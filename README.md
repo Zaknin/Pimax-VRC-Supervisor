@@ -58,4 +58,4 @@ release\PimaxVrcSupervisor
 
 ## Notes
 
-The executable requests administrator privileges because some launched tools may require elevation. If you want to avoid repeated UAC prompts, start it from an already elevated launcher or use a Windows Scheduled Task configured to run with highest privileges.
+The executable requests administrator privileges because some launched tools may require elevation. If you want to avoid repeated UAC prompts, start it from an already elevated launcher (like running VRCX with admin rights) or use a Windows Scheduled Task configured to run with highest privileges.
