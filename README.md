@@ -42,7 +42,7 @@ Edit `supervisor.config.json` to adjust paths, process names, detector rules, po
 
 Important defaults:
 
-- `BrokenEyePath` starts empty for sharing/public releases.
+- `BrokenEyePath` starts empty.
 - `VrcFaceTrackingPath` starts empty, but the file picker opens in the usual Steam install folder.
 - `MouthTrackerUser` starts empty and asks a Yes/No question on first run.
 - `AutoLaunchScheduledTask` starts empty and asks a Yes/No question on first setup.
