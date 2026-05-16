@@ -19,8 +19,8 @@ A Windows helper for Pimax Crystal + VRChat setups. It supervises Broken Eye and
 - Windows
 - .NET 9 runtime or SDK
 - Pimax Crystal headset
-- Broken Eye
-- VRCFaceTracking
+- [Broken Eye](https://github.com/ghostiam/BrokenEye)
+- [VRCFaceTracking](https://docs.vrcft.io/docs/vrcft-software/vrcft)
 - Optional: Vive mouth tracker exposed as `HTC Multimedia Camera`
 
 ## First Run
