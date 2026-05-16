@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
@@ -6,8 +7,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
+using System.Xml.Linq;
 
-var config = SupervisorConfig.Load();
 using var shutdown = new CancellationTokenSource();
 
 Console.CancelKeyPress += (_, eventArgs) =>
@@ -16,8 +17,37 @@ Console.CancelKeyPress += (_, eventArgs) =>
     shutdown.Cancel();
 };
 
+var config = SupervisorConfig.Load();
+var commandLineArgs = Environment.GetCommandLineArgs().Skip(1).ToArray();
+if (commandLineArgs.Any(arg => string.Equals(arg, "--install-auto-launch-task", StringComparison.OrdinalIgnoreCase)))
+{
+    await InstallAutoLaunchScheduledTaskFromCommandLineAsync(config, shutdown.Token);
+    return;
+}
+if (commandLineArgs.Any(arg => string.Equals(arg, "--watch-vrchat-auto-launch", StringComparison.OrdinalIgnoreCase)))
+{
+    await AutoLaunchWatcher.RunAsync(shutdown.Token);
+    return;
+}
+
 var supervisor = new AppSupervisor(config);
 await supervisor.RunAsync(shutdown.Token);
+
+static async Task InstallAutoLaunchScheduledTaskFromCommandLineAsync(SupervisorConfig config, CancellationToken cancellationToken)
+{
+    if (!OperatingSystem.IsWindows())
+    {
+        Console.WriteLine("This supervisor is Windows-only.");
+        return;
+    }
+
+    Console.WriteLine("Installing elevated auto-launch scheduled task...");
+    var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(cancellationToken);
+    config.SetAutoLaunchScheduledTask(true);
+    config.SaveAutoLaunchScheduledTaskPreference();
+    Console.WriteLine($"Installed scheduled task: {taskDetails.TaskName}");
+    Console.WriteLine($"Trigger: {taskDetails.TriggerDescription}");
+}
 
 internal sealed record ResolvedExecutablePath(string Path, bool WasSelected);
 
@@ -32,6 +62,9 @@ internal enum WatchedProcessState
 
 internal sealed class AppSupervisor
 {
+    private const int BrokenEyeStartupMaxAttempts = 10;
+    private static readonly TimeSpan BrokenEyeStartupCheckDelay = TimeSpan.FromSeconds(5);
+
     private readonly SupervisorConfig _config;
     private readonly TimeSpan _pollInterval;
     private readonly Dictionary<int, Process> _watchedProcessHandles = new();
@@ -71,6 +104,7 @@ internal sealed class AppSupervisor
         }
 
         _mouthTrackerUser = await EnsureMouthTrackerPreferenceAsync(cancellationToken);
+        await EnsureAutoLaunchScheduledTaskPreferenceAsync(cancellationToken);
 
         try
         {
@@ -261,6 +295,91 @@ internal sealed class AppSupervisor
             : "Mouth tracker workflow disabled.");
 
         return answer;
+    }
+
+    private async Task EnsureAutoLaunchScheduledTaskPreferenceAsync(CancellationToken cancellationToken)
+    {
+        if (_config.TryGetAutoLaunchScheduledTask(out var autoLaunchScheduledTask))
+        {
+            if (autoLaunchScheduledTask)
+            {
+                await EnsureAutoLaunchScheduledTaskInstalledAsync(cancellationToken);
+            }
+
+            return;
+        }
+
+        Console.WriteLine("AutoLaunchScheduledTask is not configured.");
+        var answer = await AskAutoLaunchScheduledTaskPreferenceAsync(cancellationToken);
+        if (!answer)
+        {
+            _config.SetAutoLaunchScheduledTask(false);
+            _config.SaveAutoLaunchScheduledTaskPreference();
+            Console.WriteLine("Elevated auto-launch scheduled task was not created.");
+            return;
+        }
+
+        try
+        {
+            var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(cancellationToken);
+            _config.SetAutoLaunchScheduledTask(true);
+            _config.SaveAutoLaunchScheduledTaskPreference();
+            Console.WriteLine($"Created elevated auto-launch scheduled task: {taskDetails.TaskName}");
+            Console.WriteLine($"Trigger: {taskDetails.TriggerDescription}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Could not create elevated auto-launch scheduled task:");
+            Console.WriteLine(ex.Message);
+            Console.WriteLine("The preference was not saved, so the app can ask again next run.");
+        }
+    }
+
+    private async Task EnsureAutoLaunchScheduledTaskInstalledAsync(CancellationToken cancellationToken)
+    {
+        Console.WriteLine("Ensuring elevated auto-launch scheduled task is installed.");
+        try
+        {
+            var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(cancellationToken);
+            Console.WriteLine($"Installed elevated auto-launch scheduled task: {taskDetails.TaskName}");
+            Console.WriteLine($"Trigger: {taskDetails.TriggerDescription}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Could not install elevated auto-launch scheduled task:");
+            Console.WriteLine(ex.Message);
+        }
+    }
+
+    private static Task<bool> AskAutoLaunchScheduledTaskPreferenceAsync(CancellationToken cancellationToken)
+    {
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                Application.EnableVisualStyles();
+                var result = MessageBox.Show(
+                    "Create an elevated Windows Scheduled Task that watches for VRChat.exe and starts Pimax VRC Supervisor when vrserver.exe is already running?\n\nThis uses a hidden elevated watcher at Windows sign-in, so it does not depend on Windows Security audit events.",
+                    "Pimax VRC Supervisor",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button1);
+
+                completion.TrySetResult(result == DialogResult.Yes);
+            }
+            catch (Exception ex)
+            {
+                completion.TrySetException(new InvalidOperationException("Could not open scheduled task question dialog.", ex));
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+
+        cancellationToken.Register(() => completion.TrySetCanceled(cancellationToken));
+        return completion.Task;
     }
 
     private static Task<bool> AskMouthTrackerPreferenceAsync(CancellationToken cancellationToken)
@@ -539,8 +658,7 @@ internal sealed class AppSupervisor
     private async Task StartManagedAppsAsync(CancellationToken cancellationToken)
     {
         _managedAppsStarted = true;
-        Console.WriteLine("Starting Broken Eye...");
-        StartOrAttach(_config.BrokenEyePath, _config.BrokenEyeProcessNames);
+        await StartBrokenEyeWithRetriesAsync(cancellationToken);
         Console.WriteLine($"Waiting {_config.DelayBeforeVrcFaceTrackingSeconds} seconds before starting VRCFaceTracking...");
         await DelayWithCancellationAsync(TimeSpan.FromSeconds(_config.DelayBeforeVrcFaceTrackingSeconds), cancellationToken);
         await VerifyRunningAsync("Broken Eye", _config.BrokenEyeProcessNames, cancellationToken, requiredStableSeconds: 0);
@@ -548,6 +666,46 @@ internal sealed class AppSupervisor
         Console.WriteLine("Starting VRCFaceTracking...");
         StartOrAttach(_config.VrcFaceTrackingPath, _config.VrcFaceTrackingProcessNames);
         await VerifyRunningAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
+    }
+
+    private async Task StartBrokenEyeWithRetriesAsync(CancellationToken cancellationToken)
+    {
+        if (IsAnyProcessRunning(_config.BrokenEyeProcessNames))
+        {
+            Console.WriteLine($"Broken Eye is already running: {string.Join(", ", _config.BrokenEyeProcessNames)}");
+            return;
+        }
+
+        for (var attempt = 1; attempt <= BrokenEyeStartupMaxAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Console.WriteLine($"Starting Broken Eye (attempt {attempt}/{BrokenEyeStartupMaxAttempts})...");
+
+            try
+            {
+                StartProcess(_config.BrokenEyePath);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Could not start Broken Eye on attempt {attempt}: {ex.Message}");
+            }
+
+            Console.WriteLine($"Checking whether Broken Eye is running in {BrokenEyeStartupCheckDelay.TotalSeconds:0} seconds...");
+            await DelayWithCancellationAsync(BrokenEyeStartupCheckDelay, cancellationToken);
+
+            if (IsAnyProcessRunning(_config.BrokenEyeProcessNames))
+            {
+                Console.WriteLine($"Broken Eye is running after attempt {attempt}.");
+                return;
+            }
+
+            if (attempt < BrokenEyeStartupMaxAttempts)
+            {
+                Console.WriteLine("Broken Eye is not running. Trying again...");
+            }
+        }
+
+        throw new TimeoutException($"Broken Eye did not start after {BrokenEyeStartupMaxAttempts} attempts.");
     }
 
     private async Task StopManagedAppsAsync(CancellationToken cancellationToken)
@@ -584,6 +742,11 @@ internal sealed class AppSupervisor
             return;
         }
 
+        StartProcess(path);
+    }
+
+    private static void StartProcess(string path)
+    {
         var startInfo = new ProcessStartInfo
         {
             FileName = path,
@@ -811,6 +974,288 @@ internal sealed class AppSupervisor
     private static string DescribeConnection(bool connected) => connected ? "connected" : "not connected";
 }
 
+internal static class AutoLaunchWatcher
+{
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
+    private const string WatcherMutexName = @"Local\PimaxVrcSupervisorAutoLaunchWatcher";
+    private const string VrServerProcessName = "vrserver";
+    private const string VrChatProcessName = "VRChat";
+
+    public static async Task RunAsync(CancellationToken cancellationToken)
+    {
+        using var mutex = new Mutex(initiallyOwned: true, WatcherMutexName, out var ownsMutex);
+        if (!ownsMutex)
+        {
+            return;
+        }
+
+        var supervisorPath = ScheduledTaskInstaller.GetSupervisorExecutablePath();
+        var supervisorProcessName = Path.GetFileNameWithoutExtension(supervisorPath);
+        var launchedForCurrentVrChatSession = false;
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var vrChatRunning = IsProcessRunning(VrChatProcessName);
+            var vrServerRunning = IsProcessRunning(VrServerProcessName);
+
+            if (!vrChatRunning)
+            {
+                launchedForCurrentVrChatSession = false;
+            }
+            else if (vrServerRunning && !launchedForCurrentVrChatSession && !IsAnotherSupervisorRunning(supervisorProcessName))
+            {
+                StartSupervisor(supervisorPath);
+                launchedForCurrentVrChatSession = true;
+            }
+
+            await Task.Delay(PollInterval, cancellationToken);
+        }
+    }
+
+    private static bool IsAnotherSupervisorRunning(string supervisorProcessName)
+    {
+        var currentProcessId = Environment.ProcessId;
+        foreach (var process in Process.GetProcessesByName(supervisorProcessName))
+        {
+            using (process)
+            {
+                try
+                {
+                    if (process.Id != currentProcessId && !process.HasExited)
+                    {
+                        return true;
+                    }
+                }
+                catch
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsProcessRunning(string processName)
+    {
+        var processes = Process.GetProcessesByName(processName);
+        foreach (var process in processes)
+        {
+            process.Dispose();
+        }
+
+        return processes.Length > 0;
+    }
+
+    private static void StartSupervisor(string supervisorPath)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = supervisorPath,
+            WorkingDirectory = Path.GetDirectoryName(supervisorPath) ?? Environment.CurrentDirectory,
+            UseShellExecute = true
+        };
+
+        Process.Start(startInfo);
+    }
+}
+
+internal sealed record ScheduledTaskDetails(string TaskName, string TriggerDescription);
+
+internal sealed record ProcessResult(int ExitCode, string Output, string Error);
+
+internal static class ScheduledTaskInstaller
+{
+    private const string TaskName = "Pimax VRC Supervisor Auto Launch";
+    private const string WatcherArgument = "--watch-vrchat-auto-launch";
+
+    public static async Task<bool> ExistsAsync(CancellationToken cancellationToken)
+    {
+        var result = await RunProcessCaptureAsync(
+            "schtasks.exe",
+            ["/Query", "/TN", TaskName],
+            cancellationToken);
+
+        return result.ExitCode == 0;
+    }
+
+    public static async Task<ScheduledTaskDetails> CreateOrUpdateAsync(CancellationToken cancellationToken)
+    {
+        var supervisorPath = GetSupervisorExecutablePath();
+        var supervisorWorkingDirectory = Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory;
+        var taskXml = BuildTaskXml(supervisorPath, supervisorWorkingDirectory);
+        var taskXmlPath = Path.Combine(Path.GetTempPath(), $"PimaxVrcSupervisorAutoLaunch-{Guid.NewGuid():N}.xml");
+
+        try
+        {
+            await File.WriteAllTextAsync(taskXmlPath, taskXml, Encoding.Unicode, cancellationToken);
+            await RunProcessAsync(
+                "schtasks.exe",
+                ["/Create", "/TN", TaskName, "/XML", taskXmlPath, "/F"],
+                cancellationToken);
+        }
+        finally
+        {
+            TryDeleteFile(taskXmlPath);
+        }
+
+        if (!await ExistsAsync(cancellationToken))
+        {
+            throw new InvalidOperationException("schtasks.exe reported success, but the task could not be queried afterward.");
+        }
+
+        await RunProcessAsync(
+            "schtasks.exe",
+            ["/Run", "/TN", TaskName],
+            cancellationToken);
+
+        return new ScheduledTaskDetails(TaskName, "Hidden elevated watcher at Windows sign-in; launches supervisor when VRChat.exe and vrserver.exe are running.");
+    }
+
+    private static string BuildTaskXml(
+        string supervisorPath,
+        string supervisorWorkingDirectory)
+    {
+        XNamespace ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+        var identity = WindowsIdentity.GetCurrent();
+        var command = BuildPowerShellCommand(supervisorPath, supervisorWorkingDirectory);
+
+        var document = new XDocument(
+            new XDeclaration("1.0", "UTF-16", null),
+            new XElement(ns + "Task",
+                new XAttribute("version", "1.4"),
+                new XElement(ns + "RegistrationInfo",
+                    new XElement(ns + "Description", "Runs an elevated hidden watcher that starts Pimax VRC Supervisor when VRChat starts while vrserver.exe is running.")),
+                new XElement(ns + "Triggers",
+                    new XElement(ns + "LogonTrigger",
+                        new XElement(ns + "Enabled", "true"))),
+                new XElement(ns + "Principals",
+                    new XElement(ns + "Principal",
+                        new XAttribute("id", "Author"),
+                        new XElement(ns + "UserId", identity.User?.Value ?? throw new InvalidOperationException("Could not resolve the current Windows user SID.")),
+                        new XElement(ns + "LogonType", "InteractiveToken"),
+                        new XElement(ns + "RunLevel", "HighestAvailable"))),
+                new XElement(ns + "Settings",
+                    new XElement(ns + "MultipleInstancesPolicy", "IgnoreNew"),
+                    new XElement(ns + "DisallowStartIfOnBatteries", "false"),
+                    new XElement(ns + "StopIfGoingOnBatteries", "false"),
+                    new XElement(ns + "AllowHardTerminate", "true"),
+                    new XElement(ns + "StartWhenAvailable", "true"),
+                    new XElement(ns + "RunOnlyIfNetworkAvailable", "false"),
+                    new XElement(ns + "IdleSettings",
+                        new XElement(ns + "StopOnIdleEnd", "false"),
+                        new XElement(ns + "RestartOnIdle", "false")),
+                    new XElement(ns + "AllowStartOnDemand", "true"),
+                    new XElement(ns + "Enabled", "true"),
+                    new XElement(ns + "Hidden", "true"),
+                    new XElement(ns + "RunOnlyIfIdle", "false"),
+                    new XElement(ns + "WakeToRun", "false"),
+                    new XElement(ns + "ExecutionTimeLimit", "PT0S"),
+                    new XElement(ns + "Priority", "7")),
+                new XElement(ns + "Actions",
+                    new XAttribute("Context", "Author"),
+                    new XElement(ns + "Exec",
+                        new XElement(ns + "Command", "powershell.exe"),
+                        new XElement(ns + "Arguments", $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command {QuotePowerShellArgument(command)}")))));
+
+        return document.ToString(SaveOptions.DisableFormatting);
+    }
+
+    private static string BuildPowerShellCommand(string supervisorPath, string workingDirectory)
+    {
+        var supervisorPathLiteral = ToPowerShellSingleQuotedString(supervisorPath);
+        var workingDirectoryLiteral = ToPowerShellSingleQuotedString(workingDirectory);
+        var watcherArgumentLiteral = ToPowerShellSingleQuotedString(WatcherArgument);
+
+        return $"Start-Process -WindowStyle Hidden -FilePath {supervisorPathLiteral} -ArgumentList {watcherArgumentLiteral} -WorkingDirectory {workingDirectoryLiteral}";
+    }
+
+    public static string GetSupervisorExecutablePath()
+    {
+        var processPath = Environment.ProcessPath;
+        if (!string.IsNullOrWhiteSpace(processPath)
+            && !string.Equals(Path.GetFileName(processPath), "dotnet.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return processPath;
+        }
+
+        var assemblyPath = Assembly.GetEntryAssembly()?.Location;
+        if (!string.IsNullOrWhiteSpace(assemblyPath))
+        {
+            var appHostPath = Path.ChangeExtension(assemblyPath, ".exe");
+            if (File.Exists(appHostPath))
+            {
+                return appHostPath;
+            }
+        }
+
+        var fallbackPath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.exe");
+        if (File.Exists(fallbackPath))
+        {
+            return fallbackPath;
+        }
+
+        throw new InvalidOperationException("Could not resolve PimaxVrcSupervisor.exe for the scheduled task action.");
+    }
+
+    private static async Task RunProcessAsync(string fileName, string[] arguments, CancellationToken cancellationToken)
+    {
+        var result = await RunProcessCaptureAsync(fileName, arguments, cancellationToken);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"{fileName} exited with code {result.ExitCode}: {result.Error}{result.Output}");
+        }
+    }
+
+    private static async Task<ProcessResult> RunProcessCaptureAsync(string fileName, string[] arguments, CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = fileName,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start {fileName}.");
+        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+
+        await process.WaitForExitAsync(cancellationToken);
+        var output = await outputTask;
+        var error = await errorTask;
+
+        return new ProcessResult(process.ExitCode, output, error);
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // Temporary XML cleanup failure is harmless.
+        }
+    }
+
+    private static string QuotePowerShellArgument(string value) => "\"" + value.Replace("\"", "\\\"") + "\"";
+
+    private static string ToPowerShellSingleQuotedString(string value) => "'" + value.Replace("'", "''") + "'";
+}
+
 internal sealed class SupervisorConfig
 {
     public string BrokenEyePath { get; set; } = "";
@@ -820,6 +1265,7 @@ internal sealed class SupervisorConfig
     public string[] VrcFaceTrackingProcessNames { get; set; } = ["VRCFaceTracking"];
     public string[] WatchedShutdownProcessNames { get; init; } = ["VRChat"];
     public JsonElement MouthTrackerUser { get; set; }
+    public JsonElement AutoLaunchScheduledTask { get; set; }
     public string[][] PimaxDetectors { get; init; } =
     [
         ["USB\\VID_2104&PID_0220"],
@@ -904,6 +1350,40 @@ internal sealed class SupervisorConfig
 
         File.WriteAllText(configPath, json);
         Console.WriteLine($"Saved mouth tracker preference to: {configPath}");
+    }
+
+    public bool TryGetAutoLaunchScheduledTask(out bool autoLaunchScheduledTask)
+    {
+        if (AutoLaunchScheduledTask.ValueKind == JsonValueKind.True)
+        {
+            autoLaunchScheduledTask = true;
+            return true;
+        }
+
+        if (AutoLaunchScheduledTask.ValueKind == JsonValueKind.False)
+        {
+            autoLaunchScheduledTask = false;
+            return true;
+        }
+
+        autoLaunchScheduledTask = false;
+        return false;
+    }
+
+    public void SetAutoLaunchScheduledTask(bool autoLaunchScheduledTask)
+    {
+        AutoLaunchScheduledTask = JsonSerializer.SerializeToElement(autoLaunchScheduledTask);
+    }
+
+    public void SaveAutoLaunchScheduledTaskPreference()
+    {
+        var configPath = LoadedFromPath ?? Path.Combine(AppContext.BaseDirectory, "supervisor.config.json");
+        var json = File.Exists(configPath) ? File.ReadAllText(configPath) : "{\n}";
+
+        json = ReplaceJsonBooleanOrStringProperty(json, nameof(AutoLaunchScheduledTask), TryGetAutoLaunchScheduledTask(out var value) && value);
+
+        File.WriteAllText(configPath, json);
+        Console.WriteLine($"Saved scheduled task preference to: {configPath}");
     }
 
     private static string ReplaceJsonStringProperty(string json, string propertyName, string value)

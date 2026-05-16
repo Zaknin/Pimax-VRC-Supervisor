@@ -6,7 +6,9 @@ A Windows helper for Pimax Crystal + VRChat setups. It supervises Broken Eye and
 
 - Waits for the Pimax headset before launching anything.
 - Prompts for `Broken Eye.exe` and `VRCFaceTracking.exe` on first run if paths are not configured.
-- Starts Broken Eye first, waits, verifies it is running, then starts VRCFaceTracking.
+- Can create an elevated Scheduled Task on first setup to launch the supervisor when `VRChat.exe` starts while SteamVR is running.
+- The Scheduled Task starts a hidden elevated watcher at Windows sign-in and starts that watcher immediately after setup.
+- Starts Broken Eye first, retrying up to 10 times if it does not appear as running after 5 seconds, then starts VRCFaceTracking.
 - Watches Pimax reconnects and restarts both managed apps after reconnect.
 - Optionally watches the Vive mouth tracker / HTC Multimedia Camera and restarts only VRCFaceTracking when it reconnects.
 - Watches `VRChat.exe` and closes managed apps when VRChat exits normally.
@@ -30,6 +32,7 @@ On first run, the app may ask:
 - Where `Broken Eye.exe` is located.
 - Where `VRCFaceTracking.exe` is located.
 - Whether you use a Vive mouth tracker.
+- Whether to create the elevated VRChat/SteamVR auto-launch Scheduled Task.
 
 Your answers are saved into `supervisor.config.json` next to the exe.
 
@@ -42,7 +45,26 @@ Important defaults:
 - `BrokenEyePath` starts empty for sharing/public releases.
 - `VrcFaceTrackingPath` starts empty, but the file picker opens in the usual Steam install folder.
 - `MouthTrackerUser` starts empty and asks a Yes/No question on first run.
+- `AutoLaunchScheduledTask` starts empty and asks a Yes/No question on first setup.
 - `PollIntervalSeconds` defaults to `5`.
+
+## Auto-Launch Task
+
+If enabled, the app creates a highest-privilege Scheduled Task named `Pimax VRC Supervisor Auto Launch`.
+
+The task starts a hidden watcher with:
+
+```text
+PimaxVrcSupervisor.exe --watch-vrchat-auto-launch
+```
+
+The watcher polls for `VRChat.exe` and SteamVR. SteamVR is detected by checking its `vrserver.exe` process. When both are running and the normal supervisor is not already open, it launches `PimaxVrcSupervisor.exe`. This avoids relying on Windows Security audit/process-creation events.
+
+To reinstall or repair the task directly:
+
+```powershell
+.\PimaxVrcSupervisor.exe --install-auto-launch-task
+```
 
 ## Building From Source
 
@@ -58,4 +80,4 @@ release\PimaxVrcSupervisor
 
 ## Notes
 
-The executable requests administrator privileges because some launched tools may require elevation. If you want to avoid repeated UAC prompts, start it from an already elevated launcher (like running VRCX with admin rights) or use a Windows Scheduled Task configured to run with highest privileges.
+The executable requests administrator privileges because some launched tools may require elevation.

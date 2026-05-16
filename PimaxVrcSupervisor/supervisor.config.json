@@ -23,6 +23,10 @@
   // Leave empty to show a Yes/No dialog on first run; the answer is saved here as true or false.
   "MouthTrackerUser": "",
 
+  // Leave empty to ask on first setup whether to create an elevated Windows Scheduled Task.
+  // When enabled, the task starts this supervisor when VRChat.exe launches, but only if vrserver.exe is running.
+  "AutoLaunchScheduledTask": "",
+
   // Pimax headset detection rules. Each inner array is one possible match rule.
   // A device counts as connected when any inner array has all of its keywords inside one connected-device block.
   "PimaxDetectors": [
