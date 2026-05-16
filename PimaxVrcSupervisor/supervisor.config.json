@@ -1,0 +1,66 @@
+{
+  // Full path to Broken Eye. This app is started first.
+  // If this path is missing or invalid, the supervisor opens a browse dialog and saves your selection here.
+  "BrokenEyePath": "",
+
+  // Full path to VRCFaceTracking. This app starts after Broken Eye has had time to settle.
+  // If this path is missing or invalid, the supervisor opens a browse dialog and saves your selection here.
+  // The browse dialog starts in C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking by default.
+  "VrcFaceTrackingPath": "",
+
+  // Process names used to check, attach to, and close Broken Eye. Do not include ".exe".
+  "BrokenEyeProcessNames": [ "Broken Eye" ],
+
+  // Process names used to check, attach to, and close VRCFaceTracking. Do not include ".exe".
+  "VrcFaceTrackingProcessNames": [ "VRCFaceTracking" ],
+
+  // When any of these processes has been seen running and later closes, the supervisor closes both managed apps and exits.
+  // If the watched app exits with a non-zero crash code, the supervisor waits for relaunch before exiting.
+  "WatchedShutdownProcessNames": [ "VRChat" ],
+
+  // Set to true if you use a Vive face/mouth tracker exposed as HTC Multimedia Camera.
+  // Set to false to ignore all mouth-tracker detection and VRCFaceTracking-only restart logic.
+  // Leave empty to show a Yes/No dialog on first run; the answer is saved here as true or false.
+  "MouthTrackerUser": "",
+
+  // Pimax headset detection rules. Each inner array is one possible match rule.
+  // A device counts as connected when any inner array has all of its keywords inside one connected-device block.
+  "PimaxDetectors": [
+    [ "USB\\VID_2104&PID_0220" ],
+    [ "Pimax", "Crystal" ],
+    [ "EyeChip" ]
+  ],
+
+  // Vive mouth tracker detection rules. Each inner array is one possible match rule.
+  // When this appears after being missing, only VRCFaceTracking is restarted.
+  // Ignored when MouthTrackerUser is false.
+  "MouthTrackerDetectors": [
+    [ "USB\\VID_0BB4&PID_0321&MI_00" ],
+    [ "HTC Multimedia Camera" ],
+    [ "VIVE", "Camera" ]
+  ],
+
+  // How often, in seconds, to check device and watched-process state.
+  "PollIntervalSeconds": 5,
+
+  // Maximum seconds to wait for an app to become visible as a running process.
+  "StartupTimeoutSeconds": 30,
+
+  // Seconds an app must remain running before startup verification succeeds.
+  "StartupStableSeconds": 5,
+
+  // Seconds to wait after starting Broken Eye before starting VRCFaceTracking.
+  "DelayBeforeVrcFaceTrackingSeconds": 5,
+
+  // Seconds to wait after the Pimax headset reconnects before restarting both managed apps.
+  "RestartDelayAfterReconnectSeconds": 10,
+
+  // If VRChat exits with a crash code, wait this many seconds for it to relaunch before closing apps and exiting.
+  "WatchedProcessCrashRelaunchGraceSeconds": 300,
+
+  // Seconds to wait for graceful app shutdown before force-closing the process tree.
+  "ShutdownGraceSeconds": 8,
+
+  // Maximum seconds to wait for the Windows device query command to return.
+  "DeviceProbeTimeoutSeconds": 10
+}

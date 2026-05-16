@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+.appdata/
+.dotnet/
+.vs/
+.nuget/
+.templateengine/
+publish*/
+release/
+*.user
