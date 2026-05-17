@@ -9,10 +9,12 @@ A Windows helper for Pimax Crystal + VRChat setups. It supervises Broken Eye and
 - Can create an elevated Scheduled Task on first setup to launch the supervisor when `VRChat.exe` starts while SteamVR is running.
 - The Scheduled Task starts a hidden elevated watcher at Windows sign-in and starts that watcher immediately after setup.
 - Starts Broken Eye first, retrying up to 10 times if it does not appear as running after 5 seconds, then starts VRCFaceTracking.
-- Watches Pimax reconnects and restarts both managed apps after reconnect.
+- Watches Pimax HMD/runtime reconnects, waits for the connection to stay stable, and restarts both managed apps after reconnect.
+- Watches Pimax PiService HID remove/add log events so short reconnects are still caught even when Windows USB state is back before the next poll.
 - Optionally watches the Vive mouth tracker / HTC Multimedia Camera and restarts only VRCFaceTracking when it reconnects.
 - Watches `VRChat.exe` and closes managed apps when VRChat exits normally.
 - If VRChat appears to crash, waits 5 minutes for it to relaunch before exiting.
+- Prevents duplicate normal supervisor instances from racing each other; the hidden auto-launch watcher can still run alongside one supervisor.
 
 ## Requirements
 
@@ -46,7 +48,9 @@ Important defaults:
 - `VrcFaceTrackingPath` starts empty, but the file picker opens in the usual Steam install folder.
 - `MouthTrackerUser` starts empty and asks a Yes/No question on first run.
 - `AutoLaunchScheduledTask` starts empty and asks a Yes/No question on first setup.
-- `PollIntervalSeconds` defaults to `5`.
+- `PollIntervalSeconds` defaults to `2`.
+- `PimaxDetectors` defaults to Pimax HMD/runtime USB IDs (`VID_34A4`) instead of the eye tracker-only `EyeChip` device, so reconnects are detected when the headset path actually drops and returns.
+- `UsePimaxServiceLogReconnectDetector` defaults to `true` and watches `%LOCALAPPDATA%\Pimax\PiService\Log\PiService__*.log` for fast runtime HID reconnects.
 
 ## Auto-Launch Task
 

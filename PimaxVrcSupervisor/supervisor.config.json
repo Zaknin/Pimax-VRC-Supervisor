@@ -29,10 +29,18 @@
 
   // Pimax headset detection rules. Each inner array is one possible match rule.
   // A device counts as connected when any inner array has all of its keywords inside one connected-device block.
+  // The USB\VID_34A4 rules are the actual Pimax HMD/runtime interfaces; EyeChip alone is not enough to count as a headset reconnect.
   "PimaxDetectors": [
-    [ "USB\\VID_2104&PID_0220" ],
+    [ "USB\\VID_34A4&PID_0012" ],
+    [ "USB\\VID_34A4&PID_0018" ],
+    [ "USB\\VID_34A4&PID_0020" ],
+    [ "USB\\VID_34A4&PID_0040" ],
+    [ "USB\\VID_34A4&PID_0042" ],
+    [ "USB\\VID_34A4&PID_0044" ],
+    [ "USB\\VID_34A4&PID_0046" ],
     [ "Pimax", "Crystal" ],
-    [ "EyeChip" ]
+    [ "Pimax", "P3C" ],
+    [ "Pimax", "WiGig" ]
   ],
 
   // Vive mouth tracker detection rules. Each inner array is one possible match rule.
@@ -44,8 +52,18 @@
     [ "VIVE", "Camera" ]
   ],
 
+  // Also watch Pimax PiService logs for fast HID remove/add reconnect bursts.
+  // This catches short runtime drops that can happen between normal USB polling checks.
+  "UsePimaxServiceLogReconnectDetector": true,
+
+  // Folder containing PiService__*.log files. Environment variables like %LOCALAPPDATA% are expanded.
+  "PimaxServiceLogDirectory": "%LOCALAPPDATA%\\Pimax\\PiService\\Log",
+
+  // Number of recent PiService log lines to scan each poll.
+  "PimaxServiceLogReconnectLookbackLines": 400,
+
   // How often, in seconds, to check device and watched-process state.
-  "PollIntervalSeconds": 5,
+  "PollIntervalSeconds": 2,
 
   // Maximum seconds to wait for an app to become visible as a running process.
   "StartupTimeoutSeconds": 30,

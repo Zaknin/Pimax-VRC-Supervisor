@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
@@ -27,6 +28,13 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "--install-auto-launch-task", 
 if (commandLineArgs.Any(arg => string.Equals(arg, "--watch-vrchat-auto-launch", StringComparison.OrdinalIgnoreCase)))
 {
     await AutoLaunchWatcher.RunAsync(shutdown.Token);
+    return;
+}
+
+using var supervisorMutex = new Mutex(initiallyOwned: true, @"Local\PimaxVrcSupervisor", out var ownsSupervisorMutex);
+if (!ownsSupervisorMutex)
+{
+    Console.WriteLine("Pimax VRC Supervisor is already running. Exiting this duplicate instance.");
     return;
 }
 
@@ -68,6 +76,7 @@ internal sealed class AppSupervisor
     private readonly SupervisorConfig _config;
     private readonly TimeSpan _pollInterval;
     private readonly Dictionary<int, Process> _watchedProcessHandles = new();
+    private readonly DateTimeOffset _startedAt = DateTimeOffset.Now;
     private bool? _lastPimaxConnected;
     private bool? _lastMouthTrackerConnected;
     private bool _mouthTrackerUser;
@@ -75,6 +84,9 @@ internal sealed class AppSupervisor
     private bool _waitingForWatchedProcessRelaunch;
     private bool _managedAppsStarted;
     private DateTimeOffset? _watchedProcessMissingSince;
+    private DateTimeOffset? _lastPimaxServiceLogEventSeenAt;
+    private DateTimeOffset? _pendingPimaxServiceHidRemoveAt;
+    private DateTimeOffset? _lastPimaxServiceReconnectAt;
 
     public AppSupervisor(SupervisorConfig config)
     {
@@ -150,19 +162,41 @@ internal sealed class AppSupervisor
                     return;
                 }
 
-                var pimaxConnected = await IsPimaxConnectedAsync(cancellationToken);
+                var pimaxConnected = await ReadDeviceConnectedOrPreviousAsync(
+                    "Pimax Crystal",
+                    IsPimaxConnectedAsync,
+                    _lastPimaxConnected,
+                    cancellationToken);
                 var mouthTrackerConnected = _mouthTrackerUser
-                    ? await IsMouthTrackerConnectedAsync(cancellationToken)
+                    ? await ReadDeviceConnectedOrPreviousAsync(
+                        "mouth tracker",
+                        IsMouthTrackerConnectedAsync,
+                        _lastMouthTrackerConnected,
+                        cancellationToken)
                     : (bool?)null;
+                var pimaxRuntimeReconnected = pimaxConnected
+                    && DetectPimaxServiceLogReconnect();
                 var pimaxReconnected = _lastPimaxConnected == false && pimaxConnected;
                 var mouthTrackerReconnected = _mouthTrackerUser
                     && _lastMouthTrackerConnected == false
                     && mouthTrackerConnected == true;
 
-                if (pimaxReconnected)
+                if (pimaxReconnected || pimaxRuntimeReconnected)
                 {
-                    Console.WriteLine($"Pimax Crystal reconnected. Restarting managed apps in {_config.RestartDelayAfterReconnectSeconds} seconds.");
-                    await DelayWithCancellationAsync(TimeSpan.FromSeconds(_config.RestartDelayAfterReconnectSeconds), cancellationToken);
+                    if (pimaxRuntimeReconnected && !pimaxReconnected)
+                    {
+                        Console.WriteLine("Pimax runtime HID reconnect detected from PiService logs.");
+                    }
+
+                    var reconnectDelay = TimeSpan.FromSeconds(_config.RestartDelayAfterReconnectSeconds);
+                    Console.WriteLine($"Pimax Crystal reconnected. Waiting {reconnectDelay.TotalSeconds:0} seconds for a stable connection before restarting managed apps.");
+                    var stableReconnect = await WaitForPimaxStableConnectedAsync(reconnectDelay, cancellationToken);
+                    if (!stableReconnect)
+                    {
+                        Console.WriteLine("Pimax Crystal did not stay connected during the reconnect wait. Waiting for the next reconnect.");
+                        _lastPimaxConnected = false;
+                        continue;
+                    }
 
                     if (_watchedProcessHasBeenSeen && !IsAnyProcessRunning(_config.WatchedShutdownProcessNames))
                     {
@@ -173,9 +207,17 @@ internal sealed class AppSupervisor
 
                     await StopManagedAppsAsync(cancellationToken);
                     await StartManagedAppsAsync(cancellationToken);
-                    pimaxConnected = await IsPimaxConnectedAsync(cancellationToken);
+                    pimaxConnected = await ReadDeviceConnectedOrPreviousAsync(
+                        "Pimax Crystal",
+                        IsPimaxConnectedAsync,
+                        true,
+                        cancellationToken);
                     mouthTrackerConnected = _mouthTrackerUser
-                        ? await IsMouthTrackerConnectedAsync(cancellationToken)
+                        ? await ReadDeviceConnectedOrPreviousAsync(
+                            "mouth tracker",
+                            IsMouthTrackerConnectedAsync,
+                            _lastMouthTrackerConnected,
+                            cancellationToken)
                         : (bool?)null;
                     Console.WriteLine($"Pimax Crystal state after restart: {DescribeConnection(pimaxConnected)}");
                 }
@@ -184,7 +226,7 @@ internal sealed class AppSupervisor
                     Console.WriteLine($"Pimax Crystal state changed: {DescribeConnection(pimaxConnected)}");
                 }
 
-                if (_mouthTrackerUser && mouthTrackerReconnected && !pimaxReconnected && pimaxConnected)
+                if (_mouthTrackerUser && mouthTrackerReconnected && !pimaxReconnected && !pimaxRuntimeReconnected && pimaxConnected)
                 {
                     Console.WriteLine("Mouth tracker reconnected while Pimax Crystal stayed connected. Restarting VRCFaceTracking.");
                     await RestartVrcFaceTrackingAsync(cancellationToken);
@@ -530,7 +572,7 @@ internal sealed class AppSupervisor
 
     private async Task<bool> WaitForPimaxOnStartupAsync(CancellationToken cancellationToken)
     {
-        if (await IsPimaxConnectedAsync(cancellationToken))
+        if (await ReadDeviceConnectedOrPreviousAsync("Pimax Crystal", IsPimaxConnectedAsync, previousConnected: false, cancellationToken))
         {
             return true;
         }
@@ -540,7 +582,7 @@ internal sealed class AppSupervisor
         while (!cancellationToken.IsCancellationRequested)
         {
             await Task.Delay(_pollInterval, cancellationToken);
-            if (await IsPimaxConnectedAsync(cancellationToken))
+            if (await ReadDeviceConnectedOrPreviousAsync("Pimax Crystal", IsPimaxConnectedAsync, previousConnected: false, cancellationToken))
             {
                 Console.WriteLine("Pimax Crystal connected.");
                 return true;
@@ -549,6 +591,157 @@ internal sealed class AppSupervisor
 
         cancellationToken.ThrowIfCancellationRequested();
         return false;
+    }
+
+    private async Task<bool> WaitForPimaxStableConnectedAsync(TimeSpan stableDuration, CancellationToken cancellationToken)
+    {
+        if (stableDuration <= TimeSpan.Zero)
+        {
+            return await ReadDeviceConnectedOrPreviousAsync("Pimax Crystal", IsPimaxConnectedAsync, previousConnected: true, cancellationToken);
+        }
+
+        var stableUntil = DateTimeOffset.UtcNow.Add(stableDuration);
+        while (DateTimeOffset.UtcNow < stableUntil)
+        {
+            await Task.Delay(_pollInterval, cancellationToken);
+            if (!await ReadDeviceConnectedOrPreviousAsync("Pimax Crystal", IsPimaxConnectedAsync, previousConnected: true, cancellationToken))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static async Task<bool> ReadDeviceConnectedOrPreviousAsync(
+        string displayName,
+        Func<CancellationToken, Task<bool>> readConnectedAsync,
+        bool? previousConnected,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await readConnectedAsync(cancellationToken);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            var fallback = previousConnected ?? false;
+            Console.WriteLine($"Could not read {displayName} device state: {ex.Message} Keeping previous state: {DescribeConnection(fallback)}.");
+            return fallback;
+        }
+    }
+
+    private bool DetectPimaxServiceLogReconnect()
+    {
+        if (!_config.UsePimaxServiceLogReconnectDetector)
+        {
+            return false;
+        }
+
+        var logFile = GetNewestPimaxServiceLogFile();
+        if (logFile is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            foreach (var entry in ReadRecentPimaxServiceLogEvents(logFile))
+            {
+                if (entry.Timestamp <= _startedAt || entry.Timestamp <= (_lastPimaxServiceLogEventSeenAt ?? DateTimeOffset.MinValue))
+                {
+                    continue;
+                }
+
+                _lastPimaxServiceLogEventSeenAt = entry.Timestamp;
+                if (entry.IsRemove)
+                {
+                    _pendingPimaxServiceHidRemoveAt = entry.Timestamp;
+                    continue;
+                }
+
+                if (entry.IsAdd && _pendingPimaxServiceHidRemoveAt is { } removeAt && entry.Timestamp >= removeAt)
+                {
+                    _pendingPimaxServiceHidRemoveAt = null;
+                    if (_lastPimaxServiceReconnectAt == entry.Timestamp)
+                    {
+                        continue;
+                    }
+
+                    _lastPimaxServiceReconnectAt = entry.Timestamp;
+                    Console.WriteLine($"Pimax PiService HID remove/add sequence: {removeAt:HH:mm:ss.fff} -> {entry.Timestamp:HH:mm:ss.fff}");
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not scan Pimax PiService log for reconnects: {ex.Message}");
+        }
+
+        return false;
+    }
+
+    private string? GetNewestPimaxServiceLogFile()
+    {
+        var directory = Environment.ExpandEnvironmentVariables(_config.PimaxServiceLogDirectory);
+        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+        {
+            return null;
+        }
+
+        return Directory
+            .EnumerateFiles(directory, "PiService__*.log")
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
+    }
+
+    private IEnumerable<PimaxServiceLogEvent> ReadRecentPimaxServiceLogEvents(string logFile)
+    {
+        using var stream = new FileStream(
+            logFile,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        var lines = ReadAllLines(reader)
+            .TakeLast(Math.Max(50, _config.PimaxServiceLogReconnectLookbackLines));
+
+        foreach (var line in lines)
+        {
+            var isRemove = line.Contains("removed hid device", StringComparison.OrdinalIgnoreCase);
+            var isAdd = line.Contains("added hid device", StringComparison.OrdinalIgnoreCase);
+            if ((!isRemove && !isAdd) || !TryParsePimaxServiceTimestamp(line, out var timestamp))
+            {
+                continue;
+            }
+
+            yield return new PimaxServiceLogEvent(timestamp, isRemove, isAdd);
+        }
+    }
+
+    private static IEnumerable<string> ReadAllLines(TextReader reader)
+    {
+        while (reader.ReadLine() is { } line)
+        {
+            yield return line;
+        }
+    }
+
+    private static bool TryParsePimaxServiceTimestamp(string line, out DateTimeOffset timestamp)
+    {
+        timestamp = default;
+        if (line.Length < 23)
+        {
+            return false;
+        }
+
+        return DateTimeOffset.TryParseExact(
+            line[..23],
+            "yyyy-MM-dd HH:mm:ss.fff",
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeLocal,
+            out timestamp);
     }
 
     private WatchedProcessState ObserveWatchedShutdownProcesses()
@@ -894,22 +1087,41 @@ internal sealed class AppSupervisor
         };
 
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start {fileName}.");
-        var outputTask = process.StandardOutput.ReadToEndAsync(timeoutSource.Token);
-        var errorTask = process.StandardError.ReadToEndAsync(timeoutSource.Token);
-
-        await process.WaitForExitAsync(timeoutSource.Token);
-        var output = await outputTask;
-        var error = await errorTask;
-
-        if (process.ExitCode != 0)
+        try
         {
-            throw new InvalidOperationException($"{fileName} exited with code {process.ExitCode}: {error}");
-        }
+            var outputTask = process.StandardOutput.ReadToEndAsync(timeoutSource.Token);
+            var errorTask = process.StandardError.ReadToEndAsync(timeoutSource.Token);
 
-        return output;
+            await process.WaitForExitAsync(timeoutSource.Token);
+            var output = await outputTask;
+            var error = await errorTask;
+
+            if (process.ExitCode != 0)
+            {
+                throw new InvalidOperationException($"{fileName} exited with code {process.ExitCode}: {error}");
+            }
+
+            return output;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            TryKill(process);
+            throw new TimeoutException($"{fileName} timed out after {timeout.TotalSeconds:0} seconds.");
+        }
     }
 
-    private static bool IsAnyProcessRunning(string[] processNames) => GetProcesses(processNames).Count > 0;
+    private static bool IsAnyProcessRunning(string[] processNames)
+    {
+        var processes = GetProcesses(processNames);
+        try
+        {
+            return processes.Count > 0;
+        }
+        finally
+        {
+            processes.ForEach(process => process.Dispose());
+        }
+    }
 
     private static List<Process> GetProcesses(string[] processNames)
     {
@@ -1061,6 +1273,8 @@ internal static class AutoLaunchWatcher
 }
 
 internal sealed record ScheduledTaskDetails(string TaskName, string TriggerDescription);
+
+internal sealed record PimaxServiceLogEvent(DateTimeOffset Timestamp, bool IsRemove, bool IsAdd);
 
 internal sealed record ProcessResult(int ExitCode, string Output, string Error);
 
@@ -1268,9 +1482,16 @@ internal sealed class SupervisorConfig
     public JsonElement AutoLaunchScheduledTask { get; set; }
     public string[][] PimaxDetectors { get; init; } =
     [
-        ["USB\\VID_2104&PID_0220"],
+        ["USB\\VID_34A4&PID_0012"],
+        ["USB\\VID_34A4&PID_0018"],
+        ["USB\\VID_34A4&PID_0020"],
+        ["USB\\VID_34A4&PID_0040"],
+        ["USB\\VID_34A4&PID_0042"],
+        ["USB\\VID_34A4&PID_0044"],
+        ["USB\\VID_34A4&PID_0046"],
         ["Pimax", "Crystal"],
-        ["EyeChip"]
+        ["Pimax", "P3C"],
+        ["Pimax", "WiGig"]
     ];
     public string[][] MouthTrackerDetectors { get; init; } =
     [
@@ -1278,7 +1499,10 @@ internal sealed class SupervisorConfig
         ["HTC Multimedia Camera"],
         ["VIVE", "Camera"]
     ];
-    public int PollIntervalSeconds { get; init; } = 5;
+    public bool UsePimaxServiceLogReconnectDetector { get; init; } = true;
+    public string PimaxServiceLogDirectory { get; init; } = @"%LOCALAPPDATA%\Pimax\PiService\Log";
+    public int PimaxServiceLogReconnectLookbackLines { get; init; } = 400;
+    public int PollIntervalSeconds { get; init; } = 2;
     public int StartupTimeoutSeconds { get; init; } = 30;
     public int StartupStableSeconds { get; init; } = 5;
     public int DelayBeforeVrcFaceTrackingSeconds { get; init; } = 5;
