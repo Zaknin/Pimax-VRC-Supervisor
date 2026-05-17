@@ -19,7 +19,7 @@ A Windows helper for Pimax Crystal + VRChat setups. It supervises Broken Eye and
 ## Requirements
 
 - Windows
-- .NET 9 runtime or SDK
+- No separate .NET install is needed when using the self-contained release zip
 - Pimax Crystal headset
 - [Broken Eye](https://github.com/ghostiam/BrokenEye)
 - [VRCFaceTracking](https://docs.vrcft.io/docs/vrcft-software/vrcft)
@@ -73,13 +73,13 @@ To reinstall or repair the task directly:
 ## Building From Source
 
 ```powershell
-dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -o .\release\PimaxVrcSupervisor
+dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.4
 ```
 
 The built app will be in:
 
 ```text
-release\PimaxVrcSupervisor
+release\PimaxVrcSupervisor-v1.0.4
 ```
 
 ## Notes
