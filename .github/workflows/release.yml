@@ -1,0 +1,159 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag/name, for example v1.0.9"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build-sign-release:
+    name: Build, sign, attest, and publish release
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Resolve release version
+        shell: pwsh
+        run: |
+          $version = "${{ github.event.inputs.version }}"
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            $version = "${{ github.ref_name }}"
+          }
+
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Could not determine release version. Push a v* tag or provide the manual workflow version input."
+          }
+
+          $releaseDir = "artifacts/PimaxVrcSupervisor-$version"
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RELEASE_DIR=$releaseDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Publish Windows app
+        shell: pwsh
+        run: |
+          dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o $env:RELEASE_DIR
+          dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o $env:RELEASE_DIR
+
+      - name: Authenticode-sign app binaries
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERTIFICATE_BASE64)) {
+            Write-Warning "Skipping Authenticode signing because WINDOWS_SIGNING_CERTIFICATE_BASE64 is not set."
+            exit 0
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD)) {
+            Write-Warning "Skipping Authenticode signing because WINDOWS_SIGNING_CERTIFICATE_PASSWORD is not set."
+            exit 0
+          }
+
+          $certificatePath = Join-Path $env:RUNNER_TEMP "windows-code-signing.pfx"
+          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64))
+
+          $signTool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -like "*\x64\signtool.exe" } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+
+          if ([string]::IsNullOrWhiteSpace($signTool)) {
+            throw "Could not find signtool.exe on the Windows runner."
+          }
+
+          $signTargets = @(
+            "PimaxVrcSupervisor.exe",
+            "PimaxVrcSupervisor.dll",
+            "PimaxVrcSupervisorConfigEditor.exe",
+            "PimaxVrcSupervisorConfigEditor.dll"
+          )
+
+          $files = Get-ChildItem -Path $env:RELEASE_DIR -Recurse -File |
+            Where-Object { $signTargets -contains $_.Name }
+
+          if ($files.Count -eq 0) {
+            throw "No app binaries were found to sign in $env:RELEASE_DIR."
+          }
+
+          foreach ($file in $files) {
+            & $signTool sign /f $certificatePath /p $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $file.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "Signing failed for $($file.FullName)."
+            }
+
+            & $signTool verify /pa /all $file.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "Signature verification failed for $($file.FullName)."
+            }
+          }
+
+          Remove-Item -LiteralPath $certificatePath -Force
+
+      - name: Package release
+        shell: pwsh
+        run: |
+          $zipPath = "artifacts/PimaxVrcSupervisor-$env:RELEASE_VERSION.zip"
+          $checksumPath = "$zipPath.sha256"
+
+          if (Test-Path -LiteralPath $zipPath) {
+            Remove-Item -LiteralPath $zipPath -Force
+          }
+
+          Compress-Archive -Path "$env:RELEASE_DIR\*" -DestinationPath $zipPath -CompressionLevel Optimal
+          $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $(Split-Path -Leaf $zipPath)" | Out-File -FilePath $checksumPath -Encoding ascii
+
+          "ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CHECKSUM_PATH=$checksumPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sigstore-sign release zip
+        shell: pwsh
+        run: |
+          $bundlePath = "$env:ZIP_PATH.sigstore.json"
+          cosign sign-blob --yes --bundle $bundlePath $env:ZIP_PATH
+
+          cosign verify-blob $env:ZIP_PATH `
+            --bundle $bundlePath `
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/(heads|tags)/.+$" `
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+
+          "SIGSTORE_BUNDLE_PATH=$bundlePath" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Attest release zip
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ env.ZIP_PATH }}
+
+      - name: Create or update GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:RELEASE_VERSION *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:RELEASE_VERSION $env:ZIP_PATH $env:CHECKSUM_PATH $env:SIGSTORE_BUNDLE_PATH --clobber
+          } else {
+            gh release create $env:RELEASE_VERSION $env:ZIP_PATH $env:CHECKSUM_PATH $env:SIGSTORE_BUNDLE_PATH --title "Pimax VRC Supervisor $env:RELEASE_VERSION" --generate-notes --target $env:GITHUB_SHA
+          }

@@ -97,6 +97,45 @@ To reinstall or repair the task directly:
 .\PimaxVrcSupervisor.exe --install-auto-launch-task
 ```
 
+## Signed and Attested GitHub Releases
+
+GitHub Actions builds, Sigstore-signs, attests, and publishes new release zips when you push a `v*` tag, such as `v1.0.9`, or run the `Release` workflow manually.
+
+The free signing path uses GitHub Actions OIDC and Sigstore keyless signing. It does not require a certificate, password, private key, or repository secret. The workflow publishes:
+
+- `PimaxVrcSupervisor-<version>.zip`
+- `PimaxVrcSupervisor-<version>.zip.sha256`
+- `PimaxVrcSupervisor-<version>.zip.sigstore.json`
+
+The Sigstore bundle proves the zip was signed by this repository's release workflow and is recorded in Sigstore's transparency log. This helps users verify release integrity, but it does not make Windows treat the app as a verified publisher for SmartScreen.
+
+To verify a release zip with cosign:
+
+```powershell
+cosign verify-blob .\PimaxVrcSupervisor-v1.0.9.zip `
+  --bundle .\PimaxVrcSupervisor-v1.0.9.zip.sigstore.json `
+  --certificate-identity-regexp "^https://github.com/.+/.+/.github/workflows/release.yml@refs/tags/v.+$" `
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+```
+
+Optional: add these repository secrets to Authenticode-sign the app binaries before packaging:
+
+- `WINDOWS_SIGNING_CERTIFICATE_BASE64`: base64 text for your `.pfx` code-signing certificate.
+- `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`: password for the `.pfx` certificate.
+
+To create the base64 certificate value from PowerShell:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\to\certificate.pfx"))
+```
+
+The workflow signs:
+
+- `PimaxVrcSupervisor.exe`
+- `PimaxVrcSupervisor.dll`
+- `PimaxVrcSupervisorConfigEditor.exe`
+- `PimaxVrcSupervisorConfigEditor.dll`
+
 ## Building From Source
 
 ```powershell
