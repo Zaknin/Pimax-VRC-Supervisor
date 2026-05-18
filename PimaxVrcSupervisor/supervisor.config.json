@@ -18,10 +18,18 @@
   // If the watched app exits with a non-zero crash code, the supervisor waits for relaunch before exiting.
   "WatchedShutdownProcessNames": [ "VRChat" ],
 
+  // SteamVR server process names. After VRChat exits, monitors are restored only after these processes are gone.
+  "SteamVrServerProcessNames": [ "vrserver" ],
+
   // Set to true if you use a Vive face/mouth tracker exposed as HTC Multimedia Camera.
   // Set to false to ignore all mouth-tracker detection and VRCFaceTracking-only restart logic.
   // Leave empty to show a Yes/No dialog on first run; the answer is saved here as true or false.
   "MouthTrackerUser": "",
+
+  // Set to true to disable all secondary monitors while Broken Eye/VRCFaceTracking are running.
+  // The full active monitor layout is saved first and restored after VRChat and SteamVR close.
+  // Leave empty to show a Yes/No dialog on first run; the answer is saved here as true or false.
+  "TurnOffSecondaryMonitors": "",
 
   // Leave empty to ask on first setup whether to create an elevated Windows Scheduled Task.
   // When enabled, the task starts this supervisor when VRChat.exe launches, but only if vrserver.exe is running.

@@ -74,12 +74,14 @@ internal sealed class AppSupervisor
     private static readonly TimeSpan BrokenEyeStartupCheckDelay = TimeSpan.FromSeconds(5);
 
     private readonly SupervisorConfig _config;
+    private readonly MonitorLayoutController _monitorLayout = new();
     private readonly TimeSpan _pollInterval;
     private readonly Dictionary<int, Process> _watchedProcessHandles = new();
     private readonly DateTimeOffset _startedAt = DateTimeOffset.Now;
     private bool? _lastPimaxConnected;
     private bool? _lastMouthTrackerConnected;
     private bool _mouthTrackerUser;
+    private bool _turnOffSecondaryMonitors;
     private bool _watchedProcessHasBeenSeen;
     private bool _waitingForWatchedProcessRelaunch;
     private bool _managedAppsStarted;
@@ -116,6 +118,7 @@ internal sealed class AppSupervisor
         }
 
         _mouthTrackerUser = await EnsureMouthTrackerPreferenceAsync(cancellationToken);
+        _turnOffSecondaryMonitors = await EnsureTurnOffSecondaryMonitorsPreferenceAsync(cancellationToken);
         await EnsureAutoLaunchScheduledTaskPreferenceAsync(cancellationToken);
 
         try
@@ -151,14 +154,20 @@ internal sealed class AppSupervisor
                 var watchedProcessState = ObserveWatchedShutdownProcesses();
                 if (watchedProcessState == WatchedProcessState.NormalExit)
                 {
-                    Console.WriteLine("VRChat has shut down. Closing managed apps and exiting.");
-                    await StopManagedAppsAsync(cancellationToken);
+                    var waitForSteamVrServerExit = ShouldWaitForSteamVrServerExitBeforeCleanup();
+                    Console.WriteLine(waitForSteamVrServerExit
+                        ? "VRChat has shut down. Waiting for SteamVR if needed, restoring monitors, then closing managed apps."
+                        : "VRChat has shut down. Closing managed apps and exiting.");
+                    await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit, cancellationToken);
                     return;
                 }
                 if (watchedProcessState == WatchedProcessState.CrashGraceExpired)
                 {
-                    Console.WriteLine("VRChat did not relaunch after a likely crash. Closing managed apps and exiting.");
-                    await StopManagedAppsAsync(cancellationToken);
+                    var waitForSteamVrServerExit = ShouldWaitForSteamVrServerExitBeforeCleanup();
+                    Console.WriteLine(waitForSteamVrServerExit
+                        ? "VRChat did not relaunch after a likely crash. Waiting for SteamVR if needed, restoring monitors, then closing managed apps."
+                        : "VRChat did not relaunch after a likely crash. Closing managed apps and exiting.");
+                    await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit, cancellationToken);
                     return;
                 }
 
@@ -200,8 +209,11 @@ internal sealed class AppSupervisor
 
                     if (_watchedProcessHasBeenSeen && !IsAnyProcessRunning(_config.WatchedShutdownProcessNames))
                     {
-                        Console.WriteLine("VRChat shut down during reconnect delay. Closing managed apps and exiting.");
-                        await StopManagedAppsAsync(cancellationToken);
+                        var waitForSteamVrServerExit = ShouldWaitForSteamVrServerExitBeforeCleanup();
+                        Console.WriteLine(waitForSteamVrServerExit
+                            ? "VRChat shut down during reconnect delay. Waiting for SteamVR if needed, restoring monitors, then closing managed apps."
+                            : "VRChat shut down during reconnect delay. Closing managed apps and exiting.");
+                        await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit, cancellationToken);
                         return;
                     }
 
@@ -245,8 +257,8 @@ internal sealed class AppSupervisor
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            Console.WriteLine("Shutdown requested. Closing managed apps.");
-            await TryStopManagedAppsAsync(CancellationToken.None);
+            Console.WriteLine("Shutdown requested. Restoring monitors and closing managed apps.");
+            await TryRestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -255,8 +267,8 @@ internal sealed class AppSupervisor
 
             if (_managedAppsStarted)
             {
-                Console.WriteLine("Attempting to close managed apps after unexpected error.");
-                await TryStopManagedAppsAsync(CancellationToken.None);
+                Console.WriteLine("Attempting to restore monitors and close managed apps after unexpected error.");
+                await TryRestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, CancellationToken.None);
             }
         }
         finally
@@ -339,6 +351,25 @@ internal sealed class AppSupervisor
         return answer;
     }
 
+    private async Task<bool> EnsureTurnOffSecondaryMonitorsPreferenceAsync(CancellationToken cancellationToken)
+    {
+        if (_config.TryGetTurnOffSecondaryMonitors(out var turnOffSecondaryMonitors))
+        {
+            return turnOffSecondaryMonitors;
+        }
+
+        Console.WriteLine("TurnOffSecondaryMonitors is not configured.");
+        var answer = await AskTurnOffSecondaryMonitorsPreferenceAsync(cancellationToken);
+        _config.SetTurnOffSecondaryMonitors(answer);
+        _config.SaveTurnOffSecondaryMonitorsPreference();
+
+        Console.WriteLine(answer
+            ? "Secondary monitors will be turned off during headset sessions."
+            : "Secondary monitors will stay enabled during headset sessions.");
+
+        return answer;
+    }
+
     private async Task EnsureAutoLaunchScheduledTaskPreferenceAsync(CancellationToken cancellationToken)
     {
         if (_config.TryGetAutoLaunchScheduledTask(out var autoLaunchScheduledTask))
@@ -414,6 +445,37 @@ internal sealed class AppSupervisor
             catch (Exception ex)
             {
                 completion.TrySetException(new InvalidOperationException("Could not open scheduled task question dialog.", ex));
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+
+        cancellationToken.Register(() => completion.TrySetCanceled(cancellationToken));
+        return completion.Task;
+    }
+
+    private static Task<bool> AskTurnOffSecondaryMonitorsPreferenceAsync(CancellationToken cancellationToken)
+    {
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                Application.EnableVisualStyles();
+                var result = MessageBox.Show(
+                    "Do you want to turn off secondary monitors when using the headset?",
+                    "Pimax VRC Supervisor",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button1);
+
+                completion.TrySetResult(result == DialogResult.Yes);
+            }
+            catch (Exception ex)
+            {
+                completion.TrySetException(new InvalidOperationException("Could not open secondary monitor question dialog.", ex));
             }
         });
 
@@ -851,6 +913,7 @@ internal sealed class AppSupervisor
     private async Task StartManagedAppsAsync(CancellationToken cancellationToken)
     {
         _managedAppsStarted = true;
+        PrepareMonitorLayoutForVrSession();
         await StartBrokenEyeWithRetriesAsync(cancellationToken);
         Console.WriteLine($"Waiting {_config.DelayBeforeVrcFaceTrackingSeconds} seconds before starting VRCFaceTracking...");
         await DelayWithCancellationAsync(TimeSpan.FromSeconds(_config.DelayBeforeVrcFaceTrackingSeconds), cancellationToken);
@@ -859,6 +922,23 @@ internal sealed class AppSupervisor
         Console.WriteLine("Starting VRCFaceTracking...");
         StartOrAttach(_config.VrcFaceTrackingPath, _config.VrcFaceTrackingProcessNames);
         await VerifyRunningAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
+    }
+
+    private void PrepareMonitorLayoutForVrSession()
+    {
+        if (!_turnOffSecondaryMonitors)
+        {
+            return;
+        }
+
+        try
+        {
+            _monitorLayout.KeepPrimaryMonitorOnly();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not switch to primary monitor only before launching Broken Eye: {ex.Message}");
+        }
     }
 
     private async Task StartBrokenEyeWithRetriesAsync(CancellationToken cancellationToken)
@@ -907,15 +987,57 @@ internal sealed class AppSupervisor
         await StopProcessesAsync("Broken Eye", _config.BrokenEyeProcessNames, cancellationToken);
     }
 
-    private async Task TryStopManagedAppsAsync(CancellationToken cancellationToken)
+    private async Task RestoreMonitorsAndStopManagedAppsAsync(bool waitForSteamVrServerExit, CancellationToken cancellationToken)
+    {
+        if (waitForSteamVrServerExit)
+        {
+            await WaitForSteamVrServerExitAsync(cancellationToken);
+        }
+
+        RestoreMonitorLayout();
+        await StopManagedAppsAsync(cancellationToken);
+    }
+
+    private bool ShouldWaitForSteamVrServerExitBeforeCleanup()
+        => _turnOffSecondaryMonitors && _monitorLayout.HasSavedLayout;
+
+    private async Task TryRestoreMonitorsAndStopManagedAppsAsync(bool waitForSteamVrServerExit, CancellationToken cancellationToken)
     {
         try
         {
-            await StopManagedAppsAsync(cancellationToken);
+            await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit, cancellationToken);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Could not complete managed app cleanup: {ex.Message}");
+            Console.WriteLine($"Could not complete monitor restore and managed app cleanup: {ex.Message}");
+        }
+    }
+
+    private async Task WaitForSteamVrServerExitAsync(CancellationToken cancellationToken)
+    {
+        if (!IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+        {
+            return;
+        }
+
+        Console.WriteLine($"Waiting for SteamVR server to exit: {string.Join(", ", _config.SteamVrServerProcessNames)}");
+        while (IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+        {
+            await Task.Delay(_pollInterval, cancellationToken);
+        }
+
+        Console.WriteLine("SteamVR server has exited.");
+    }
+
+    private void RestoreMonitorLayout()
+    {
+        try
+        {
+            _monitorLayout.Restore();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not restore previous monitor layout: {ex.Message}");
         }
     }
 
@@ -1470,6 +1592,384 @@ internal static class ScheduledTaskInstaller
     private static string ToPowerShellSingleQuotedString(string value) => "'" + value.Replace("'", "''") + "'";
 }
 
+internal sealed class MonitorLayoutController
+{
+    private DisplayLayoutSnapshot? _savedLayout;
+
+    public bool HasSavedLayout => _savedLayout is not null;
+
+    public void KeepPrimaryMonitorOnly()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        if (_savedLayout is not null)
+        {
+            return;
+        }
+
+        var currentLayout = DisplayLayoutSnapshot.Capture();
+        if (currentLayout.ActiveMonitorCount <= 1)
+        {
+            Console.WriteLine("Only one active monitor detected. Keeping current monitor layout.");
+            return;
+        }
+
+        var primaryPathIndex = currentLayout.FindPrimaryPathIndex();
+        _savedLayout = currentLayout;
+
+        Console.WriteLine($"Multiple active monitors detected ({currentLayout.ActiveMonitorCount}). Saving layout and switching to monitor 1 only.");
+        currentLayout.ApplyOnlyPath(primaryPathIndex);
+        Console.WriteLine("Extra monitors are disabled for the VR session.");
+    }
+
+    public void Restore()
+    {
+        if (_savedLayout is null)
+        {
+            return;
+        }
+
+        Console.WriteLine("Restoring previous monitor layout.");
+        _savedLayout.Apply();
+        _savedLayout = null;
+        Console.WriteLine("Previous monitor layout restored.");
+    }
+}
+
+internal sealed class DisplayLayoutSnapshot
+{
+    private const uint ErrorSuccess = 0;
+    private const uint QdcOnlyActivePaths = 0x00000002;
+    private const uint SdcUseSuppliedDisplayConfig = 0x00000020;
+    private const uint SdcApply = 0x00000080;
+    private const uint SdcAllowChanges = 0x00000400;
+    private const uint InvalidModeInfoIndex = 0xffffffff;
+
+    private readonly DisplayConfigPathInfo[] _paths;
+    private readonly DisplayConfigModeInfo[] _modes;
+
+    private DisplayLayoutSnapshot(DisplayConfigPathInfo[] paths, DisplayConfigModeInfo[] modes)
+    {
+        _paths = paths;
+        _modes = modes;
+    }
+
+    public int ActiveMonitorCount => _paths.Length;
+
+    public static DisplayLayoutSnapshot Capture()
+    {
+        var error = GetDisplayConfigBufferSizes(QdcOnlyActivePaths, out var pathCount, out var modeCount);
+        ThrowIfWin32Error(error, "get display configuration buffer sizes");
+
+        while (true)
+        {
+            var paths = new DisplayConfigPathInfo[pathCount];
+            var modes = new DisplayConfigModeInfo[modeCount];
+            var queryPathCount = pathCount;
+            var queryModeCount = modeCount;
+
+            error = QueryDisplayConfig(
+                QdcOnlyActivePaths,
+                ref queryPathCount,
+                paths,
+                ref queryModeCount,
+                modes,
+                IntPtr.Zero);
+
+            if (error == ErrorSuccess)
+            {
+                Array.Resize(ref paths, checked((int)queryPathCount));
+                Array.Resize(ref modes, checked((int)queryModeCount));
+                return new DisplayLayoutSnapshot(paths, modes);
+            }
+
+            const uint errorInsufficientBuffer = 122;
+            if (error != errorInsufficientBuffer)
+            {
+                ThrowIfWin32Error(error, "query active display configuration");
+            }
+
+            error = GetDisplayConfigBufferSizes(QdcOnlyActivePaths, out pathCount, out modeCount);
+            ThrowIfWin32Error(error, "get display configuration buffer sizes");
+        }
+    }
+
+    public int FindPrimaryPathIndex()
+    {
+        for (var index = 0; index < _paths.Length; index++)
+        {
+            if (TryGetSourcePosition(_paths[index], out var position) && position.X == 0 && position.Y == 0)
+            {
+                return index;
+            }
+        }
+
+        return 0;
+    }
+
+    public void ApplyOnlyPath(int pathIndex)
+    {
+        if (pathIndex < 0 || pathIndex >= _paths.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(pathIndex));
+        }
+
+        var path = _paths[pathIndex];
+        path.Flags |= DisplayConfigNative.PathActive;
+        var modes = new List<DisplayConfigModeInfo>();
+        path.SourceInfo.ModeInfoIdx = AddReferencedMode(path.SourceInfo.ModeInfoIdx, modes);
+        path.TargetInfo.ModeInfoIdx = AddReferencedMode(path.TargetInfo.ModeInfoIdx, modes);
+        Apply([path], modes.ToArray());
+    }
+
+    public void Apply() => Apply(_paths, _modes);
+
+    private bool TryGetSourcePosition(DisplayConfigPathInfo path, out PointL position)
+    {
+        position = default;
+        if (path.SourceInfo.ModeInfoIdx == InvalidModeInfoIndex || path.SourceInfo.ModeInfoIdx >= _modes.Length)
+        {
+            return false;
+        }
+
+        var mode = _modes[path.SourceInfo.ModeInfoIdx];
+        if (mode.InfoType != DisplayConfigModeInfoType.Source)
+        {
+            return false;
+        }
+
+        position = mode.ModeInfo.SourceMode.Position;
+        return true;
+    }
+
+    private uint AddReferencedMode(uint modeIndex, List<DisplayConfigModeInfo> modes)
+    {
+        if (modeIndex == InvalidModeInfoIndex || modeIndex >= _modes.Length)
+        {
+            return InvalidModeInfoIndex;
+        }
+
+        var updatedModeIndex = checked((uint)modes.Count);
+        modes.Add(_modes[modeIndex]);
+        return updatedModeIndex;
+    }
+
+    private static void Apply(DisplayConfigPathInfo[] paths, DisplayConfigModeInfo[] modes)
+    {
+        var error = SetDisplayConfig(
+            (uint)paths.Length,
+            paths,
+            (uint)modes.Length,
+            modes,
+            SdcUseSuppliedDisplayConfig | SdcApply | SdcAllowChanges);
+
+        ThrowIfWin32Error(error, "apply display configuration");
+    }
+
+    private static void ThrowIfWin32Error(uint error, string action)
+    {
+        if (error == ErrorSuccess)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException($"Could not {action}. Win32 error: {error}.");
+    }
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDisplayConfigBufferSizes(
+        uint flags,
+        out uint numPathArrayElements,
+        out uint numModeInfoArrayElements);
+
+    [DllImport("user32.dll")]
+    private static extern uint QueryDisplayConfig(
+        uint flags,
+        ref uint numPathArrayElements,
+        [Out] DisplayConfigPathInfo[] pathInfoArray,
+        ref uint numModeInfoArrayElements,
+        [Out] DisplayConfigModeInfo[] modeInfoArray,
+        IntPtr currentTopologyId);
+
+    [DllImport("user32.dll")]
+    private static extern uint SetDisplayConfig(
+        uint numPathArrayElements,
+        [In] DisplayConfigPathInfo[] pathArray,
+        uint numModeInfoArrayElements,
+        [In] DisplayConfigModeInfo[] modeInfoArray,
+        uint flags);
+}
+
+internal static class DisplayConfigNative
+{
+    public const uint PathActive = 0x00000001;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct Luid
+{
+    public uint LowPart;
+    public int HighPart;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct DisplayConfigPathInfo
+{
+    public DisplayConfigPathSourceInfo SourceInfo;
+    public DisplayConfigPathTargetInfo TargetInfo;
+    public uint Flags;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct DisplayConfigPathSourceInfo
+{
+    public Luid AdapterId;
+    public uint Id;
+    public uint ModeInfoIdx;
+    public uint StatusFlags;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct DisplayConfigPathTargetInfo
+{
+    public Luid AdapterId;
+    public uint Id;
+    public uint ModeInfoIdx;
+    public DisplayConfigVideoOutputTechnology OutputTechnology;
+    public DisplayConfigRotation Rotation;
+    public DisplayConfigScaling Scaling;
+    public DisplayConfigRational RefreshRate;
+    public DisplayConfigScanLineOrdering ScanLineOrdering;
+    [MarshalAs(UnmanagedType.Bool)]
+    public bool TargetAvailable;
+    public uint StatusFlags;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct DisplayConfigModeInfo
+{
+    public DisplayConfigModeInfoType InfoType;
+    public uint Id;
+    public Luid AdapterId;
+    public DisplayConfigModeInfoUnion ModeInfo;
+}
+
+[StructLayout(LayoutKind.Explicit)]
+internal struct DisplayConfigModeInfoUnion
+{
+    [FieldOffset(0)]
+    public DisplayConfigTargetMode TargetMode;
+
+    [FieldOffset(0)]
+    public DisplayConfigSourceMode SourceMode;
+
+    [FieldOffset(0)]
+    public DisplayConfigDesktopImageInfo DesktopImageInfo;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct DisplayConfigTargetMode
+{
+    public DisplayConfigVideoSignalInfo TargetVideoSignalInfo;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct DisplayConfigVideoSignalInfo
+{
+    public ulong PixelRate;
+    public DisplayConfigRational HSyncFreq;
+    public DisplayConfigRational VSyncFreq;
+    public DisplayConfig2DRegion ActiveSize;
+    public DisplayConfig2DRegion TotalSize;
+    public uint VideoStandard;
+    public DisplayConfigScanLineOrdering ScanLineOrdering;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct DisplayConfigSourceMode
+{
+    public uint Width;
+    public uint Height;
+    public DisplayConfigPixelFormat PixelFormat;
+    public PointL Position;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct DisplayConfigDesktopImageInfo
+{
+    public PointL PathSourceSize;
+    public RectL DesktopImageRegion;
+    public RectL DesktopImageClip;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct DisplayConfigRational
+{
+    public uint Numerator;
+    public uint Denominator;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct DisplayConfig2DRegion
+{
+    public uint Cx;
+    public uint Cy;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct PointL
+{
+    public int X;
+    public int Y;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct RectL
+{
+    public int Left;
+    public int Top;
+    public int Right;
+    public int Bottom;
+}
+
+internal enum DisplayConfigModeInfoType : uint
+{
+    Source = 1,
+    Target = 2,
+    DesktopImage = 3
+}
+
+internal enum DisplayConfigVideoOutputTechnology : uint
+{
+    Other = 0xffffffff
+}
+
+internal enum DisplayConfigRotation : uint
+{
+    Identity = 1
+}
+
+internal enum DisplayConfigScaling : uint
+{
+    Identity = 1
+}
+
+internal enum DisplayConfigScanLineOrdering : uint
+{
+    Unspecified = 0
+}
+
+internal enum DisplayConfigPixelFormat : uint
+{
+    Bpp32 = 0,
+    Bpp16 = 1,
+    Bpp8 = 2,
+    NonGdi = 3
+}
+
 internal sealed class SupervisorConfig
 {
     public string BrokenEyePath { get; set; } = "";
@@ -1478,7 +1978,9 @@ internal sealed class SupervisorConfig
     public string[] BrokenEyeProcessNames { get; set; } = ["Broken Eye"];
     public string[] VrcFaceTrackingProcessNames { get; set; } = ["VRCFaceTracking"];
     public string[] WatchedShutdownProcessNames { get; init; } = ["VRChat"];
+    public string[] SteamVrServerProcessNames { get; init; } = ["vrserver"];
     public JsonElement MouthTrackerUser { get; set; }
+    public JsonElement TurnOffSecondaryMonitors { get; set; }
     public JsonElement AutoLaunchScheduledTask { get; set; }
     public string[][] PimaxDetectors { get; init; } =
     [
@@ -1574,6 +2076,43 @@ internal sealed class SupervisorConfig
 
         File.WriteAllText(configPath, json);
         Console.WriteLine($"Saved mouth tracker preference to: {configPath}");
+    }
+
+    public bool TryGetTurnOffSecondaryMonitors(out bool turnOffSecondaryMonitors)
+    {
+        if (TurnOffSecondaryMonitors.ValueKind == JsonValueKind.True)
+        {
+            turnOffSecondaryMonitors = true;
+            return true;
+        }
+
+        if (TurnOffSecondaryMonitors.ValueKind == JsonValueKind.False)
+        {
+            turnOffSecondaryMonitors = false;
+            return true;
+        }
+
+        turnOffSecondaryMonitors = false;
+        return false;
+    }
+
+    public void SetTurnOffSecondaryMonitors(bool turnOffSecondaryMonitors)
+    {
+        TurnOffSecondaryMonitors = JsonSerializer.SerializeToElement(turnOffSecondaryMonitors);
+    }
+
+    public void SaveTurnOffSecondaryMonitorsPreference()
+    {
+        var configPath = LoadedFromPath ?? Path.Combine(AppContext.BaseDirectory, "supervisor.config.json");
+        var json = File.Exists(configPath) ? File.ReadAllText(configPath) : "{\n}";
+
+        json = ReplaceJsonBooleanOrStringProperty(
+            json,
+            nameof(TurnOffSecondaryMonitors),
+            TryGetTurnOffSecondaryMonitors(out var value) && value);
+
+        File.WriteAllText(configPath, json);
+        Console.WriteLine($"Saved secondary monitor preference to: {configPath}");
     }
 
     public bool TryGetAutoLaunchScheduledTask(out bool autoLaunchScheduledTask)

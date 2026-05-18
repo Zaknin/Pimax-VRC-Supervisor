@@ -1,19 +1,18 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <OutputType>WinExe</OutputType>
     <TargetFramework>net9.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
-    <AssemblyName>PimaxVrcSupervisor</AssemblyName>
-    <RootNamespace>PimaxVrcSupervisor</RootNamespace>
-    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <AssemblyName>PimaxVrcSupervisorConfigEditor</AssemblyName>
+    <RootNamespace>PimaxVrcSupervisor.ConfigEditor</RootNamespace>
+    <ApplicationIcon>Assets\config-editor.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
-    <None Update="supervisor.config.json">
+    <None Include="..\PimaxVrcSupervisor\supervisor.config.json" Link="supervisor.config.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Include="..\README.md" Link="README.md">
