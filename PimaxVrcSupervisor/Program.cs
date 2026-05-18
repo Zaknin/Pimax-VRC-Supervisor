@@ -59,6 +59,16 @@ static async Task InstallAutoLaunchScheduledTaskFromCommandLineAsync(SupervisorC
 
 internal sealed record ResolvedExecutablePath(string Path, bool WasSelected);
 
+internal sealed record ManagedAutoLaunchApp(string DisplayName, string Path, string[] ProcessNames, bool RestartOnPimaxReconnect);
+
+internal sealed record PimaxServiceReconnect(DateTimeOffset RemoveAt, DateTimeOffset AddAt);
+
+internal enum ManagedAppStopReason
+{
+    SessionEnding,
+    PimaxReconnect
+}
+
 internal enum WatchedProcessState
 {
     NotSeenYet,
@@ -89,6 +99,9 @@ internal sealed class AppSupervisor
     private DateTimeOffset? _lastPimaxServiceLogEventSeenAt;
     private DateTimeOffset? _pendingPimaxServiceHidRemoveAt;
     private DateTimeOffset? _lastPimaxServiceReconnectAt;
+    private DateTimeOffset? _lastHandledPimaxReconnectSignalAt;
+    private DateTimeOffset? _lastMouthTrackerPnPEventSeenAt;
+    private bool _mouthTrackerPnPEventWarningShown;
 
     public AppSupervisor(SupervisorConfig config)
     {
@@ -183,64 +196,92 @@ internal sealed class AppSupervisor
                         _lastMouthTrackerConnected,
                         cancellationToken)
                     : (bool?)null;
-                var pimaxRuntimeReconnected = pimaxConnected
-                    && DetectPimaxServiceLogReconnect();
+                var pimaxServiceReconnect = pimaxConnected
+                    ? DetectPimaxServiceLogReconnect()
+                    : null;
+                var pimaxRuntimeReconnected = pimaxServiceReconnect is not null;
                 var pimaxReconnected = _lastPimaxConnected == false && pimaxConnected;
                 var mouthTrackerReconnected = _mouthTrackerUser
                     && _lastMouthTrackerConnected == false
                     && mouthTrackerConnected == true;
+                var mouthTrackerPnPReconnected = _mouthTrackerUser
+                    && mouthTrackerConnected == true
+                    && await DetectMouthTrackerPnPReconnectAsync(cancellationToken);
 
                 if (pimaxReconnected || pimaxRuntimeReconnected)
                 {
-                    if (pimaxRuntimeReconnected && !pimaxReconnected)
+                    var reconnectSignalAt = pimaxServiceReconnect?.AddAt ?? DateTimeOffset.Now;
+                    if (IsDuplicatePimaxReconnectSignal(reconnectSignalAt))
                     {
-                        Console.WriteLine("Pimax runtime HID reconnect detected from PiService logs.");
-                    }
+                        if (pimaxServiceReconnect is not null)
+                        {
+                            Console.WriteLine($"Ignoring PiService HID reconnect at {pimaxServiceReconnect.AddAt:HH:mm:ss.fff}; it matches a Pimax reconnect already handled.");
+                        }
 
-                    var reconnectDelay = TimeSpan.FromSeconds(_config.RestartDelayAfterReconnectSeconds);
-                    Console.WriteLine($"Pimax Crystal reconnected. Waiting {reconnectDelay.TotalSeconds:0} seconds for a stable connection before restarting managed apps.");
-                    var stableReconnect = await WaitForPimaxStableConnectedAsync(reconnectDelay, cancellationToken);
-                    if (!stableReconnect)
+                        pimaxReconnected = false;
+                        pimaxRuntimeReconnected = false;
+                    }
+                    else
                     {
-                        Console.WriteLine("Pimax Crystal did not stay connected during the reconnect wait. Waiting for the next reconnect.");
-                        _lastPimaxConnected = false;
-                        continue;
-                    }
+                        _lastHandledPimaxReconnectSignalAt = reconnectSignalAt;
 
-                    if (_watchedProcessHasBeenSeen && !IsAnyProcessRunning(_config.WatchedShutdownProcessNames))
-                    {
-                        var waitForSteamVrServerExit = ShouldWaitForSteamVrServerExitBeforeCleanup();
-                        Console.WriteLine(waitForSteamVrServerExit
-                            ? "VRChat shut down during reconnect delay. Waiting for SteamVR if needed, restoring monitors, then closing managed apps."
-                            : "VRChat shut down during reconnect delay. Closing managed apps and exiting.");
-                        await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit, cancellationToken);
-                        return;
-                    }
+                        if (pimaxServiceReconnect is not null)
+                        {
+                            Console.WriteLine($"Pimax PiService HID remove/add sequence: {pimaxServiceReconnect.RemoveAt:HH:mm:ss.fff} -> {pimaxServiceReconnect.AddAt:HH:mm:ss.fff}");
+                        }
 
-                    await StopManagedAppsAsync(cancellationToken);
-                    await StartManagedAppsAsync(cancellationToken);
-                    pimaxConnected = await ReadDeviceConnectedOrPreviousAsync(
-                        "Pimax Crystal",
-                        IsPimaxConnectedAsync,
-                        true,
-                        cancellationToken);
-                    mouthTrackerConnected = _mouthTrackerUser
-                        ? await ReadDeviceConnectedOrPreviousAsync(
-                            "mouth tracker",
-                            IsMouthTrackerConnectedAsync,
-                            _lastMouthTrackerConnected,
-                            cancellationToken)
-                        : (bool?)null;
-                    Console.WriteLine($"Pimax Crystal state after restart: {DescribeConnection(pimaxConnected)}");
+                        if (pimaxRuntimeReconnected && !pimaxReconnected)
+                        {
+                            Console.WriteLine("Pimax runtime HID reconnect detected from PiService logs.");
+                        }
+
+                        var reconnectDelay = TimeSpan.FromSeconds(_config.RestartDelayAfterReconnectSeconds);
+                        Console.WriteLine($"Pimax Crystal reconnected. Waiting {reconnectDelay.TotalSeconds:0} seconds for a stable connection before restarting managed apps.");
+                        var stableReconnect = await WaitForPimaxStableConnectedAsync(reconnectDelay, cancellationToken);
+                        if (!stableReconnect)
+                        {
+                            Console.WriteLine("Pimax Crystal did not stay connected during the reconnect wait. Waiting for the next reconnect.");
+                            _lastPimaxConnected = false;
+                            continue;
+                        }
+
+                        if (_watchedProcessHasBeenSeen && !IsAnyProcessRunning(_config.WatchedShutdownProcessNames))
+                        {
+                            var waitForSteamVrServerExit = ShouldWaitForSteamVrServerExitBeforeCleanup();
+                            Console.WriteLine(waitForSteamVrServerExit
+                                ? "VRChat shut down during reconnect delay. Waiting for SteamVR if needed, restoring monitors, then closing managed apps."
+                                : "VRChat shut down during reconnect delay. Closing managed apps and exiting.");
+                            await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit, cancellationToken);
+                            return;
+                        }
+
+                        await StopManagedAppsAsync(ManagedAppStopReason.PimaxReconnect, cancellationToken);
+                        await StartManagedAppsAsync(cancellationToken);
+                        pimaxConnected = await ReadDeviceConnectedOrPreviousAsync(
+                            "Pimax Crystal",
+                            IsPimaxConnectedAsync,
+                            true,
+                            cancellationToken);
+                        mouthTrackerConnected = _mouthTrackerUser
+                            ? await ReadDeviceConnectedOrPreviousAsync(
+                                "mouth tracker",
+                                IsMouthTrackerConnectedAsync,
+                                _lastMouthTrackerConnected,
+                                cancellationToken)
+                            : (bool?)null;
+                        Console.WriteLine($"Pimax Crystal state after restart: {DescribeConnection(pimaxConnected)}");
+                    }
                 }
                 else if (_lastPimaxConnected != pimaxConnected)
                 {
                     Console.WriteLine($"Pimax Crystal state changed: {DescribeConnection(pimaxConnected)}");
                 }
 
-                if (_mouthTrackerUser && mouthTrackerReconnected && !pimaxReconnected && !pimaxRuntimeReconnected && pimaxConnected)
+                if (_mouthTrackerUser && (mouthTrackerReconnected || mouthTrackerPnPReconnected) && !pimaxReconnected && !pimaxRuntimeReconnected && pimaxConnected)
                 {
-                    Console.WriteLine("Mouth tracker reconnected while Pimax Crystal stayed connected. Restarting VRCFaceTracking.");
+                    Console.WriteLine(mouthTrackerPnPReconnected && !mouthTrackerReconnected
+                        ? "Mouth tracker device event detected while Pimax Crystal stayed connected. Restarting VRCFaceTracking."
+                        : "Mouth tracker reconnected while Pimax Crystal stayed connected. Restarting VRCFaceTracking.");
                     await RestartVrcFaceTrackingAsync(cancellationToken);
                 }
                 else if (_mouthTrackerUser && _lastMouthTrackerConnected == true && mouthTrackerConnected == false)
@@ -693,17 +734,30 @@ internal sealed class AppSupervisor
         }
     }
 
-    private bool DetectPimaxServiceLogReconnect()
+    private bool IsDuplicatePimaxReconnectSignal(DateTimeOffset signalAt)
+    {
+        if (_lastHandledPimaxReconnectSignalAt is not { } lastHandledSignalAt)
+        {
+            return false;
+        }
+
+        var coalesceWindow = TimeSpan.FromSeconds(Math.Max(
+            30,
+            _config.RestartDelayAfterReconnectSeconds + _config.PollIntervalSeconds + 5));
+        return (signalAt - lastHandledSignalAt).Duration() <= coalesceWindow;
+    }
+
+    private PimaxServiceReconnect? DetectPimaxServiceLogReconnect()
     {
         if (!_config.UsePimaxServiceLogReconnectDetector)
         {
-            return false;
+            return null;
         }
 
         var logFile = GetNewestPimaxServiceLogFile();
         if (logFile is null)
         {
-            return false;
+            return null;
         }
 
         try
@@ -731,8 +785,7 @@ internal sealed class AppSupervisor
                     }
 
                     _lastPimaxServiceReconnectAt = entry.Timestamp;
-                    Console.WriteLine($"Pimax PiService HID remove/add sequence: {removeAt:HH:mm:ss.fff} -> {entry.Timestamp:HH:mm:ss.fff}");
-                    return true;
+                    return new PimaxServiceReconnect(removeAt, entry.Timestamp);
                 }
             }
         }
@@ -741,7 +794,71 @@ internal sealed class AppSupervisor
             Console.WriteLine($"Could not scan Pimax PiService log for reconnects: {ex.Message}");
         }
 
-        return false;
+        return null;
+    }
+
+    private async Task<bool> DetectMouthTrackerPnPReconnectAsync(CancellationToken cancellationToken)
+    {
+        if (!_config.UseMouthTrackerPnPReconnectDetector)
+        {
+            return false;
+        }
+
+        try
+        {
+            var output = await RunProcessForOutputAsync(
+                "wevtutil.exe",
+                "qe System /rd:true /c:120 /f:text /q:\"*[System[Provider[@Name='Microsoft-Windows-Kernel-PnP']]]\"",
+                TimeSpan.FromSeconds(_config.DeviceProbeTimeoutSeconds),
+                cancellationToken);
+
+            var detectedReconnect = false;
+            foreach (var eventBlock in SplitWindowsEventLogBlocks(output).Reverse())
+            {
+                if (!TryParseWindowsEventLogTimestamp(eventBlock, out var timestamp)
+                    || timestamp <= _startedAt
+                    || timestamp <= (_lastMouthTrackerPnPEventSeenAt ?? DateTimeOffset.MinValue)
+                    || !DetectorGroupMatchesBlockAny(_config.MouthTrackerDetectors, eventBlock.ToLowerInvariant()))
+                {
+                    continue;
+                }
+
+                _lastMouthTrackerPnPEventSeenAt = timestamp;
+                detectedReconnect = true;
+            }
+
+            return detectedReconnect;
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            if (!_mouthTrackerPnPEventWarningShown)
+            {
+                Console.WriteLine($"Could not scan Windows PnP events for mouth tracker reconnects: {ex.Message}");
+                _mouthTrackerPnPEventWarningShown = true;
+            }
+
+            return false;
+        }
+    }
+
+    private static string[] SplitWindowsEventLogBlocks(string output)
+    {
+        return Regex
+            .Split(output.Trim(), @"(?m)(?=^Event\[\d+\]\s*:?\s*$)")
+            .Where(block => !string.IsNullOrWhiteSpace(block))
+            .ToArray();
+    }
+
+    private static bool TryParseWindowsEventLogTimestamp(string eventBlock, out DateTimeOffset timestamp)
+    {
+        timestamp = default;
+        var match = Regex.Match(eventBlock, @"(?m)^\s*Date:\s*(.+?)\s*$");
+        return match.Success
+            && DateTimeOffset.TryParse(
+                match.Groups[1].Value,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal,
+                out timestamp);
     }
 
     private string? GetNewestPimaxServiceLogFile()
@@ -922,6 +1039,8 @@ internal sealed class AppSupervisor
         Console.WriteLine("Starting VRCFaceTracking...");
         StartOrAttach(_config.VrcFaceTrackingPath, _config.VrcFaceTrackingProcessNames);
         await VerifyRunningAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
+
+        await StartAutoLaunchAppsAsync(cancellationToken);
     }
 
     private void PrepareMonitorLayoutForVrSession()
@@ -981,8 +1100,19 @@ internal sealed class AppSupervisor
         throw new TimeoutException($"Broken Eye did not start after {BrokenEyeStartupMaxAttempts} attempts.");
     }
 
-    private async Task StopManagedAppsAsync(CancellationToken cancellationToken)
+    private async Task StopManagedAppsAsync(ManagedAppStopReason reason, CancellationToken cancellationToken)
     {
+        foreach (var app in GetEnabledAutoLaunchApps().Reverse())
+        {
+            if (reason == ManagedAppStopReason.PimaxReconnect && !app.RestartOnPimaxReconnect)
+            {
+                Console.WriteLine($"{app.DisplayName} is configured to stay running during Pimax reconnect cleanup.");
+                continue;
+            }
+
+            await StopProcessesAsync(app.DisplayName, app.ProcessNames, cancellationToken);
+        }
+
         await StopProcessesAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
         await StopProcessesAsync("Broken Eye", _config.BrokenEyeProcessNames, cancellationToken);
     }
@@ -995,7 +1125,7 @@ internal sealed class AppSupervisor
         }
 
         RestoreMonitorLayout();
-        await StopManagedAppsAsync(cancellationToken);
+        await StopManagedAppsAsync(ManagedAppStopReason.SessionEnding, cancellationToken);
     }
 
     private bool ShouldWaitForSteamVrServerExitBeforeCleanup()
@@ -1049,7 +1179,87 @@ internal sealed class AppSupervisor
         await VerifyRunningAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
     }
 
-    private void StartOrAttach(string path, string[] processNames)
+    private async Task StartAutoLaunchAppsAsync(CancellationToken cancellationToken)
+    {
+        var apps = GetEnabledAutoLaunchApps();
+        if (apps.Length == 0)
+        {
+            return;
+        }
+
+        Console.WriteLine("Starting configured auto-launch apps...");
+        foreach (var app in apps)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!File.Exists(app.Path))
+            {
+                Console.WriteLine($"Skipping {app.DisplayName}: executable was not found at {app.Path}");
+                continue;
+            }
+
+            try
+            {
+                Console.WriteLine($"Starting {app.DisplayName}...");
+                StartOrAttach(app.Path, app.ProcessNames, suppressOutput: true);
+                await VerifyRunningAsync(app.DisplayName, app.ProcessNames, cancellationToken);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                Console.WriteLine($"Could not start {app.DisplayName}: {ex.Message}");
+            }
+        }
+    }
+
+    private ManagedAutoLaunchApp[] GetEnabledAutoLaunchApps()
+    {
+        return _config.AutoLaunchApps
+            .Where(app => app.Enabled && !string.IsNullOrWhiteSpace(app.Path))
+            .Select(CreateManagedAutoLaunchApp)
+            .Where(app => app is not null)
+            .Cast<ManagedAutoLaunchApp>()
+            .ToArray();
+    }
+
+    private static ManagedAutoLaunchApp? CreateManagedAutoLaunchApp(AutoLaunchAppConfig app)
+    {
+        var path = app.Path.Trim();
+        var processNames = app.ProcessNames
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => Path.GetFileNameWithoutExtension(name.Trim()))
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (processNames.Length == 0)
+        {
+            var inferredProcessName = Path.GetFileNameWithoutExtension(path);
+            if (!string.IsNullOrWhiteSpace(inferredProcessName))
+            {
+                processNames = [inferredProcessName];
+            }
+        }
+
+        if (processNames.Length == 0)
+        {
+            Console.WriteLine($"Skipping auto-launch app with no process name: {path}");
+            return null;
+        }
+
+        var displayName = !string.IsNullOrWhiteSpace(app.Name)
+            ? app.Name.Trim()
+            : Path.GetFileNameWithoutExtension(path);
+        if (string.IsNullOrWhiteSpace(displayName))
+        {
+            displayName = path;
+        }
+
+        var restartOnPimaxReconnect = app.RestartOnPimaxReconnect
+            ?? app.CloseOnPimaxDisconnect
+            ?? true;
+        return new ManagedAutoLaunchApp(displayName, path, processNames, restartOnPimaxReconnect);
+    }
+
+    private void StartOrAttach(string path, string[] processNames, bool suppressOutput = false)
     {
         if (IsAnyProcessRunning(processNames))
         {
@@ -1057,7 +1267,14 @@ internal sealed class AppSupervisor
             return;
         }
 
-        StartProcess(path);
+        if (suppressOutput)
+        {
+            StartProcessSilently(path);
+        }
+        else
+        {
+            StartProcess(path);
+        }
     }
 
     private static void StartProcess(string path)
@@ -1070,6 +1287,40 @@ internal sealed class AppSupervisor
         };
 
         Process.Start(startInfo);
+    }
+
+    private static void StartProcessSilently(string path)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = path,
+            WorkingDirectory = Path.GetDirectoryName(path) ?? Environment.CurrentDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start {path}.");
+        _ = Task.Run(async () =>
+        {
+            using (process)
+            {
+                try
+                {
+                    await Task.WhenAll(
+                        process.StandardOutput.ReadToEndAsync(),
+                        process.StandardError.ReadToEndAsync(),
+                        process.WaitForExitAsync());
+                }
+                catch
+                {
+                    // Auto-launch app output is intentionally discarded.
+                }
+            }
+        });
     }
 
     private async Task VerifyRunningAsync(
@@ -1190,6 +1441,11 @@ internal sealed class AppSupervisor
         return keywords.Length > 0
             && keywords.All(keyword => normalizedDeviceBlock.Contains(keyword.ToLowerInvariant()));
     }
+
+    private static bool DetectorGroupMatchesBlockAny(string[][] detectorGroups, string normalizedDeviceBlock)
+        => detectorGroups
+            .Where(group => group.Length > 0)
+            .Any(group => DetectorGroupMatchesBlock(group, normalizedDeviceBlock));
 
     private static async Task<string> RunProcessForOutputAsync(string fileName, string arguments, TimeSpan timeout, CancellationToken cancellationToken)
     {
@@ -1977,6 +2233,7 @@ internal sealed class SupervisorConfig
     public const string DefaultVrcFaceTrackingPath = @"C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking\VRCFaceTracking.exe";
     public string[] BrokenEyeProcessNames { get; set; } = ["Broken Eye"];
     public string[] VrcFaceTrackingProcessNames { get; set; } = ["VRCFaceTracking"];
+    public AutoLaunchAppConfig[] AutoLaunchApps { get; init; } = [];
     public string[] WatchedShutdownProcessNames { get; init; } = ["VRChat"];
     public string[] SteamVrServerProcessNames { get; init; } = ["vrserver"];
     public JsonElement MouthTrackerUser { get; set; }
@@ -2002,6 +2259,7 @@ internal sealed class SupervisorConfig
         ["VIVE", "Camera"]
     ];
     public bool UsePimaxServiceLogReconnectDetector { get; init; } = true;
+    public bool UseMouthTrackerPnPReconnectDetector { get; init; } = true;
     public string PimaxServiceLogDirectory { get; init; } = @"%LOCALAPPDATA%\Pimax\PiService\Log";
     public int PimaxServiceLogReconnectLookbackLines { get; init; } = 400;
     public int PollIntervalSeconds { get; init; } = 2;
@@ -2231,4 +2489,14 @@ internal sealed class SupervisorConfig
         AllowTrailingCommas = true,
         Converters = { new JsonStringEnumConverter() }
     };
+}
+
+internal sealed class AutoLaunchAppConfig
+{
+    public string Name { get; init; } = "";
+    public string Path { get; init; } = "";
+    public string[] ProcessNames { get; init; } = [];
+    public bool Enabled { get; init; } = true;
+    public bool? RestartOnPimaxReconnect { get; init; }
+    public bool? CloseOnPimaxDisconnect { get; init; }
 }

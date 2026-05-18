@@ -10,10 +10,12 @@ A Windows helper for Pimax Crystal + VRChat setups. It supervises Broken Eye and
 - The Scheduled Task starts a hidden elevated watcher at Windows sign-in and starts that watcher immediately after setup.
 - If enabled, before starting Broken Eye saves the active Windows monitor layout and switches to monitor 1 only when multiple monitors are active.
 - Starts Broken Eye first, retrying up to 10 times if it does not appear as running after 5 seconds, then starts VRCFaceTracking.
+- Starts optional user-defined apps after the main Broken Eye/VRCFaceTracking sequence has completed.
 - Watches Pimax HMD/runtime reconnects, waits for the connection to stay stable, and restarts both managed apps after reconnect.
 - Watches Pimax PiService HID remove/add log events so short reconnects are still caught even when Windows USB state is back before the next poll.
 - Optionally watches the Vive mouth tracker / HTC Multimedia Camera and restarts only VRCFaceTracking when it reconnects.
-- Watches `VRChat.exe`; if monitor handling is enabled, waits for `vrserver.exe`, restores the previous monitor layout, then closes managed apps.
+- Watches Windows PnP events for the Vive mouth tracker so fast tracker restarts can still restart VRCFaceTracking.
+- Watches `VRChat.exe`; if monitor handling is enabled, waits for `vrserver.exe`, restores the previous monitor layout, then closes managed apps and user-defined auto-launch apps.
 - If VRChat appears to crash, waits 5 minutes for it to relaunch before exiting.
 - Prevents duplicate normal supervisor instances from racing each other; the hidden auto-launch watcher can still run alongside one supervisor.
 
@@ -40,7 +42,7 @@ On first run, the app may ask:
 
 Your answers are saved into `supervisor.config.json` next to the exe.
 
-You can also run `PimaxVrcSupervisorConfigEditor.exe` to edit the same config file with a small GUI. It provides browse buttons for executable paths, checkboxes for yes/no settings, editors for process names and detector rules, and numeric controls for timing values.
+You can also run `PimaxVrcSupervisorConfigEditor.exe` to edit the same config file with a small GUI. It provides browse buttons for executable paths, checkboxes for yes/no settings, an Auto Launch tab for user-defined apps, editors for process names and detector rules, and numeric controls for timing values.
 
 ## Configuration
 
@@ -53,10 +55,27 @@ Important defaults:
 - `MouthTrackerUser` starts empty and asks a Yes/No question on first run.
 - `TurnOffSecondaryMonitors` starts empty and asks a Yes/No question on first run.
 - `AutoLaunchScheduledTask` starts empty and asks a Yes/No question on first setup.
+- `AutoLaunchApps` defaults to an empty list. Each item can define `Name`, `Path`, `Enabled`, and `RestartOnPimaxReconnect`. The process name is inferred from the exe filename.
 - `SteamVrServerProcessNames` defaults to `vrserver` and controls when monitors are restored after VRChat exits if secondary monitor handling is enabled.
 - `PollIntervalSeconds` defaults to `2`.
 - `PimaxDetectors` defaults to Pimax HMD/runtime USB IDs (`VID_34A4`) instead of the eye tracker-only `EyeChip` device, so reconnects are detected when the headset path actually drops and returns.
 - `UsePimaxServiceLogReconnectDetector` defaults to `true` and watches `%LOCALAPPDATA%\Pimax\PiService\Log\PiService__*.log` for fast runtime HID reconnects.
+- `UseMouthTrackerPnPReconnectDetector` defaults to `true` and watches Windows Kernel-PnP events for fast Vive mouth tracker reconnects.
+
+Example auto-launch app:
+
+```json
+"AutoLaunchApps": [
+  {
+    "Name": "Example overlay",
+    "Path": "C:\\Tools\\ExampleOverlay\\ExampleOverlay.exe",
+    "Enabled": true,
+    "RestartOnPimaxReconnect": true
+  }
+]
+```
+
+Set `RestartOnPimaxReconnect` to `false` for apps that should stay running during the Pimax reconnect restart cycle. They will still be closed when the VRChat session ends.
 
 ## Auto-Launch Task
 
@@ -79,14 +98,14 @@ To reinstall or repair the task directly:
 ## Building From Source
 
 ```powershell
-dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.5
-dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.5
+dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.6
+dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.6
 ```
 
 The built app will be in:
 
 ```text
-release\PimaxVrcSupervisor-v1.0.5
+release\PimaxVrcSupervisor-v1.0.6
 ```
 
 ## Notes

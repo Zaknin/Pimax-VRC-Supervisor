@@ -14,6 +14,19 @@
   // Process names used to check, attach to, and close VRCFaceTracking. Do not include ".exe".
   "VrcFaceTrackingProcessNames": [ "VRCFaceTracking" ],
 
+  // Optional apps to start after Broken Eye and VRCFaceTracking are running.
+  // These apps are closed with the same managed-app cleanup used for Broken Eye and VRCFaceTracking.
+  // The process name is inferred from Path.
+  // Set RestartOnPimaxReconnect to false to leave an app running during the Pimax reconnect restart cycle.
+  "AutoLaunchApps": [
+    // {
+    //   "Name": "Example overlay",
+    //   "Path": "C:\\Tools\\ExampleOverlay\\ExampleOverlay.exe",
+    //   "Enabled": true,
+    //   "RestartOnPimaxReconnect": true
+    // }
+  ],
+
   // When any of these processes has been seen running and later closes, the supervisor closes both managed apps and exits.
   // If the watched app exits with a non-zero crash code, the supervisor waits for relaunch before exiting.
   "WatchedShutdownProcessNames": [ "VRChat" ],
@@ -63,6 +76,10 @@
   // Also watch Pimax PiService logs for fast HID remove/add reconnect bursts.
   // This catches short runtime drops that can happen between normal USB polling checks.
   "UsePimaxServiceLogReconnectDetector": true,
+
+  // Also watch Windows Kernel-PnP events for fast Vive mouth tracker reconnects.
+  // This catches short mouth tracker restarts that can happen between normal USB polling checks.
+  "UseMouthTrackerPnPReconnectDetector": true,
 
   // Folder containing PiService__*.log files. Environment variables like %LOCALAPPDATA% are expanded.
   "PimaxServiceLogDirectory": "%LOCALAPPDATA%\\Pimax\\PiService\\Log",

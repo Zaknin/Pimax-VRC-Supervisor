@@ -20,4 +20,8 @@
     </None>
   </ItemGroup>
 
+  <Target Name="PatchCreatedumpIcon" AfterTargets="Publish" Condition="Exists('$(PublishDir)createdump.exe')">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\PimaxVrcSupervisor\Tools\Set-WindowsIcon.ps1&quot; -ExecutablePath &quot;$(PublishDir)createdump.exe&quot; -IconPath &quot;$(MSBuildThisFileDirectory)..\PimaxVrcSupervisor\Assets\dump.ico&quot;" />
+  </Target>
+
 </Project>

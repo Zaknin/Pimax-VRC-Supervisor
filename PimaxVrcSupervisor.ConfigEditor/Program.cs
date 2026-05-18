@@ -28,7 +28,16 @@ internal sealed class ConfigEditorForm : Form
     private readonly CheckBox _turnOffMonitorsCheckBox = CreateTriStateCheckBox("Turn off secondary monitors during headset sessions");
     private readonly CheckBox _autoLaunchTaskCheckBox = CreateTriStateCheckBox("Create/evaluate VRChat auto-launch Scheduled Task");
     private readonly CheckBox _usePimaxLogCheckBox = new() { Text = "Watch Pimax PiService logs for fast reconnects", AutoSize = true };
+    private readonly CheckBox _useMouthTrackerPnPCheckBox = new() { Text = "Watch Windows PnP events for fast mouth tracker reconnects", AutoSize = true };
     private readonly TextBox _pimaxServiceLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
+    private readonly DataGridView _autoLaunchAppsGrid = new()
+    {
+        Dock = DockStyle.Fill,
+        AllowUserToAddRows = true,
+        AllowUserToDeleteRows = true,
+        AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+        RowHeadersVisible = false
+    };
     private readonly TextBox _brokenEyeProcessesTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _vrcFaceTrackingProcessesTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _watchedShutdownProcessesTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
@@ -170,6 +179,7 @@ internal sealed class ConfigEditorForm : Form
     {
         var tabs = new ThemedTabHost { Dock = DockStyle.Fill };
         tabs.AddTab("Basics", BuildBasicsTab());
+        tabs.AddTab("Auto Launch", BuildAutoLaunchTab());
         tabs.AddTab("Processes", BuildProcessesTab());
         tabs.AddTab("Detectors", BuildDetectorsTab());
         tabs.AddTab("Timing", BuildTimingTab());
@@ -192,9 +202,138 @@ internal sealed class ConfigEditorForm : Form
         AddFullWidth(layout, _turnOffMonitorsCheckBox, "Checked saves the current monitor layout and disables secondary monitors during the VR session. The layout is restored after VRChat and SteamVR close.");
         AddFullWidth(layout, _autoLaunchTaskCheckBox, "Checked lets the app create or repair the elevated auto-launch Scheduled Task. Filled square asks on first setup.");
         AddFullWidth(layout, _usePimaxLogCheckBox, "Also scan PiService logs for quick HID remove/add reconnects that normal USB polling can miss.");
+        AddFullWidth(layout, _useMouthTrackerPnPCheckBox, "Also scan Windows Kernel-PnP events for quick mouth tracker reconnects that normal USB polling can miss.");
         AddLabeledRow(layout, "PiService log folder", _pimaxServiceLogDirectoryTextBox, "Folder containing PiService__*.log files. Environment variables such as %LOCALAPPDATA% are expanded by the supervisor.");
 
         return layout;
+    }
+
+    private Control BuildAutoLaunchTab()
+    {
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Padding = new Padding(8)
+        };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        ConfigureAutoLaunchAppsGrid();
+
+        const string tooltip = "Optional apps to launch after Broken Eye and VRCFaceTracking are running. The supervisor infers the process name from the selected exe.";
+        var label = new Label
+        {
+            Text = "Auto-launch apps",
+            AutoSize = true,
+            Padding = new Padding(0, 0, 0, 4)
+        };
+
+        _toolTips.SetToolTip(label, tooltip);
+        _toolTips.SetToolTip(_autoLaunchAppsGrid, tooltip);
+        layout.Controls.Add(label, 0, 0);
+        layout.Controls.Add(_autoLaunchAppsGrid, 0, 1);
+        return layout;
+    }
+
+    private void ConfigureAutoLaunchAppsGrid()
+    {
+        if (_autoLaunchAppsGrid.Columns.Count > 0)
+        {
+            return;
+        }
+
+        _autoLaunchAppsGrid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "Name",
+            HeaderText = "Name",
+            FillWeight = 18
+        });
+        _autoLaunchAppsGrid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "Path",
+            HeaderText = "Exe path",
+            FillWeight = 36
+        });
+        _autoLaunchAppsGrid.Columns.Add(new DataGridViewButtonColumn
+        {
+            Name = "Browse",
+            HeaderText = "",
+            Text = "Browse...",
+            UseColumnTextForButtonValue = true,
+            DefaultCellStyle = { NullValue = "Browse..." },
+            FillWeight = 10
+        });
+        _autoLaunchAppsGrid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "Enabled",
+            HeaderText = "Enabled",
+            FillWeight = 10
+        });
+        _autoLaunchAppsGrid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "RestartOnPimaxReconnect",
+            HeaderText = "Restart on Pimax reconnect",
+            FillWeight = 18
+        });
+        _autoLaunchAppsGrid.CellContentClick += OnAutoLaunchAppsGridCellContentClick;
+        _autoLaunchAppsGrid.CellFormatting += OnAutoLaunchAppsGridCellFormatting;
+        _autoLaunchAppsGrid.DefaultValuesNeeded += OnAutoLaunchAppsGridDefaultValuesNeeded;
+    }
+
+    private void OnAutoLaunchAppsGridCellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
+    {
+        if (e.RowIndex >= 0 && _autoLaunchAppsGrid.Columns[e.ColumnIndex].Name == "Browse")
+        {
+            e.Value = "Browse...";
+            e.FormattingApplied = true;
+        }
+    }
+
+    private void OnAutoLaunchAppsGridDefaultValuesNeeded(object? sender, DataGridViewRowEventArgs e)
+    {
+        e.Row.Cells["Enabled"].Value = true;
+        e.Row.Cells["RestartOnPimaxReconnect"].Value = true;
+    }
+
+    private void OnAutoLaunchAppsGridCellContentClick(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || _autoLaunchAppsGrid.Columns[e.ColumnIndex].Name != "Browse")
+        {
+            return;
+        }
+
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Select auto-launch app",
+            Filter = "Executable files (*.exe)|*.exe|All files (*.*)|*.*",
+            CheckFileExists = true,
+            CheckPathExists = true,
+            Multiselect = false
+        };
+
+        var selectedRow = _autoLaunchAppsGrid.Rows[e.RowIndex];
+        var currentPath = selectedRow.IsNewRow ? "" : GetGridString(selectedRow, "Path");
+        if (File.Exists(currentPath))
+        {
+            dialog.InitialDirectory = Path.GetDirectoryName(currentPath);
+            dialog.FileName = Path.GetFileName(currentPath);
+        }
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        var row = selectedRow.IsNewRow
+            ? _autoLaunchAppsGrid.Rows[AddAutoLaunchAppGridRow("", "", enabled: true, restartOnPimaxReconnect: true)]
+            : selectedRow;
+        row.Cells["Path"].Value = dialog.FileName;
+        if (string.IsNullOrWhiteSpace(GetGridString(row, "Name")))
+        {
+            row.Cells["Name"].Value = Path.GetFileNameWithoutExtension(dialog.FileName);
+        }
     }
 
     private Control BuildProcessesTab()
@@ -478,7 +617,9 @@ internal sealed class ConfigEditorForm : Form
         _turnOffMonitorsCheckBox.CheckState = GetBoolCheckState(node, "TurnOffSecondaryMonitors");
         _autoLaunchTaskCheckBox.CheckState = GetBoolCheckState(node, "AutoLaunchScheduledTask");
         _usePimaxLogCheckBox.Checked = GetBool(node, "UsePimaxServiceLogReconnectDetector", defaultValue: true);
+        _useMouthTrackerPnPCheckBox.Checked = GetBool(node, "UseMouthTrackerPnPReconnectDetector", defaultValue: true);
         _pimaxServiceLogDirectoryTextBox.Text = GetString(node, "PimaxServiceLogDirectory");
+        PopulateAutoLaunchAppsGrid(GetAutoLaunchApps(node));
         _brokenEyeProcessesTextBox.Text = string.Join(", ", GetStringArray(node, "BrokenEyeProcessNames"));
         _vrcFaceTrackingProcessesTextBox.Text = string.Join(", ", GetStringArray(node, "VrcFaceTrackingProcessNames"));
         _watchedShutdownProcessesTextBox.Text = string.Join(", ", GetStringArray(node, "WatchedShutdownProcessNames"));
@@ -502,6 +643,7 @@ internal sealed class ConfigEditorForm : Form
                 throw new InvalidOperationException("Choose a config file path before saving.");
             }
 
+            CommitAutoLaunchAppsGridEdits();
             var json = ApplyControlValues(_rawJsonTextBox.Text);
             ParseJson(json);
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
@@ -522,6 +664,7 @@ internal sealed class ConfigEditorForm : Form
         var json = string.IsNullOrWhiteSpace(baseJson) ? "{\r\n}\r\n" : baseJson;
         json = JsonPropertyEditor.Replace(json, "BrokenEyePath", Serialize(_brokenEyePathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "VrcFaceTrackingPath", Serialize(_vrcFaceTrackingPathTextBox.Text.Trim()));
+        json = JsonPropertyEditor.Replace(json, "AutoLaunchApps", Serialize(ReadAutoLaunchAppsGrid()));
         json = JsonPropertyEditor.Replace(json, "BrokenEyeProcessNames", Serialize(ParseStringList(_brokenEyeProcessesTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "VrcFaceTrackingProcessNames", Serialize(ParseStringList(_vrcFaceTrackingProcessesTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "WatchedShutdownProcessNames", Serialize(ParseStringList(_watchedShutdownProcessesTextBox.Text)));
@@ -532,6 +675,7 @@ internal sealed class ConfigEditorForm : Form
         json = JsonPropertyEditor.Replace(json, "PimaxDetectors", Serialize(ParseStringMatrix(_pimaxDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "MouthTrackerDetectors", Serialize(ParseStringMatrix(_mouthTrackerDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "UsePimaxServiceLogReconnectDetector", _usePimaxLogCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "UseMouthTrackerPnPReconnectDetector", _useMouthTrackerPnPCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "PimaxServiceLogDirectory", Serialize(_pimaxServiceLogDirectoryTextBox.Text.Trim()));
 
         foreach (var (propertyName, input) in _numberInputs)
@@ -581,6 +725,13 @@ internal sealed class ConfigEditorForm : Form
             : defaultValue;
     }
 
+    private static bool? GetOptionalBool(JsonNode? node, string propertyName)
+    {
+        return node?[propertyName] is JsonValue value && value.TryGetValue<bool>(out var result)
+            ? result
+            : null;
+    }
+
     private static CheckState GetBoolCheckState(JsonNode? node, string propertyName)
     {
         if (node?[propertyName] is not JsonValue value)
@@ -624,11 +775,104 @@ internal sealed class ConfigEditorForm : Form
             .ToArray();
     }
 
+    private static AutoLaunchAppEditorRow[] GetAutoLaunchApps(JsonNode? node)
+    {
+        if (node?["AutoLaunchApps"] is not JsonArray array)
+        {
+            return [];
+        }
+
+        var apps = new List<AutoLaunchAppEditorRow>();
+        foreach (var item in array)
+        {
+            switch (item)
+            {
+                case JsonValue value when value.TryGetValue<string>(out var path) && !string.IsNullOrWhiteSpace(path):
+                    apps.Add(new AutoLaunchAppEditorRow("", path.Trim(), Enabled: true, RestartOnPimaxReconnect: true));
+                    break;
+                case JsonObject obj:
+                    var appPath = GetString(obj, "Path").Trim();
+                    if (string.IsNullOrWhiteSpace(appPath))
+                    {
+                        continue;
+                    }
+
+                    apps.Add(new AutoLaunchAppEditorRow(
+                        GetString(obj, "Name").Trim(),
+                        appPath,
+                        GetBool(obj, "Enabled", defaultValue: true),
+                        GetOptionalBool(obj, "RestartOnPimaxReconnect")
+                            ?? GetOptionalBool(obj, "CloseOnPimaxDisconnect")
+                            ?? true));
+                    break;
+            }
+        }
+
+        return apps.ToArray();
+    }
+
     private static string[] ParseStringList(string text)
     {
         return text.Split([',', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(value => value.Length > 0)
             .ToArray();
+    }
+
+    private void PopulateAutoLaunchAppsGrid(AutoLaunchAppEditorRow[] apps)
+    {
+        _autoLaunchAppsGrid.Rows.Clear();
+        foreach (var app in apps)
+        {
+            AddAutoLaunchAppGridRow(app.Name, app.Path, app.Enabled, app.RestartOnPimaxReconnect);
+        }
+    }
+
+    private int AddAutoLaunchAppGridRow(string name, string path, bool enabled, bool restartOnPimaxReconnect)
+    {
+        return _autoLaunchAppsGrid.Rows.Add(
+            name,
+            path,
+            "",
+            enabled,
+            restartOnPimaxReconnect);
+    }
+
+    private void CommitAutoLaunchAppsGridEdits()
+    {
+        if (_autoLaunchAppsGrid.IsCurrentCellDirty)
+        {
+            _autoLaunchAppsGrid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        }
+
+        _autoLaunchAppsGrid.EndEdit();
+        ValidateChildren();
+    }
+
+    private AutoLaunchAppEditorRow[] ReadAutoLaunchAppsGrid()
+    {
+        CommitAutoLaunchAppsGridEdits();
+        var apps = new List<AutoLaunchAppEditorRow>();
+        foreach (DataGridViewRow row in _autoLaunchAppsGrid.Rows)
+        {
+            if (row.IsNewRow)
+            {
+                continue;
+            }
+
+            var path = GetGridString(row, "Path");
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                continue;
+            }
+
+            apps.Add(new AutoLaunchAppEditorRow(
+                GetGridString(row, "Name"),
+                path,
+                GetGridBool(row, "Enabled", defaultValue: true),
+                GetGridBool(row, "RestartOnPimaxReconnect", defaultValue: true)));
+        }
+
+        return apps.ToArray();
     }
 
     private static string[][] ParseStringMatrix(string text)
@@ -642,6 +886,22 @@ internal sealed class ConfigEditorForm : Form
     private static string FormatStringMatrix(string[][] matrix)
     {
         return string.Join(Environment.NewLine, matrix.Select(rule => string.Join(", ", rule)));
+    }
+
+    private static string GetGridString(DataGridViewRow row, string columnName)
+    {
+        return Convert.ToString(row.Cells[columnName].Value)?.Trim() ?? "";
+    }
+
+    private static bool GetGridBool(DataGridViewRow row, string columnName, bool defaultValue)
+    {
+        var value = row.Cells[columnName].Value;
+        return value switch
+        {
+            bool boolValue => boolValue,
+            string text when bool.TryParse(text, out var parsed) => parsed,
+            _ => defaultValue
+        };
     }
 
     private static CheckBox CreateTriStateCheckBox(string text)
@@ -730,6 +990,9 @@ internal sealed class ConfigEditorForm : Form
                 input.BackColor = _theme.InputBack;
                 input.ForeColor = _theme.Text;
                 break;
+            case DataGridView grid:
+                ApplyThemeToGrid(grid);
+                break;
             case Button button:
                 button.UseVisualStyleBackColor = false;
                 button.FlatStyle = FlatStyle.Flat;
@@ -769,6 +1032,26 @@ internal sealed class ConfigEditorForm : Form
         }
     }
 
+    private void ApplyThemeToGrid(DataGridView grid)
+    {
+        grid.BackgroundColor = _theme.WindowBack;
+        grid.GridColor = _theme.Border;
+        grid.BorderStyle = BorderStyle.FixedSingle;
+        grid.EnableHeadersVisualStyles = false;
+        grid.ColumnHeadersDefaultCellStyle.BackColor = _theme.ButtonBack;
+        grid.ColumnHeadersDefaultCellStyle.ForeColor = _theme.Text;
+        grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = _theme.ButtonHover;
+        grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = _theme.Text;
+        grid.DefaultCellStyle.BackColor = _theme.InputBack;
+        grid.DefaultCellStyle.ForeColor = _theme.Text;
+        grid.DefaultCellStyle.SelectionBackColor = _theme.ButtonHover;
+        grid.DefaultCellStyle.SelectionForeColor = _theme.Text;
+        grid.RowHeadersDefaultCellStyle.BackColor = _theme.WindowBack;
+        grid.RowHeadersDefaultCellStyle.ForeColor = _theme.Text;
+        grid.AlternatingRowsDefaultCellStyle.BackColor = _theme.WindowBack;
+        grid.AlternatingRowsDefaultCellStyle.ForeColor = _theme.Text;
+    }
+
     private static string? FindConfigPath(string? requestedConfigPath)
     {
         var candidates = new[]
@@ -785,6 +1068,8 @@ internal sealed class ConfigEditorForm : Form
             .FirstOrDefault(File.Exists);
     }
 }
+
+internal sealed record AutoLaunchAppEditorRow(string Name, string Path, bool Enabled, bool RestartOnPimaxReconnect);
 
 internal sealed record AppTheme(
     bool IsDark,
@@ -948,6 +1233,9 @@ internal sealed class ThemedTabHost : UserControl
                 input.BackColor = _theme.InputBack;
                 input.ForeColor = _theme.Text;
                 break;
+            case DataGridView grid:
+                ApplyThemeToGrid(grid);
+                break;
             case Button button:
                 button.UseVisualStyleBackColor = false;
                 button.FlatStyle = FlatStyle.Flat;
@@ -976,6 +1264,26 @@ internal sealed class ThemedTabHost : UserControl
         {
             ApplyThemeToContent(child);
         }
+    }
+
+    private void ApplyThemeToGrid(DataGridView grid)
+    {
+        grid.BackgroundColor = _theme.WindowBack;
+        grid.GridColor = _theme.Border;
+        grid.BorderStyle = BorderStyle.FixedSingle;
+        grid.EnableHeadersVisualStyles = false;
+        grid.ColumnHeadersDefaultCellStyle.BackColor = _theme.ButtonBack;
+        grid.ColumnHeadersDefaultCellStyle.ForeColor = _theme.Text;
+        grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = _theme.ButtonHover;
+        grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = _theme.Text;
+        grid.DefaultCellStyle.BackColor = _theme.InputBack;
+        grid.DefaultCellStyle.ForeColor = _theme.Text;
+        grid.DefaultCellStyle.SelectionBackColor = _theme.ButtonHover;
+        grid.DefaultCellStyle.SelectionForeColor = _theme.Text;
+        grid.RowHeadersDefaultCellStyle.BackColor = _theme.WindowBack;
+        grid.RowHeadersDefaultCellStyle.ForeColor = _theme.Text;
+        grid.AlternatingRowsDefaultCellStyle.BackColor = _theme.WindowBack;
+        grid.AlternatingRowsDefaultCellStyle.ForeColor = _theme.Text;
     }
 }
 

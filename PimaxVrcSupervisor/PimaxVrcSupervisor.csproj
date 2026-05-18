@@ -19,6 +19,13 @@
     <None Include="..\README.md" Link="README.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Update="Assets\dump.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
+
+  <Target Name="PatchCreatedumpIcon" AfterTargets="Publish" Condition="Exists('$(PublishDir)createdump.exe')">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)Tools\Set-WindowsIcon.ps1&quot; -ExecutablePath &quot;$(PublishDir)createdump.exe&quot; -IconPath &quot;$(MSBuildThisFileDirectory)Assets\dump.ico&quot;" />
+  </Target>
 
 </Project>
