@@ -9,11 +9,6 @@
     <AssemblyName>PimaxVrcSupervisorConfigEditor</AssemblyName>
     <RootNamespace>PimaxVrcSupervisor.ConfigEditor</RootNamespace>
     <ApplicationIcon>Assets\config-editor.ico</ApplicationIcon>
-    <PublishSingleFile>true</PublishSingleFile>
-    <SelfContained>true</SelfContained>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
-    <DebugType>embedded</DebugType>
   </PropertyGroup>
 
   <ItemGroup>

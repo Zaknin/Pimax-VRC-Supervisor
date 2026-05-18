@@ -82,7 +82,9 @@ jobs:
 
           $signTargets = @(
             "PimaxVrcSupervisor.exe",
-            "PimaxVrcSupervisorConfigEditor.exe"
+            "PimaxVrcSupervisor.dll",
+            "PimaxVrcSupervisorConfigEditor.exe",
+            "PimaxVrcSupervisorConfigEditor.dll"
           )
 
           $files = Get-ChildItem -Path $env:RELEASE_DIR -Recurse -File |
