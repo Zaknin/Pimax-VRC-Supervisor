@@ -107,6 +107,8 @@ The free signing path uses GitHub Actions OIDC and Sigstore keyless signing. It 
 - `PimaxVrcSupervisor-<version>.zip.sha256`
 - `PimaxVrcSupervisor-<version>.zip.sigstore.json`
 
+If you publish a release through GitHub's release UI with uploaded `.zip` assets, the `Sign Release Assets` workflow signs those zip files and uploads matching `.sha256` and `.sigstore.json` files. If you add assets after a release is already published, run that workflow manually for the release tag.
+
 The Sigstore bundle proves the zip was signed by this repository's release workflow and is recorded in Sigstore's transparency log. This helps users verify release integrity, but it does not make Windows treat the app as a verified publisher for SmartScreen.
 
 To verify a release zip with cosign:

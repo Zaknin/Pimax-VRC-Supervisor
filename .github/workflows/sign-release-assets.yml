@@ -1,0 +1,97 @@
+name: Sign Release Assets
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to sign, for example v1.0.9"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  sign-release-assets:
+    name: Sign uploaded release assets
+    runs-on: windows-latest
+
+    steps:
+      - name: Resolve release tag
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.release.tag_name }}"
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            $tag = "${{ github.event.inputs.tag }}"
+          }
+
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            throw "Could not determine release tag."
+          }
+
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Download zip release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $release = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json assets | ConvertFrom-Json
+          $zipAssets = @($release.assets | Where-Object { $_.name -like "*.zip" })
+
+          if ($zipAssets.Count -eq 0) {
+            Write-Host "No zip assets found on release $env:RELEASE_TAG."
+            "ZIP_ASSET_COUNT=0" | Out-File -FilePath $env:GITHUB_ENV -Append
+            exit 0
+          }
+
+          $assetDir = Join-Path $env:RUNNER_TEMP "release-assets"
+          New-Item -ItemType Directory -Path $assetDir -Force | Out-Null
+
+          foreach ($asset in $zipAssets) {
+            gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --dir $assetDir --pattern $asset.name --clobber
+          }
+
+          "ZIP_ASSET_COUNT=$($zipAssets.Count)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ASSET_DIR=$assetDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install cosign
+        if: env.ZIP_ASSET_COUNT != '0'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign and checksum zip assets
+        if: env.ZIP_ASSET_COUNT != '0'
+        shell: pwsh
+        run: |
+          $signedDir = Join-Path $env:RUNNER_TEMP "signed-assets"
+          New-Item -ItemType Directory -Path $signedDir -Force | Out-Null
+
+          foreach ($zip in Get-ChildItem -Path $env:ASSET_DIR -Filter "*.zip" -File) {
+            $bundlePath = Join-Path $signedDir "$($zip.Name).sigstore.json"
+            $checksumPath = Join-Path $signedDir "$($zip.Name).sha256"
+
+            $hash = (Get-FileHash -Path $zip.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($zip.Name)" | Out-File -FilePath $checksumPath -Encoding ascii
+
+            cosign sign-blob --yes --bundle $bundlePath $zip.FullName
+
+            cosign verify-blob $zip.FullName `
+              --bundle $bundlePath `
+              --certificate-identity-regexp "^https://github.com/${{ github.repository }}/.github/workflows/sign-release-assets.yml@refs/(heads|tags)/.+$" `
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+          }
+
+          "SIGNED_DIR=$signedDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload signatures and checksums
+        if: env.ZIP_ASSET_COUNT != '0'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = @(Get-ChildItem -Path $env:SIGNED_DIR -File | Select-Object -ExpandProperty FullName)
+          gh release upload $env:RELEASE_TAG @files --repo $env:GITHUB_REPOSITORY --clobber
