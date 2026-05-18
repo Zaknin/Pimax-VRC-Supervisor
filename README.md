@@ -79,14 +79,14 @@ To reinstall or repair the task directly:
 ## Building From Source
 
 ```powershell
-dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.4
-dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.4
+dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.5
+dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.5
 ```
 
 The built app will be in:
 
 ```text
-release\PimaxVrcSupervisor-v1.0.4
+release\PimaxVrcSupervisor-v1.0.5
 ```
 
 ## Notes

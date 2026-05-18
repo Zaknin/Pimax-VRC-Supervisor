@@ -1,4 +1,4 @@
-# Pimax VRC Supervisor v1.0.4: что умеет текущая версия
+# Pimax VRC Supervisor v1.0.5: что умеет текущая версия
 
 Pimax VRC Supervisor - Windows-утилита для сетапа Pimax Crystal + VRChat. Она следит за подключением шлема, Broken Eye, VRCFaceTracking, VRChat и, при необходимости, Vive mouth tracker, чтобы автоматически запускать, перезапускать и корректно закрывать нужные приложения во время VR-сессии.
 
@@ -51,6 +51,6 @@ Pimax VRC Supervisor - Windows-утилита для сетапа Pimax Crystal 
 ## Сборка и поставка
 
 - Проект собирается как self-contained Windows-приложение на `.NET 9`.
-- В релизной папке используется версия `release/PimaxVrcSupervisor-v1.0.4`.
+- В релизной папке используется версия `release/PimaxVrcSupervisor-v1.0.5`.
 - Отдельная установка .NET для пользователя релизного zip не требуется.
 - Основной exe запрашивает права администратора через manifest.
