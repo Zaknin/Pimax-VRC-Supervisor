@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
@@ -1791,16 +1790,6 @@ internal static class ScheduledTaskInstaller
             && !string.Equals(Path.GetFileName(processPath), "dotnet.exe", StringComparison.OrdinalIgnoreCase))
         {
             return processPath;
-        }
-
-        var assemblyPath = Assembly.GetEntryAssembly()?.Location;
-        if (!string.IsNullOrWhiteSpace(assemblyPath))
-        {
-            var appHostPath = Path.ChangeExtension(assemblyPath, ".exe");
-            if (File.Exists(appHostPath))
-            {
-                return appHostPath;
-            }
         }
 
         var fallbackPath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.exe");

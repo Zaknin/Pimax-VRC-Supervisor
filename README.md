@@ -134,9 +134,7 @@ To create the base64 certificate value from PowerShell:
 The workflow signs:
 
 - `PimaxVrcSupervisor.exe`
-- `PimaxVrcSupervisor.dll`
 - `PimaxVrcSupervisorConfigEditor.exe`
-- `PimaxVrcSupervisorConfigEditor.dll`
 
 ## Building From Source
 
@@ -150,6 +148,8 @@ The built app will be in:
 ```text
 release\PimaxVrcSupervisor-v1.0.8
 ```
+
+Release builds are self-contained single-file Windows executables, so users do not need a separate .NET install and the release folder stays small: the app executables, `supervisor.config.json`, and `README.md`.
 
 ## Notes
 
