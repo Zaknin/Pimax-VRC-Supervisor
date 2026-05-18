@@ -36,6 +36,7 @@ internal sealed class ConfigEditorForm : Form
         AllowUserToAddRows = true,
         AllowUserToDeleteRows = true,
         AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+        ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
         RowHeadersVisible = false
     };
     private readonly TextBox _brokenEyeProcessesTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
@@ -248,13 +249,15 @@ internal sealed class ConfigEditorForm : Form
         {
             Name = "Name",
             HeaderText = "Name",
-            FillWeight = 18
+            FillWeight = 20,
+            MinimumWidth = 150
         });
         _autoLaunchAppsGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
             Name = "Path",
             HeaderText = "Exe path",
-            FillWeight = 36
+            FillWeight = 42,
+            MinimumWidth = 240
         });
         _autoLaunchAppsGrid.Columns.Add(new DataGridViewButtonColumn
         {
@@ -263,19 +266,29 @@ internal sealed class ConfigEditorForm : Form
             Text = "Browse...",
             UseColumnTextForButtonValue = true,
             DefaultCellStyle = { NullValue = "Browse..." },
-            FillWeight = 10
+            FillWeight = 10,
+            MinimumWidth = 110
         });
         _autoLaunchAppsGrid.Columns.Add(new DataGridViewCheckBoxColumn
         {
             Name = "Enabled",
             HeaderText = "Enabled",
-            FillWeight = 10
+            FillWeight = 10,
+            MinimumWidth = 88
         });
         _autoLaunchAppsGrid.Columns.Add(new DataGridViewCheckBoxColumn
         {
             Name = "RestartOnPimaxReconnect",
             HeaderText = "Restart on Pimax reconnect",
-            FillWeight = 18
+            FillWeight = 22,
+            MinimumWidth = 190
+        });
+        _autoLaunchAppsGrid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "RunAsAdmin",
+            HeaderText = "Run as admin",
+            FillWeight = 14,
+            MinimumWidth = 120
         });
         _autoLaunchAppsGrid.CellContentClick += OnAutoLaunchAppsGridCellContentClick;
         _autoLaunchAppsGrid.CellFormatting += OnAutoLaunchAppsGridCellFormatting;
@@ -295,6 +308,7 @@ internal sealed class ConfigEditorForm : Form
     {
         e.Row.Cells["Enabled"].Value = true;
         e.Row.Cells["RestartOnPimaxReconnect"].Value = true;
+        e.Row.Cells["RunAsAdmin"].Value = false;
     }
 
     private void OnAutoLaunchAppsGridCellContentClick(object? sender, DataGridViewCellEventArgs e)
@@ -327,7 +341,7 @@ internal sealed class ConfigEditorForm : Form
         }
 
         var row = selectedRow.IsNewRow
-            ? _autoLaunchAppsGrid.Rows[AddAutoLaunchAppGridRow("", "", enabled: true, restartOnPimaxReconnect: true)]
+            ? _autoLaunchAppsGrid.Rows[AddAutoLaunchAppGridRow("", "", enabled: true, restartOnPimaxReconnect: true, runAsAdmin: false)]
             : selectedRow;
         row.Cells["Path"].Value = dialog.FileName;
         if (string.IsNullOrWhiteSpace(GetGridString(row, "Name")))
@@ -788,7 +802,7 @@ internal sealed class ConfigEditorForm : Form
             switch (item)
             {
                 case JsonValue value when value.TryGetValue<string>(out var path) && !string.IsNullOrWhiteSpace(path):
-                    apps.Add(new AutoLaunchAppEditorRow("", path.Trim(), Enabled: true, RestartOnPimaxReconnect: true));
+                    apps.Add(new AutoLaunchAppEditorRow("", path.Trim(), Enabled: true, RestartOnPimaxReconnect: true, RunAsAdmin: false));
                     break;
                 case JsonObject obj:
                     var appPath = GetString(obj, "Path").Trim();
@@ -803,7 +817,8 @@ internal sealed class ConfigEditorForm : Form
                         GetBool(obj, "Enabled", defaultValue: true),
                         GetOptionalBool(obj, "RestartOnPimaxReconnect")
                             ?? GetOptionalBool(obj, "CloseOnPimaxDisconnect")
-                            ?? true));
+                            ?? true,
+                        GetBool(obj, "RunAsAdmin", defaultValue: false)));
                     break;
             }
         }
@@ -823,18 +838,19 @@ internal sealed class ConfigEditorForm : Form
         _autoLaunchAppsGrid.Rows.Clear();
         foreach (var app in apps)
         {
-            AddAutoLaunchAppGridRow(app.Name, app.Path, app.Enabled, app.RestartOnPimaxReconnect);
+            AddAutoLaunchAppGridRow(app.Name, app.Path, app.Enabled, app.RestartOnPimaxReconnect, app.RunAsAdmin);
         }
     }
 
-    private int AddAutoLaunchAppGridRow(string name, string path, bool enabled, bool restartOnPimaxReconnect)
+    private int AddAutoLaunchAppGridRow(string name, string path, bool enabled, bool restartOnPimaxReconnect, bool runAsAdmin)
     {
         return _autoLaunchAppsGrid.Rows.Add(
             name,
             path,
             "",
             enabled,
-            restartOnPimaxReconnect);
+            restartOnPimaxReconnect,
+            runAsAdmin);
     }
 
     private void CommitAutoLaunchAppsGridEdits()
@@ -869,7 +885,8 @@ internal sealed class ConfigEditorForm : Form
                 GetGridString(row, "Name"),
                 path,
                 GetGridBool(row, "Enabled", defaultValue: true),
-                GetGridBool(row, "RestartOnPimaxReconnect", defaultValue: true)));
+                GetGridBool(row, "RestartOnPimaxReconnect", defaultValue: true),
+                GetGridBool(row, "RunAsAdmin", defaultValue: false)));
         }
 
         return apps.ToArray();
@@ -1069,7 +1086,7 @@ internal sealed class ConfigEditorForm : Form
     }
 }
 
-internal sealed record AutoLaunchAppEditorRow(string Name, string Path, bool Enabled, bool RestartOnPimaxReconnect);
+internal sealed record AutoLaunchAppEditorRow(string Name, string Path, bool Enabled, bool RestartOnPimaxReconnect, bool RunAsAdmin);
 
 internal sealed record AppTheme(
     bool IsDark,

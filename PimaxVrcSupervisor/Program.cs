@@ -59,7 +59,7 @@ static async Task InstallAutoLaunchScheduledTaskFromCommandLineAsync(SupervisorC
 
 internal sealed record ResolvedExecutablePath(string Path, bool WasSelected);
 
-internal sealed record ManagedAutoLaunchApp(string DisplayName, string Path, string[] ProcessNames, bool RestartOnPimaxReconnect);
+internal sealed record ManagedAutoLaunchApp(string DisplayName, string Path, string[] ProcessNames, bool RestartOnPimaxReconnect, bool RunAsAdmin);
 
 internal sealed record PimaxServiceReconnect(DateTimeOffset RemoveAt, DateTimeOffset AddAt);
 
@@ -1200,7 +1200,7 @@ internal sealed class AppSupervisor
             try
             {
                 Console.WriteLine($"Starting {app.DisplayName}...");
-                StartOrAttach(app.Path, app.ProcessNames, suppressOutput: true);
+                StartOrAttach(app.Path, app.ProcessNames, suppressOutput: true, runAsAdmin: app.RunAsAdmin);
                 await VerifyRunningAsync(app.DisplayName, app.ProcessNames, cancellationToken);
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
@@ -1256,14 +1256,20 @@ internal sealed class AppSupervisor
         var restartOnPimaxReconnect = app.RestartOnPimaxReconnect
             ?? app.CloseOnPimaxDisconnect
             ?? true;
-        return new ManagedAutoLaunchApp(displayName, path, processNames, restartOnPimaxReconnect);
+        return new ManagedAutoLaunchApp(displayName, path, processNames, restartOnPimaxReconnect, app.RunAsAdmin);
     }
 
-    private void StartOrAttach(string path, string[] processNames, bool suppressOutput = false)
+    private void StartOrAttach(string path, string[] processNames, bool suppressOutput = false, bool runAsAdmin = true)
     {
         if (IsAnyProcessRunning(processNames))
         {
             Console.WriteLine($"Already running: {string.Join(", ", processNames)}");
+            return;
+        }
+
+        if (!runAsAdmin)
+        {
+            StartProcessUnelevated(path);
             return;
         }
 
@@ -1284,6 +1290,19 @@ internal sealed class AppSupervisor
             FileName = path,
             WorkingDirectory = Path.GetDirectoryName(path) ?? Environment.CurrentDirectory,
             UseShellExecute = true
+        };
+
+        Process.Start(startInfo);
+    }
+
+    private static void StartProcessUnelevated(string path)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "explorer.exe",
+            Arguments = QuoteCommandLineArgument(path),
+            UseShellExecute = false,
+            CreateNoWindow = true
         };
 
         Process.Start(startInfo);
@@ -1322,6 +1341,9 @@ internal sealed class AppSupervisor
             }
         });
     }
+
+    private static string QuoteCommandLineArgument(string value)
+        => "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
 
     private async Task VerifyRunningAsync(
         string displayName,
@@ -2499,4 +2521,5 @@ internal sealed class AutoLaunchAppConfig
     public bool Enabled { get; init; } = true;
     public bool? RestartOnPimaxReconnect { get; init; }
     public bool? CloseOnPimaxDisconnect { get; init; }
+    public bool RunAsAdmin { get; init; }
 }

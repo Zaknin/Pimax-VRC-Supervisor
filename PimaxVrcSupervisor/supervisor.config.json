@@ -18,12 +18,14 @@
   // These apps are closed with the same managed-app cleanup used for Broken Eye and VRCFaceTracking.
   // The process name is inferred from Path.
   // Set RestartOnPimaxReconnect to false to leave an app running during the Pimax reconnect restart cycle.
+  // Set RunAsAdmin to true only for extra apps that must run elevated.
   "AutoLaunchApps": [
     // {
     //   "Name": "Example overlay",
     //   "Path": "C:\\Tools\\ExampleOverlay\\ExampleOverlay.exe",
     //   "Enabled": true,
-    //   "RestartOnPimaxReconnect": true
+    //   "RestartOnPimaxReconnect": true,
+    //   "RunAsAdmin": false
     // }
   ],
 

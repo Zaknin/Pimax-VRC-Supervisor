@@ -55,7 +55,7 @@ Important defaults:
 - `MouthTrackerUser` starts empty and asks a Yes/No question on first run.
 - `TurnOffSecondaryMonitors` starts empty and asks a Yes/No question on first run.
 - `AutoLaunchScheduledTask` starts empty and asks a Yes/No question on first setup.
-- `AutoLaunchApps` defaults to an empty list. Each item can define `Name`, `Path`, `Enabled`, and `RestartOnPimaxReconnect`. The process name is inferred from the exe filename.
+- `AutoLaunchApps` defaults to an empty list. Each item can define `Name`, `Path`, `Enabled`, `RestartOnPimaxReconnect`, and `RunAsAdmin`. The process name is inferred from the exe filename.
 - `SteamVrServerProcessNames` defaults to `vrserver` and controls when monitors are restored after VRChat exits if secondary monitor handling is enabled.
 - `PollIntervalSeconds` defaults to `2`.
 - `PimaxDetectors` defaults to Pimax HMD/runtime USB IDs (`VID_34A4`) instead of the eye tracker-only `EyeChip` device, so reconnects are detected when the headset path actually drops and returns.
@@ -70,12 +70,14 @@ Example auto-launch app:
     "Name": "Example overlay",
     "Path": "C:\\Tools\\ExampleOverlay\\ExampleOverlay.exe",
     "Enabled": true,
-    "RestartOnPimaxReconnect": true
+    "RestartOnPimaxReconnect": true,
+    "RunAsAdmin": false
   }
 ]
 ```
 
 Set `RestartOnPimaxReconnect` to `false` for apps that should stay running during the Pimax reconnect restart cycle. They will still be closed when the VRChat session ends.
+Set `RunAsAdmin` to `true` only for extra auto-launch apps that must run elevated. Broken Eye and VRCFaceTracking are still started through the supervisor's elevated launch path.
 
 ## Auto-Launch Task
 
@@ -98,14 +100,14 @@ To reinstall or repair the task directly:
 ## Building From Source
 
 ```powershell
-dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.6
-dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.6
+dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.7
+dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.7
 ```
 
 The built app will be in:
 
 ```text
-release\PimaxVrcSupervisor-v1.0.6
+release\PimaxVrcSupervisor-v1.0.7
 ```
 
 ## Notes
