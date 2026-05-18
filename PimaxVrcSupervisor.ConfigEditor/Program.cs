@@ -24,9 +24,9 @@ internal sealed class ConfigEditorForm : Form
     private readonly TextBox _configPathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _brokenEyePathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _vrcFaceTrackingPathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
-    private readonly CheckBox _mouthTrackerCheckBox = CreateTriStateCheckBox("Use Vive mouth tracker");
-    private readonly CheckBox _turnOffMonitorsCheckBox = CreateTriStateCheckBox("Turn off secondary monitors during headset sessions");
-    private readonly CheckBox _autoLaunchTaskCheckBox = CreateTriStateCheckBox("Create/evaluate VRChat auto-launch Scheduled Task");
+    private readonly CheckBox _mouthTrackerCheckBox = CreateOptionalConfigCheckBox("Use Vive mouth tracker");
+    private readonly CheckBox _turnOffMonitorsCheckBox = CreateOptionalConfigCheckBox("Turn off secondary monitors during headset sessions");
+    private readonly CheckBox _autoLaunchTaskCheckBox = CreateOptionalConfigCheckBox("Create/evaluate VRChat auto-launch Scheduled Task");
     private readonly CheckBox _usePimaxLogCheckBox = new() { Text = "Watch Pimax PiService logs for fast reconnects", AutoSize = true };
     private readonly CheckBox _useMouthTrackerPnPCheckBox = new() { Text = "Watch Windows PnP events for fast mouth tracker reconnects", AutoSize = true };
     private readonly TextBox _pimaxServiceLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
@@ -199,9 +199,9 @@ internal sealed class ConfigEditorForm : Form
             _vrcFaceTrackingPathTextBox,
             "Full path to VRCFaceTracking.exe. The supervisor starts this after Broken Eye settles.",
             DefaultVrcFaceTrackingDirectory);
-        AddFullWidth(layout, _mouthTrackerCheckBox, "Checked means you use a Vive mouth tracker. Unchecked disables mouth-tracker monitoring. Filled square leaves the first-run question enabled.");
+        AddFullWidth(layout, _mouthTrackerCheckBox, "Checked means you use a Vive mouth tracker. Unchecked disables mouth-tracker monitoring. Filled square is shown only when the config leaves the first-run question enabled.");
         AddFullWidth(layout, _turnOffMonitorsCheckBox, "Checked saves the current monitor layout and disables secondary monitors during the VR session. The layout is restored after VRChat and SteamVR close.");
-        AddFullWidth(layout, _autoLaunchTaskCheckBox, "Checked lets the app create or repair the elevated auto-launch Scheduled Task. Filled square asks on first setup.");
+        AddFullWidth(layout, _autoLaunchTaskCheckBox, "Checked lets the app create or repair the elevated auto-launch Scheduled Task. Filled square is shown only when the config asks on first setup.");
         AddFullWidth(layout, _usePimaxLogCheckBox, "Also scan PiService logs for quick HID remove/add reconnects that normal USB polling can miss.");
         AddFullWidth(layout, _useMouthTrackerPnPCheckBox, "Also scan Windows Kernel-PnP events for quick mouth tracker reconnects that normal USB polling can miss.");
         AddLabeledRow(layout, "PiService log folder", _pimaxServiceLogDirectoryTextBox, "Folder containing PiService__*.log files. Environment variables such as %LOCALAPPDATA% are expanded by the supervisor.");
@@ -921,13 +921,13 @@ internal sealed class ConfigEditorForm : Form
         };
     }
 
-    private static CheckBox CreateTriStateCheckBox(string text)
+    private static CheckBox CreateOptionalConfigCheckBox(string text)
     {
         return new CheckBox
         {
-            Text = text + " (filled square = ask on first run)",
+            Text = text + " (filled square = set by config)",
             AutoSize = true,
-            ThreeState = true,
+            ThreeState = false,
             CheckState = CheckState.Indeterminate
         };
     }
