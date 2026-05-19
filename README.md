@@ -53,13 +53,15 @@ Important defaults:
 
 - `BrokenEyePath` starts empty.
 - `VrcFaceTrackingPath` starts empty, but the file picker opens in the usual Steam install folder.
+- `BrokenEyeStartMinimized` and `VrcFaceTrackingStartMinimized` default to `false`. When enabled, the supervisor requests a minimized launch and then tries to minimize the detected main window.
 - `MouthTrackerUser` starts empty and asks a Yes/No question on first run.
 - `TurnOffSecondaryMonitors` starts empty and asks a Yes/No question on first run.
 - `AutoLaunchScheduledTask` starts empty and asks a Yes/No question on first setup.
-- `AutoLaunchApps` defaults to an empty list. Each item can define `Name`, `Path`, `Enabled`, `RestartOnPimaxReconnect`, and `RunAsAdmin`. The process name is inferred from the exe filename.
+- `AutoLaunchApps` defaults to an empty list. Each item can define `Name`, `Path`, `Enabled`, `RestartOnPimaxReconnect`, `RunAsAdmin`, and `StartMinimized`. The process name is inferred from the exe filename.
 - `OscGoesBrrrEnabled` defaults to `false` and enables the OSCGoesBrrr workflow.
 - `OscGoesBrrrHotkeyEnabled` defaults to `true`. When enabled, press `L` in the supervisor console to start `IntifacePath`, wait `DelayBeforeOscGoesBrrrSeconds`, then start `OscGoesBrrrPath`.
 - `OscGoesBrrrBleScannerEnabled` defaults to `false`. When enabled, the supervisor scans nearby BLE advertisements in 30-second bursts every 60 seconds and auto-launches the same Intiface/OscGoesBrrr sequence on a `LovenseDetectors` match.
+- `IntifaceStartMinimized` and `OscGoesBrrrStartMinimized` default to `false` and apply separately to the two OSCGoesBrrr workflow executables.
 - `SteamVrServerProcessNames` defaults to `vrserver` and controls when monitors are restored after VRChat exits if secondary monitor handling is enabled.
 - `PollIntervalSeconds` defaults to `2`.
 - `PimaxDetectors` defaults to Pimax HMD/runtime USB IDs (`VID_34A4`) instead of the eye tracker-only `EyeChip` device, so reconnects are detected when the headset path actually drops and returns.
@@ -76,13 +78,15 @@ Example auto-launch app:
     "Path": "C:\\Tools\\ExampleOverlay\\ExampleOverlay.exe",
     "Enabled": true,
     "RestartOnPimaxReconnect": true,
-    "RunAsAdmin": false
+    "RunAsAdmin": false,
+    "StartMinimized": false
   }
 ]
 ```
 
 Set `RestartOnPimaxReconnect` to `false` for apps that should stay running during the Pimax reconnect restart cycle. They will still be closed when the VRChat session ends.
 Set `RunAsAdmin` to `true` only for extra auto-launch apps that must run elevated. Broken Eye and VRCFaceTracking are still started through the supervisor's elevated launch path.
+Set `StartMinimized` to `true` to request a minimized launch and then try to minimize the app's main window after it is detected.
 
 Example Lovense-triggered Intiface/OscGoesBrrr config:
 
@@ -91,7 +95,9 @@ Example Lovense-triggered Intiface/OscGoesBrrr config:
 "OscGoesBrrrHotkeyEnabled": true,
 "OscGoesBrrrBleScannerEnabled": false,
 "IntifacePath": "%APPDATA%\\IntifaceCentral\\intiface_central.exe",
+"IntifaceStartMinimized": false,
 "OscGoesBrrrPath": "%LOCALAPPDATA%\\Programs\\OscGoesBrrr\\OscGoesBrrr.exe",
+"OscGoesBrrrStartMinimized": false,
 "IntifaceProcessNames": [ "intiface_central.exe" ],
 "OscGoesBrrrProcessNames": [ "OscGoesBrrr.exe" ],
 "LovenseDetectors": [

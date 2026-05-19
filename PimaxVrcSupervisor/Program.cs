@@ -70,7 +70,7 @@ static async Task InstallAutoLaunchScheduledTaskFromCommandLineAsync(SupervisorC
 
 internal sealed record ResolvedExecutablePath(string Path, bool WasSelected);
 
-internal sealed record ManagedAutoLaunchApp(string DisplayName, string Path, string[] ProcessNames, bool RestartOnPimaxReconnect, bool RunAsAdmin);
+internal sealed record ManagedAutoLaunchApp(string DisplayName, string Path, string[] ProcessNames, bool RestartOnPimaxReconnect, bool RunAsAdmin, bool StartMinimized);
 
 internal sealed record PimaxServiceReconnect(DateTimeOffset RemoveAt, DateTimeOffset AddAt);
 
@@ -1136,8 +1136,15 @@ internal sealed class AppSupervisor
         await VerifyRunningAsync("Broken Eye", _config.BrokenEyeProcessNames, cancellationToken, requiredStableSeconds: 0);
 
         Console.WriteLine("Starting VRCFaceTracking...");
-        StartOrAttach(_config.VrcFaceTrackingPath, _config.VrcFaceTrackingProcessNames);
+        var vrcFaceTrackingStarted = StartOrAttach(
+            _config.VrcFaceTrackingPath,
+            _config.VrcFaceTrackingProcessNames,
+            startMinimized: _config.VrcFaceTrackingStartMinimized);
         await VerifyRunningAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
+        if (vrcFaceTrackingStarted && _config.VrcFaceTrackingStartMinimized)
+        {
+            await MinimizeProcessWindowsAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
+        }
 
         await StartAutoLaunchAppsAsync(cancellationToken);
     }
@@ -1171,10 +1178,12 @@ internal sealed class AppSupervisor
         {
             cancellationToken.ThrowIfCancellationRequested();
             Console.WriteLine($"Starting Broken Eye (attempt {attempt}/{BrokenEyeStartupMaxAttempts})...");
+            var startedOnThisAttempt = false;
 
             try
             {
-                StartProcess(_config.BrokenEyePath);
+                StartProcess(_config.BrokenEyePath, _config.BrokenEyeStartMinimized);
+                startedOnThisAttempt = true;
             }
             catch (Exception ex)
             {
@@ -1187,6 +1196,11 @@ internal sealed class AppSupervisor
             if (IsAnyProcessRunning(_config.BrokenEyeProcessNames))
             {
                 Console.WriteLine($"Broken Eye is running after attempt {attempt}.");
+                if (startedOnThisAttempt && _config.BrokenEyeStartMinimized)
+                {
+                    await MinimizeProcessWindowsAsync("Broken Eye", _config.BrokenEyeProcessNames, cancellationToken);
+                }
+
                 return;
             }
 
@@ -1275,8 +1289,15 @@ internal sealed class AppSupervisor
     {
         await StopProcessesAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
         Console.WriteLine("Starting VRCFaceTracking...");
-        StartOrAttach(_config.VrcFaceTrackingPath, _config.VrcFaceTrackingProcessNames);
+        var vrcFaceTrackingStarted = StartOrAttach(
+            _config.VrcFaceTrackingPath,
+            _config.VrcFaceTrackingProcessNames,
+            startMinimized: _config.VrcFaceTrackingStartMinimized);
         await VerifyRunningAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
+        if (vrcFaceTrackingStarted && _config.VrcFaceTrackingStartMinimized)
+        {
+            await MinimizeProcessWindowsAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
+        }
     }
 
     private async Task InitializeOscGoesBrrrWorkflowAsync(CancellationToken cancellationToken)
@@ -1554,8 +1575,17 @@ internal sealed class AppSupervisor
         }
 
         Console.WriteLine("Starting Intiface...");
-        StartOrAttach(_config.IntifacePath, _config.IntifaceProcessNames, suppressOutput: true);
+        var intifaceStarted = StartOrAttach(
+            _config.IntifacePath,
+            _config.IntifaceProcessNames,
+            suppressOutput: true,
+            startMinimized: _config.IntifaceStartMinimized);
         await VerifyRunningAsync("Intiface", _config.IntifaceProcessNames, cancellationToken);
+        if (intifaceStarted && _config.IntifaceStartMinimized)
+        {
+            await MinimizeProcessWindowsAsync("Intiface", _config.IntifaceProcessNames, cancellationToken);
+        }
+
         _lovenseIntifaceStarted = true;
     }
 
@@ -1579,8 +1609,17 @@ internal sealed class AppSupervisor
                 await DelayWithCancellationAsync(TimeSpan.FromSeconds(_config.DelayBeforeOscGoesBrrrSeconds), cancellationToken);
 
                 Console.WriteLine("Starting OscGoesBrrr...");
-                StartOrAttach(_config.OscGoesBrrrPath, _config.OscGoesBrrrProcessNames, suppressOutput: true);
+                var oscGoesBrrrStarted = StartOrAttach(
+                    _config.OscGoesBrrrPath,
+                    _config.OscGoesBrrrProcessNames,
+                    suppressOutput: true,
+                    startMinimized: _config.OscGoesBrrrStartMinimized);
                 await VerifyRunningAsync("OscGoesBrrr", _config.OscGoesBrrrProcessNames, cancellationToken);
+                if (oscGoesBrrrStarted && _config.OscGoesBrrrStartMinimized)
+                {
+                    await MinimizeProcessWindowsAsync("OscGoesBrrr", _config.OscGoesBrrrProcessNames, cancellationToken);
+                }
+
                 _lovenseWorkflowTriggered = true;
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
@@ -1638,8 +1677,17 @@ internal sealed class AppSupervisor
             try
             {
                 Console.WriteLine($"Starting {app.DisplayName}...");
-                StartOrAttach(app.Path, app.ProcessNames, suppressOutput: true, runAsAdmin: app.RunAsAdmin);
+                var appStarted = StartOrAttach(
+                    app.Path,
+                    app.ProcessNames,
+                    suppressOutput: true,
+                    runAsAdmin: app.RunAsAdmin,
+                    startMinimized: app.StartMinimized);
                 await VerifyRunningAsync(app.DisplayName, app.ProcessNames, cancellationToken);
+                if (appStarted && app.StartMinimized)
+                {
+                    await MinimizeProcessWindowsAsync(app.DisplayName, app.ProcessNames, cancellationToken);
+                }
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
@@ -1694,63 +1742,68 @@ internal sealed class AppSupervisor
         var restartOnPimaxReconnect = app.RestartOnPimaxReconnect
             ?? app.CloseOnPimaxDisconnect
             ?? true;
-        return new ManagedAutoLaunchApp(displayName, path, processNames, restartOnPimaxReconnect, app.RunAsAdmin);
+        return new ManagedAutoLaunchApp(displayName, path, processNames, restartOnPimaxReconnect, app.RunAsAdmin, app.StartMinimized);
     }
 
-    private void StartOrAttach(
+    private bool StartOrAttach(
         string path,
         string[] processNames,
         bool suppressOutput = false,
-        bool runAsAdmin = true)
+        bool runAsAdmin = true,
+        bool startMinimized = false)
     {
         if (IsAnyProcessRunning(processNames))
         {
             Console.WriteLine($"Already running: {string.Join(", ", processNames)}");
-            return;
+            return false;
         }
 
         if (!runAsAdmin)
         {
-            StartProcessUnelevated(path);
-            return;
+            StartProcessUnelevated(path, startMinimized);
+            return true;
         }
 
         if (suppressOutput)
         {
-            StartProcessSilently(path);
+            StartProcessSilently(path, startMinimized);
         }
         else
         {
-            StartProcess(path);
+            StartProcess(path, startMinimized);
         }
+
+        return true;
     }
 
-    private static void StartProcess(string path)
+    private static void StartProcess(string path, bool startMinimized = false)
     {
         var startInfo = new ProcessStartInfo
         {
             FileName = path,
             WorkingDirectory = Path.GetDirectoryName(path) ?? Environment.CurrentDirectory,
-            UseShellExecute = true
+            UseShellExecute = true,
+            WindowStyle = startMinimized ? ProcessWindowStyle.Minimized : ProcessWindowStyle.Normal
         };
 
         Process.Start(startInfo);
     }
 
-    private static void StartProcessUnelevated(string path)
+    private static void StartProcessUnelevated(string path, bool startMinimized = false)
     {
         var startInfo = new ProcessStartInfo
         {
             FileName = "explorer.exe",
             Arguments = QuoteCommandLineArgument(path),
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            WindowStyle = startMinimized ? ProcessWindowStyle.Minimized : ProcessWindowStyle.Normal
         };
 
         Process.Start(startInfo);
     }
 
-    private static void StartProcessSilently(string path)
+    private static void StartProcessSilently(string path, bool startMinimized = false)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -1758,6 +1811,7 @@ internal sealed class AppSupervisor
             WorkingDirectory = Path.GetDirectoryName(path) ?? Environment.CurrentDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
+            WindowStyle = startMinimized ? ProcessWindowStyle.Minimized : ProcessWindowStyle.Normal,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             StandardOutputEncoding = Encoding.UTF8,
@@ -1818,6 +1872,59 @@ internal sealed class AppSupervisor
         }
 
         throw new TimeoutException($"{displayName} did not stay running within {_config.StartupTimeoutSeconds} seconds.");
+    }
+
+    private static async Task MinimizeProcessWindowsAsync(string displayName, string[] processNames, CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (TryMinimizeProcessWindows(processNames))
+            {
+                Console.WriteLine($"{displayName} window minimized.");
+                return;
+            }
+
+            await Task.Delay(250, cancellationToken);
+        }
+
+        Console.WriteLine($"Could not find a main window to minimize for {displayName}.");
+    }
+
+    private static bool TryMinimizeProcessWindows(string[] processNames)
+    {
+        var minimizedAny = false;
+        var processes = GetProcesses(processNames);
+        foreach (var process in processes)
+        {
+            using (process)
+            {
+                try
+                {
+                    if (process.HasExited)
+                    {
+                        continue;
+                    }
+
+                    process.Refresh();
+                    var windowHandle = process.MainWindowHandle;
+                    if (windowHandle == IntPtr.Zero)
+                    {
+                        continue;
+                    }
+
+                    ShowWindow(windowHandle, ShowWindowMinimize);
+                    minimizedAny = true;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Could not minimize process {process.ProcessName}: {ex.Message}");
+                }
+            }
+        }
+
+        return minimizedAny;
     }
 
     private async Task StopProcessesAsync(string displayName, string[] processNames, CancellationToken cancellationToken)
@@ -2065,6 +2172,11 @@ internal sealed class AppSupervisor
 
         return result;
     }
+
+    private const int ShowWindowMinimize = 6;
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
     private static void TryCloseMainWindow(Process process)
     {
@@ -2844,6 +2956,10 @@ internal sealed class SupervisorConfig
     public string VrcFaceTrackingPath { get; set; } = "";
     public string IntifacePath { get; set; } = "";
     public string OscGoesBrrrPath { get; set; } = "";
+    public bool BrokenEyeStartMinimized { get; set; }
+    public bool VrcFaceTrackingStartMinimized { get; set; }
+    public bool IntifaceStartMinimized { get; set; }
+    public bool OscGoesBrrrStartMinimized { get; set; }
     public const string DefaultVrcFaceTrackingPath = @"C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking\VRCFaceTracking.exe";
     public static string DefaultIntifacePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -3168,4 +3284,5 @@ internal sealed class AutoLaunchAppConfig
     public bool? RestartOnPimaxReconnect { get; init; }
     public bool? CloseOnPimaxDisconnect { get; init; }
     public bool RunAsAdmin { get; init; }
+    public bool StartMinimized { get; init; }
 }
