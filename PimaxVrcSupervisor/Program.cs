@@ -68,6 +68,14 @@ static async Task InstallAutoLaunchScheduledTaskFromCommandLineAsync(SupervisorC
     Console.WriteLine($"Trigger: {taskDetails.TriggerDescription}");
 }
 
+internal static class AppVersion
+{
+    public static string Current =>
+        typeof(AppVersion).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        ?? typeof(AppVersion).Assembly.GetName().Version?.ToString()
+        ?? "unknown";
+}
+
 internal sealed record ResolvedExecutablePath(string Path, bool WasSelected);
 
 internal sealed record ManagedAutoLaunchApp(string DisplayName, string Path, string[] ProcessNames, bool RestartOnPimaxReconnect, bool RunAsAdmin, bool StartMinimized);
@@ -129,7 +137,7 @@ internal sealed class AppSupervisor
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        Console.WriteLine("Pimax VRC Supervisor");
+        Console.WriteLine($"Pimax VRC Supervisor {AppVersion.Current}");
         Console.WriteLine("---------------------");
 
         if (!OperatingSystem.IsWindows())

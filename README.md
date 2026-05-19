@@ -1,75 +1,167 @@
 # Pimax VRC Supervisor
 
-A Windows helper for Pimax Crystal + VRChat setups. It supervises Broken Eye and VRCFaceTracking, watches headset and optional Vive mouth tracker connectivity, and restarts the right apps when USB/device state changes.
+![Version](https://img.shields.io/badge/version-1.0.9-2563eb)
+![Platform](https://img.shields.io/badge/platform-Windows-0f766e)
+![Runtime](https://img.shields.io/badge/.NET-9.0-512bd4)
+![Release](https://img.shields.io/badge/release-signed%20%2B%20attested-16a34a)
 
-## What It Does
+A small Windows companion app for Pimax Crystal and VRChat sessions. It waits for the headset, starts the tools you rely on, watches for device reconnects, and cleans everything up when VRChat is done.
 
-- Waits for the Pimax headset before launching anything.
-- Prompts for `Broken Eye.exe` and `VRCFaceTracking.exe` on first run if paths are not configured.
-- Can create an elevated Scheduled Task on first setup to launch the supervisor when `VRChat.exe` starts while SteamVR is running.
-- The Scheduled Task starts a hidden elevated watcher at Windows sign-in and starts that watcher immediately after setup.
-- If enabled, before starting Broken Eye saves the active Windows monitor layout and switches to monitor 1 only when multiple monitors are active.
-- Starts Broken Eye first, retrying up to 10 times if it does not appear as running after 5 seconds, then starts VRCFaceTracking.
-- Starts optional user-defined apps after the main Broken Eye/VRCFaceTracking sequence has completed.
-- Optionally enables an OSCGoesBrrr workflow after normal startup. Press `L` in the supervisor console to start Intiface followed by OscGoesBrrr.
-- Watches Pimax HMD/runtime reconnects, waits for the connection to stay stable, and restarts both managed apps after reconnect.
-- Watches Pimax PiService HID remove/add log events so short reconnects are still caught even when Windows USB state is back before the next poll.
-- Optionally watches the Vive mouth tracker / HTC Multimedia Camera and restarts only VRCFaceTracking when it reconnects.
-- Watches Windows PnP events for the Vive mouth tracker so fast tracker restarts can still restart VRCFaceTracking.
-- Watches `VRChat.exe`; if monitor handling is enabled, waits for `vrserver.exe`, restores the previous monitor layout, then closes managed apps and user-defined auto-launch apps.
-- If VRChat appears to crash, waits 5 minutes for it to relaunch before exiting.
-- Prevents duplicate normal supervisor instances from racing each other; the hidden auto-launch watcher can still run alongside one supervisor.
+The current release is **v1.0.9**.
+
+## Why It Exists
+
+Pimax + VRChat setups can be fragile when USB devices blink, the runtime reconnects, or face tracking starts in the wrong order. Pimax VRC Supervisor keeps that session flow predictable:
+
+- wait until the Pimax headset is actually present
+- launch Broken Eye, then VRCFaceTracking
+- restart the right apps after headset or mouth tracker reconnects
+- optionally manage secondary monitors during VR
+- optionally auto-launch when VRChat starts while SteamVR is running
+- optionally start Intiface and OscGoesBrrr for Lovense workflows
+
+## Included Apps
+
+| App | Purpose |
+| --- | --- |
+| `PimaxVrcSupervisor.exe` | Console supervisor that watches the VR session and manages apps/devices. |
+| `PimaxVrcSupervisorConfigEditor.exe` | GUI editor for `supervisor.config.json`. |
+| `supervisor.config.json` | Documented configuration file copied next to the executables. |
+
+Both executables are stamped with version `1.0.9`.
+
+## Features
+
+### Session Startup
+
+- Waits for a Pimax Crystal-compatible headset before launching managed apps.
+- Prompts for `Broken Eye.exe` and `VRCFaceTracking.exe` on first run if paths are missing.
+- Starts Broken Eye first, retries startup if needed, then starts VRCFaceTracking after a configurable delay.
+- Starts optional user-defined apps after the main Broken Eye/VRCFaceTracking sequence.
+- Can start apps minimized and then try to minimize their main windows after launch.
+- Prevents duplicate normal supervisor instances from racing each other.
+
+### Reconnect Handling
+
+- Watches Pimax headset USB/runtime state.
+- Watches Pimax PiService HID remove/add log events so short runtime reconnects can be caught between normal polls.
+- Waits for a stable headset connection before restarting managed apps.
+- Optionally watches Vive mouth tracker / HTC Multimedia Camera devices.
+- Watches Windows Kernel-PnP events for fast mouth tracker reconnects.
+- Restarts only VRCFaceTracking when the mouth tracker reconnects while the headset stays connected.
+
+### VRChat Shutdown Cleanup
+
+- Watches `VRChat.exe` and exits when the session ends.
+- If VRChat appears to crash, waits for a configurable relaunch grace period before cleanup.
+- Optionally waits for SteamVR `vrserver.exe` before restoring monitors.
+- Closes Broken Eye, VRCFaceTracking, OscGoesBrrr workflow apps, and configured auto-launch apps.
+- Uses graceful shutdown first, then force-closes after the configured timeout.
+
+### Monitor Management
+
+- Optional first-run prompt for secondary monitor handling.
+- Saves the active Windows monitor layout before the session.
+- Switches to monitor 1 only when multiple monitors are active.
+- Restores the previous layout after VRChat and SteamVR close.
+
+### Auto-Launch Task
+
+- Optional elevated Scheduled Task named `Pimax VRC Supervisor Auto Launch`.
+- Starts a hidden watcher at Windows sign-in.
+- The watcher launches the supervisor only when `VRChat.exe` and SteamVR `vrserver.exe` are both running.
+- The task can be repaired directly with:
+
+```powershell
+.\PimaxVrcSupervisor.exe --install-auto-launch-task
+```
+
+### OscGoesBrrr / Lovense Workflow
+
+- Optional `OscGoesBrrrEnabled` workflow.
+- Press `L` in the supervisor console to start Intiface, wait the configured delay, then start OscGoesBrrr.
+- Optional BLE scanner can detect Lovense advertisements such as `LVS-` and auto-launch the same workflow.
+- If Intiface is running but OscGoesBrrr is missing, the supervisor can repair the workflow.
+- Pimax reconnects do not restart Intiface/OscGoesBrrr; normal session cleanup closes them.
 
 ## Requirements
 
-- Windows
-- No separate .NET install is needed when using the self-contained release zip
-- Pimax Crystal headset
+- Windows 10/11
+- No separate .NET install when using the self-contained release zip
+- Pimax Crystal-compatible headset
 - [Broken Eye](https://github.com/ghostiam/BrokenEye)
 - [VRCFaceTracking](https://docs.vrcft.io/docs/vrcft-software/vrcft)
 - Optional: Vive mouth tracker exposed as `HTC Multimedia Camera`
+- Optional: Intiface + OscGoesBrrr for Lovense workflows
 
-## First Run
+## Install
 
-Run `PimaxVrcSupervisor.exe`.
+1. Download `PimaxVrcSupervisor-v1.0.9.zip` from the GitHub release.
+2. Extract it somewhere writable, for example:
 
-On first run, the app may ask:
+```text
+C:\Tools\PimaxVrcSupervisor
+```
 
-- Where `Broken Eye.exe` is located.
-- Where `VRCFaceTracking.exe` is located.
-- Whether you use a Vive mouth tracker.
-- Whether to turn off secondary monitors while using the headset.
-- Whether to create the elevated VRChat/SteamVR auto-launch Scheduled Task.
+3. Run `PimaxVrcSupervisor.exe`.
+4. Answer the first-run prompts.
+5. Use `PimaxVrcSupervisorConfigEditor.exe` later if you want to edit paths, timers, detectors, or auto-launch apps without touching JSON by hand.
 
-Your answers are saved into `supervisor.config.json` next to the exe.
+The supervisor requests administrator privileges through its manifest because some managed tools and monitor actions may require elevation.
 
-You can also run `PimaxVrcSupervisorConfigEditor.exe` to edit the same config file with a small GUI. It provides browse buttons for executable paths, checkboxes for yes/no settings, an Auto Launch tab for user-defined apps, editors for process names and detector rules, and numeric controls for timing values.
+## First Run Prompts
 
-## Configuration
+On first launch, the supervisor may ask:
 
-Edit `supervisor.config.json` to adjust paths, process names, detector rules, polling intervals, startup delays, and shutdown behavior. The file includes inline comments for each setting.
+- where `Broken Eye.exe` is located
+- where `VRCFaceTracking.exe` is located
+- whether you use a Vive mouth tracker
+- whether to turn off secondary monitors during headset sessions
+- whether to create the elevated VRChat/SteamVR auto-launch Scheduled Task
 
-Important defaults:
+Answers are saved to `supervisor.config.json` next to the exe.
 
-- `BrokenEyePath` starts empty.
-- `VrcFaceTrackingPath` starts empty, but the file picker opens in the usual Steam install folder.
-- `BrokenEyeStartMinimized` and `VrcFaceTrackingStartMinimized` default to `false`. When enabled, the supervisor requests a minimized launch and then tries to minimize the detected main window.
-- `MouthTrackerUser` starts empty and asks a Yes/No question on first run.
-- `TurnOffSecondaryMonitors` starts empty and asks a Yes/No question on first run.
-- `AutoLaunchScheduledTask` starts empty and asks a Yes/No question on first setup.
-- `AutoLaunchApps` defaults to an empty list. Each item can define `Name`, `Path`, `Enabled`, `RestartOnPimaxReconnect`, `RunAsAdmin`, and `StartMinimized`. The process name is inferred from the exe filename.
-- `OscGoesBrrrEnabled` defaults to `false` and enables the OSCGoesBrrr workflow.
-- `OscGoesBrrrHotkeyEnabled` defaults to `true`. When enabled, press `L` in the supervisor console to start `IntifacePath`, wait `DelayBeforeOscGoesBrrrSeconds`, then start `OscGoesBrrrPath`.
-- `OscGoesBrrrBleScannerEnabled` defaults to `false`. When enabled, the supervisor scans nearby BLE advertisements in 30-second bursts every 60 seconds and auto-launches the same Intiface/OscGoesBrrr sequence on a `LovenseDetectors` match.
-- `IntifaceStartMinimized` and `OscGoesBrrrStartMinimized` default to `false` and apply separately to the two OSCGoesBrrr workflow executables.
-- `SteamVrServerProcessNames` defaults to `vrserver` and controls when monitors are restored after VRChat exits if secondary monitor handling is enabled.
-- `PollIntervalSeconds` defaults to `2`.
-- `PimaxDetectors` defaults to Pimax HMD/runtime USB IDs (`VID_34A4`) instead of the eye tracker-only `EyeChip` device, so reconnects are detected when the headset path actually drops and returns.
-- `LovenseDetectors` defaults to `Lovense` and `LVS-`; direct Bluetooth/WebBluetooth Lovense toys usually advertise names starting with `LVS-`. The supervisor checks connected PnP devices first, then recent Windows Bluetooth device names.
-- `UsePimaxServiceLogReconnectDetector` defaults to `true` and watches `%LOCALAPPDATA%\Pimax\PiService\Log\PiService__*.log` for fast runtime HID reconnects.
-- `UseMouthTrackerPnPReconnectDetector` defaults to `true` and watches Windows Kernel-PnP events for fast Vive mouth tracker reconnects.
+## Config Editor
 
-Example auto-launch app:
+Run:
+
+```powershell
+.\PimaxVrcSupervisorConfigEditor.exe
+```
+
+The editor includes tabs for:
+
+- **Basics**: main executable paths and first-run choices
+- **Auto Launch**: extra apps to launch with the VR session
+- **OSCGoesBrrr**: Intiface, OscGoesBrrr, hotkey, BLE scanner, and Lovense rules
+- **Processes**: watched process names and cleanup targets
+- **Detectors**: Pimax, mouth tracker, and Lovense detection rules
+- **Timing**: poll intervals, startup delays, reconnect waits, and shutdown grace periods
+- **Raw JSON**: direct config editing when you need it
+
+## Key Configuration
+
+The release includes a commented `supervisor.config.json`. Important settings:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `BrokenEyePath` | empty | Prompts for Broken Eye on first run. |
+| `VrcFaceTrackingPath` | empty | Prompts for VRCFaceTracking on first run. |
+| `BrokenEyeStartMinimized` | `false` | Requests/minimizes Broken Eye after launch. |
+| `VrcFaceTrackingStartMinimized` | `false` | Requests/minimizes VRCFaceTracking after launch. |
+| `MouthTrackerUser` | empty | Empty means ask on first run; true enables mouth tracker monitoring. |
+| `TurnOffSecondaryMonitors` | empty | Empty means ask on first run; true enables monitor layout handling. |
+| `AutoLaunchScheduledTask` | empty | Empty means ask on first setup; true creates/repairs the task. |
+| `AutoLaunchApps` | `[]` | Extra apps started after Broken Eye and VRCFaceTracking. |
+| `OscGoesBrrrEnabled` | `false` | Enables Intiface/OscGoesBrrr workflow support. |
+| `OscGoesBrrrHotkeyEnabled` | `true` | Press `L` to launch the workflow. |
+| `OscGoesBrrrBleScannerEnabled` | `false` | Enables Lovense BLE advertisement scanning. |
+| `UsePimaxServiceLogReconnectDetector` | `true` | Watches PiService logs for fast runtime reconnects. |
+| `UseMouthTrackerPnPReconnectDetector` | `true` | Watches Windows PnP events for fast mouth tracker reconnects. |
+| `PollIntervalSeconds` | `2` | Normal device/process polling interval. |
+| `RestartDelayAfterReconnectSeconds` | `10` | Stability wait before restarting apps after Pimax reconnect. |
+
+Example extra app:
 
 ```json
 "AutoLaunchApps": [
@@ -85,104 +177,74 @@ Example auto-launch app:
 ```
 
 Set `RestartOnPimaxReconnect` to `false` for apps that should stay running during the Pimax reconnect restart cycle. They will still be closed when the VRChat session ends.
-Set `RunAsAdmin` to `true` only for extra auto-launch apps that must run elevated. Broken Eye and VRCFaceTracking are still started through the supervisor's elevated launch path.
-Set `StartMinimized` to `true` to request a minimized launch and then try to minimize the app's main window after it is detected.
 
-Example Lovense-triggered Intiface/OscGoesBrrr config:
+Example OscGoesBrrr workflow:
 
 ```json
 "OscGoesBrrrEnabled": true,
 "OscGoesBrrrHotkeyEnabled": true,
 "OscGoesBrrrBleScannerEnabled": false,
 "IntifacePath": "%APPDATA%\\IntifaceCentral\\intiface_central.exe",
-"IntifaceStartMinimized": false,
 "OscGoesBrrrPath": "%LOCALAPPDATA%\\Programs\\OscGoesBrrr\\OscGoesBrrr.exe",
-"OscGoesBrrrStartMinimized": false,
-"IntifaceProcessNames": [ "intiface_central.exe" ],
-"OscGoesBrrrProcessNames": [ "OscGoesBrrr.exe" ],
+"DelayBeforeOscGoesBrrrSeconds": 5,
 "LovenseDetectors": [
   [ "Lovense" ],
   [ "LVS-" ]
-],
-"DelayBeforeOscGoesBrrrSeconds": 5,
-"OscGoesBrrrBleScanSeconds": 30,
-"OscGoesBrrrBleScanIntervalSeconds": 60
+]
 ```
 
-The hotkey and optional BLE scanner share the same launch guard, and can launch again if you manually close Intiface/OscGoesBrrr during the same supervisor session. Pimax reconnects do not stop or restart them; normal VRChat/session cleanup closes OscGoesBrrr first, then Intiface.
+## Release Verification
 
-## Auto-Launch Task
+GitHub Actions publishes signed and attested release assets when a `v*` tag is pushed or the `Release` workflow is run manually.
 
-If enabled, the app creates a highest-privilege Scheduled Task named `Pimax VRC Supervisor Auto Launch`.
+Expected release files:
 
-The task starts a hidden watcher with:
+- `PimaxVrcSupervisor-v1.0.9.zip`
+- `PimaxVrcSupervisor-v1.0.9.zip.sha256`
+- `PimaxVrcSupervisor-v1.0.9.zip.sigstore.json`
 
-```text
-PimaxVrcSupervisor.exe --watch-vrchat-auto-launch
-```
-
-The watcher polls for `VRChat.exe` and SteamVR. SteamVR is detected by checking its `vrserver.exe` process. When both are running and the normal supervisor is not already open, it launches `PimaxVrcSupervisor.exe`. This avoids relying on Windows Security audit/process-creation events.
-
-To reinstall or repair the task directly:
+Verify the checksum:
 
 ```powershell
-.\PimaxVrcSupervisor.exe --install-auto-launch-task
+Get-FileHash .\PimaxVrcSupervisor-v1.0.9.zip -Algorithm SHA256
+Get-Content .\PimaxVrcSupervisor-v1.0.9.zip.sha256
 ```
 
-## Signed and Attested GitHub Releases
-
-GitHub Actions builds, Sigstore-signs, attests, and publishes new release zips when you push a `v*` tag, such as `v1.0.9`, or run the `Release` workflow manually.
-
-The free signing path uses GitHub Actions OIDC and Sigstore keyless signing. It does not require a certificate, password, private key, or repository secret. The workflow publishes:
-
-- `PimaxVrcSupervisor-<version>.zip`
-- `PimaxVrcSupervisor-<version>.zip.sha256`
-- `PimaxVrcSupervisor-<version>.zip.sigstore.json`
-
-If you publish a release through GitHub's release UI with uploaded `.zip` assets, the `Sign Release Assets` workflow signs those zip files and uploads matching `.sha256` and `.sigstore.json` files. If you add assets after a release is already published, run that workflow manually for the release tag.
-
-The Sigstore bundle proves the zip was signed by this repository's release workflow and is recorded in Sigstore's transparency log. This helps users verify release integrity, but it does not make Windows treat the app as a verified publisher for SmartScreen.
-
-To verify a release zip with cosign:
+Verify the Sigstore bundle with cosign:
 
 ```powershell
 cosign verify-blob .\PimaxVrcSupervisor-v1.0.9.zip `
   --bundle .\PimaxVrcSupervisor-v1.0.9.zip.sigstore.json `
-  --certificate-identity-regexp "^https://github.com/.+/.+/.github/workflows/release.yml@refs/tags/v.+$" `
+  --certificate-identity-regexp "^https://github.com/.+/.+/.github/workflows/release.yml@refs/(heads|tags)/.+$" `
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 ```
 
-Optional: add these repository secrets to Authenticode-sign the app binaries before packaging:
+Sigstore verification proves the zip was signed by the repository workflow and recorded in the transparency log. It does not make Windows SmartScreen show the app as a verified publisher unless Authenticode code-signing secrets are configured for the workflow.
 
-- `WINDOWS_SIGNING_CERTIFICATE_BASE64`: base64 text for your `.pfx` code-signing certificate.
-- `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`: password for the `.pfx` certificate.
+## Build From Source
 
-To create the base64 certificate value from PowerShell:
-
-```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\to\certificate.pfx"))
-```
-
-The workflow signs:
-
-- `PimaxVrcSupervisor.exe`
-- `PimaxVrcSupervisor.dll`
-- `PimaxVrcSupervisorConfigEditor.exe`
-- `PimaxVrcSupervisorConfigEditor.dll`
-
-## Building From Source
+Install the .NET 9 SDK, then run:
 
 ```powershell
-dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.8
-dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.8
+dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.9
+dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.9
 ```
 
-The built app will be in:
+The output folder will contain both executables, the config file, and this README.
 
-```text
-release\PimaxVrcSupervisor-v1.0.8
-```
+## Troubleshooting
+
+| Symptom | Try |
+| --- | --- |
+| The supervisor exits immediately | Check whether another normal supervisor instance is already running. |
+| Broken Eye or VRCFaceTracking does not launch | Open the config editor and verify the executable path and process name. |
+| Reconnects are not detected | Confirm `PimaxDetectors`, `UsePimaxServiceLogReconnectDetector`, and the PiService log directory. |
+| Mouth tracker reconnects do nothing | Set `MouthTrackerUser` to `true` and verify `MouthTrackerDetectors`. |
+| Monitors are not restored | Let SteamVR fully exit; the supervisor waits for `vrserver.exe` before restoring when monitor handling is enabled. |
+| OscGoesBrrr does not start | Check `OscGoesBrrrEnabled`, the Intiface/OscGoesBrrr paths, and whether the hotkey or BLE scanner mode is enabled. |
 
 ## Notes
 
-The executable requests administrator privileges because some launched tools may require elevation.
+- This is a Windows-only utility.
+- The release zip is self-contained and intentionally large because it includes the Windows .NET runtime.
+- The app edits only its nearby `supervisor.config.json` unless you choose a different config path in the editor.

@@ -1,4 +1,5 @@
 using Microsoft.Win32;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -82,7 +83,7 @@ internal sealed class ConfigEditorForm : Form
 
     public ConfigEditorForm(string? requestedConfigPath)
     {
-        Text = "Pimax VRC Supervisor Config Editor";
+        Text = $"Pimax VRC Supervisor Config Editor {AppVersion.Current}";
         SetWindowIconFromExecutable();
         MinimumSize = new Size(900, 660);
         Size = new Size(1180, 760);
@@ -1273,6 +1274,14 @@ internal sealed class ConfigEditorForm : Form
             .Select(path => Path.GetFullPath(path!))
             .FirstOrDefault(File.Exists);
     }
+}
+
+internal static class AppVersion
+{
+    public static string Current =>
+        typeof(AppVersion).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        ?? typeof(AppVersion).Assembly.GetName().Version?.ToString()
+        ?? "unknown";
 }
 
 internal sealed record AutoLaunchAppEditorRow(string Name, string Path, bool Enabled, bool RestartOnPimaxReconnect, bool RunAsAdmin, bool StartMinimized);
