@@ -10,18 +10,24 @@ using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using System.Xml.Linq;
 using Microsoft.Win32;
+using PimaxVrcSupervisor.BaseStations;
 using Windows.Devices.Bluetooth.Advertisement;
 
 using var shutdown = new CancellationTokenSource();
 
-Console.CancelKeyPress += (_, eventArgs) =>
+var commandLineArgs = Environment.GetCommandLineArgs().Skip(1).ToArray();
+if (TryGetCommandOption(commandLineArgs, "--emergency-base-station-cleanup", out var emergencyConfigPath))
 {
-    eventArgs.Cancel = true;
-    shutdown.Cancel();
-};
+    var initialDelaySeconds = TryGetCommandOption(commandLineArgs, "--delay-seconds", out var delayText)
+        && int.TryParse(delayText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedDelay)
+        ? Math.Max(0, parsedDelay)
+        : 0;
+    var emergencyConfig = SupervisorConfig.Load(emergencyConfigPath);
+    await BaseStationEmergencyCleanup.RunAsync(emergencyConfig, TimeSpan.FromSeconds(initialDelaySeconds), CancellationToken.None);
+    return;
+}
 
 var config = SupervisorConfig.Load();
-var commandLineArgs = Environment.GetCommandLineArgs().Skip(1).ToArray();
 if (commandLineArgs.Any(arg => string.Equals(arg, "--install-auto-launch-task", StringComparison.OrdinalIgnoreCase)))
 {
     await InstallAutoLaunchScheduledTaskFromCommandLineAsync(config, shutdown.Token);
@@ -40,9 +46,18 @@ if (!ownsSupervisorMutex)
     return;
 }
 
-var supervisorStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-using var consoleCloseHandler = ConsoleCloseHandler.Register(shutdown, supervisorStopped.Task);
 var supervisor = new AppSupervisor(config);
+var supervisorStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+Console.CancelKeyPress += (_, eventArgs) =>
+{
+    eventArgs.Cancel = true;
+    RunBlockingEmergencyShutdown("Ctrl+C requested. Restoring monitors and closing managed apps.", shutdown, supervisorStopped.Task, supervisor.RunEmergencyCloseCleanupAsync);
+};
+using var consoleCloseHandler = ConsoleCloseHandler.Register(
+    shutdown,
+    supervisorStopped.Task,
+    supervisor.RunEmergencyCloseCleanupAsync,
+    () => BaseStationEmergencyCleanup.TryLaunchDetached(config, TimeSpan.FromSeconds(6)));
 try
 {
     await supervisor.RunAsync(shutdown.Token);
@@ -50,6 +65,46 @@ try
 finally
 {
     supervisorStopped.TrySetResult();
+}
+
+static void RunBlockingEmergencyShutdown(
+    string message,
+    CancellationTokenSource shutdown,
+    Task supervisorStopped,
+    Func<Task> emergencyCleanupAsync)
+{
+    try
+    {
+        Console.WriteLine(message);
+        emergencyCleanupAsync().GetAwaiter().GetResult();
+        shutdown.Cancel();
+        supervisorStopped.Wait(TimeSpan.FromSeconds(60));
+    }
+    catch
+    {
+        // Console shutdown has a short OS-managed timeout; cleanup is best-effort.
+    }
+}
+
+static bool TryGetCommandOption(string[] args, string name, out string? value)
+{
+    value = null;
+    for (var index = 0; index < args.Length; index++)
+    {
+        if (!string.Equals(args[index], name, StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+
+        if (index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
+        {
+            value = args[index + 1];
+        }
+
+        return true;
+    }
+
+    return false;
 }
 
 static async Task InstallAutoLaunchScheduledTaskFromCommandLineAsync(SupervisorConfig config, CancellationToken cancellationToken)
@@ -97,6 +152,12 @@ internal enum WatchedProcessState
     CrashGraceExpired
 }
 
+internal struct ConsoleHotkeys
+{
+    public bool LaunchOscGoesBrrr { get; set; }
+    public bool RestartCoreApps { get; set; }
+}
+
 internal sealed class AppSupervisor
 {
     private const int BrokenEyeStartupMaxAttempts = 10;
@@ -104,10 +165,13 @@ internal sealed class AppSupervisor
     private static readonly TimeSpan LovenseBluetoothRegistryRecentWindow = TimeSpan.FromHours(1);
 
     private readonly SupervisorConfig _config;
+    private readonly BaseStationGattClient _baseStationGattClient = new();
     private readonly MonitorLayoutController _monitorLayout = new();
     private readonly TimeSpan _pollInterval;
     private readonly Dictionary<int, Process> _watchedProcessHandles = new();
     private readonly SemaphoreSlim _oscGoesBrrrLaunchLock = new(1, 1);
+    private readonly SemaphoreSlim _cleanupLock = new(1, 1);
+    private readonly SemaphoreSlim _coreAppRestartLock = new(1, 1);
     private readonly DateTimeOffset _startedAt = DateTimeOffset.Now;
     private bool? _lastPimaxConnected;
     private bool? _lastMouthTrackerConnected;
@@ -116,6 +180,16 @@ internal sealed class AppSupervisor
     private bool _watchedProcessHasBeenSeen;
     private bool _waitingForWatchedProcessRelaunch;
     private bool _managedAppsStarted;
+    private bool _baseStationPowerOnAttempted;
+    private bool _baseStationsPoweredOn;
+    private bool _baseStationPowerOnComplete;
+    private int _baseStationPowerOnPassesCompleted;
+    private readonly HashSet<string> _baseStationPowerOnCommandSucceeded = new(StringComparer.OrdinalIgnoreCase);
+    private DateTimeOffset? _lastBaseStationPowerOnSkippedLogAt;
+    private DateTimeOffset? _nextBaseStationPowerOnAttemptAt;
+    private DateTimeOffset? _baseStationSecondPowerOnPassCompletedAt;
+    private bool _baseStationSettingsNeedSave;
+    private bool _cleanupStarted;
     private bool? _lastLovenseConnected;
     private bool _lovenseIntifaceStarted;
     private bool _lovenseWorkflowTriggered;
@@ -164,6 +238,8 @@ internal sealed class AppSupervisor
         {
             _lastPimaxConnected = await WaitForPimaxOnStartupAsync(cancellationToken);
 
+            await TryPowerOnBaseStationsForSessionAsync(1, cancellationToken);
+
             if (_mouthTrackerUser)
             {
                 _lastMouthTrackerConnected = await IsMouthTrackerConnectedAsync(cancellationToken);
@@ -183,6 +259,7 @@ internal sealed class AppSupervisor
 
             await StartManagedAppsAsync(cancellationToken);
             await InitializeOscGoesBrrrWorkflowAsync(cancellationToken);
+            await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
 
             Console.WriteLine($"Pimax Crystal initial state: {DescribeConnection(_lastPimaxConnected.Value)}");
             Console.WriteLine("Waiting for Pimax reconnects or VRChat shutdown. Press Ctrl+C to stop.");
@@ -191,7 +268,11 @@ internal sealed class AppSupervisor
             {
                 await Task.Delay(_pollInterval, cancellationToken);
                 RefreshOscGoesBrrrWorkflowState();
-                await HandleOscGoesBrrrHotkeyAsync(cancellationToken);
+                await HandleConsoleHotkeysAsync(cancellationToken);
+                if (_lastPimaxConnected == true)
+                {
+                    await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
+                }
 
                 var watchedProcessState = ObserveWatchedShutdownProcesses();
                 if (watchedProcessState == WatchedProcessState.NormalExit)
@@ -354,7 +435,7 @@ internal sealed class AppSupervisor
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             Console.WriteLine("Shutdown requested. Restoring monitors and closing managed apps.");
-            await TryRestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, CancellationToken.None);
+            await TryEmergencyCloseCleanupAsync();
         }
         catch (Exception ex)
         {
@@ -1138,6 +1219,12 @@ internal sealed class AppSupervisor
     {
         _managedAppsStarted = true;
         PrepareMonitorLayoutForVrSession();
+        await StartCoreAppsAsync(cancellationToken);
+        await StartAutoLaunchAppsAsync(cancellationToken);
+    }
+
+    private async Task StartCoreAppsAsync(CancellationToken cancellationToken)
+    {
         await StartBrokenEyeWithRetriesAsync(cancellationToken);
         Console.WriteLine($"Waiting {_config.DelayBeforeVrcFaceTrackingSeconds} seconds before starting VRCFaceTracking...");
         await DelayWithCancellationAsync(TimeSpan.FromSeconds(_config.DelayBeforeVrcFaceTrackingSeconds), cancellationToken);
@@ -1153,8 +1240,6 @@ internal sealed class AppSupervisor
         {
             await MinimizeProcessWindowsAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
         }
-
-        await StartAutoLaunchAppsAsync(cancellationToken);
     }
 
     private void PrepareMonitorLayoutForVrSession()
@@ -1238,26 +1323,439 @@ internal sealed class AppSupervisor
         await StopProcessesAsync("Broken Eye", _config.BrokenEyeProcessNames, cancellationToken);
     }
 
+    private async Task RestartCoreAppsAsync(CancellationToken cancellationToken)
+    {
+        if (!await _coreAppRestartLock.WaitAsync(0, cancellationToken))
+        {
+            Console.WriteLine("Core app restart is already in progress.");
+            return;
+        }
+
+        try
+        {
+            Console.WriteLine("Restarting VRCFaceTracking and Broken Eye...");
+            await StopProcessesAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
+            await StopProcessesAsync("Broken Eye", _config.BrokenEyeProcessNames, cancellationToken);
+            await StartCoreAppsAsync(cancellationToken);
+            Console.WriteLine("Core app restart complete.");
+        }
+        finally
+        {
+            _coreAppRestartLock.Release();
+        }
+    }
+
+    private async Task TryPowerOnBaseStationsForSessionAsync(int targetPowerOnPasses, CancellationToken cancellationToken)
+    {
+        if (_baseStationPowerOnComplete)
+        {
+            return;
+        }
+
+        var baseStations = GetEnabledBaseStations();
+        if (!_config.BaseStationsEnabled || baseStations.Length == 0)
+        {
+            return;
+        }
+
+        if (!IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+        {
+            if (_lastBaseStationPowerOnSkippedLogAt is null || DateTimeOffset.UtcNow - _lastBaseStationPowerOnSkippedLogAt.Value > TimeSpan.FromSeconds(30))
+            {
+                Console.WriteLine("Base station power-on waiting for SteamVR server.");
+                _lastBaseStationPowerOnSkippedLogAt = DateTimeOffset.UtcNow;
+            }
+
+            return;
+        }
+
+        if (_nextBaseStationPowerOnAttemptAt is { } nextAttempt && DateTimeOffset.UtcNow < nextAttempt)
+        {
+            return;
+        }
+
+        targetPowerOnPasses = Math.Clamp(targetPowerOnPasses, 1, BaseStationCommandTiming.PowerOnPasses);
+        var initialStates = await ReadBaseStationPowerStatesAsync(baseStations, cancellationToken);
+        var alreadyAwake = initialStates.Select(IsAwakeBaseStationState).ToArray();
+        if (alreadyAwake.Any(value => value))
+        {
+            _baseStationPowerOnAttempted = true;
+            _baseStationsPoweredOn = true;
+        }
+
+        var baseStationsToPowerOn = baseStations
+            .Where((_, index) => !alreadyAwake[index])
+            .ToArray();
+        if (baseStationsToPowerOn.Length == 0)
+        {
+            Console.WriteLine("All enabled base stations already report awake.");
+            _baseStationPowerOnComplete = true;
+            _nextBaseStationPowerOnAttemptAt = null;
+            return;
+        }
+
+        _baseStationPowerOnAttempted = true;
+        var passesToRun = Math.Max(0, targetPowerOnPasses - _baseStationPowerOnPassesCompleted);
+        for (var passOffset = 0; passOffset < passesToRun; passOffset++)
+        {
+            var pass = _baseStationPowerOnPassesCompleted + 1;
+            var passBaseStations = pass >= 3
+                ? baseStationsToPowerOn.Where(baseStation => baseStation.RequiresExtendedPowerOnPasses).ToArray()
+                : baseStationsToPowerOn;
+            if (pass == 3 && passBaseStations.Length > 0)
+            {
+                var thirdPassAt = (_baseStationSecondPowerOnPassCompletedAt ?? DateTimeOffset.UtcNow).Add(BaseStationCommandTiming.PowerOnRetryPassDelay);
+                if (DateTimeOffset.UtcNow < thirdPassAt)
+                {
+                    _nextBaseStationPowerOnAttemptAt = thirdPassAt;
+                    return;
+                }
+            }
+
+            if (passBaseStations.Length == 0)
+            {
+                _baseStationPowerOnPassesCompleted = pass;
+                continue;
+            }
+
+            var passSucceeded = await SendBaseStationPowerOnPassAsync(passBaseStations, pass, cancellationToken);
+            for (var index = 0; index < passBaseStations.Length; index++)
+            {
+                if (passSucceeded[index])
+                {
+                    _baseStationPowerOnCommandSucceeded.Add(passBaseStations[index].BluetoothAddress);
+                }
+            }
+
+            _baseStationPowerOnPassesCompleted = pass;
+            if (pass == 2)
+            {
+                _baseStationSecondPowerOnPassCompletedAt = DateTimeOffset.UtcNow;
+            }
+        }
+
+        _baseStationsPoweredOn = _baseStationsPoweredOn || _baseStationPowerOnCommandSucceeded.Count > 0;
+        if (targetPowerOnPasses < BaseStationCommandTiming.PowerOnPasses)
+        {
+            _nextBaseStationPowerOnAttemptAt = null;
+            return;
+        }
+
+        var finalStates = await ReadBaseStationPowerStatesAsync(baseStations, cancellationToken);
+        _baseStationPowerOnComplete = IsBaseStationPowerOnComplete(baseStations, finalStates, _baseStationPowerOnCommandSucceeded);
+        if (_baseStationPowerOnComplete)
+        {
+            _nextBaseStationPowerOnAttemptAt = null;
+            return;
+        }
+
+        _baseStationPowerOnPassesCompleted = 0;
+        _baseStationSecondPowerOnPassCompletedAt = null;
+        _baseStationPowerOnCommandSucceeded.Clear();
+        _nextBaseStationPowerOnAttemptAt = DateTimeOffset.UtcNow.AddSeconds(10);
+    }
+
+    private async Task TryPowerDownBaseStationsForSessionAsync(CancellationToken cancellationToken)
+    {
+        if (!_baseStationsPoweredOn && !_baseStationPowerOnAttempted)
+        {
+            return;
+        }
+
+        var baseStations = GetEnabledBaseStations();
+        if (!_config.BaseStationsEnabled || baseStations.Length == 0)
+        {
+            _baseStationPowerOnAttempted = false;
+            _baseStationsPoweredOn = false;
+            _baseStationPowerOnComplete = false;
+            _baseStationPowerOnPassesCompleted = 0;
+            _baseStationSecondPowerOnPassCompletedAt = null;
+            _baseStationPowerOnCommandSucceeded.Clear();
+            return;
+        }
+
+        var mode = _config.BaseStationPowerDownMode;
+        Console.WriteLine($"Sending {mode.ToString().ToLowerInvariant()} to {baseStations.Length} base station(s)...");
+        var successes = await SendBaseStationCommandsAsync(
+            baseStations,
+            mode == BaseStationPowerDownMode.Standby ? "standby" : "sleep",
+            (baseStation, token) => _baseStationGattClient.PowerDownAsync(baseStation, mode, token),
+            cancellationToken);
+
+        if (successes == baseStations.Length)
+        {
+            _baseStationPowerOnAttempted = false;
+            _baseStationsPoweredOn = false;
+            _baseStationPowerOnComplete = false;
+            _baseStationPowerOnPassesCompleted = 0;
+            _baseStationSecondPowerOnPassCompletedAt = null;
+            _baseStationPowerOnCommandSucceeded.Clear();
+        }
+    }
+
+    public async Task RunEmergencyCloseCleanupAsync()
+    {
+        await TryEmergencyCloseCleanupAsync();
+    }
+
+    private async Task TryEmergencyCloseCleanupAsync()
+    {
+        try
+        {
+            await RunCleanupOnceAsync(waitForSteamVrServerExit: false, emergencyClose: true, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not complete emergency cleanup: {ex.Message}");
+        }
+    }
+
+    private async Task RunCleanupOnceAsync(bool waitForSteamVrServerExit, bool emergencyClose, CancellationToken cancellationToken)
+    {
+        if (!await _cleanupLock.WaitAsync(0, cancellationToken))
+        {
+            return;
+        }
+
+        try
+        {
+            if (_cleanupStarted)
+            {
+                return;
+            }
+
+            if (emergencyClose)
+            {
+                Console.WriteLine("Emergency cleanup: restoring monitors before closing apps and base stations.");
+                RestoreMonitorLayout();
+                await TryStopManagedAppsForEmergencyCloseAsync();
+                await TryPowerDownBaseStationsWithTimeoutAsync(TimeSpan.FromSeconds(20));
+                _cleanupStarted = true;
+                return;
+            }
+
+            await RestoreMonitorsAndStopManagedAppsCoreAsync(waitForSteamVrServerExit, cancellationToken);
+            _cleanupStarted = true;
+        }
+        finally
+        {
+            _cleanupLock.Release();
+        }
+    }
+
+    private async Task TryPowerDownBaseStationsWithTimeoutAsync(TimeSpan timeout)
+    {
+        if (!_baseStationsPoweredOn && !_baseStationPowerOnAttempted)
+        {
+            return;
+        }
+
+        try
+        {
+            using var timeoutSource = new CancellationTokenSource(timeout);
+            await TryPowerDownBaseStationsForSessionAsync(timeoutSource.Token);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Emergency cleanup could not power down base stations: {ex.Message}");
+        }
+    }
+
+    private async Task TryStopManagedAppsForEmergencyCloseAsync()
+    {
+        try
+        {
+            using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Max(5, _config.ShutdownGraceSeconds + 5)));
+            await StopLovenseAppsAsync(timeoutSource.Token);
+            await StopManagedAppsAsync(ManagedAppStopReason.SessionEnding, timeoutSource.Token);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Emergency cleanup could not close managed apps: {ex.Message}");
+        }
+    }
+
+    private async Task<int> SendBaseStationCommandsAsync(
+        BaseStationDevice[] baseStations,
+        string action,
+        Func<BaseStationDevice, CancellationToken, Task> commandAsync,
+        CancellationToken cancellationToken,
+        int attemptsPerStation = 1,
+        Action<int>? onSuccess = null)
+    {
+        var successes = 0;
+        for (var index = 0; index < baseStations.Length; index++)
+        {
+            var baseStation = baseStations[index];
+            cancellationToken.ThrowIfCancellationRequested();
+            Exception? lastException = null;
+            try
+            {
+                for (var attempt = 1; attempt <= Math.Max(1, attemptsPerStation); attempt++)
+                {
+                    try
+                    {
+                        await commandAsync(baseStation, cancellationToken);
+                        successes++;
+                        onSuccess?.Invoke(index);
+                        lastException = null;
+                        Console.WriteLine($"Base station {baseStation.DisplayName}: {action} succeeded.");
+                        break;
+                    }
+                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        lastException = ex;
+                        if (attempt < attemptsPerStation)
+                        {
+                            Console.WriteLine($"Base station {baseStation.DisplayName}: {action} attempt {attempt} failed: {ex.Message}. Trying again.");
+                            await Task.Delay(BaseStationCommandTiming.InterStationDelay, cancellationToken);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                lastException = ex;
+            }
+
+            if (lastException is not null)
+            {
+                Console.WriteLine($"Base station {baseStation.DisplayName}: could not {action}: {lastException.Message}");
+            }
+
+            if (index < baseStations.Length - 1)
+            {
+                await Task.Delay(BaseStationCommandTiming.InterStationDelay, cancellationToken);
+            }
+        }
+
+        return successes;
+    }
+
+    private async Task<bool[]> SendBaseStationPowerOnPassAsync(BaseStationDevice[] baseStations, int pass, CancellationToken cancellationToken)
+    {
+        var stationSucceeded = new bool[baseStations.Length];
+        if (pass > 1)
+        {
+            Console.WriteLine($"Repeating base station power-on pass {pass}/{BaseStationCommandTiming.PowerOnPasses}...");
+        }
+        else
+        {
+            Console.WriteLine($"Powering on {baseStations.Length} base station(s)...");
+        }
+
+        await SendBaseStationCommandsAsync(
+            baseStations,
+            pass == 1 ? "power on" : $"power on pass {pass}",
+            (baseStation, token) => _baseStationGattClient.PowerOnAsync(baseStation, token),
+            cancellationToken,
+            BaseStationCommandTiming.PowerOnAttempts,
+            index => stationSucceeded[index] = true);
+
+        return stationSucceeded;
+    }
+
+    private async Task<BaseStationPowerState[]> ReadBaseStationPowerStatesAsync(BaseStationDevice[] baseStations, CancellationToken cancellationToken)
+    {
+        var states = new BaseStationPowerState[baseStations.Length];
+        for (var index = 0; index < baseStations.Length; index++)
+        {
+            var baseStation = baseStations[index];
+            try
+            {
+                if (baseStation.PowerStateReadUnsupported)
+                {
+                    states[index] = BaseStationPowerState.Unsupported;
+                    continue;
+                }
+
+                states[index] = await _baseStationGattClient.ReadPowerStateAsync(baseStation, cancellationToken);
+                if (states[index] == BaseStationPowerState.Unsupported)
+                {
+                    baseStation.PowerStateReadUnsupported = true;
+                    _baseStationSettingsNeedSave = true;
+                }
+
+                Console.WriteLine($"Base station {baseStation.DisplayName}: reported state {states[index]}.");
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                states[index] = BaseStationPowerState.Unknown;
+                Console.WriteLine($"Base station {baseStation.DisplayName}: could not read power state: {ex.Message}");
+            }
+
+            if (index < baseStations.Length - 1)
+            {
+                await Task.Delay(BaseStationCommandTiming.InterStationDelay, cancellationToken);
+            }
+        }
+
+        if (_baseStationSettingsNeedSave)
+        {
+            _config.SaveBaseStationSettings();
+            _baseStationSettingsNeedSave = false;
+        }
+
+        return states;
+    }
+
+    private static bool IsAwakeBaseStationState(BaseStationPowerState state)
+        => state is BaseStationPowerState.Awake or BaseStationPowerState.Waking;
+
+    private static bool IsBaseStationPowerOnComplete(
+        BaseStationDevice[] allBaseStations,
+        BaseStationPowerState[] finalStates,
+        HashSet<string> commandSucceeded)
+    {
+        for (var index = 0; index < allBaseStations.Length; index++)
+        {
+            if (IsAwakeBaseStationState(finalStates[index]))
+            {
+                continue;
+            }
+
+            if (commandSucceeded.Contains(allBaseStations[index].BluetoothAddress)
+                && finalStates[index] is BaseStationPowerState.Unknown or BaseStationPowerState.Unsupported)
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private BaseStationDevice[] GetEnabledBaseStations()
+        => _config.BaseStations
+            .Where(baseStation => baseStation.Enabled && !string.IsNullOrWhiteSpace(baseStation.BluetoothAddress))
+            .Select(baseStation => baseStation.WithDefaults())
+            .ToArray();
+
     private async Task RestoreMonitorsAndStopManagedAppsAsync(bool waitForSteamVrServerExit, CancellationToken cancellationToken)
+        => await RunCleanupOnceAsync(waitForSteamVrServerExit, emergencyClose: false, cancellationToken);
+
+    private async Task RestoreMonitorsAndStopManagedAppsCoreAsync(bool waitForSteamVrServerExit, CancellationToken cancellationToken)
     {
         if (waitForSteamVrServerExit)
         {
             await WaitForSteamVrServerExitAsync(cancellationToken);
         }
 
+        await TryPowerDownBaseStationsForSessionAsync(cancellationToken);
         RestoreMonitorLayout();
         await StopLovenseAppsAsync(cancellationToken);
         await StopManagedAppsAsync(ManagedAppStopReason.SessionEnding, cancellationToken);
     }
 
     private bool ShouldWaitForSteamVrServerExitBeforeCleanup()
-        => _turnOffSecondaryMonitors && _monitorLayout.HasSavedLayout;
+        => (_turnOffSecondaryMonitors && _monitorLayout.HasSavedLayout) || _baseStationsPoweredOn || _baseStationPowerOnAttempted;
 
     private async Task TryRestoreMonitorsAndStopManagedAppsAsync(bool waitForSteamVrServerExit, CancellationToken cancellationToken)
     {
         try
         {
-            await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit, cancellationToken);
+            await RunCleanupOnceAsync(waitForSteamVrServerExit, emergencyClose: false, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -1499,14 +1997,28 @@ internal sealed class AppSupervisor
             : name;
     }
 
-    private async Task HandleOscGoesBrrrHotkeyAsync(CancellationToken cancellationToken)
+    private async Task HandleConsoleHotkeysAsync(CancellationToken cancellationToken)
+    {
+        var hotkeys = ConsumeConsoleHotkeys();
+        if (hotkeys.RestartCoreApps)
+        {
+            await RestartCoreAppsAsync(cancellationToken);
+        }
+
+        if (hotkeys.LaunchOscGoesBrrr)
+        {
+            await HandleOscGoesBrrrHotkeyAsync(cancellationToken, hotkeyAlreadyConsumed: true);
+        }
+    }
+
+    private async Task HandleOscGoesBrrrHotkeyAsync(CancellationToken cancellationToken, bool hotkeyAlreadyConsumed)
     {
         if (!_config.OscGoesBrrrEnabled || !_config.OscGoesBrrrHotkeyEnabled)
         {
             return;
         }
 
-        if (!TryConsumeOscGoesBrrrHotkey())
+        if (!hotkeyAlreadyConsumed)
         {
             return;
         }
@@ -1546,30 +2058,34 @@ internal sealed class AppSupervisor
     private bool IsOscGoesBrrrWorkflowRunning()
         => IsIntifaceRunning() && IsOscGoesBrrrRunning();
 
-    private static bool TryConsumeOscGoesBrrrHotkey()
+    private static ConsoleHotkeys ConsumeConsoleHotkeys()
     {
         if (Console.IsInputRedirected)
         {
-            return false;
+            return default;
         }
 
         try
         {
-            var launchRequested = false;
+            var hotkeys = new ConsoleHotkeys();
             while (Console.KeyAvailable)
             {
                 var key = Console.ReadKey(intercept: true);
                 if (key.Key == ConsoleKey.L)
                 {
-                    launchRequested = true;
+                    hotkeys.LaunchOscGoesBrrr = true;
+                }
+                else if (key.Key == ConsoleKey.R)
+                {
+                    hotkeys.RestartCoreApps = true;
                 }
             }
 
-            return launchRequested;
+            return hotkeys;
         }
         catch (InvalidOperationException)
         {
-            return false;
+            return default;
         }
     }
 
@@ -1653,7 +2169,7 @@ internal sealed class AppSupervisor
 
         if (_lovenseWorkflowTriggered || oscGoesBrrrRunning)
         {
-            await StopProcessesAsync("OscGoesBrrr", _config.OscGoesBrrrProcessNames, cancellationToken);
+            await StopProcessesAsync("OscGoesBrrr", _config.OscGoesBrrrProcessNames, cancellationToken, forceFirst: true);
             _lovenseWorkflowTriggered = false;
         }
 
@@ -1935,7 +2451,7 @@ internal sealed class AppSupervisor
         return minimizedAny;
     }
 
-    private async Task StopProcessesAsync(string displayName, string[] processNames, CancellationToken cancellationToken)
+    private async Task StopProcessesAsync(string displayName, string[] processNames, CancellationToken cancellationToken, bool forceFirst = false)
     {
         var processes = GetProcesses(processNames);
         if (processes.Count == 0)
@@ -1945,6 +2461,32 @@ internal sealed class AppSupervisor
         }
 
         Console.WriteLine($"Closing {displayName}...");
+
+        if (forceFirst)
+        {
+            foreach (var process in processes)
+            {
+                using (process)
+                {
+                    TryKill(process);
+                }
+            }
+
+            var forceOnlyDeadline = DateTimeOffset.UtcNow.AddSeconds(_config.ShutdownGraceSeconds);
+            while (DateTimeOffset.UtcNow < forceOnlyDeadline)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!IsAnyProcessRunning(processNames))
+                {
+                    Console.WriteLine($"{displayName} is closed.");
+                    return;
+                }
+
+                await Task.Delay(250, cancellationToken);
+            }
+
+            throw new TimeoutException($"{displayName} did not close cleanly.");
+        }
 
         foreach (var process in processes)
         {
@@ -2238,6 +2780,127 @@ internal sealed class AppSupervisor
     private static string DescribeConnection(bool connected) => connected ? "connected" : "not connected";
 }
 
+internal static class BaseStationEmergencyCleanup
+{
+    public static bool TryLaunchDetached(SupervisorConfig config, TimeSpan initialDelay)
+    {
+        if (!config.BaseStationsEnabled || config.BaseStations.Length == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            var executablePath = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(executablePath) || !File.Exists(executablePath))
+            {
+                executablePath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.exe");
+            }
+
+            if (!File.Exists(executablePath))
+            {
+                return false;
+            }
+
+            var configPath = config.LoadedFromPath ?? Path.Combine(AppContext.BaseDirectory, "supervisor.config.json");
+            if (!File.Exists(configPath))
+            {
+                return false;
+            }
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = executablePath,
+                WorkingDirectory = Path.GetDirectoryName(executablePath) ?? AppContext.BaseDirectory,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add("--emergency-base-station-cleanup");
+            startInfo.ArgumentList.Add(configPath);
+            startInfo.ArgumentList.Add("--delay-seconds");
+            startInfo.ArgumentList.Add(Math.Max(0, (int)Math.Round(initialDelay.TotalSeconds)).ToString(CultureInfo.InvariantCulture));
+
+            Process.Start(startInfo)?.Dispose();
+            Console.WriteLine("Started detached base-station emergency cleanup helper.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not start detached base-station cleanup helper: {ex.Message}");
+            return false;
+        }
+    }
+
+    public static async Task RunAsync(SupervisorConfig config, TimeSpan initialDelay, CancellationToken cancellationToken)
+    {
+        if (initialDelay > TimeSpan.Zero)
+        {
+            await Task.Delay(initialDelay, cancellationToken);
+        }
+
+        if (!config.BaseStationsEnabled)
+        {
+            return;
+        }
+
+        var baseStations = config.BaseStations
+            .Where(baseStation => baseStation.Enabled && !string.IsNullOrWhiteSpace(baseStation.BluetoothAddress))
+            .Select(baseStation => baseStation.WithDefaults())
+            .ToArray();
+        if (baseStations.Length == 0)
+        {
+            return;
+        }
+
+        var client = new BaseStationGattClient();
+        for (var pass = 1; pass <= 2; pass++)
+        {
+            for (var index = 0; index < baseStations.Length; index++)
+            {
+                var baseStation = baseStations[index];
+                cancellationToken.ThrowIfCancellationRequested();
+
+                try
+                {
+                    if (!baseStation.PowerStateReadUnsupported)
+                    {
+                        var state = await client.ReadPowerStateAsync(baseStation, cancellationToken);
+                        if (state is BaseStationPowerState.Sleeping or BaseStationPowerState.Standby)
+                        {
+                            Console.WriteLine($"Base station {baseStation.DisplayName}: already {state}.");
+                            continue;
+                        }
+                    }
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    Console.WriteLine($"Base station {baseStation.DisplayName}: cleanup helper could not read state: {ex.Message}");
+                }
+
+                try
+                {
+                    await client.PowerDownAsync(baseStation, config.BaseStationPowerDownMode, cancellationToken);
+                    Console.WriteLine($"Base station {baseStation.DisplayName}: cleanup helper sent {config.BaseStationPowerDownMode}.");
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    Console.WriteLine($"Base station {baseStation.DisplayName}: cleanup helper could not power down: {ex.Message}");
+                }
+
+                if (index < baseStations.Length - 1)
+                {
+                    await Task.Delay(BaseStationCommandTiming.InterStationDelay, cancellationToken);
+                }
+            }
+
+            if (pass < 2)
+            {
+                await Task.Delay(BaseStationCommandTiming.PowerOnRetryPassDelay, cancellationToken);
+            }
+        }
+    }
+}
+
 internal sealed class ConsoleCloseHandler : IDisposable
 {
     private const uint CtrlCloseEvent = 2;
@@ -2247,7 +2910,11 @@ internal sealed class ConsoleCloseHandler : IDisposable
 
     private readonly HandlerRoutine _handler;
 
-    private ConsoleCloseHandler(CancellationTokenSource shutdown, Task supervisorStopped)
+    private ConsoleCloseHandler(
+        CancellationTokenSource shutdown,
+        Task supervisorStopped,
+        Func<Task> emergencyCleanupAsync,
+        Action launchDetachedBaseStationCleanup)
     {
         _handler = ctrlType =>
         {
@@ -2259,6 +2926,8 @@ internal sealed class ConsoleCloseHandler : IDisposable
             try
             {
                 Console.WriteLine("Console close requested. Restoring monitors and closing managed apps.");
+                launchDetachedBaseStationCleanup();
+                emergencyCleanupAsync().GetAwaiter().GetResult();
                 shutdown.Cancel();
                 supervisorStopped.Wait(TimeSpan.FromSeconds(60));
             }
@@ -2273,9 +2942,13 @@ internal sealed class ConsoleCloseHandler : IDisposable
         SetConsoleCtrlHandler(_handler, add: true);
     }
 
-    public static IDisposable Register(CancellationTokenSource shutdown, Task supervisorStopped)
+    public static IDisposable Register(
+        CancellationTokenSource shutdown,
+        Task supervisorStopped,
+        Func<Task> emergencyCleanupAsync,
+        Action launchDetachedBaseStationCleanup)
         => OperatingSystem.IsWindows()
-            ? new ConsoleCloseHandler(shutdown, supervisorStopped)
+            ? new ConsoleCloseHandler(shutdown, supervisorStopped, emergencyCleanupAsync, launchDetachedBaseStationCleanup)
             : NoopRegistration;
 
     public void Dispose()
@@ -3005,6 +3678,9 @@ internal sealed class SupervisorConfig
     public AutoLaunchAppConfig[] AutoLaunchApps { get; init; } = [];
     public string[] WatchedShutdownProcessNames { get; init; } = ["VRChat"];
     public string[] SteamVrServerProcessNames { get; init; } = ["vrserver"];
+    public bool BaseStationsEnabled { get; init; }
+    public BaseStationPowerDownMode BaseStationPowerDownMode { get; init; } = BaseStationPowerDownMode.Sleep;
+    public BaseStationDevice[] BaseStations { get; init; } = [];
     public bool OscGoesBrrrEnabled { get; set; }
     public bool LovenseAutoLaunchEnabled
     {
@@ -3062,9 +3738,9 @@ internal sealed class SupervisorConfig
     [JsonIgnore]
     public string? LoadedFromPath { get; private set; }
 
-    public static SupervisorConfig Load()
+    public static SupervisorConfig Load(string? explicitPath = null)
     {
-        var configPath = FindConfigPath();
+        var configPath = FindConfigPath(explicitPath);
         if (configPath is null)
         {
             return new SupervisorConfig();
@@ -3199,6 +3875,17 @@ internal sealed class SupervisorConfig
         Console.WriteLine($"Saved scheduled task preference to: {configPath}");
     }
 
+    public void SaveBaseStationSettings()
+    {
+        var configPath = LoadedFromPath ?? Path.Combine(AppContext.BaseDirectory, "supervisor.config.json");
+        var json = File.Exists(configPath) ? File.ReadAllText(configPath) : "{\n}";
+
+        json = ReplaceJsonValueProperty(json, nameof(BaseStations), JsonSerializer.Serialize(BaseStations, JsonOptions()));
+
+        File.WriteAllText(configPath, json);
+        Console.WriteLine($"Saved base station settings to: {configPath}");
+    }
+
     private static string ReplaceJsonStringProperty(string json, string propertyName, string value)
     {
         var escapedValue = JsonSerializer.Serialize(value);
@@ -3239,6 +3926,24 @@ internal sealed class SupervisorConfig
         return $"{{\n{insertion}}}\n";
     }
 
+    private static string ReplaceJsonValueProperty(string json, string propertyName, string valueJson)
+    {
+        var pattern = $"(\"{Regex.Escape(propertyName)}\"\\s*:\\s*)\\[(?:.|\\r|\\n)*?\\]";
+        if (Regex.IsMatch(json, pattern))
+        {
+            return Regex.Replace(json, pattern, match => match.Groups[1].Value + valueJson, RegexOptions.Multiline);
+        }
+
+        var insertion = $"  \"{propertyName}\": {valueJson},\n";
+        var openBrace = json.IndexOf('{');
+        if (openBrace >= 0)
+        {
+            return json.Insert(openBrace + 1, Environment.NewLine + insertion);
+        }
+
+        return $"{{\n{insertion}}}\n";
+    }
+
     private static string ReplaceJsonBooleanOrStringProperty(string json, string propertyName, bool value)
     {
         var escapedValue = value ? "true" : "false";
@@ -3263,8 +3968,14 @@ internal sealed class SupervisorConfig
         return $"{{\n{insertion}}}\n";
     }
 
-    private static string? FindConfigPath()
+    private static string? FindConfigPath(string? explicitPath = null)
     {
+        if (!string.IsNullOrWhiteSpace(explicitPath))
+        {
+            var fullPath = Path.GetFullPath(explicitPath);
+            return File.Exists(fullPath) ? fullPath : null;
+        }
+
         var candidates = new[]
         {
             Path.Combine(AppContext.BaseDirectory, "supervisor.config.json"),

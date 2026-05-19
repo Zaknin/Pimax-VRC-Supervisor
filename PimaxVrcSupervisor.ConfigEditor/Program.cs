@@ -1,10 +1,13 @@
 using Microsoft.Win32;
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using System.Text.Json.Serialization;
+using PimaxVrcSupervisor.BaseStations;
 
 namespace PimaxVrcSupervisor.ConfigEditor;
 
@@ -44,6 +47,8 @@ internal sealed class ConfigEditorForm : Form
     private readonly CheckBox _oscGoesBrrrEnabledCheckBox = new() { Text = "Enabled", AutoSize = true };
     private readonly CheckBox _oscGoesBrrrHotkeyCheckBox = new() { Text = "Enable L hotkey launch", AutoSize = true };
     private readonly CheckBox _oscGoesBrrrBleScannerCheckBox = new() { Text = "Enable BLE scanner", AutoSize = true };
+    private readonly CheckBox _baseStationsEnabledCheckBox = new() { Text = "Enable base station power automation", AutoSize = true };
+    private readonly ComboBox _baseStationPowerDownModeComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     private readonly CheckBox _mouthTrackerCheckBox = CreateOptionalConfigCheckBox("Use Vive mouth tracker");
     private readonly CheckBox _turnOffMonitorsCheckBox = CreateOptionalConfigCheckBox("Turn off secondary monitors during headset sessions");
     private readonly CheckBox _autoLaunchTaskCheckBox = CreateOptionalConfigCheckBox("Create/evaluate VRChat auto-launch Scheduled Task");
@@ -54,6 +59,15 @@ internal sealed class ConfigEditorForm : Form
     {
         Dock = DockStyle.Fill,
         AllowUserToAddRows = true,
+        AllowUserToDeleteRows = true,
+        AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+        ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
+        RowHeadersVisible = false
+    };
+    private readonly DataGridView _baseStationsGrid = new()
+    {
+        Dock = DockStyle.Fill,
+        AllowUserToAddRows = false,
         AllowUserToDeleteRows = true,
         AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
         ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
@@ -218,6 +232,7 @@ internal sealed class ConfigEditorForm : Form
     {
         var tabs = new ThemedTabHost { Dock = DockStyle.Fill };
         tabs.AddTab("Basics", BuildBasicsTab());
+        tabs.AddTab("Base Stations", BuildBaseStationsTab());
         tabs.AddTab("Auto Launch", BuildAutoLaunchTab());
         tabs.AddTab("OSCGoesBrrr", BuildLovenseTab());
         tabs.AddTab("Processes", BuildProcessesTab());
@@ -249,6 +264,457 @@ internal sealed class ConfigEditorForm : Form
 
         return layout;
     }
+
+    private Control BuildBaseStationsTab()
+    {
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 3,
+            Padding = new Padding(8)
+        };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        _baseStationPowerDownModeComboBox.Items.Clear();
+        _baseStationPowerDownModeComboBox.Items.Add(BaseStationPowerDownMode.Sleep.ToString());
+        _baseStationPowerDownModeComboBox.Items.Add(BaseStationPowerDownMode.Standby.ToString());
+        _baseStationPowerDownModeComboBox.SelectedIndex = 0;
+        _baseStationPowerDownModeComboBox.Anchor = AnchorStyles.Left | AnchorStyles.Top;
+
+        var settings = CreateFormLayout(2);
+        settings.Dock = DockStyle.Top;
+        settings.AutoSize = true;
+        AddFullWidth(settings, _baseStationsEnabledCheckBox, "Checked means the supervisor powers on enabled base stations after SteamVR and the Pimax headset are present, then powers them down after VRChat and SteamVR close.");
+        AddLabeledRow(settings, "Power-down mode", _baseStationPowerDownModeComboBox, "Sleep works for Base Station 1.0 and 2.0. Standby applies to Base Station 2.0; Base Station 1.0 falls back to sleep.");
+
+        var buttons = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Padding = new Padding(0, 0, 0, 8)
+        };
+        var scanButton = new Button { Text = "Scan", AutoSize = true };
+        scanButton.Click += async (_, _) => await ScanBaseStationsAsync();
+        _toolTips.SetToolTip(scanButton, "Scan nearby Bluetooth LE devices for SteamVR base stations and merge them into the list.");
+        buttons.Controls.Add(scanButton);
+        var refreshStateButton = new Button { Text = "Refresh State", AutoSize = true };
+        refreshStateButton.Click += async (_, _) => await RefreshBaseStationStatesAsync();
+        _toolTips.SetToolTip(refreshStateButton, "Read live power state from enabled Base Station 2.0 devices when firmware supports it.");
+        buttons.Controls.Add(refreshStateButton);
+        var turnOnButton = new Button { Text = "Turn On", AutoSize = true };
+        turnOnButton.Click += async (_, _) => await SendBaseStationPowerOnToEnabledRowsAsync();
+        _toolTips.SetToolTip(turnOnButton, "Power on every enabled base station in the list.");
+        buttons.Controls.Add(turnOnButton);
+        var turnOffButton = new Button { Text = "Turn Off", AutoSize = true };
+        turnOffButton.Click += async (_, _) => await SendBaseStationCommandToEnabledRowsAsync(
+            "Turn Off",
+            (client, baseStation, token) => client.PowerDownAsync(baseStation, SelectedBaseStationPowerDownMode(), token));
+        _toolTips.SetToolTip(turnOffButton, "Power down every enabled base station using the selected power-down mode.");
+        buttons.Controls.Add(turnOffButton);
+        var addManualButton = new Button { Text = "Add Manual", AutoSize = true };
+        addManualButton.Click += (_, _) => AddBaseStationGridRow(new BaseStationDevice
+        {
+            FriendlyName = "Base station",
+            Name = "",
+            BluetoothAddress = "",
+            Version = BaseStationVersion.V2,
+            Enabled = true
+        });
+        _toolTips.SetToolTip(addManualButton, "Add a base station row manually if Windows discovery does not expose it.");
+        buttons.Controls.Add(addManualButton);
+
+        ConfigureBaseStationsGrid();
+        layout.Controls.Add(settings, 0, 0);
+        layout.Controls.Add(buttons, 0, 1);
+        layout.Controls.Add(_baseStationsGrid, 0, 2);
+        return layout;
+    }
+
+    private void ConfigureBaseStationsGrid()
+    {
+        if (_baseStationsGrid.Columns.Count > 0)
+        {
+            return;
+        }
+
+        _baseStationsGrid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "Enabled",
+            HeaderText = "Enabled",
+            FillWeight = 8,
+            MinimumWidth = 80
+        });
+        _baseStationsGrid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "FriendlyName",
+            HeaderText = "Friendly name",
+            FillWeight = 20,
+            MinimumWidth = 160
+        });
+        _baseStationsGrid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "Name",
+            HeaderText = "BLE name",
+            FillWeight = 18,
+            MinimumWidth = 150
+        });
+        _baseStationsGrid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "BluetoothAddress",
+            HeaderText = "Bluetooth address",
+            FillWeight = 18,
+            MinimumWidth = 150
+        });
+        _baseStationsGrid.Columns.Add(new DataGridViewComboBoxColumn
+        {
+            Name = "Version",
+            HeaderText = "Version",
+            DataSource = Enum.GetNames<BaseStationVersion>(),
+            FillWeight = 10,
+            MinimumWidth = 100
+        });
+        _baseStationsGrid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "Id",
+            HeaderText = "V1 ID",
+            FillWeight = 10,
+            MinimumWidth = 90
+        });
+        _baseStationsGrid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "State",
+            HeaderText = "State",
+            ReadOnly = true,
+            FillWeight = 10,
+            MinimumWidth = 100
+        });
+        _baseStationsGrid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "PowerStateReadUnsupported",
+            HeaderText = "State read unsupported",
+            Visible = false
+        });
+        _baseStationsGrid.Columns.Add(new DataGridViewButtonColumn
+        {
+            Name = "PowerOn",
+            HeaderText = "",
+            Text = "Power On",
+            UseColumnTextForButtonValue = true,
+            FillWeight = 10,
+            MinimumWidth = 95
+        });
+        _baseStationsGrid.Columns.Add(new DataGridViewButtonColumn
+        {
+            Name = "Sleep",
+            HeaderText = "",
+            Text = "Sleep",
+            UseColumnTextForButtonValue = true,
+            FillWeight = 8,
+            MinimumWidth = 80
+        });
+        _baseStationsGrid.Columns.Add(new DataGridViewButtonColumn
+        {
+            Name = "Standby",
+            HeaderText = "",
+            Text = "Standby",
+            UseColumnTextForButtonValue = true,
+            FillWeight = 9,
+            MinimumWidth = 90
+        });
+        _baseStationsGrid.Columns.Add(new DataGridViewButtonColumn
+        {
+            Name = "Identify",
+            HeaderText = "",
+            Text = "Identify",
+            UseColumnTextForButtonValue = true,
+            FillWeight = 9,
+            MinimumWidth = 90
+        });
+        _baseStationsGrid.CellContentClick += OnBaseStationsGridCellContentClick;
+        _baseStationsGrid.DefaultValuesNeeded += OnBaseStationsGridDefaultValuesNeeded;
+    }
+
+    private void OnBaseStationsGridDefaultValuesNeeded(object? sender, DataGridViewRowEventArgs e)
+    {
+        e.Row.Cells["Enabled"].Value = true;
+        e.Row.Cells["Version"].Value = BaseStationVersion.V2.ToString();
+    }
+
+    private async Task ScanBaseStationsAsync()
+    {
+        try
+        {
+            SetStatus("Scanning for base stations...");
+            var discovered = await BaseStationDiscovery.ScanAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
+            foreach (var baseStation in discovered)
+            {
+                UpsertBaseStationGridRow(baseStation.WithDefaults());
+            }
+
+            SetStatus($"Base station scan complete. Found {discovered.Count} station(s).");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Base station scan failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus("Base station scan failed.");
+        }
+    }
+
+    private async void OnBaseStationsGridCellContentClick(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0)
+        {
+            return;
+        }
+
+        var columnName = _baseStationsGrid.Columns[e.ColumnIndex].Name;
+        if (columnName is not ("PowerOn" or "Sleep" or "Standby" or "Identify"))
+        {
+            return;
+        }
+
+        CommitBaseStationsGridEdits();
+        var row = _baseStationsGrid.Rows[e.RowIndex];
+        var baseStation = ReadBaseStationGridRow(row);
+        if (baseStation is null)
+        {
+            return;
+        }
+
+        if (columnName == "Standby" && !baseStation.SupportsStandby)
+        {
+            MessageBox.Show(this, "Standby is only supported for Base Station 2.0. Use Sleep for Base Station 1.0.", "Standby unavailable", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        if (columnName == "Identify" && !baseStation.SupportsStandby)
+        {
+            MessageBox.Show(this, "Identify is only supported for Base Station 2.0.", "Identify unavailable", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        try
+        {
+            SetStatus($"{columnName} test for {baseStation.DisplayName}...");
+            var client = new BaseStationGattClient();
+            switch (columnName)
+            {
+                case "PowerOn":
+                    await client.PowerOnAsync(baseStation, CancellationToken.None);
+                    break;
+                case "Sleep":
+                    await client.SleepAsync(baseStation, CancellationToken.None);
+                    break;
+                case "Standby":
+                    await client.StandbyAsync(baseStation, CancellationToken.None);
+                    break;
+                case "Identify":
+                    await client.IdentifyAsync(baseStation, CancellationToken.None);
+                    break;
+            }
+
+            SetStatus($"{columnName} test succeeded for {baseStation.DisplayName}.");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Base station command failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus($"{columnName} test failed.");
+        }
+    }
+
+    private async Task SendBaseStationCommandToEnabledRowsAsync(
+        string action,
+        Func<BaseStationGattClient, BaseStationDevice, CancellationToken, Task> commandAsync,
+        int attemptsPerStation = 1)
+    {
+        CommitBaseStationsGridEdits();
+        var baseStations = ReadBaseStationsGrid()
+            .Where(baseStation => baseStation.Enabled)
+            .ToArray();
+        if (baseStations.Length == 0)
+        {
+            SetStatus("No enabled base stations to control.");
+            return;
+        }
+
+        var failures = new List<string>();
+        var client = new BaseStationGattClient();
+        SetStatus($"{action}: controlling {baseStations.Length} base station(s)...");
+        for (var index = 0; index < baseStations.Length; index++)
+        {
+            var baseStation = baseStations[index];
+            SetStatus($"{action}: {index + 1}/{baseStations.Length} {baseStation.DisplayName}...");
+            Exception? lastException = null;
+            try
+            {
+                for (var attempt = 1; attempt <= Math.Max(1, attemptsPerStation); attempt++)
+                {
+                    try
+                    {
+                        await commandAsync(client, baseStation, CancellationToken.None);
+                        lastException = null;
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        lastException = ex;
+                        if (attempt < attemptsPerStation)
+                        {
+                            await Task.Delay(BaseStationCommandTiming.InterStationDelay);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                lastException = ex;
+            }
+
+            if (lastException is not null)
+            {
+                failures.Add($"{baseStation.DisplayName}: {lastException.Message}");
+            }
+
+            if (index < baseStations.Length - 1)
+            {
+                await Task.Delay(BaseStationCommandTiming.InterStationDelay);
+            }
+        }
+
+        if (failures.Count == 0)
+        {
+            SetStatus($"{action} succeeded for {baseStations.Length} base station(s).");
+            return;
+        }
+
+        MessageBox.Show(this, string.Join(Environment.NewLine, failures), action + " failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        SetStatus($"{action} completed with {failures.Count} failure(s).");
+    }
+
+    private async Task SendBaseStationPowerOnToEnabledRowsAsync()
+    {
+        CommitBaseStationsGridEdits();
+        var baseStations = ReadBaseStationsGrid()
+            .Where(baseStation => baseStation.Enabled)
+            .ToArray();
+        if (baseStations.Length == 0)
+        {
+            SetStatus("No enabled base stations to control.");
+            return;
+        }
+
+        var stationSucceeded = new bool[baseStations.Length];
+        var client = new BaseStationGattClient();
+        for (var pass = 1; pass <= BaseStationCommandTiming.PowerOnPasses; pass++)
+        {
+            var passBaseStations = pass >= 3
+                ? baseStations.Where(baseStation => baseStation.RequiresExtendedPowerOnPasses).ToArray()
+                : baseStations;
+            if (passBaseStations.Length == 0)
+            {
+                continue;
+            }
+
+            if (pass == 3)
+            {
+                SetStatus($"Turn On: waiting before pass {pass}/{BaseStationCommandTiming.PowerOnPasses}...");
+                await Task.Delay(BaseStationCommandTiming.PowerOnRetryPassDelay);
+            }
+
+            await SendBaseStationCommandToRowsAsync(
+                passBaseStations,
+                pass == 1 ? "Turn On" : $"Turn On pass {pass}",
+                client,
+                (baseStation, token) => client.PowerOnAsync(baseStation, token),
+                BaseStationCommandTiming.PowerOnAttempts,
+                index =>
+                {
+                    var originalIndex = Array.FindIndex(
+                        baseStations,
+                        candidate => string.Equals(candidate.BluetoothAddress, passBaseStations[index].BluetoothAddress, StringComparison.OrdinalIgnoreCase));
+                    if (originalIndex >= 0)
+                    {
+                        stationSucceeded[originalIndex] = true;
+                    }
+                });
+        }
+
+        var succeeded = stationSucceeded.Count(value => value);
+        if (succeeded != baseStations.Length)
+        {
+            var missing = baseStations
+                .Where((_, index) => !stationSucceeded[index])
+                .Select(baseStation => baseStation.DisplayName);
+            MessageBox.Show(this, string.Join(Environment.NewLine, missing), "Turn On failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+
+        SetStatus(succeeded == baseStations.Length
+            ? $"Turn On succeeded for {baseStations.Length} base station(s)."
+            : $"Turn On completed. {succeeded}/{baseStations.Length} base station(s) accepted at least one command.");
+    }
+
+    private async Task<List<string>> SendBaseStationCommandToRowsAsync(
+        BaseStationDevice[] baseStations,
+        string action,
+        BaseStationGattClient client,
+        Func<BaseStationDevice, CancellationToken, Task> commandAsync,
+        int attemptsPerStation,
+        Action<int>? onSuccess = null)
+    {
+        var failures = new List<string>();
+        SetStatus($"{action}: controlling {baseStations.Length} base station(s)...");
+        for (var index = 0; index < baseStations.Length; index++)
+        {
+            var baseStation = baseStations[index];
+            SetStatus($"{action}: {index + 1}/{baseStations.Length} {baseStation.DisplayName}...");
+            Exception? lastException = null;
+            try
+            {
+                for (var attempt = 1; attempt <= Math.Max(1, attemptsPerStation); attempt++)
+                {
+                    try
+                    {
+                        await commandAsync(baseStation, CancellationToken.None);
+                        onSuccess?.Invoke(index);
+                        lastException = null;
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        lastException = ex;
+                        if (attempt < attemptsPerStation)
+                        {
+                            await Task.Delay(BaseStationCommandTiming.InterStationDelay);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                lastException = ex;
+            }
+
+            if (lastException is not null)
+            {
+                failures.Add($"{baseStation.DisplayName}: {lastException.Message}");
+            }
+
+            if (index < baseStations.Length - 1)
+            {
+                await Task.Delay(BaseStationCommandTiming.InterStationDelay);
+            }
+        }
+
+        return failures;
+    }
+
+    private BaseStationPowerDownMode SelectedBaseStationPowerDownMode()
+        => Enum.TryParse(Convert.ToString(_baseStationPowerDownModeComboBox.SelectedItem), ignoreCase: true, out BaseStationPowerDownMode mode)
+            ? mode
+            : BaseStationPowerDownMode.Sleep;
 
     private Control BuildLovenseTab()
     {
@@ -529,13 +995,18 @@ internal sealed class ConfigEditorForm : Form
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Bottom,
-            ColumnCount = 3,
+            ColumnCount = 4,
             AutoSize = true,
             Padding = new Padding(0, 10, 0, 0)
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        var launchButton = new Button { Text = "Launch", AutoSize = true };
+        launchButton.Click += (_, _) => LaunchSupervisor();
+        _toolTips.SetToolTip(launchButton, "Launch PimaxVrcSupervisor.exe from the same folder as this config editor.");
 
         var saveButton = new Button { Text = "Save", AutoSize = true };
         saveButton.Click += (_, _) => SaveConfig();
@@ -546,8 +1017,9 @@ internal sealed class ConfigEditorForm : Form
         _toolTips.SetToolTip(saveAsButton, "Choose a different JSON file path, then save the current editor values.");
 
         layout.Controls.Add(_statusLabel, 0, 0);
-        layout.Controls.Add(saveAsButton, 1, 0);
-        layout.Controls.Add(saveButton, 2, 0);
+        layout.Controls.Add(launchButton, 1, 0);
+        layout.Controls.Add(saveAsButton, 2, 0);
+        layout.Controls.Add(saveButton, 3, 0);
         return layout;
     }
 
@@ -580,11 +1052,14 @@ internal sealed class ConfigEditorForm : Form
         var browseButton = new Button { Text = "Browse...", AutoSize = true };
         browseButton.Click += (_, _) =>
         {
+            var defaultFileName = string.IsNullOrWhiteSpace(Path.GetFileName(textBox.Text))
+                ? label
+                : Path.GetFileName(textBox.Text);
             using var dialog = new OpenFileDialog
             {
                 Title = "Select " + label,
                 Filter = "Executable files (*.exe)|*.exe|All files (*.*)|*.*",
-                FileName = Path.GetFileName(textBox.Text)
+                FileName = defaultFileName
             };
 
             if (File.Exists(textBox.Text))
@@ -693,6 +1168,37 @@ internal sealed class ConfigEditorForm : Form
         }
     }
 
+    private void LaunchSupervisor()
+    {
+        if (!ConfirmUnsavedChangesBefore("launching the supervisor"))
+        {
+            return;
+        }
+
+        var supervisorPath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.exe");
+        if (!File.Exists(supervisorPath))
+        {
+            MessageBox.Show(this, $"Could not find {supervisorPath}.", "Could not launch supervisor", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = supervisorPath,
+                WorkingDirectory = Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory,
+                UseShellExecute = true
+            });
+            SetStatus("Launched " + supervisorPath);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Could not launch supervisor", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus("Launch failed.");
+        }
+    }
+
     private void LoadConfig(string path)
     {
         try
@@ -701,14 +1207,17 @@ internal sealed class ConfigEditorForm : Form
             {
                 _loadedJson = "{\r\n}\r\n";
                 _rawJsonTextBox.Text = _loadedJson;
+                PopulateControls(null);
+                _loadedJson = BuildCurrentJson();
                 SetStatus("Config file does not exist yet. Fill values, then Save.");
                 return;
             }
 
-            _loadedJson = File.ReadAllText(path);
-            _rawJsonTextBox.Text = _loadedJson;
-            var node = ParseJson(_loadedJson);
+            var loadedJson = File.ReadAllText(path);
+            _rawJsonTextBox.Text = loadedJson;
+            var node = ParseJson(loadedJson);
             PopulateControls(node);
+            _loadedJson = BuildCurrentJson();
             SetStatus("Loaded " + path);
         }
         catch (Exception ex)
@@ -737,6 +1246,14 @@ internal sealed class ConfigEditorForm : Form
         _usePimaxLogCheckBox.Checked = GetBool(node, "UsePimaxServiceLogReconnectDetector", defaultValue: true);
         _useMouthTrackerPnPCheckBox.Checked = GetBool(node, "UseMouthTrackerPnPReconnectDetector", defaultValue: true);
         _pimaxServiceLogDirectoryTextBox.Text = GetString(node, "PimaxServiceLogDirectory");
+        _baseStationsEnabledCheckBox.Checked = GetBool(node, "BaseStationsEnabled", defaultValue: false);
+        _baseStationPowerDownModeComboBox.SelectedItem = GetStringOrDefault(node, "BaseStationPowerDownMode", BaseStationPowerDownMode.Sleep.ToString());
+        if (_baseStationPowerDownModeComboBox.SelectedIndex < 0)
+        {
+            _baseStationPowerDownModeComboBox.SelectedItem = BaseStationPowerDownMode.Sleep.ToString();
+        }
+
+        PopulateBaseStationsGrid(GetBaseStations(node));
         PopulateAutoLaunchAppsGrid(GetAutoLaunchApps(node));
         _brokenEyeProcessesTextBox.Text = string.Join(", ", GetStringArray(node, "BrokenEyeProcessNames"));
         _vrcFaceTrackingProcessesTextBox.Text = string.Join(", ", GetStringArray(node, "VrcFaceTrackingProcessNames"));
@@ -764,7 +1281,7 @@ internal sealed class ConfigEditorForm : Form
         }
     }
 
-    private void SaveConfig()
+    private bool SaveConfig()
     {
         try
         {
@@ -775,6 +1292,7 @@ internal sealed class ConfigEditorForm : Form
             }
 
             CommitAutoLaunchAppsGridEdits();
+            CommitBaseStationsGridEdits();
             var json = ApplyControlValues(_rawJsonTextBox.Text);
             ParseJson(json);
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
@@ -782,12 +1300,67 @@ internal sealed class ConfigEditorForm : Form
             _loadedJson = json;
             _rawJsonTextBox.Text = json;
             SetStatus("Saved " + path);
+            return true;
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, ex.Message, "Could not save config", MessageBoxButtons.OK, MessageBoxIcon.Error);
             SetStatus("Save failed.");
+            return false;
         }
+    }
+
+    private string BuildCurrentJson()
+    {
+        CommitAutoLaunchAppsGridEdits();
+        CommitBaseStationsGridEdits();
+        return ApplyControlValues(_rawJsonTextBox.Text);
+    }
+
+    private bool HasUnsavedChanges()
+    {
+        try
+        {
+            return !string.Equals(BuildCurrentJson(), _loadedJson, StringComparison.Ordinal);
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private bool ConfirmUnsavedChangesBefore(string action)
+    {
+        if (!HasUnsavedChanges())
+        {
+            return true;
+        }
+
+        var result = MessageBox.Show(
+            this,
+            $"Save changes before {action}?",
+            "Unsaved changes",
+            MessageBoxButtons.YesNoCancel,
+            MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button1);
+
+        return result switch
+        {
+            DialogResult.Yes => SaveConfig(),
+            DialogResult.No => true,
+            _ => false
+        };
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (!ConfirmUnsavedChangesBefore("exiting"))
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        base.OnFormClosing(e);
     }
 
     private string ApplyControlValues(string baseJson)
@@ -804,6 +1377,9 @@ internal sealed class ConfigEditorForm : Form
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrEnabled", _oscGoesBrrrEnabledCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrHotkeyEnabled", _oscGoesBrrrHotkeyCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrBleScannerEnabled", _oscGoesBrrrBleScannerCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "BaseStationsEnabled", _baseStationsEnabledCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "BaseStationPowerDownMode", Serialize(Convert.ToString(_baseStationPowerDownModeComboBox.SelectedItem) ?? BaseStationPowerDownMode.Sleep.ToString()));
+        json = JsonPropertyEditor.Replace(json, "BaseStations", Serialize(ReadBaseStationsGrid()));
         json = JsonPropertyEditor.Replace(json, "AutoLaunchApps", Serialize(ReadAutoLaunchAppsGrid()));
         json = JsonPropertyEditor.Replace(json, "BrokenEyeProcessNames", Serialize(ParseStringList(_brokenEyeProcessesTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "VrcFaceTrackingProcessNames", Serialize(ParseStringList(_vrcFaceTrackingProcessesTextBox.Text)));
@@ -843,8 +1419,14 @@ internal sealed class ConfigEditorForm : Form
 
     private static string Serialize<T>(T value)
     {
-        return JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true });
+        return JsonSerializer.Serialize(value, JsonOptions());
     }
+
+    private static JsonSerializerOptions JsonOptions() => new()
+    {
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter() }
+    };
 
     private static string SerializeTriState(CheckState checkState)
     {
@@ -1014,6 +1596,55 @@ internal sealed class ConfigEditorForm : Form
         return apps.ToArray();
     }
 
+    private static BaseStationDevice[] GetBaseStations(JsonNode? node)
+    {
+        if (node?["BaseStations"] is not JsonArray array)
+        {
+            return [];
+        }
+
+        var baseStations = new List<BaseStationDevice>();
+        foreach (var item in array.OfType<JsonObject>())
+        {
+            var name = GetString(item, "Name").Trim();
+            var address = GetString(item, "BluetoothAddress").Trim();
+            if (string.IsNullOrWhiteSpace(address))
+            {
+                continue;
+            }
+
+            baseStations.Add(new BaseStationDevice
+            {
+                FriendlyName = GetString(item, "FriendlyName").Trim(),
+                Name = name,
+                BluetoothAddress = address,
+                Version = GetBaseStationVersion(item, "Version", BaseStationDevice.InferVersion(name)),
+                Enabled = GetBool(item, "Enabled", defaultValue: true),
+                Id = GetString(item, "Id").Trim(),
+                PowerStateReadUnsupported = GetBool(item, "PowerStateReadUnsupported", defaultValue: false)
+            }.WithDefaults());
+        }
+
+        return baseStations.ToArray();
+    }
+
+    private static BaseStationVersion GetBaseStationVersion(JsonNode? node, string propertyName, BaseStationVersion defaultValue)
+    {
+        if (node?[propertyName] is not JsonValue value)
+        {
+            return defaultValue;
+        }
+
+        if (value.TryGetValue<string>(out var text) && Enum.TryParse(text, ignoreCase: true, out BaseStationVersion parsedText))
+        {
+            return parsedText;
+        }
+
+        return value.TryGetValue<int>(out var number) && Enum.IsDefined(typeof(BaseStationVersion), number)
+            ? (BaseStationVersion)number
+            : defaultValue;
+    }
+
     private static string[] ParseStringList(string text)
     {
         return text.Split([',', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -1080,6 +1711,153 @@ internal sealed class ConfigEditorForm : Form
         }
 
         return apps.ToArray();
+    }
+
+    private void PopulateBaseStationsGrid(BaseStationDevice[] baseStations)
+    {
+        ConfigureBaseStationsGrid();
+        _baseStationsGrid.Rows.Clear();
+        foreach (var baseStation in baseStations)
+        {
+            AddBaseStationGridRow(baseStation.WithDefaults());
+        }
+    }
+
+    private int AddBaseStationGridRow(BaseStationDevice baseStation)
+    {
+        return _baseStationsGrid.Rows.Add(
+            baseStation.Enabled,
+            baseStation.FriendlyName,
+            baseStation.Name,
+            baseStation.BluetoothAddress,
+            baseStation.EffectiveVersion.ToString(),
+            baseStation.Id,
+            "",
+            baseStation.PowerStateReadUnsupported,
+            "Power On",
+            "Sleep",
+            "Standby",
+            "Identify");
+    }
+
+    private void UpsertBaseStationGridRow(BaseStationDevice baseStation)
+    {
+        foreach (DataGridViewRow row in _baseStationsGrid.Rows)
+        {
+            if (row.IsNewRow)
+            {
+                continue;
+            }
+
+            if (!string.Equals(GetGridString(row, "BluetoothAddress"), baseStation.BluetoothAddress, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            row.Cells["Name"].Value = baseStation.Name;
+            row.Cells["Version"].Value = baseStation.EffectiveVersion.ToString();
+            if (string.IsNullOrWhiteSpace(GetGridString(row, "FriendlyName")))
+            {
+                row.Cells["FriendlyName"].Value = baseStation.FriendlyName;
+            }
+
+            return;
+        }
+
+        AddBaseStationGridRow(baseStation);
+    }
+
+    private void CommitBaseStationsGridEdits()
+    {
+        if (_baseStationsGrid.IsCurrentCellDirty)
+        {
+            _baseStationsGrid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        }
+
+        _baseStationsGrid.EndEdit();
+        ValidateChildren();
+    }
+
+    private BaseStationDevice[] ReadBaseStationsGrid()
+    {
+        CommitBaseStationsGridEdits();
+        var baseStations = new List<BaseStationDevice>();
+        foreach (DataGridViewRow row in _baseStationsGrid.Rows)
+        {
+            var baseStation = ReadBaseStationGridRow(row);
+            if (baseStation is not null)
+            {
+                baseStations.Add(baseStation);
+            }
+        }
+
+        return baseStations.ToArray();
+    }
+
+    private BaseStationDevice? ReadBaseStationGridRow(DataGridViewRow row)
+    {
+        if (row.IsNewRow)
+        {
+            return null;
+        }
+
+        var address = GetGridString(row, "BluetoothAddress");
+        if (string.IsNullOrWhiteSpace(address))
+        {
+            return null;
+        }
+
+        var name = GetGridString(row, "Name");
+        var friendlyName = GetGridString(row, "FriendlyName");
+        if (!Enum.TryParse(GetGridString(row, "Version"), ignoreCase: true, out BaseStationVersion version))
+        {
+            version = BaseStationDevice.InferVersion(name);
+        }
+
+        return new BaseStationDevice
+        {
+            Enabled = GetGridBool(row, "Enabled", defaultValue: true),
+            FriendlyName = string.IsNullOrWhiteSpace(friendlyName) ? name : friendlyName,
+            Name = name,
+            BluetoothAddress = address,
+            Version = version,
+            Id = GetGridString(row, "Id"),
+            PowerStateReadUnsupported = GetGridBool(row, "PowerStateReadUnsupported", defaultValue: false)
+        }.WithDefaults();
+    }
+
+    private async Task RefreshBaseStationStatesAsync()
+    {
+        CommitBaseStationsGridEdits();
+        var client = new BaseStationGattClient();
+        var updated = 0;
+
+        foreach (DataGridViewRow row in _baseStationsGrid.Rows)
+        {
+            var baseStation = ReadBaseStationGridRow(row);
+            if (baseStation is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                SetStatus($"Reading state for {baseStation.DisplayName}...");
+                var state = await client.ReadPowerStateAsync(baseStation, CancellationToken.None);
+                row.Cells["State"].Value = state;
+                row.Cells["PowerStateReadUnsupported"].Value = state == BaseStationPowerState.Unsupported;
+                updated++;
+            }
+            catch (Exception ex)
+            {
+                row.Cells["State"].Value = "Unknown";
+                SetStatus($"Could not read state for {baseStation.DisplayName}: {ex.Message}");
+            }
+
+            await Task.Delay(BaseStationCommandTiming.InterStationDelay);
+        }
+
+        SetStatus($"Refreshed state for {updated} base station(s).");
     }
 
     private static string[][] ParseStringMatrix(string text)
@@ -1196,6 +1974,10 @@ internal sealed class ConfigEditorForm : Form
             case NumericUpDown input:
                 input.BackColor = _theme.InputBack;
                 input.ForeColor = _theme.Text;
+                break;
+            case ComboBox comboBox:
+                comboBox.BackColor = _theme.InputBack;
+                comboBox.ForeColor = _theme.Text;
                 break;
             case DataGridView grid:
                 ApplyThemeToGrid(grid);
@@ -1447,6 +2229,10 @@ internal sealed class ThemedTabHost : UserControl
             case NumericUpDown input:
                 input.BackColor = _theme.InputBack;
                 input.ForeColor = _theme.Text;
+                break;
+            case ComboBox comboBox:
+                comboBox.BackColor = _theme.InputBack;
+                comboBox.ForeColor = _theme.Text;
                 break;
             case DataGridView grid:
                 ApplyThemeToGrid(grid);
