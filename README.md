@@ -11,6 +11,7 @@ A Windows helper for Pimax Crystal + VRChat setups. It supervises Broken Eye and
 - If enabled, before starting Broken Eye saves the active Windows monitor layout and switches to monitor 1 only when multiple monitors are active.
 - Starts Broken Eye first, retrying up to 10 times if it does not appear as running after 5 seconds, then starts VRCFaceTracking.
 - Starts optional user-defined apps after the main Broken Eye/VRCFaceTracking sequence has completed.
+- Optionally enables an OSCGoesBrrr workflow after normal startup. Press `L` in the supervisor console to start Intiface followed by OscGoesBrrr.
 - Watches Pimax HMD/runtime reconnects, waits for the connection to stay stable, and restarts both managed apps after reconnect.
 - Watches Pimax PiService HID remove/add log events so short reconnects are still caught even when Windows USB state is back before the next poll.
 - Optionally watches the Vive mouth tracker / HTC Multimedia Camera and restarts only VRCFaceTracking when it reconnects.
@@ -56,9 +57,13 @@ Important defaults:
 - `TurnOffSecondaryMonitors` starts empty and asks a Yes/No question on first run.
 - `AutoLaunchScheduledTask` starts empty and asks a Yes/No question on first setup.
 - `AutoLaunchApps` defaults to an empty list. Each item can define `Name`, `Path`, `Enabled`, `RestartOnPimaxReconnect`, and `RunAsAdmin`. The process name is inferred from the exe filename.
+- `OscGoesBrrrEnabled` defaults to `false` and enables the OSCGoesBrrr workflow.
+- `OscGoesBrrrHotkeyEnabled` defaults to `true`. When enabled, press `L` in the supervisor console to start `IntifacePath`, wait `DelayBeforeOscGoesBrrrSeconds`, then start `OscGoesBrrrPath`.
+- `OscGoesBrrrBleScannerEnabled` defaults to `false`. When enabled, the supervisor scans nearby BLE advertisements in 30-second bursts every 60 seconds and auto-launches the same Intiface/OscGoesBrrr sequence on a `LovenseDetectors` match.
 - `SteamVrServerProcessNames` defaults to `vrserver` and controls when monitors are restored after VRChat exits if secondary monitor handling is enabled.
 - `PollIntervalSeconds` defaults to `2`.
 - `PimaxDetectors` defaults to Pimax HMD/runtime USB IDs (`VID_34A4`) instead of the eye tracker-only `EyeChip` device, so reconnects are detected when the headset path actually drops and returns.
+- `LovenseDetectors` defaults to `Lovense` and `LVS-`; direct Bluetooth/WebBluetooth Lovense toys usually advertise names starting with `LVS-`. The supervisor checks connected PnP devices first, then recent Windows Bluetooth device names.
 - `UsePimaxServiceLogReconnectDetector` defaults to `true` and watches `%LOCALAPPDATA%\Pimax\PiService\Log\PiService__*.log` for fast runtime HID reconnects.
 - `UseMouthTrackerPnPReconnectDetector` defaults to `true` and watches Windows Kernel-PnP events for fast Vive mouth tracker reconnects.
 
@@ -78,6 +83,27 @@ Example auto-launch app:
 
 Set `RestartOnPimaxReconnect` to `false` for apps that should stay running during the Pimax reconnect restart cycle. They will still be closed when the VRChat session ends.
 Set `RunAsAdmin` to `true` only for extra auto-launch apps that must run elevated. Broken Eye and VRCFaceTracking are still started through the supervisor's elevated launch path.
+
+Example Lovense-triggered Intiface/OscGoesBrrr config:
+
+```json
+"OscGoesBrrrEnabled": true,
+"OscGoesBrrrHotkeyEnabled": true,
+"OscGoesBrrrBleScannerEnabled": false,
+"IntifacePath": "%APPDATA%\\IntifaceCentral\\intiface_central.exe",
+"OscGoesBrrrPath": "%LOCALAPPDATA%\\Programs\\OscGoesBrrr\\OscGoesBrrr.exe",
+"IntifaceProcessNames": [ "intiface_central.exe" ],
+"OscGoesBrrrProcessNames": [ "OscGoesBrrr.exe" ],
+"LovenseDetectors": [
+  [ "Lovense" ],
+  [ "LVS-" ]
+],
+"DelayBeforeOscGoesBrrrSeconds": 5,
+"OscGoesBrrrBleScanSeconds": 30,
+"OscGoesBrrrBleScanIntervalSeconds": 60
+```
+
+The hotkey and optional BLE scanner share the same launch guard, and can launch again if you manually close Intiface/OscGoesBrrr during the same supervisor session. Pimax reconnects do not stop or restart them; normal VRChat/session cleanup closes OscGoesBrrr first, then Intiface.
 
 ## Auto-Launch Task
 

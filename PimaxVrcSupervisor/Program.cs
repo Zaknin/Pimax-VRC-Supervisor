@@ -9,6 +9,8 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using System.Xml.Linq;
+using Microsoft.Win32;
+using Windows.Devices.Bluetooth.Advertisement;
 
 using var shutdown = new CancellationTokenSource();
 
@@ -38,8 +40,17 @@ if (!ownsSupervisorMutex)
     return;
 }
 
+var supervisorStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+using var consoleCloseHandler = ConsoleCloseHandler.Register(shutdown, supervisorStopped.Task);
 var supervisor = new AppSupervisor(config);
-await supervisor.RunAsync(shutdown.Token);
+try
+{
+    await supervisor.RunAsync(shutdown.Token);
+}
+finally
+{
+    supervisorStopped.TrySetResult();
+}
 
 static async Task InstallAutoLaunchScheduledTaskFromCommandLineAsync(SupervisorConfig config, CancellationToken cancellationToken)
 {
@@ -82,11 +93,13 @@ internal sealed class AppSupervisor
 {
     private const int BrokenEyeStartupMaxAttempts = 10;
     private static readonly TimeSpan BrokenEyeStartupCheckDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan LovenseBluetoothRegistryRecentWindow = TimeSpan.FromHours(1);
 
     private readonly SupervisorConfig _config;
     private readonly MonitorLayoutController _monitorLayout = new();
     private readonly TimeSpan _pollInterval;
     private readonly Dictionary<int, Process> _watchedProcessHandles = new();
+    private readonly SemaphoreSlim _oscGoesBrrrLaunchLock = new(1, 1);
     private readonly DateTimeOffset _startedAt = DateTimeOffset.Now;
     private bool? _lastPimaxConnected;
     private bool? _lastMouthTrackerConnected;
@@ -95,6 +108,11 @@ internal sealed class AppSupervisor
     private bool _watchedProcessHasBeenSeen;
     private bool _waitingForWatchedProcessRelaunch;
     private bool _managedAppsStarted;
+    private bool? _lastLovenseConnected;
+    private bool _lovenseIntifaceStarted;
+    private bool _lovenseWorkflowTriggered;
+    private Task? _oscGoesBrrrBleScannerTask;
+    private bool _oscGoesBrrrBleScannerWarningShown;
     private DateTimeOffset? _watchedProcessMissingSince;
     private DateTimeOffset? _lastPimaxServiceLogEventSeenAt;
     private DateTimeOffset? _pendingPimaxServiceHidRemoveAt;
@@ -156,6 +174,7 @@ internal sealed class AppSupervisor
             }
 
             await StartManagedAppsAsync(cancellationToken);
+            await InitializeOscGoesBrrrWorkflowAsync(cancellationToken);
 
             Console.WriteLine($"Pimax Crystal initial state: {DescribeConnection(_lastPimaxConnected.Value)}");
             Console.WriteLine("Waiting for Pimax reconnects or VRChat shutdown. Press Ctrl+C to stop.");
@@ -163,6 +182,8 @@ internal sealed class AppSupervisor
             while (!cancellationToken.IsCancellationRequested)
             {
                 await Task.Delay(_pollInterval, cancellationToken);
+                RefreshOscGoesBrrrWorkflowState();
+                await HandleOscGoesBrrrHotkeyAsync(cancellationToken);
 
                 var watchedProcessState = ObserveWatchedShutdownProcesses();
                 if (watchedProcessState == WatchedProcessState.NormalExit)
@@ -196,6 +217,16 @@ internal sealed class AppSupervisor
                         _lastMouthTrackerConnected,
                         cancellationToken)
                     : (bool?)null;
+                var lovenseConnected = _config.OscGoesBrrrEnabled
+                    && !_config.OscGoesBrrrHotkeyEnabled
+                    && !_config.OscGoesBrrrBleScannerEnabled
+                    && !IsOscGoesBrrrWorkflowRunning()
+                    ? await ReadDeviceConnectedOrPreviousAsync(
+                        "Lovense",
+                        IsLovenseConnectedAsync,
+                        _lastLovenseConnected,
+                        cancellationToken)
+                    : _lastLovenseConnected;
                 var pimaxServiceReconnect = pimaxConnected
                     ? DetectPimaxServiceLogReconnect()
                     : null;
@@ -289,10 +320,26 @@ internal sealed class AppSupervisor
                     Console.WriteLine("you forgot to connect mouth tracker!");
                 }
 
+                if (_config.OscGoesBrrrEnabled
+                    && !_config.OscGoesBrrrHotkeyEnabled
+                    && !_config.OscGoesBrrrBleScannerEnabled
+                    && !IsOscGoesBrrrWorkflowRunning()
+                    && _lastLovenseConnected == false
+                    && lovenseConnected == true)
+                {
+                    Console.WriteLine("Lovense device detected. Starting OscGoesBrrr.");
+                    await StartLovenseOscAsync(cancellationToken);
+                }
+
                 _lastPimaxConnected = pimaxConnected;
                 if (_mouthTrackerUser)
                 {
                     _lastMouthTrackerConnected = mouthTrackerConnected;
+                }
+
+                if (_config.OscGoesBrrrEnabled && !_config.OscGoesBrrrHotkeyEnabled && !_config.OscGoesBrrrBleScannerEnabled)
+                {
+                    _lastLovenseConnected = lovenseConnected;
                 }
             }
         }
@@ -364,6 +411,57 @@ internal sealed class AppSupervisor
 
         ValidateExecutable(_config.BrokenEyePath, "Broken Eye");
         ValidateExecutable(_config.VrcFaceTrackingPath, "VRCFaceTracking");
+
+        if (_config.OscGoesBrrrEnabled)
+        {
+            var intifacePath = await ResolveExecutablePathAsync(
+                _config.IntifacePath,
+                "Intiface",
+                "intiface_central.exe",
+                SupervisorConfig.DefaultIntifacePath,
+                cancellationToken);
+            if (intifacePath is null)
+            {
+                return false;
+            }
+
+            UpdateProcessNamesFromSelectedExecutable(
+                "Intiface",
+                intifacePath.Path,
+                intifacePath.WasSelected,
+                processNames => _config.IntifaceProcessNames = processNames,
+                _config.IntifaceProcessNames);
+
+            var oscGoesBrrrrPath = await ResolveExecutablePathAsync(
+                _config.OscGoesBrrrPath,
+                "OscGoesBrrr",
+                "OscGoesBrrr.exe",
+                SupervisorConfig.DefaultOscGoesBrrrPath,
+                cancellationToken);
+            if (oscGoesBrrrrPath is null)
+            {
+                return false;
+            }
+
+            UpdateProcessNamesFromSelectedExecutable(
+                "OscGoesBrrr",
+                oscGoesBrrrrPath.Path,
+                oscGoesBrrrrPath.WasSelected,
+                processNames => _config.OscGoesBrrrProcessNames = processNames,
+                _config.OscGoesBrrrProcessNames);
+
+            pathsChanged = pathsChanged
+                || !StringComparer.OrdinalIgnoreCase.Equals(_config.IntifacePath, intifacePath.Path)
+                || !StringComparer.OrdinalIgnoreCase.Equals(_config.OscGoesBrrrPath, oscGoesBrrrrPath.Path)
+                || intifacePath.WasSelected
+                || oscGoesBrrrrPath.WasSelected;
+
+            _config.IntifacePath = intifacePath.Path;
+            _config.OscGoesBrrrPath = oscGoesBrrrrPath.Path;
+
+            ValidateExecutable(_config.IntifacePath, "Intiface");
+            ValidateExecutable(_config.OscGoesBrrrPath, "OscGoesBrrr");
+        }
 
         if (pathsChanged)
         {
@@ -565,9 +663,10 @@ internal sealed class AppSupervisor
         string? suggestedPath,
         CancellationToken cancellationToken)
     {
-        if (!string.IsNullOrWhiteSpace(configuredPath) && File.Exists(configuredPath))
+        var expandedConfiguredPath = Environment.ExpandEnvironmentVariables(configuredPath);
+        if (!string.IsNullOrWhiteSpace(configuredPath) && File.Exists(expandedConfiguredPath))
         {
-            return new ResolvedExecutablePath(configuredPath, WasSelected: false);
+            return new ResolvedExecutablePath(expandedConfiguredPath, WasSelected: false);
         }
 
         if (string.IsNullOrWhiteSpace(configuredPath))
@@ -608,11 +707,11 @@ internal sealed class AppSupervisor
         var configuredContainsSelectedName = configuredProcessNames
             .Any(name => string.Equals(Path.GetFileNameWithoutExtension(name), selectedProcessName, StringComparison.OrdinalIgnoreCase));
 
-        if (wasSelected)
+        if (wasSelected || configuredProcessNames.All(string.IsNullOrWhiteSpace))
         {
             if (!configuredContainsSelectedName)
             {
-                Console.WriteLine($"{displayName} selected exe name does not match configured process names. Auto-updating process name to: {selectedProcessName}");
+                Console.WriteLine($"{displayName} process name will be inferred from the configured exe: {selectedProcessName}");
             }
 
             updateProcessNames([selectedProcessName]);
@@ -1125,6 +1224,7 @@ internal sealed class AppSupervisor
         }
 
         RestoreMonitorLayout();
+        await StopLovenseAppsAsync(cancellationToken);
         await StopManagedAppsAsync(ManagedAppStopReason.SessionEnding, cancellationToken);
     }
 
@@ -1177,6 +1277,344 @@ internal sealed class AppSupervisor
         Console.WriteLine("Starting VRCFaceTracking...");
         StartOrAttach(_config.VrcFaceTrackingPath, _config.VrcFaceTrackingProcessNames);
         await VerifyRunningAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
+    }
+
+    private async Task InitializeOscGoesBrrrWorkflowAsync(CancellationToken cancellationToken)
+    {
+        if (!_config.OscGoesBrrrEnabled)
+        {
+            Console.WriteLine("OscGoesBrrr workflow is disabled by config.");
+            return;
+        }
+
+        if (_config.OscGoesBrrrBleScannerEnabled)
+        {
+            StartOscGoesBrrrBleScanner(cancellationToken);
+        }
+
+        if (_config.OscGoesBrrrHotkeyEnabled)
+        {
+            Console.WriteLine("Press L to launch OSCGoesBrrr.");
+            return;
+        }
+
+        if (_config.OscGoesBrrrBleScannerEnabled)
+        {
+            Console.WriteLine("Waiting for BLE scanner to detect Lovense before launching OSCGoesBrrr.");
+            return;
+        }
+
+        try
+        {
+            await StartLovenseIntifaceAsync(cancellationToken);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            Console.WriteLine($"Could not start Intiface for OscGoesBrrr workflow: {ex.Message}");
+            return;
+        }
+
+        _lastLovenseConnected = await ReadDeviceConnectedOrPreviousAsync(
+            "Lovense",
+            IsLovenseConnectedAsync,
+            previousConnected: false,
+            cancellationToken);
+
+        if (_lastLovenseConnected.Value)
+        {
+            Console.WriteLine("Lovense device detected after Intiface startup. Starting OscGoesBrrr.");
+            await StartLovenseOscAsync(cancellationToken);
+        }
+        else
+        {
+            Console.WriteLine("No Lovense device detected yet. Intiface is running; OscGoesBrrr will start if a Lovense device appears.");
+        }
+    }
+
+    private void StartOscGoesBrrrBleScanner(CancellationToken cancellationToken)
+    {
+        if (_oscGoesBrrrBleScannerTask is not null)
+        {
+            return;
+        }
+
+        var scanSeconds = Math.Max(1, _config.OscGoesBrrrBleScanSeconds);
+        var intervalSeconds = Math.Max(1, _config.OscGoesBrrrBleScanIntervalSeconds);
+        Console.WriteLine($"BLE scanner enabled for OSCGoesBrrr. Scanning for {scanSeconds} seconds every {intervalSeconds} seconds.");
+        _oscGoesBrrrBleScannerTask = Task.Run(() => RunOscGoesBrrrBleScannerAsync(cancellationToken), CancellationToken.None);
+    }
+
+    private async Task RunOscGoesBrrrBleScannerAsync(CancellationToken cancellationToken)
+    {
+        var scanDuration = TimeSpan.FromSeconds(Math.Max(1, _config.OscGoesBrrrBleScanSeconds));
+        var scanInterval = TimeSpan.FromSeconds(Math.Max(1, _config.OscGoesBrrrBleScanIntervalSeconds));
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            if (IsOscGoesBrrrWorkflowRunning())
+            {
+                await Task.Delay(scanInterval, cancellationToken);
+                continue;
+            }
+
+            if (IsIntifaceRunning() && !IsOscGoesBrrrRunning())
+            {
+                Console.WriteLine("Intiface is running but OscGoesBrrr is missing. Repairing OSCGoesBrrr workflow.");
+                await StartLovenseOscAsync(cancellationToken);
+                await Task.Delay(scanInterval, cancellationToken);
+                continue;
+            }
+
+            try
+            {
+                var detected = await ScanForLovenseBleAdvertisementAsync(scanDuration, cancellationToken);
+                if (detected && !IsOscGoesBrrrWorkflowRunning())
+                {
+                    Console.WriteLine("Lovense BLE advertisement detected. Launching OSCGoesBrrr workflow.");
+                    await StartLovenseOscAsync(cancellationToken);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                if (!_oscGoesBrrrBleScannerWarningShown)
+                {
+                    Console.WriteLine($"Could not scan BLE advertisements for Lovense: {ex.Message}. Press L to launch OSCGoesBrrr manually.");
+                    _oscGoesBrrrBleScannerWarningShown = true;
+                }
+
+                return;
+            }
+
+            await Task.Delay(scanInterval, cancellationToken);
+        }
+    }
+
+    private async Task<bool> ScanForLovenseBleAdvertisementAsync(TimeSpan scanDuration, CancellationToken cancellationToken)
+    {
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240))
+        {
+            throw new PlatformNotSupportedException("BLE advertisement scanning requires Windows 10 or newer.");
+        }
+
+        var matchCompletion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var watcher = new BluetoothLEAdvertisementWatcher
+        {
+            ScanningMode = BluetoothLEScanningMode.Active
+        };
+
+        void OnReceived(BluetoothLEAdvertisementWatcher sender, BluetoothLEAdvertisementReceivedEventArgs eventArgs)
+        {
+            var advertisementBlock = BuildBleAdvertisementMatchBlock(eventArgs);
+            if (DetectorGroupMatchesBlockAny(_config.LovenseDetectors, advertisementBlock.ToLowerInvariant()))
+            {
+                matchCompletion.TrySetResult(DescribeBleAdvertisement(eventArgs));
+            }
+        }
+
+        watcher.Received += OnReceived;
+        try
+        {
+            watcher.Start();
+
+            var completedTask = await Task.WhenAny(matchCompletion.Task, Task.Delay(scanDuration, cancellationToken));
+            if (completedTask != matchCompletion.Task)
+            {
+                return false;
+            }
+
+            Console.WriteLine($"Lovense BLE advertisement matched: {await matchCompletion.Task}");
+            return true;
+        }
+        finally
+        {
+            watcher.Received -= OnReceived;
+            if (watcher.Status is BluetoothLEAdvertisementWatcherStatus.Started or BluetoothLEAdvertisementWatcherStatus.Created)
+            {
+                watcher.Stop();
+            }
+        }
+    }
+
+    private static string BuildBleAdvertisementMatchBlock(BluetoothLEAdvertisementReceivedEventArgs eventArgs)
+    {
+        var builder = new StringBuilder();
+        var advertisement = eventArgs.Advertisement;
+
+        builder.AppendLine(advertisement.LocalName);
+        builder.AppendLine(eventArgs.BluetoothAddress.ToString("X12", CultureInfo.InvariantCulture));
+        builder.AppendLine(eventArgs.RawSignalStrengthInDBm.ToString(CultureInfo.InvariantCulture));
+
+        foreach (var serviceUuid in advertisement.ServiceUuids)
+        {
+            builder.AppendLine(serviceUuid.ToString());
+        }
+
+        foreach (var manufacturerData in advertisement.ManufacturerData)
+        {
+            builder.Append("manufacturer:");
+            builder.AppendLine(manufacturerData.CompanyId.ToString("X4", CultureInfo.InvariantCulture));
+        }
+
+        return builder.ToString();
+    }
+
+    private static string DescribeBleAdvertisement(BluetoothLEAdvertisementReceivedEventArgs eventArgs)
+    {
+        var name = eventArgs.Advertisement.LocalName;
+        return string.IsNullOrWhiteSpace(name)
+            ? eventArgs.BluetoothAddress.ToString("X12", CultureInfo.InvariantCulture)
+            : name;
+    }
+
+    private async Task HandleOscGoesBrrrHotkeyAsync(CancellationToken cancellationToken)
+    {
+        if (!_config.OscGoesBrrrEnabled || !_config.OscGoesBrrrHotkeyEnabled)
+        {
+            return;
+        }
+
+        if (!TryConsumeOscGoesBrrrHotkey())
+        {
+            return;
+        }
+
+        if (IsOscGoesBrrrWorkflowRunning())
+        {
+            Console.WriteLine("OSCGoesBrrr workflow is already launched.");
+            return;
+        }
+
+        Console.WriteLine("Launching OSCGoesBrrr workflow...");
+        await StartLovenseOscAsync(cancellationToken);
+    }
+
+    private void RefreshOscGoesBrrrWorkflowState()
+    {
+        if (!_config.OscGoesBrrrEnabled)
+        {
+            return;
+        }
+
+        var wasWorkflowActive = _lovenseWorkflowTriggered || _lovenseIntifaceStarted;
+        if (wasWorkflowActive && !IsOscGoesBrrrWorkflowRunning())
+        {
+            _lovenseWorkflowTriggered = false;
+            _lovenseIntifaceStarted = false;
+            Console.WriteLine("OSCGoesBrrr workflow is incomplete. Launch can be requested again.");
+        }
+    }
+
+    private bool IsIntifaceRunning()
+        => IsAnyProcessRunning(_config.IntifaceProcessNames);
+
+    private bool IsOscGoesBrrrRunning()
+        => IsAnyProcessRunning(_config.OscGoesBrrrProcessNames);
+
+    private bool IsOscGoesBrrrWorkflowRunning()
+        => IsIntifaceRunning() && IsOscGoesBrrrRunning();
+
+    private static bool TryConsumeOscGoesBrrrHotkey()
+    {
+        if (Console.IsInputRedirected)
+        {
+            return false;
+        }
+
+        try
+        {
+            var launchRequested = false;
+            while (Console.KeyAvailable)
+            {
+                var key = Console.ReadKey(intercept: true);
+                if (key.Key == ConsoleKey.L)
+                {
+                    launchRequested = true;
+                }
+            }
+
+            return launchRequested;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private async Task StartLovenseIntifaceAsync(CancellationToken cancellationToken)
+    {
+        if (IsIntifaceRunning())
+        {
+            Console.WriteLine($"Already running: {string.Join(", ", _config.IntifaceProcessNames)}");
+            _lovenseIntifaceStarted = true;
+            return;
+        }
+
+        Console.WriteLine("Starting Intiface...");
+        StartOrAttach(_config.IntifacePath, _config.IntifaceProcessNames, suppressOutput: true);
+        await VerifyRunningAsync("Intiface", _config.IntifaceProcessNames, cancellationToken);
+        _lovenseIntifaceStarted = true;
+    }
+
+    private async Task StartLovenseOscAsync(CancellationToken cancellationToken)
+    {
+        await _oscGoesBrrrLaunchLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (IsOscGoesBrrrWorkflowRunning())
+            {
+                _lovenseIntifaceStarted = true;
+                _lovenseWorkflowTriggered = true;
+                return;
+            }
+
+            try
+            {
+                await StartLovenseIntifaceAsync(cancellationToken);
+
+                Console.WriteLine($"Waiting {_config.DelayBeforeOscGoesBrrrSeconds} seconds before starting OscGoesBrrr...");
+                await DelayWithCancellationAsync(TimeSpan.FromSeconds(_config.DelayBeforeOscGoesBrrrSeconds), cancellationToken);
+
+                Console.WriteLine("Starting OscGoesBrrr...");
+                StartOrAttach(_config.OscGoesBrrrPath, _config.OscGoesBrrrProcessNames, suppressOutput: true);
+                await VerifyRunningAsync("OscGoesBrrr", _config.OscGoesBrrrProcessNames, cancellationToken);
+                _lovenseWorkflowTriggered = true;
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                Console.WriteLine($"Could not complete OscGoesBrrr startup: {ex.Message}");
+            }
+        }
+        finally
+        {
+            _oscGoesBrrrLaunchLock.Release();
+        }
+    }
+
+    private async Task StopLovenseAppsAsync(CancellationToken cancellationToken)
+    {
+        if (!_config.OscGoesBrrrEnabled && !_lovenseWorkflowTriggered && !_lovenseIntifaceStarted)
+        {
+            return;
+        }
+
+        var oscGoesBrrrRunning = _config.OscGoesBrrrEnabled && IsOscGoesBrrrRunning();
+        var intifaceRunning = _config.OscGoesBrrrEnabled && IsIntifaceRunning();
+
+        if (_lovenseWorkflowTriggered || oscGoesBrrrRunning)
+        {
+            await StopProcessesAsync("OscGoesBrrr", _config.OscGoesBrrrProcessNames, cancellationToken);
+            _lovenseWorkflowTriggered = false;
+        }
+
+        if (_lovenseIntifaceStarted || intifaceRunning)
+        {
+            await StopProcessesAsync("Intiface", _config.IntifaceProcessNames, cancellationToken);
+            _lovenseIntifaceStarted = false;
+        }
     }
 
     private async Task StartAutoLaunchAppsAsync(CancellationToken cancellationToken)
@@ -1259,7 +1697,11 @@ internal sealed class AppSupervisor
         return new ManagedAutoLaunchApp(displayName, path, processNames, restartOnPimaxReconnect, app.RunAsAdmin);
     }
 
-    private void StartOrAttach(string path, string[] processNames, bool suppressOutput = false, bool runAsAdmin = true)
+    private void StartOrAttach(
+        string path,
+        string[] processNames,
+        bool suppressOutput = false,
+        bool runAsAdmin = true)
     {
         if (IsAnyProcessRunning(processNames))
         {
@@ -1434,6 +1876,96 @@ internal sealed class AppSupervisor
     private async Task<bool> IsMouthTrackerConnectedAsync(CancellationToken cancellationToken)
         => await IsDeviceConnectedAsync(_config.MouthTrackerDetectors, cancellationToken);
 
+    private async Task<bool> IsLovenseConnectedAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (await IsDeviceConnectedAsync(_config.LovenseDetectors, cancellationToken))
+            {
+                return true;
+            }
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            Console.WriteLine($"Could not scan connected PnP devices for Lovense: {ex.Message} Trying Bluetooth device names.");
+        }
+
+        return IsRecentlySeenLovenseBluetoothDevice();
+    }
+
+    private bool IsRecentlySeenLovenseBluetoothDevice()
+    {
+        const string bluetoothDevicesKeyPath = @"SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Devices";
+
+        try
+        {
+            using var devicesKey = Registry.LocalMachine.OpenSubKey(bluetoothDevicesKeyPath);
+            if (devicesKey is null)
+            {
+                return false;
+            }
+
+            foreach (var deviceKeyName in devicesKey.GetSubKeyNames())
+            {
+                using var deviceKey = devicesKey.OpenSubKey(deviceKeyName);
+                if (deviceKey is null)
+                {
+                    continue;
+                }
+
+                var deviceName = DecodeBluetoothDeviceName(deviceKey.GetValue("Name"));
+                if (string.IsNullOrWhiteSpace(deviceName))
+                {
+                    continue;
+                }
+
+                var lastSeen = ReadBluetoothFileTime(deviceKey.GetValue("LastSeen"))
+                    ?? ReadBluetoothFileTime(deviceKey.GetValue("LastConnected"));
+                if (lastSeen is null || DateTime.UtcNow - lastSeen.Value > LovenseBluetoothRegistryRecentWindow)
+                {
+                    continue;
+                }
+
+                var normalizedBlock = $"{deviceName}\n{deviceKeyName}".ToLowerInvariant();
+                if (DetectorGroupMatchesBlockAny(_config.LovenseDetectors, normalizedBlock))
+                {
+                    Console.WriteLine($"Lovense Bluetooth device name matched: {deviceName}");
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not scan Bluetooth device names for Lovense: {ex.Message}");
+        }
+
+        return false;
+    }
+
+    private static string DecodeBluetoothDeviceName(object? value)
+    {
+        return value is byte[] bytes
+            ? Encoding.UTF8.GetString(bytes).TrimEnd('\0').Trim()
+            : "";
+    }
+
+    private static DateTime? ReadBluetoothFileTime(object? value)
+    {
+        try
+        {
+            return value switch
+            {
+                long longValue => DateTime.FromFileTimeUtc(longValue),
+                int intValue => DateTime.FromFileTimeUtc(intValue),
+                _ => null
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private async Task<bool> IsDeviceConnectedAsync(string[][] detectorGroups, CancellationToken cancellationToken)
     {
         var output = await RunProcessForOutputAsync(
@@ -1584,6 +2116,64 @@ internal sealed class AppSupervisor
         => Task.Delay(delay, cancellationToken);
 
     private static string DescribeConnection(bool connected) => connected ? "connected" : "not connected";
+}
+
+internal sealed class ConsoleCloseHandler : IDisposable
+{
+    private const uint CtrlCloseEvent = 2;
+    private const uint CtrlLogoffEvent = 5;
+    private const uint CtrlShutdownEvent = 6;
+    private static readonly IDisposable NoopRegistration = new NoopDisposable();
+
+    private readonly HandlerRoutine _handler;
+
+    private ConsoleCloseHandler(CancellationTokenSource shutdown, Task supervisorStopped)
+    {
+        _handler = ctrlType =>
+        {
+            if (ctrlType is not (CtrlCloseEvent or CtrlLogoffEvent or CtrlShutdownEvent))
+            {
+                return false;
+            }
+
+            try
+            {
+                Console.WriteLine("Console close requested. Restoring monitors and closing managed apps.");
+                shutdown.Cancel();
+                supervisorStopped.Wait(TimeSpan.FromSeconds(60));
+            }
+            catch
+            {
+                // Windows gives console close handlers limited time; keep this best-effort.
+            }
+
+            return true;
+        };
+
+        SetConsoleCtrlHandler(_handler, add: true);
+    }
+
+    public static IDisposable Register(CancellationTokenSource shutdown, Task supervisorStopped)
+        => OperatingSystem.IsWindows()
+            ? new ConsoleCloseHandler(shutdown, supervisorStopped)
+            : NoopRegistration;
+
+    public void Dispose()
+    {
+        SetConsoleCtrlHandler(_handler, add: false);
+    }
+
+    private delegate bool HandlerRoutine(uint ctrlType);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool SetConsoleCtrlHandler(HandlerRoutine handler, bool add);
+
+    private sealed class NoopDisposable : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
 }
 
 internal static class AutoLaunchWatcher
@@ -2252,12 +2842,54 @@ internal sealed class SupervisorConfig
 {
     public string BrokenEyePath { get; set; } = "";
     public string VrcFaceTrackingPath { get; set; } = "";
+    public string IntifacePath { get; set; } = "";
+    public string OscGoesBrrrPath { get; set; } = "";
     public const string DefaultVrcFaceTrackingPath = @"C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking\VRCFaceTracking.exe";
+    public static string DefaultIntifacePath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "IntifaceCentral",
+        "intiface_central.exe");
+    public static string DefaultOscGoesBrrrPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "Programs",
+        "OscGoesBrrr",
+        "OscGoesBrrr.exe");
     public string[] BrokenEyeProcessNames { get; set; } = ["Broken Eye"];
     public string[] VrcFaceTrackingProcessNames { get; set; } = ["VRCFaceTracking"];
+    public string[] IntifaceProcessNames { get; set; } = ["intiface_central.exe"];
+    public string[] OscGoesBrrrProcessNames { get; set; } = ["OscGoesBrrr.exe"];
+    public string OscGoesBrrrrPath
+    {
+        set
+        {
+            if (string.IsNullOrWhiteSpace(OscGoesBrrrPath))
+            {
+                OscGoesBrrrPath = value;
+            }
+        }
+    }
+    public string[] OscGoesBrrrrProcessNames
+    {
+        set
+        {
+            if (OscGoesBrrrProcessNames.Length == 0 || OscGoesBrrrProcessNames.SequenceEqual(["OscGoesBrrr.exe"], StringComparer.OrdinalIgnoreCase))
+            {
+                OscGoesBrrrProcessNames = value;
+            }
+        }
+    }
     public AutoLaunchAppConfig[] AutoLaunchApps { get; init; } = [];
     public string[] WatchedShutdownProcessNames { get; init; } = ["VRChat"];
     public string[] SteamVrServerProcessNames { get; init; } = ["vrserver"];
+    public bool OscGoesBrrrEnabled { get; set; }
+    public bool LovenseAutoLaunchEnabled
+    {
+        set => OscGoesBrrrEnabled = value;
+    }
+    public bool OscGoesBrrrHotkeyEnabled { get; init; } = true;
+    public bool OscGoesBrrrBleScannerEnabled { get; init; }
+    public int OscGoesBrrrBleScanSeconds { get; init; } = 30;
+    public int OscGoesBrrrBleScanIntervalSeconds { get; init; } = 60;
     public JsonElement MouthTrackerUser { get; set; }
     public JsonElement TurnOffSecondaryMonitors { get; set; }
     public JsonElement AutoLaunchScheduledTask { get; set; }
@@ -2280,6 +2912,11 @@ internal sealed class SupervisorConfig
         ["HTC Multimedia Camera"],
         ["VIVE", "Camera"]
     ];
+    public string[][] LovenseDetectors { get; init; } =
+    [
+        ["Lovense"],
+        ["LVS-"]
+    ];
     public bool UsePimaxServiceLogReconnectDetector { get; init; } = true;
     public bool UseMouthTrackerPnPReconnectDetector { get; init; } = true;
     public string PimaxServiceLogDirectory { get; init; } = @"%LOCALAPPDATA%\Pimax\PiService\Log";
@@ -2288,6 +2925,11 @@ internal sealed class SupervisorConfig
     public int StartupTimeoutSeconds { get; init; } = 30;
     public int StartupStableSeconds { get; init; } = 5;
     public int DelayBeforeVrcFaceTrackingSeconds { get; init; } = 5;
+    public int DelayBeforeOscGoesBrrrSeconds { get; set; } = 5;
+    public int DelayBeforeOscGoesBrrrrSeconds
+    {
+        set => DelayBeforeOscGoesBrrrSeconds = value;
+    }
     public int RestartDelayAfterReconnectSeconds { get; init; } = 10;
     public int WatchedProcessCrashRelaunchGraceSeconds { get; init; } = 300;
     public int ShutdownGraceSeconds { get; init; } = 8;
@@ -2317,8 +2959,12 @@ internal sealed class SupervisorConfig
 
         json = ReplaceJsonStringProperty(json, nameof(BrokenEyePath), BrokenEyePath);
         json = ReplaceJsonStringProperty(json, nameof(VrcFaceTrackingPath), VrcFaceTrackingPath);
+        json = ReplaceJsonStringProperty(json, nameof(IntifacePath), IntifacePath);
+        json = ReplaceJsonStringProperty(json, nameof(OscGoesBrrrPath), OscGoesBrrrPath);
         json = ReplaceJsonStringArrayProperty(json, nameof(BrokenEyeProcessNames), BrokenEyeProcessNames);
         json = ReplaceJsonStringArrayProperty(json, nameof(VrcFaceTrackingProcessNames), VrcFaceTrackingProcessNames);
+        json = ReplaceJsonStringArrayProperty(json, nameof(IntifaceProcessNames), IntifaceProcessNames);
+        json = ReplaceJsonStringArrayProperty(json, nameof(OscGoesBrrrProcessNames), OscGoesBrrrProcessNames);
 
         File.WriteAllText(configPath, json);
         Console.WriteLine($"Saved selected executable settings to: {configPath}");
