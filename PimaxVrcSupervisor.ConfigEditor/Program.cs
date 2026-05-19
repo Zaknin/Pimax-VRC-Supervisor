@@ -20,10 +20,24 @@ internal static class Program
 internal sealed class ConfigEditorForm : Form
 {
     private const string DefaultVrcFaceTrackingDirectory = @"C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking";
+    private static readonly string DefaultIntifacePath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "IntifaceCentral",
+        "intiface_central.exe");
+    private static readonly string DefaultOscGoesBrrrPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "Programs",
+        "OscGoesBrrr",
+        "OscGoesBrrr.exe");
+    private static readonly string[][] DefaultLovenseDetectors = [["Lovense"], ["LVS-"]];
 
     private readonly TextBox _configPathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _brokenEyePathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _vrcFaceTrackingPathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
+    private readonly TextBox _intifacePathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
+    private readonly TextBox _oscGoesBrrrPathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
+    private readonly CheckBox _oscGoesBrrrEnabledCheckBox = new() { Text = "Enabled", AutoSize = true };
+    private readonly CheckBox _oscGoesBrrrHotkeyCheckBox = new() { Text = "Enable L hotkey launch", AutoSize = true };
     private readonly CheckBox _mouthTrackerCheckBox = CreateOptionalConfigCheckBox("Use Vive mouth tracker");
     private readonly CheckBox _turnOffMonitorsCheckBox = CreateOptionalConfigCheckBox("Turn off secondary monitors during headset sessions");
     private readonly CheckBox _autoLaunchTaskCheckBox = CreateOptionalConfigCheckBox("Create/evaluate VRChat auto-launch Scheduled Task");
@@ -41,10 +55,13 @@ internal sealed class ConfigEditorForm : Form
     };
     private readonly TextBox _brokenEyeProcessesTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _vrcFaceTrackingProcessesTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
+    private readonly TextBox _intifaceProcessesTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
+    private readonly TextBox _oscGoesBrrrProcessesTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _watchedShutdownProcessesTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _steamVrServerProcessesTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _pimaxDetectorsTextBox = CreateMultilineTextBox();
     private readonly TextBox _mouthTrackerDetectorsTextBox = CreateMultilineTextBox();
+    private readonly TextBox _lovenseDetectorsTextBox = CreateMultilineTextBox();
     private readonly TextBox _rawJsonTextBox = CreateMultilineTextBox(readOnly: false);
     private readonly Label _statusLabel = new() { AutoSize = true };
     private readonly ToolTip _toolTips = new()
@@ -181,6 +198,7 @@ internal sealed class ConfigEditorForm : Form
         var tabs = new ThemedTabHost { Dock = DockStyle.Fill };
         tabs.AddTab("Basics", BuildBasicsTab());
         tabs.AddTab("Auto Launch", BuildAutoLaunchTab());
+        tabs.AddTab("OSCGoesBrrr", BuildLovenseTab());
         tabs.AddTab("Processes", BuildProcessesTab());
         tabs.AddTab("Detectors", BuildDetectorsTab());
         tabs.AddTab("Timing", BuildTimingTab());
@@ -207,6 +225,47 @@ internal sealed class ConfigEditorForm : Form
         AddLabeledRow(layout, "PiService log folder", _pimaxServiceLogDirectoryTextBox, "Folder containing PiService__*.log files. Environment variables such as %LOCALAPPDATA% are expanded by the supervisor.");
 
         return layout;
+    }
+
+    private Control BuildLovenseTab()
+    {
+        var layout = CreateFormLayout(3);
+
+        AddFullWidth(layout, _oscGoesBrrrEnabledCheckBox, "Checked means the OscGoesBrrr workflow is available during headset sessions.");
+        AddFullWidth(layout, _oscGoesBrrrHotkeyCheckBox, "Checked means the supervisor shows Press L to launch OSCGoesBrrr and starts Intiface plus OscGoesBrrr when L is pressed.");
+        AddPathRow(layout, "intiface_central.exe", _intifacePathTextBox, "Full path to intiface_central.exe. This starts first when a Lovense detector rule matches.", Path.GetDirectoryName(DefaultIntifacePath));
+        AddPathRow(layout, "OscGoesBrrr.exe", _oscGoesBrrrPathTextBox, "Full path to OscGoesBrrr.exe. This starts after Intiface is running.", Path.GetDirectoryName(DefaultOscGoesBrrrPath));
+        AddLabeledRow(layout, "Intiface process names", _intifaceProcessesTextBox, "Process names used to detect, attach to, and close Intiface. .exe is optional.");
+        AddLabeledRow(layout, "OscGoesBrrr process names", _oscGoesBrrrProcessesTextBox, "Process names used to detect, attach to, and close OscGoesBrrr. .exe is optional.");
+        AddNumber(layout, "DelayBeforeOscGoesBrrrSeconds", 0, 3600, "Seconds to wait after Intiface is running before starting OscGoesBrrr.");
+        AddFullWidth(layout, BuildLovenseDetectorPanel(), "Each line is one possible Lovense match rule. Defaults include Lovense and LVS- for common Bluetooth/WebBluetooth names.");
+
+        return layout;
+    }
+
+    private Control BuildLovenseDetectorPanel()
+    {
+        var panel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            ColumnCount = 1,
+            RowCount = 2,
+            Height = 180,
+            Margin = new Padding(0, 8, 0, 0)
+        };
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var label = new Label
+        {
+            Text = "Lovense detector rules",
+            AutoSize = true,
+            Padding = new Padding(0, 0, 0, 4)
+        };
+        _lovenseDetectorsTextBox.Dock = DockStyle.Fill;
+        panel.Controls.Add(label, 0, 0);
+        panel.Controls.Add(_lovenseDetectorsTextBox, 0, 1);
+        return panel;
     }
 
     private Control BuildAutoLaunchTab()
@@ -627,6 +686,10 @@ internal sealed class ConfigEditorForm : Form
     {
         _brokenEyePathTextBox.Text = GetString(node, "BrokenEyePath");
         _vrcFaceTrackingPathTextBox.Text = GetString(node, "VrcFaceTrackingPath");
+        _intifacePathTextBox.Text = GetStringOrDefault(node, "IntifacePath", DefaultIntifacePath);
+        _oscGoesBrrrPathTextBox.Text = GetStringOrFallbackOrDefault(node, "OscGoesBrrrPath", "OscGoesBrrrrPath", DefaultOscGoesBrrrPath);
+        _oscGoesBrrrEnabledCheckBox.Checked = GetBoolOrFallback(node, "OscGoesBrrrEnabled", "LovenseAutoLaunchEnabled", defaultValue: false);
+        _oscGoesBrrrHotkeyCheckBox.Checked = GetBool(node, "OscGoesBrrrHotkeyEnabled", defaultValue: true);
         _mouthTrackerCheckBox.CheckState = GetBoolCheckState(node, "MouthTrackerUser");
         _turnOffMonitorsCheckBox.CheckState = GetBoolCheckState(node, "TurnOffSecondaryMonitors");
         _autoLaunchTaskCheckBox.CheckState = GetBoolCheckState(node, "AutoLaunchScheduledTask");
@@ -636,14 +699,23 @@ internal sealed class ConfigEditorForm : Form
         PopulateAutoLaunchAppsGrid(GetAutoLaunchApps(node));
         _brokenEyeProcessesTextBox.Text = string.Join(", ", GetStringArray(node, "BrokenEyeProcessNames"));
         _vrcFaceTrackingProcessesTextBox.Text = string.Join(", ", GetStringArray(node, "VrcFaceTrackingProcessNames"));
+        _intifaceProcessesTextBox.Text = string.Join(", ", GetStringArrayOrDefault(node, "IntifaceProcessNames", ["intiface_central.exe"]));
+        _oscGoesBrrrProcessesTextBox.Text = string.Join(", ", GetStringArrayOrDefault(node, "OscGoesBrrrProcessNames", ["OscGoesBrrr.exe"], "OscGoesBrrrrProcessNames"));
         _watchedShutdownProcessesTextBox.Text = string.Join(", ", GetStringArray(node, "WatchedShutdownProcessNames"));
         _steamVrServerProcessesTextBox.Text = string.Join(", ", GetStringArray(node, "SteamVrServerProcessNames"));
         _pimaxDetectorsTextBox.Text = FormatStringMatrix(GetStringMatrix(node, "PimaxDetectors"));
         _mouthTrackerDetectorsTextBox.Text = FormatStringMatrix(GetStringMatrix(node, "MouthTrackerDetectors"));
+        _lovenseDetectorsTextBox.Text = FormatStringMatrix(GetStringMatrixOrDefault(node, "LovenseDetectors", DefaultLovenseDetectors));
 
         foreach (var (propertyName, input) in _numberInputs)
         {
-            input.Value = Math.Clamp(GetInt(node, propertyName, decimal.ToInt32(input.Minimum)), input.Minimum, input.Maximum);
+            var defaultValue = propertyName == "DelayBeforeOscGoesBrrrSeconds"
+                ? 5
+                : decimal.ToInt32(input.Minimum);
+            var value = propertyName == "DelayBeforeOscGoesBrrrSeconds"
+                ? GetIntOrFallback(node, propertyName, "DelayBeforeOscGoesBrrrrSeconds", defaultValue)
+                : GetInt(node, propertyName, defaultValue);
+            input.Value = Math.Clamp(value, input.Minimum, input.Maximum);
         }
     }
 
@@ -678,9 +750,15 @@ internal sealed class ConfigEditorForm : Form
         var json = string.IsNullOrWhiteSpace(baseJson) ? "{\r\n}\r\n" : baseJson;
         json = JsonPropertyEditor.Replace(json, "BrokenEyePath", Serialize(_brokenEyePathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "VrcFaceTrackingPath", Serialize(_vrcFaceTrackingPathTextBox.Text.Trim()));
+        json = JsonPropertyEditor.Replace(json, "IntifacePath", Serialize(_intifacePathTextBox.Text.Trim()));
+        json = JsonPropertyEditor.Replace(json, "OscGoesBrrrPath", Serialize(_oscGoesBrrrPathTextBox.Text.Trim()));
+        json = JsonPropertyEditor.Replace(json, "OscGoesBrrrEnabled", _oscGoesBrrrEnabledCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "OscGoesBrrrHotkeyEnabled", _oscGoesBrrrHotkeyCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "AutoLaunchApps", Serialize(ReadAutoLaunchAppsGrid()));
         json = JsonPropertyEditor.Replace(json, "BrokenEyeProcessNames", Serialize(ParseStringList(_brokenEyeProcessesTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "VrcFaceTrackingProcessNames", Serialize(ParseStringList(_vrcFaceTrackingProcessesTextBox.Text)));
+        json = JsonPropertyEditor.Replace(json, "IntifaceProcessNames", Serialize(ParseStringList(_intifaceProcessesTextBox.Text)));
+        json = JsonPropertyEditor.Replace(json, "OscGoesBrrrProcessNames", Serialize(ParseStringList(_oscGoesBrrrProcessesTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "WatchedShutdownProcessNames", Serialize(ParseStringList(_watchedShutdownProcessesTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "SteamVrServerProcessNames", Serialize(ParseStringList(_steamVrServerProcessesTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "MouthTrackerUser", SerializeTriState(_mouthTrackerCheckBox.CheckState));
@@ -688,6 +766,7 @@ internal sealed class ConfigEditorForm : Form
         json = JsonPropertyEditor.Replace(json, "AutoLaunchScheduledTask", SerializeTriState(_autoLaunchTaskCheckBox.CheckState));
         json = JsonPropertyEditor.Replace(json, "PimaxDetectors", Serialize(ParseStringMatrix(_pimaxDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "MouthTrackerDetectors", Serialize(ParseStringMatrix(_mouthTrackerDetectorsTextBox.Text)));
+        json = JsonPropertyEditor.Replace(json, "LovenseDetectors", Serialize(ParseStringMatrix(_lovenseDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "UsePimaxServiceLogReconnectDetector", _usePimaxLogCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "UseMouthTrackerPnPReconnectDetector", _useMouthTrackerPnPCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "PimaxServiceLogDirectory", Serialize(_pimaxServiceLogDirectoryTextBox.Text.Trim()));
@@ -732,11 +811,39 @@ internal sealed class ConfigEditorForm : Form
         return node?[propertyName]?.GetValue<string>() ?? "";
     }
 
+    private static string GetStringOrDefault(JsonNode? node, string propertyName, string defaultValue)
+    {
+        var value = GetString(node, propertyName);
+        return string.IsNullOrWhiteSpace(value) ? defaultValue : value;
+    }
+
+    private static string GetStringOrFallback(JsonNode? node, string propertyName, string fallbackPropertyName)
+    {
+        var value = GetString(node, propertyName);
+        return string.IsNullOrWhiteSpace(value) ? GetString(node, fallbackPropertyName) : value;
+    }
+
+    private static string GetStringOrFallbackOrDefault(JsonNode? node, string propertyName, string fallbackPropertyName, string defaultValue)
+    {
+        var value = GetStringOrFallback(node, propertyName, fallbackPropertyName);
+        return string.IsNullOrWhiteSpace(value) ? defaultValue : value;
+    }
+
     private static bool GetBool(JsonNode? node, string propertyName, bool defaultValue)
     {
         return node?[propertyName] is JsonValue value && value.TryGetValue<bool>(out var result)
             ? result
             : defaultValue;
+    }
+
+    private static bool GetBoolOrFallback(JsonNode? node, string propertyName, string fallbackPropertyName, bool defaultValue)
+    {
+        if (node?[propertyName] is JsonValue value && value.TryGetValue<bool>(out var result))
+        {
+            return result;
+        }
+
+        return GetBool(node, fallbackPropertyName, defaultValue);
     }
 
     private static bool? GetOptionalBool(JsonNode? node, string propertyName)
@@ -768,11 +875,35 @@ internal sealed class ConfigEditorForm : Form
             : defaultValue;
     }
 
+    private static int GetIntOrFallback(JsonNode? node, string propertyName, string fallbackPropertyName, int defaultValue)
+    {
+        var value = GetInt(node, propertyName, int.MinValue);
+        return value != int.MinValue ? value : GetInt(node, fallbackPropertyName, defaultValue);
+    }
+
     private static string[] GetStringArray(JsonNode? node, string propertyName)
     {
         return node?[propertyName] is JsonArray array
             ? array.Select(item => item?.GetValue<string>() ?? "").Where(value => value.Length > 0).ToArray()
             : [];
+    }
+
+    private static string[] GetStringArrayOrDefault(JsonNode? node, string propertyName, string[] defaultValue)
+    {
+        var values = GetStringArray(node, propertyName);
+        return values.Length > 0 ? values : defaultValue;
+    }
+
+    private static string[] GetStringArrayOrDefault(JsonNode? node, string propertyName, string[] defaultValue, string fallbackPropertyName)
+    {
+        var values = GetStringArray(node, propertyName);
+        if (values.Length > 0)
+        {
+            return values;
+        }
+
+        var fallbackValues = GetStringArray(node, fallbackPropertyName);
+        return fallbackValues.Length > 0 ? fallbackValues : defaultValue;
     }
 
     private static string[][] GetStringMatrix(JsonNode? node, string propertyName)
@@ -787,6 +918,12 @@ internal sealed class ConfigEditorForm : Form
             .Select(inner => inner.Select(item => item?.GetValue<string>() ?? "").Where(value => value.Length > 0).ToArray())
             .Where(rule => rule.Length > 0)
             .ToArray();
+    }
+
+    private static string[][] GetStringMatrixOrDefault(JsonNode? node, string propertyName, string[][] defaultValue)
+    {
+        var values = GetStringMatrix(node, propertyName);
+        return values.Length > 0 ? values : defaultValue;
     }
 
     private static AutoLaunchAppEditorRow[] GetAutoLaunchApps(JsonNode? node)

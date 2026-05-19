@@ -8,11 +8,30 @@
   // The browse dialog starts in C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking by default.
   "VrcFaceTrackingPath": "",
 
+  // Enable the OSCGoesBrrr workflow during headset sessions.
+  // These apps are closed during normal VRChat/session cleanup, but they are not restarted when Pimax reconnects.
+  "OscGoesBrrrEnabled": false,
+
+  // When enabled, press L in the supervisor console to launch Intiface and then OscGoesBrrr.
+  "OscGoesBrrrHotkeyEnabled": true,
+
+  // Full path to Intiface. The OSCGoesBrrr workflow starts this app first.
+  "IntifacePath": "%APPDATA%\\IntifaceCentral\\intiface_central.exe",
+
+  // Full path to OscGoesBrrr. This app starts after Intiface is running.
+  "OscGoesBrrrPath": "%LOCALAPPDATA%\\Programs\\OscGoesBrrr\\OscGoesBrrr.exe",
+
   // Process names used to check, attach to, and close Broken Eye. Do not include ".exe".
   "BrokenEyeProcessNames": [ "Broken Eye" ],
 
   // Process names used to check, attach to, and close VRCFaceTracking. Do not include ".exe".
   "VrcFaceTrackingProcessNames": [ "VRCFaceTracking" ],
+
+  // Process names used to detect, attach to, and close Intiface. ".exe" is optional.
+  "IntifaceProcessNames": [ "intiface_central.exe" ],
+
+  // Process names used to detect, attach to, and close OscGoesBrrr. ".exe" is optional.
+  "OscGoesBrrrProcessNames": [ "OscGoesBrrr.exe" ],
 
   // Optional apps to start after Broken Eye and VRCFaceTracking are running.
   // These apps are closed with the same managed-app cleanup used for Broken Eye and VRCFaceTracking.
@@ -75,6 +94,14 @@
     [ "VIVE", "Camera" ]
   ],
 
+  // Lovense detection rules. Each inner array is one possible match rule.
+  // Direct Bluetooth/WebBluetooth Lovense toys usually advertise names starting with LVS-.
+  // Add exact Windows hardware IDs or device names here if your adapter exposes them differently.
+  "LovenseDetectors": [
+    [ "Lovense" ],
+    [ "LVS-" ]
+  ],
+
   // Also watch Pimax PiService logs for fast HID remove/add reconnect bursts.
   // This catches short runtime drops that can happen between normal USB polling checks.
   "UsePimaxServiceLogReconnectDetector": true,
@@ -100,6 +127,9 @@
 
   // Seconds to wait after starting Broken Eye before starting VRCFaceTracking.
   "DelayBeforeVrcFaceTrackingSeconds": 5,
+
+  // Seconds to wait after Intiface is running before starting OscGoesBrrr.
+  "DelayBeforeOscGoesBrrrSeconds": 5,
 
   // Seconds to wait after the Pimax headset reconnects before restarting both managed apps.
   "RestartDelayAfterReconnectSeconds": 10,
