@@ -3,10 +3,16 @@
   // If this path is missing or invalid, the supervisor opens a browse dialog and saves your selection here.
   "BrokenEyePath": "",
 
+  // Start Broken Eye minimized, then try to minimize its main window after launch.
+  "BrokenEyeStartMinimized": false,
+
   // Full path to VRCFaceTracking. This app starts after Broken Eye has had time to settle.
   // If this path is missing or invalid, the supervisor opens a browse dialog and saves your selection here.
   // The browse dialog starts in C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking by default.
   "VrcFaceTrackingPath": "",
+
+  // Start VRCFaceTracking minimized, then try to minimize its main window after launch.
+  "VrcFaceTrackingStartMinimized": false,
 
   // Enable the OSCGoesBrrr workflow during headset sessions.
   // These apps are closed during normal VRChat/session cleanup, but they are not restarted when Pimax reconnects.
@@ -22,8 +28,14 @@
   // Full path to Intiface. The OSCGoesBrrr workflow starts this app first.
   "IntifacePath": "%APPDATA%\\IntifaceCentral\\intiface_central.exe",
 
+  // Start Intiface minimized, then try to minimize its main window after launch.
+  "IntifaceStartMinimized": false,
+
   // Full path to OscGoesBrrr. This app starts after Intiface is running.
   "OscGoesBrrrPath": "%LOCALAPPDATA%\\Programs\\OscGoesBrrr\\OscGoesBrrr.exe",
+
+  // Start OscGoesBrrr minimized, then try to minimize its main window after launch.
+  "OscGoesBrrrStartMinimized": false,
 
   // Process names used to check, attach to, and close Broken Eye. Do not include ".exe".
   "BrokenEyeProcessNames": [ "Broken Eye" ],
@@ -42,13 +54,15 @@
   // The process name is inferred from Path.
   // Set RestartOnPimaxReconnect to false to leave an app running during the Pimax reconnect restart cycle.
   // Set RunAsAdmin to true only for extra apps that must run elevated.
+  // Set StartMinimized to true to start an app minimized and then try to minimize its main window after launch.
   "AutoLaunchApps": [
     // {
     //   "Name": "Example overlay",
     //   "Path": "C:\\Tools\\ExampleOverlay\\ExampleOverlay.exe",
     //   "Enabled": true,
     //   "RestartOnPimaxReconnect": true,
-    //   "RunAsAdmin": false
+    //   "RunAsAdmin": false,
+    //   "StartMinimized": false
     // }
   ],
 

@@ -36,6 +36,10 @@ internal sealed class ConfigEditorForm : Form
     private readonly TextBox _vrcFaceTrackingPathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _intifacePathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _oscGoesBrrrPathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
+    private readonly CheckBox _brokenEyeStartMinimizedCheckBox = new() { Text = "Start Broken Eye minimized", AutoSize = true };
+    private readonly CheckBox _vrcFaceTrackingStartMinimizedCheckBox = new() { Text = "Start VRCFaceTracking minimized", AutoSize = true };
+    private readonly CheckBox _intifaceStartMinimizedCheckBox = new() { Text = "Start Intiface minimized", AutoSize = true };
+    private readonly CheckBox _oscGoesBrrrStartMinimizedCheckBox = new() { Text = "Start OscGoesBrrr minimized", AutoSize = true };
     private readonly CheckBox _oscGoesBrrrEnabledCheckBox = new() { Text = "Enabled", AutoSize = true };
     private readonly CheckBox _oscGoesBrrrHotkeyCheckBox = new() { Text = "Enable L hotkey launch", AutoSize = true };
     private readonly CheckBox _oscGoesBrrrBleScannerCheckBox = new() { Text = "Enable BLE scanner", AutoSize = true };
@@ -227,12 +231,14 @@ internal sealed class ConfigEditorForm : Form
         var layout = CreateFormLayout(3);
 
         AddPathRow(layout, "Broken Eye.exe", _brokenEyePathTextBox, "Full path to Broken Eye.exe. The supervisor starts this app first.");
+        AddFullWidth(layout, _brokenEyeStartMinimizedCheckBox, "Checked means the supervisor starts Broken Eye minimized and tries to minimize its main window after launch.");
         AddPathRow(
             layout,
             "VRCFaceTracking.exe",
             _vrcFaceTrackingPathTextBox,
             "Full path to VRCFaceTracking.exe. The supervisor starts this after Broken Eye settles.",
             DefaultVrcFaceTrackingDirectory);
+        AddFullWidth(layout, _vrcFaceTrackingStartMinimizedCheckBox, "Checked means the supervisor starts VRCFaceTracking minimized and tries to minimize its main window after launch.");
         AddFullWidth(layout, _mouthTrackerCheckBox, "Checked means you use a Vive mouth tracker. Unchecked disables mouth-tracker monitoring. Filled square is shown only when the config leaves the first-run question enabled.");
         AddFullWidth(layout, _turnOffMonitorsCheckBox, "Checked saves the current monitor layout and disables secondary monitors during the VR session. The layout is restored after VRChat and SteamVR close.");
         AddFullWidth(layout, _autoLaunchTaskCheckBox, "Checked lets the app create or repair the elevated auto-launch Scheduled Task. Filled square is shown only when the config asks on first setup.");
@@ -251,7 +257,9 @@ internal sealed class ConfigEditorForm : Form
         AddFullWidth(layout, _oscGoesBrrrHotkeyCheckBox, "Checked means the supervisor shows Press L to launch OSCGoesBrrr and starts Intiface plus OscGoesBrrr when L is pressed.");
         AddFullWidth(layout, _oscGoesBrrrBleScannerCheckBox, "Checked means the supervisor scans nearby BLE advertisements for Lovense names such as LVS- and auto-launches the workflow when one matches.");
         AddPathRow(layout, "intiface_central.exe", _intifacePathTextBox, "Full path to intiface_central.exe. This starts first when a Lovense detector rule matches.", Path.GetDirectoryName(DefaultIntifacePath));
+        AddFullWidth(layout, _intifaceStartMinimizedCheckBox, "Checked means the supervisor starts Intiface minimized and tries to minimize its main window after launch.");
         AddPathRow(layout, "OscGoesBrrr.exe", _oscGoesBrrrPathTextBox, "Full path to OscGoesBrrr.exe. This starts after Intiface is running.", Path.GetDirectoryName(DefaultOscGoesBrrrPath));
+        AddFullWidth(layout, _oscGoesBrrrStartMinimizedCheckBox, "Checked means the supervisor starts OscGoesBrrr minimized and tries to minimize its main window after launch.");
         AddLabeledRow(layout, "Intiface process names", _intifaceProcessesTextBox, "Process names used to detect, attach to, and close Intiface. .exe is optional.");
         AddLabeledRow(layout, "OscGoesBrrr process names", _oscGoesBrrrProcessesTextBox, "Process names used to detect, attach to, and close OscGoesBrrr. .exe is optional.");
         AddNumber(layout, "DelayBeforeOscGoesBrrrSeconds", 0, 3600, "Seconds to wait after Intiface is running before starting OscGoesBrrr.");
@@ -368,6 +376,13 @@ internal sealed class ConfigEditorForm : Form
             FillWeight = 14,
             MinimumWidth = 120
         });
+        _autoLaunchAppsGrid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "StartMinimized",
+            HeaderText = "Start minimized",
+            FillWeight = 16,
+            MinimumWidth = 135
+        });
         _autoLaunchAppsGrid.CellContentClick += OnAutoLaunchAppsGridCellContentClick;
         _autoLaunchAppsGrid.CellFormatting += OnAutoLaunchAppsGridCellFormatting;
         _autoLaunchAppsGrid.DefaultValuesNeeded += OnAutoLaunchAppsGridDefaultValuesNeeded;
@@ -387,6 +402,7 @@ internal sealed class ConfigEditorForm : Form
         e.Row.Cells["Enabled"].Value = true;
         e.Row.Cells["RestartOnPimaxReconnect"].Value = true;
         e.Row.Cells["RunAsAdmin"].Value = false;
+        e.Row.Cells["StartMinimized"].Value = false;
     }
 
     private void OnAutoLaunchAppsGridCellContentClick(object? sender, DataGridViewCellEventArgs e)
@@ -419,7 +435,7 @@ internal sealed class ConfigEditorForm : Form
         }
 
         var row = selectedRow.IsNewRow
-            ? _autoLaunchAppsGrid.Rows[AddAutoLaunchAppGridRow("", "", enabled: true, restartOnPimaxReconnect: true, runAsAdmin: false)]
+            ? _autoLaunchAppsGrid.Rows[AddAutoLaunchAppGridRow("", "", enabled: true, restartOnPimaxReconnect: true, runAsAdmin: false, startMinimized: false)]
             : selectedRow;
         row.Cells["Path"].Value = dialog.FileName;
         if (string.IsNullOrWhiteSpace(GetGridString(row, "Name")))
@@ -707,6 +723,10 @@ internal sealed class ConfigEditorForm : Form
         _vrcFaceTrackingPathTextBox.Text = GetString(node, "VrcFaceTrackingPath");
         _intifacePathTextBox.Text = GetStringOrDefault(node, "IntifacePath", DefaultIntifacePath);
         _oscGoesBrrrPathTextBox.Text = GetStringOrFallbackOrDefault(node, "OscGoesBrrrPath", "OscGoesBrrrrPath", DefaultOscGoesBrrrPath);
+        _brokenEyeStartMinimizedCheckBox.Checked = GetBool(node, "BrokenEyeStartMinimized", defaultValue: false);
+        _vrcFaceTrackingStartMinimizedCheckBox.Checked = GetBool(node, "VrcFaceTrackingStartMinimized", defaultValue: false);
+        _intifaceStartMinimizedCheckBox.Checked = GetBool(node, "IntifaceStartMinimized", defaultValue: false);
+        _oscGoesBrrrStartMinimizedCheckBox.Checked = GetBool(node, "OscGoesBrrrStartMinimized", defaultValue: false);
         _oscGoesBrrrEnabledCheckBox.Checked = GetBoolOrFallback(node, "OscGoesBrrrEnabled", "LovenseAutoLaunchEnabled", defaultValue: false);
         _oscGoesBrrrHotkeyCheckBox.Checked = GetBool(node, "OscGoesBrrrHotkeyEnabled", defaultValue: true);
         _oscGoesBrrrBleScannerCheckBox.Checked = GetBool(node, "OscGoesBrrrBleScannerEnabled", defaultValue: false);
@@ -776,6 +796,10 @@ internal sealed class ConfigEditorForm : Form
         json = JsonPropertyEditor.Replace(json, "VrcFaceTrackingPath", Serialize(_vrcFaceTrackingPathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "IntifacePath", Serialize(_intifacePathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrPath", Serialize(_oscGoesBrrrPathTextBox.Text.Trim()));
+        json = JsonPropertyEditor.Replace(json, "BrokenEyeStartMinimized", _brokenEyeStartMinimizedCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "VrcFaceTrackingStartMinimized", _vrcFaceTrackingStartMinimizedCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "IntifaceStartMinimized", _intifaceStartMinimizedCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "OscGoesBrrrStartMinimized", _oscGoesBrrrStartMinimizedCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrEnabled", _oscGoesBrrrEnabledCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrHotkeyEnabled", _oscGoesBrrrHotkeyCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrBleScannerEnabled", _oscGoesBrrrBleScannerCheckBox.Checked ? "true" : "false");
@@ -964,7 +988,7 @@ internal sealed class ConfigEditorForm : Form
             switch (item)
             {
                 case JsonValue value when value.TryGetValue<string>(out var path) && !string.IsNullOrWhiteSpace(path):
-                    apps.Add(new AutoLaunchAppEditorRow("", path.Trim(), Enabled: true, RestartOnPimaxReconnect: true, RunAsAdmin: false));
+                    apps.Add(new AutoLaunchAppEditorRow("", path.Trim(), Enabled: true, RestartOnPimaxReconnect: true, RunAsAdmin: false, StartMinimized: false));
                     break;
                 case JsonObject obj:
                     var appPath = GetString(obj, "Path").Trim();
@@ -980,7 +1004,8 @@ internal sealed class ConfigEditorForm : Form
                         GetOptionalBool(obj, "RestartOnPimaxReconnect")
                             ?? GetOptionalBool(obj, "CloseOnPimaxDisconnect")
                             ?? true,
-                        GetBool(obj, "RunAsAdmin", defaultValue: false)));
+                        GetBool(obj, "RunAsAdmin", defaultValue: false),
+                        GetBool(obj, "StartMinimized", defaultValue: false)));
                     break;
             }
         }
@@ -1000,11 +1025,11 @@ internal sealed class ConfigEditorForm : Form
         _autoLaunchAppsGrid.Rows.Clear();
         foreach (var app in apps)
         {
-            AddAutoLaunchAppGridRow(app.Name, app.Path, app.Enabled, app.RestartOnPimaxReconnect, app.RunAsAdmin);
+            AddAutoLaunchAppGridRow(app.Name, app.Path, app.Enabled, app.RestartOnPimaxReconnect, app.RunAsAdmin, app.StartMinimized);
         }
     }
 
-    private int AddAutoLaunchAppGridRow(string name, string path, bool enabled, bool restartOnPimaxReconnect, bool runAsAdmin)
+    private int AddAutoLaunchAppGridRow(string name, string path, bool enabled, bool restartOnPimaxReconnect, bool runAsAdmin, bool startMinimized)
     {
         return _autoLaunchAppsGrid.Rows.Add(
             name,
@@ -1012,7 +1037,8 @@ internal sealed class ConfigEditorForm : Form
             "",
             enabled,
             restartOnPimaxReconnect,
-            runAsAdmin);
+            runAsAdmin,
+            startMinimized);
     }
 
     private void CommitAutoLaunchAppsGridEdits()
@@ -1048,7 +1074,8 @@ internal sealed class ConfigEditorForm : Form
                 path,
                 GetGridBool(row, "Enabled", defaultValue: true),
                 GetGridBool(row, "RestartOnPimaxReconnect", defaultValue: true),
-                GetGridBool(row, "RunAsAdmin", defaultValue: false)));
+                GetGridBool(row, "RunAsAdmin", defaultValue: false),
+                GetGridBool(row, "StartMinimized", defaultValue: false)));
         }
 
         return apps.ToArray();
@@ -1248,7 +1275,7 @@ internal sealed class ConfigEditorForm : Form
     }
 }
 
-internal sealed record AutoLaunchAppEditorRow(string Name, string Path, bool Enabled, bool RestartOnPimaxReconnect, bool RunAsAdmin);
+internal sealed record AutoLaunchAppEditorRow(string Name, string Path, bool Enabled, bool RestartOnPimaxReconnect, bool RunAsAdmin, bool StartMinimized);
 
 internal sealed record AppTheme(
     bool IsDark,
