@@ -59,6 +59,7 @@ Important defaults:
 - `AutoLaunchApps` defaults to an empty list. Each item can define `Name`, `Path`, `Enabled`, `RestartOnPimaxReconnect`, and `RunAsAdmin`. The process name is inferred from the exe filename.
 - `OscGoesBrrrEnabled` defaults to `false` and enables the OSCGoesBrrr workflow.
 - `OscGoesBrrrHotkeyEnabled` defaults to `true`. When enabled, press `L` in the supervisor console to start `IntifacePath`, wait `DelayBeforeOscGoesBrrrSeconds`, then start `OscGoesBrrrPath`.
+- `OscGoesBrrrBleScannerEnabled` defaults to `false`. When enabled, the supervisor scans nearby BLE advertisements in 30-second bursts every 60 seconds and auto-launches the same Intiface/OscGoesBrrr sequence on a `LovenseDetectors` match.
 - `SteamVrServerProcessNames` defaults to `vrserver` and controls when monitors are restored after VRChat exits if secondary monitor handling is enabled.
 - `PollIntervalSeconds` defaults to `2`.
 - `PimaxDetectors` defaults to Pimax HMD/runtime USB IDs (`VID_34A4`) instead of the eye tracker-only `EyeChip` device, so reconnects are detected when the headset path actually drops and returns.
@@ -88,6 +89,7 @@ Example Lovense-triggered Intiface/OscGoesBrrr config:
 ```json
 "OscGoesBrrrEnabled": true,
 "OscGoesBrrrHotkeyEnabled": true,
+"OscGoesBrrrBleScannerEnabled": false,
 "IntifacePath": "%APPDATA%\\IntifaceCentral\\intiface_central.exe",
 "OscGoesBrrrPath": "%LOCALAPPDATA%\\Programs\\OscGoesBrrr\\OscGoesBrrr.exe",
 "IntifaceProcessNames": [ "intiface_central.exe" ],
@@ -96,10 +98,12 @@ Example Lovense-triggered Intiface/OscGoesBrrr config:
   [ "Lovense" ],
   [ "LVS-" ]
 ],
-"DelayBeforeOscGoesBrrrSeconds": 5
+"DelayBeforeOscGoesBrrrSeconds": 5,
+"OscGoesBrrrBleScanSeconds": 30,
+"OscGoesBrrrBleScanIntervalSeconds": 60
 ```
 
-The hotkey launches Intiface and OscGoesBrrr at most once per supervisor session. Pimax reconnects do not stop or restart them; normal VRChat/session cleanup closes OscGoesBrrr first, then Intiface.
+The hotkey and optional BLE scanner share the same launch guard, and can launch again if you manually close Intiface/OscGoesBrrr during the same supervisor session. Pimax reconnects do not stop or restart them; normal VRChat/session cleanup closes OscGoesBrrr first, then Intiface.
 
 ## Auto-Launch Task
 

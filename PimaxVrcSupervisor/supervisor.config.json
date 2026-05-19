@@ -15,6 +15,10 @@
   // When enabled, press L in the supervisor console to launch Intiface and then OscGoesBrrr.
   "OscGoesBrrrHotkeyEnabled": true,
 
+  // Optional experimental BLE scanner. When enabled, the supervisor scans nearby BLE advertisements for Lovense names.
+  // The L hotkey remains available as a fallback when OscGoesBrrrHotkeyEnabled is true.
+  "OscGoesBrrrBleScannerEnabled": false,
+
   // Full path to Intiface. The OSCGoesBrrr workflow starts this app first.
   "IntifacePath": "%APPDATA%\\IntifaceCentral\\intiface_central.exe",
 
@@ -130,6 +134,12 @@
 
   // Seconds to wait after Intiface is running before starting OscGoesBrrr.
   "DelayBeforeOscGoesBrrrSeconds": 5,
+
+  // Seconds each BLE scan burst runs when OscGoesBrrrBleScannerEnabled is true.
+  "OscGoesBrrrBleScanSeconds": 30,
+
+  // Seconds to wait after each unsuccessful BLE scan before trying again.
+  "OscGoesBrrrBleScanIntervalSeconds": 60,
 
   // Seconds to wait after the Pimax headset reconnects before restarting both managed apps.
   "RestartDelayAfterReconnectSeconds": 10,
