@@ -1,13 +1,13 @@
 # Pimax VRC Supervisor
 
-![Version](https://img.shields.io/badge/version-1.1.0-2563eb)
+![Version](https://img.shields.io/badge/version-1.1.1-2563eb)
 ![Platform](https://img.shields.io/badge/platform-Windows-0f766e)
 ![Runtime](https://img.shields.io/badge/.NET-9.0-512bd4)
 ![Release](https://img.shields.io/badge/release-signed%20%2B%20attested-16a34a)
 
 A small Windows companion app for Pimax Crystal and VRChat sessions. It waits for the headset, starts the tools you rely on, watches for device reconnects, and cleans everything up when VRChat is done.
 
-The current release is **v1.1.0**.
+The current release is **v1.1.1**.
 
 ## Why It Exists
 
@@ -29,7 +29,7 @@ Pimax + VRChat setups can be fragile when USB devices blink, the runtime reconne
 | `PimaxVrcSupervisorConfigEditor.exe` | GUI editor for `supervisor.config.json`. |
 | `supervisor.config.json` | Documented configuration file copied next to the executables. |
 
-Both executables are stamped with version `1.1.0`.
+Both executables are stamped with version `1.1.1`.
 
 ## Features
 
@@ -108,7 +108,7 @@ Both executables are stamped with version `1.1.0`.
 
 ## Install
 
-1. Download `PimaxVrcSupervisor-v1.1.0.zip` from the GitHub release.
+1. Download `PimaxVrcSupervisor-v1.1.1.zip` from the GitHub release.
 2. Extract it somewhere writable, for example:
 
 ```text
@@ -235,22 +235,22 @@ GitHub Actions publishes signed and attested release assets when a `v*` tag is p
 
 Expected release files:
 
-- `PimaxVrcSupervisor-v1.1.0.zip`
-- `PimaxVrcSupervisor-v1.1.0.zip.sha256`
-- `PimaxVrcSupervisor-v1.1.0.zip.sigstore.json`
+- `PimaxVrcSupervisor-v1.1.1.zip`
+- `PimaxVrcSupervisor-v1.1.1.zip.sha256`
+- `PimaxVrcSupervisor-v1.1.1.zip.sigstore.json`
 
 Verify the checksum:
 
 ```powershell
-Get-FileHash .\PimaxVrcSupervisor-v1.1.0.zip -Algorithm SHA256
-Get-Content .\PimaxVrcSupervisor-v1.1.0.zip.sha256
+Get-FileHash .\PimaxVrcSupervisor-v1.1.1.zip -Algorithm SHA256
+Get-Content .\PimaxVrcSupervisor-v1.1.1.zip.sha256
 ```
 
 Verify the Sigstore bundle with cosign:
 
 ```powershell
-cosign verify-blob .\PimaxVrcSupervisor-v1.1.0.zip `
-  --bundle .\PimaxVrcSupervisor-v1.1.0.zip.sigstore.json `
+cosign verify-blob .\PimaxVrcSupervisor-v1.1.1.zip `
+  --bundle .\PimaxVrcSupervisor-v1.1.1.zip.sigstore.json `
   --certificate-identity-regexp "^https://github.com/.+/.+/.github/workflows/release.yml@refs/(heads|tags)/.+$" `
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 ```
@@ -262,8 +262,8 @@ Sigstore verification proves the zip was signed by the repository workflow and r
 Install the .NET 9 SDK, then run:
 
 ```powershell
-dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.1.0
-dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.1.0
+dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.1.1
+dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.1.1
 ```
 
 The output folder will contain both executables, the config file, and this README.

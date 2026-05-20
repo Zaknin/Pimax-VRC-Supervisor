@@ -1,12 +1,12 @@
-# Pimax VRC Supervisor v1.1.0 Release Notes
+# Pimax VRC Supervisor v1.1.1 Release Notes
 
-This is the release-facing companion note for `PimaxVrcSupervisor-v1.1.0.zip`.
+This is the release-facing companion note for `PimaxVrcSupervisor-v1.1.1.zip`.
 
 ## Current Version
 
-- Release tag: `v1.1.0`
-- App version: `1.1.0`
-- Assembly/file version: `1.1.0.0`
+- Release tag: `v1.1.1`
+- App version: `1.1.1`
+- Assembly/file version: `1.1.1.0`
 - Platform: Windows
 - Runtime: self-contained .NET 9
 
@@ -28,11 +28,12 @@ This is the release-facing companion note for `PimaxVrcSupervisor-v1.1.0.zip`.
 - Base Station 2.0 state reads are used when firmware supports them; unsupported reads are cached per station to speed later launches.
 - Startup now overlaps base-station wake with the normal Broken Eye, VRCFaceTracking, OscGoesBrrr, and auto-launch sequence.
 - Base Station 1.0 and stations with unsupported state reads receive a third wake pass 30 seconds after the second pass.
+- Fixes the Config Editor default Base Stations tab width so the Identify button is visible without manually resizing the window.
 - Keeps existing reconnect handling, monitor restore, auto-launch task, mouth tracker, and OscGoesBrrr/Lovense workflow behavior.
 
 ## Install
 
-1. Download `PimaxVrcSupervisor-v1.1.0.zip`.
+1. Download `PimaxVrcSupervisor-v1.1.1.zip`.
 2. Extract it to a writable folder.
 3. Run `PimaxVrcSupervisor.exe`.
 4. Choose your Broken Eye and VRCFaceTracking executables when prompted.
@@ -51,21 +52,21 @@ No separate .NET install is required for the release zip.
 
 Expected companion assets:
 
-- `PimaxVrcSupervisor-v1.1.0.zip.sha256`
-- `PimaxVrcSupervisor-v1.1.0.zip.sigstore.json`
+- `PimaxVrcSupervisor-v1.1.1.zip.sha256`
+- `PimaxVrcSupervisor-v1.1.1.zip.sigstore.json`
 
 Checksum:
 
 ```powershell
-Get-FileHash .\PimaxVrcSupervisor-v1.1.0.zip -Algorithm SHA256
-Get-Content .\PimaxVrcSupervisor-v1.1.0.zip.sha256
+Get-FileHash .\PimaxVrcSupervisor-v1.1.1.zip -Algorithm SHA256
+Get-Content .\PimaxVrcSupervisor-v1.1.1.zip.sha256
 ```
 
 Sigstore:
 
 ```powershell
-cosign verify-blob .\PimaxVrcSupervisor-v1.1.0.zip `
-  --bundle .\PimaxVrcSupervisor-v1.1.0.zip.sigstore.json `
+cosign verify-blob .\PimaxVrcSupervisor-v1.1.1.zip `
+  --bundle .\PimaxVrcSupervisor-v1.1.1.zip.sigstore.json `
   --certificate-identity-regexp "^https://github.com/.+/.+/.github/workflows/release.yml@refs/(heads|tags)/.+$" `
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 ```
@@ -73,11 +74,11 @@ cosign verify-blob .\PimaxVrcSupervisor-v1.1.0.zip `
 ## Suggested GitHub Release Body
 
 ```markdown
-Pimax VRC Supervisor v1.1.0 adds native SteamVR base-station management for Pimax Crystal + VRChat sessions.
+Pimax VRC Supervisor v1.1.1 adds native SteamVR base-station management for Pimax Crystal + VRChat sessions and fixes the Config Editor Base Stations tab default-width layout.
 
 Use the new Config Editor Base Stations tab to scan, rename, enable, test, identify, and manually add base stations. The supervisor powers enabled stations on after Pimax and SteamVR are ready, avoids restarting them during reconnect handling, and powers them down during cleanup using the configured Sleep/Standby mode.
 
-Download `PimaxVrcSupervisor-v1.1.0.zip`, extract it, and run `PimaxVrcSupervisor.exe`. Use `PimaxVrcSupervisorConfigEditor.exe` to edit paths, detectors, auto-launch apps, timings, OscGoesBrrr settings, and base-station settings.
+Download `PimaxVrcSupervisor-v1.1.1.zip`, extract it, and run `PimaxVrcSupervisor.exe`. Use `PimaxVrcSupervisorConfigEditor.exe` to edit paths, detectors, auto-launch apps, timings, OscGoesBrrr settings, and base-station settings.
 
 The release zip is accompanied by SHA-256 and Sigstore verification files.
 ```
