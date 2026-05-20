@@ -27,7 +27,8 @@ This is the release-facing companion note for `PimaxVrcSupervisor-v1.1.1.zip`.
 - Cleanup sends configured Sleep/Standby during session shutdown, including a detached helper for console-window close.
 - Base Station 2.0 state reads are used when firmware supports them; unsupported reads are cached per station to speed later launches.
 - Startup now overlaps base-station wake with the normal Broken Eye, VRCFaceTracking, OscGoesBrrr, and auto-launch sequence.
-- Base Station 1.0 and stations with unsupported state reads receive a third wake pass 30 seconds after the second pass.
+- When OpenVR is available, startup checks SteamVR tracking 10 seconds after each wake cycle and retries up to 5 cycles until all enabled base stations are active.
+- If OpenVR is unavailable or cannot be queried, Base Station 1.0 and stations with unsupported state reads receive a third wake pass 30 seconds after the second pass.
 - Fixes the Config Editor default Base Stations tab width so the Identify button is visible without manually resizing the window.
 - Keeps existing reconnect handling, monitor restore, auto-launch task, mouth tracker, and OscGoesBrrr/Lovense workflow behavior.
 

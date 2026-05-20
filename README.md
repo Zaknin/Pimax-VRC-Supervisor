@@ -65,7 +65,8 @@ Both executables are stamped with version `1.1.1`.
 - Config Editor can scan for stations, rename them, enable/disable rows, add manual rows, and send Power On, Sleep, Standby, and Identify test commands.
 - Supervisor powers enabled stations on only after the Pimax headset is connected and SteamVR `vrserver.exe` is running.
 - Base stations are not restarted during Pimax, mouth tracker, or other device reconnect handling.
-- Startup sends two normal wake passes; Base Station 1.0 and stations whose firmware does not support power-state reads get a third wake pass 30 seconds later.
+- When OpenVR is available, startup checks SteamVR tracking 10 seconds after each wake cycle and retries up to 5 cycles until all enabled base stations are active.
+- If OpenVR is unavailable or cannot be queried, startup sends two normal wake passes; Base Station 1.0 and stations whose firmware does not support power-state reads get a third wake pass 30 seconds later.
 - Base Station 2.0 firmware with readable state is checked before wake so already-awake stations are not power-cycled.
 - Firmware that reports power-state reads as unsupported is cached per station as `PowerStateReadUnsupported` to speed later launches. Use Config Editor **Refresh State** to manually retry detection.
 - Session cleanup sends the configured Sleep or Standby command. Console-window close also starts a detached base-station cleanup helper so slow BLE shutdown can finish after the console closes.
@@ -278,7 +279,7 @@ The output folder will contain both executables, the config file, and this READM
 | Mouth tracker reconnects do nothing | Set `MouthTrackerUser` to `true` and verify `MouthTrackerDetectors`. |
 | Monitors are not restored | Let SteamVR fully exit; the supervisor waits for `vrserver.exe` before restoring when monitor handling is enabled. |
 | Base stations do not scan | Confirm Windows Bluetooth LE is enabled and try the Base Stations tab **Scan** button again. Add a manual row if Windows discovery exposes the address elsewhere. |
-| Base stations wake slowly | Keep `PowerStateReadUnsupported` enabled for unsupported firmware. The supervisor sends a third delayed wake pass only to V1/unsupported stations. |
+| Base stations wake slowly | Keep `PowerStateReadUnsupported` enabled for unsupported firmware. When OpenVR is available, SteamVR tracking can stop retries early; otherwise the supervisor sends a third delayed wake pass only to V1/unsupported stations. |
 | Base stations stay on after console X | Use the latest release; console close starts a detached helper that sends the configured Sleep/Standby command after the main console exits. |
 | OscGoesBrrr does not start | Check `OscGoesBrrrEnabled`, the Intiface/OscGoesBrrr paths, and whether the hotkey or BLE scanner mode is enabled. |
 

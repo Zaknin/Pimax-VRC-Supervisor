@@ -166,6 +166,7 @@ internal sealed class AppSupervisor
 
     private readonly SupervisorConfig _config;
     private readonly BaseStationGattClient _baseStationGattClient = new();
+    private readonly SteamVrTrackingReferenceReader _steamVrTrackingReferenceReader = new();
     private readonly MonitorLayoutController _monitorLayout = new();
     private readonly TimeSpan _pollInterval;
     private readonly Dictionary<int, Process> _watchedProcessHandles = new();
@@ -189,6 +190,8 @@ internal sealed class AppSupervisor
     private DateTimeOffset? _nextBaseStationPowerOnAttemptAt;
     private DateTimeOffset? _baseStationSecondPowerOnPassCompletedAt;
     private bool _baseStationSettingsNeedSave;
+    private bool? _steamVrTrackingReferenceStartupAvailable;
+    private bool _steamVrTrackingReferenceStartupUnavailableLogged;
     private bool _cleanupStarted;
     private bool? _lastLovenseConnected;
     private bool _lovenseIntifaceStarted;
@@ -1374,7 +1377,16 @@ internal sealed class AppSupervisor
             return;
         }
 
-        targetPowerOnPasses = Math.Clamp(targetPowerOnPasses, 1, BaseStationCommandTiming.PowerOnPasses);
+        var useSteamVrTrackingConfirmation = CanUseSteamVrTrackingConfirmationForStartup();
+        if (useSteamVrTrackingConfirmation && targetPowerOnPasses >= BaseStationCommandTiming.PowerOnPasses)
+        {
+            targetPowerOnPasses = BaseStationCommandTiming.OpenVrPowerOnCycles;
+        }
+
+        var maximumPowerOnPasses = useSteamVrTrackingConfirmation
+            ? BaseStationCommandTiming.OpenVrPowerOnCycles
+            : BaseStationCommandTiming.PowerOnPasses;
+        targetPowerOnPasses = Math.Clamp(targetPowerOnPasses, 1, maximumPowerOnPasses);
         var initialStates = await ReadBaseStationPowerStatesAsync(baseStations, cancellationToken);
         var alreadyAwake = initialStates.Select(IsAwakeBaseStationState).ToArray();
         if (alreadyAwake.Any(value => value))
@@ -1399,10 +1411,10 @@ internal sealed class AppSupervisor
         for (var passOffset = 0; passOffset < passesToRun; passOffset++)
         {
             var pass = _baseStationPowerOnPassesCompleted + 1;
-            var passBaseStations = pass >= 3
+            var passBaseStations = !useSteamVrTrackingConfirmation && pass >= 3
                 ? baseStationsToPowerOn.Where(baseStation => baseStation.RequiresExtendedPowerOnPasses).ToArray()
                 : baseStationsToPowerOn;
-            if (pass == 3 && passBaseStations.Length > 0)
+            if (!useSteamVrTrackingConfirmation && pass == 3 && passBaseStations.Length > 0)
             {
                 var thirdPassAt = (_baseStationSecondPowerOnPassCompletedAt ?? DateTimeOffset.UtcNow).Add(BaseStationCommandTiming.PowerOnRetryPassDelay);
                 if (DateTimeOffset.UtcNow < thirdPassAt)
@@ -1418,7 +1430,7 @@ internal sealed class AppSupervisor
                 continue;
             }
 
-            var passSucceeded = await SendBaseStationPowerOnPassAsync(passBaseStations, pass, cancellationToken);
+            var passSucceeded = await SendBaseStationPowerOnPassAsync(passBaseStations, pass, maximumPowerOnPasses, cancellationToken);
             for (var index = 0; index < passBaseStations.Length; index++)
             {
                 if (passSucceeded[index])
@@ -1432,16 +1444,44 @@ internal sealed class AppSupervisor
             {
                 _baseStationSecondPowerOnPassCompletedAt = DateTimeOffset.UtcNow;
             }
+
+            if (useSteamVrTrackingConfirmation)
+            {
+                var confirmation = await TryConfirmBaseStationStartupWithSteamVrAsync(baseStations, cancellationToken);
+                if (confirmation == true)
+                {
+                    _baseStationsPoweredOn = true;
+                    _baseStationPowerOnComplete = true;
+                    _nextBaseStationPowerOnAttemptAt = null;
+                    return;
+                }
+
+                if (confirmation is null)
+                {
+                    useSteamVrTrackingConfirmation = false;
+                    maximumPowerOnPasses = BaseStationCommandTiming.PowerOnPasses;
+                    targetPowerOnPasses = Math.Min(targetPowerOnPasses, maximumPowerOnPasses);
+                    if (_baseStationPowerOnPassesCompleted >= maximumPowerOnPasses)
+                    {
+                        break;
+                    }
+                }
+            }
         }
 
         _baseStationsPoweredOn = _baseStationsPoweredOn || _baseStationPowerOnCommandSucceeded.Count > 0;
-        if (targetPowerOnPasses < BaseStationCommandTiming.PowerOnPasses)
+        if (targetPowerOnPasses < maximumPowerOnPasses)
         {
             _nextBaseStationPowerOnAttemptAt = null;
             return;
         }
 
         var finalStates = await ReadBaseStationPowerStatesAsync(baseStations, cancellationToken);
+        if (useSteamVrTrackingConfirmation)
+        {
+            Console.WriteLine($"SteamVR did not confirm all enabled base stations after {BaseStationCommandTiming.OpenVrPowerOnCycles} startup cycle(s). Stopping startup retries.");
+        }
+
         _baseStationPowerOnComplete = IsBaseStationPowerOnComplete(baseStations, finalStates, _baseStationPowerOnCommandSucceeded);
         if (_baseStationPowerOnComplete)
         {
@@ -1453,6 +1493,61 @@ internal sealed class AppSupervisor
         _baseStationSecondPowerOnPassCompletedAt = null;
         _baseStationPowerOnCommandSucceeded.Clear();
         _nextBaseStationPowerOnAttemptAt = DateTimeOffset.UtcNow.AddSeconds(10);
+    }
+
+    private bool CanUseSteamVrTrackingConfirmationForStartup()
+    {
+        if (_steamVrTrackingReferenceStartupAvailable is { } available)
+        {
+            return available;
+        }
+
+        available = _steamVrTrackingReferenceReader.IsAvailable(out var reason);
+        _steamVrTrackingReferenceStartupAvailable = available;
+        if (!available && !_steamVrTrackingReferenceStartupUnavailableLogged)
+        {
+            Console.WriteLine($"SteamVR base-station tracking confirmation unavailable: {reason}. Using BLE startup fallback.");
+            _steamVrTrackingReferenceStartupUnavailableLogged = true;
+        }
+
+        return available;
+    }
+
+    private async Task<bool?> TryConfirmBaseStationStartupWithSteamVrAsync(BaseStationDevice[] baseStations, CancellationToken cancellationToken)
+    {
+        Console.WriteLine($"Waiting {BaseStationCommandTiming.OpenVrTrackingCheckDelay.TotalSeconds:0} seconds before checking SteamVR base-station tracking...");
+        await Task.Delay(BaseStationCommandTiming.OpenVrTrackingCheckDelay, cancellationToken);
+
+        try
+        {
+            var trackingReferences = _steamVrTrackingReferenceReader.ReadActiveTrackingReferences();
+            var match = SteamVrBaseStationMatcher.Match(baseStations, trackingReferences);
+            if (match.AllMatchedExactly)
+            {
+                Console.WriteLine($"SteamVR reports all {baseStations.Length} enabled base station(s) active by exact identity match. Startup complete.");
+                return true;
+            }
+
+            if (match.CountFallbackMatched)
+            {
+                Console.WriteLine($"SteamVR reports {match.ActiveTrackingReferenceCount} active tracking reference(s) for {baseStations.Length} configured base station(s). Startup complete by count fallback.");
+                return true;
+            }
+
+            Console.WriteLine($"SteamVR reports {match.ExactMatchCount}/{baseStations.Length} exact base station match(es) and {match.ActiveTrackingReferenceCount} active tracking reference(s). Continuing startup.");
+            return false;
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _steamVrTrackingReferenceStartupAvailable = false;
+            if (!_steamVrTrackingReferenceStartupUnavailableLogged)
+            {
+                Console.WriteLine($"SteamVR base-station tracking confirmation failed: {ex.Message}. Using BLE startup fallback.");
+                _steamVrTrackingReferenceStartupUnavailableLogged = true;
+            }
+
+            return null;
+        }
     }
 
     private async Task TryPowerDownBaseStationsForSessionAsync(CancellationToken cancellationToken)
@@ -1634,12 +1729,12 @@ internal sealed class AppSupervisor
         return successes;
     }
 
-    private async Task<bool[]> SendBaseStationPowerOnPassAsync(BaseStationDevice[] baseStations, int pass, CancellationToken cancellationToken)
+    private async Task<bool[]> SendBaseStationPowerOnPassAsync(BaseStationDevice[] baseStations, int pass, int totalPasses, CancellationToken cancellationToken)
     {
         var stationSucceeded = new bool[baseStations.Length];
         if (pass > 1)
         {
-            Console.WriteLine($"Repeating base station power-on pass {pass}/{BaseStationCommandTiming.PowerOnPasses}...");
+            Console.WriteLine($"Repeating base station power-on pass {pass}/{totalPasses}...");
         }
         else
         {
@@ -2780,6 +2875,470 @@ internal sealed class AppSupervisor
         => Task.Delay(delay, cancellationToken);
 
     private static string DescribeConnection(bool connected) => connected ? "connected" : "not connected";
+}
+
+internal sealed record SteamVrTrackingReference(uint DeviceIndex, string[] IdentityValues);
+
+internal sealed record SteamVrBaseStationMatchResult(
+    int ExactMatchCount,
+    int ActiveTrackingReferenceCount,
+    bool AllMatchedExactly,
+    bool CountFallbackMatched);
+
+internal static class SteamVrBaseStationMatcher
+{
+    private static readonly Regex LighthouseNamePattern = new(@"LHB-?[A-Z0-9]{8}", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    public static SteamVrBaseStationMatchResult Match(BaseStationDevice[] baseStations, IReadOnlyList<SteamVrTrackingReference> trackingReferences)
+    {
+        var activeIdentitySets = trackingReferences
+            .Select(reference => reference.IdentityValues
+                .Select(NormalizeIdentity)
+                .Where(value => value.Length >= 6)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray())
+            .ToArray();
+        var matchedReferenceIndexes = new HashSet<int>();
+        var exactMatches = 0;
+
+        foreach (var baseStation in baseStations)
+        {
+            var candidates = BuildBaseStationIdentityCandidates(baseStation)
+                .Select(NormalizeIdentity)
+                .Where(value => value.Length >= 6)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (candidates.Length == 0)
+            {
+                continue;
+            }
+
+            for (var index = 0; index < activeIdentitySets.Length; index++)
+            {
+                if (matchedReferenceIndexes.Contains(index))
+                {
+                    continue;
+                }
+
+                if (!candidates.Any(candidate => activeIdentitySets[index].Any(identity => IdentityMatches(candidate, identity))))
+                {
+                    continue;
+                }
+
+                matchedReferenceIndexes.Add(index);
+                exactMatches++;
+                break;
+            }
+        }
+
+        var allMatchedExactly = baseStations.Length > 0 && exactMatches == baseStations.Length;
+        var countFallbackMatched = !allMatchedExactly && trackingReferences.Count >= baseStations.Length;
+        return new SteamVrBaseStationMatchResult(exactMatches, trackingReferences.Count, allMatchedExactly, countFallbackMatched);
+    }
+
+    private static IEnumerable<string> BuildBaseStationIdentityCandidates(BaseStationDevice baseStation)
+    {
+        if (!string.IsNullOrWhiteSpace(baseStation.Name))
+        {
+            yield return baseStation.Name;
+            foreach (Match match in LighthouseNamePattern.Matches(baseStation.Name))
+            {
+                yield return match.Value;
+                yield return match.Value.Replace("-", "", StringComparison.Ordinal);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(baseStation.FriendlyName))
+        {
+            yield return baseStation.FriendlyName;
+        }
+
+        if (!string.IsNullOrWhiteSpace(baseStation.Id))
+        {
+            yield return baseStation.Id;
+        }
+    }
+
+    private static bool IdentityMatches(string baseStationIdentity, string steamVrIdentity)
+        => string.Equals(baseStationIdentity, steamVrIdentity, StringComparison.OrdinalIgnoreCase)
+            || steamVrIdentity.Contains(baseStationIdentity, StringComparison.OrdinalIgnoreCase)
+            || baseStationIdentity.Contains(steamVrIdentity, StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeIdentity(string value)
+        => new(value
+            .Where(char.IsLetterOrDigit)
+            .Select(char.ToUpperInvariant)
+            .ToArray());
+}
+
+internal sealed class SteamVrTrackingReferenceReader
+{
+    private const string OpenVrSystemFnTableVersion = "FnTable:IVRSystem_026";
+    private const int VrApplicationBackground = 3;
+    private const int VrInitErrorNone = 0;
+    private const int TrackingUniverseStanding = 1;
+    private const int TrackedDeviceClassTrackingReference = 4;
+    private const int TrackingResultRunningOk = 200;
+    private const int TrackingResultRunningOutOfRange = 201;
+    private const int MaxTrackedDeviceCount = 64;
+    private const int PropTrackingSystemNameString = 1000;
+    private const int PropModelNumberString = 1001;
+    private const int PropSerialNumberString = 1002;
+    private const int PropRenderModelNameString = 1003;
+    private const int PropRegisteredDeviceTypeString = 1036;
+    private const int PropManufacturerSerialNumberString = 1049;
+    private const int PropComputedSerialNumberString = 1050;
+    private const int PropActualTrackingSystemNameString = 1054;
+
+    public bool IsAvailable(out string reason)
+        => TryFindOpenVrApiDll(out _, out reason);
+
+    public IReadOnlyList<SteamVrTrackingReference> ReadActiveTrackingReferences()
+    {
+        if (!TryFindOpenVrApiDll(out var openVrApiDllPath, out var reason))
+        {
+            throw new InvalidOperationException(reason);
+        }
+
+        var library = NativeLibrary.Load(openVrApiDllPath);
+        var initialized = false;
+        try
+        {
+            var initInternal = GetExportDelegate<VrInitInternalDelegate>(library, "VR_InitInternal");
+            var shutdownInternal = GetExportDelegate<VrShutdownInternalDelegate>(library, "VR_ShutdownInternal");
+            var getGenericInterface = GetExportDelegate<VrGetGenericInterfaceDelegate>(library, "VR_GetGenericInterface");
+            var getInitErrorDescription = GetOptionalExportDelegate<VrGetVrInitErrorAsEnglishDescriptionDelegate>(library, "VR_GetVRInitErrorAsEnglishDescription");
+
+            var initError = 0;
+            _ = initInternal(ref initError, VrApplicationBackground);
+            if (initError != VrInitErrorNone)
+            {
+                throw new InvalidOperationException($"OpenVR init failed: {DescribeOpenVrInitError(initError, getInitErrorDescription)}");
+            }
+
+            initialized = true;
+            var interfaceError = 0;
+            var systemTablePointer = getGenericInterface(OpenVrSystemFnTableVersion, ref interfaceError);
+            if (systemTablePointer == IntPtr.Zero || interfaceError != VrInitErrorNone)
+            {
+                throw new InvalidOperationException($"OpenVR system interface unavailable: {DescribeOpenVrInitError(interfaceError, getInitErrorDescription)}");
+            }
+
+            var systemTable = Marshal.PtrToStructure<OpenVrSystemFnTable>(systemTablePointer);
+            var getDeviceToAbsoluteTrackingPose = CreateDelegate<GetDeviceToAbsoluteTrackingPoseDelegate>(systemTable.GetDeviceToAbsoluteTrackingPose);
+            var getTrackedDeviceClass = CreateDelegate<GetTrackedDeviceClassDelegate>(systemTable.GetTrackedDeviceClass);
+            var isTrackedDeviceConnected = CreateDelegate<IsTrackedDeviceConnectedDelegate>(systemTable.IsTrackedDeviceConnected);
+            var getStringTrackedDeviceProperty = CreateDelegate<GetStringTrackedDevicePropertyDelegate>(systemTable.GetStringTrackedDeviceProperty);
+
+            var poses = ReadTrackedDevicePoses(getDeviceToAbsoluteTrackingPose);
+            var activeReferences = new List<SteamVrTrackingReference>();
+            for (uint deviceIndex = 0; deviceIndex < MaxTrackedDeviceCount; deviceIndex++)
+            {
+                var pose = poses[deviceIndex];
+                if (getTrackedDeviceClass(deviceIndex) != TrackedDeviceClassTrackingReference
+                    || !isTrackedDeviceConnected(deviceIndex)
+                    || !IsActiveTrackingReferencePose(pose))
+                {
+                    continue;
+                }
+
+                activeReferences.Add(new SteamVrTrackingReference(
+                    deviceIndex,
+                    ReadTrackingReferenceIdentityValues(deviceIndex, getStringTrackedDeviceProperty)));
+            }
+
+            shutdownInternal();
+            initialized = false;
+            return activeReferences;
+        }
+        finally
+        {
+            try
+            {
+                if (initialized)
+                {
+                    GetExportDelegate<VrShutdownInternalDelegate>(library, "VR_ShutdownInternal")();
+                }
+            }
+            finally
+            {
+                NativeLibrary.Free(library);
+            }
+        }
+    }
+
+    private static bool TryFindOpenVrApiDll(out string openVrApiDllPath, out string reason)
+    {
+        foreach (var runtimePath in GetOpenVrRuntimePaths())
+        {
+            var candidate = Path.Combine(runtimePath, "bin", "win64", "openvr_api.dll");
+            if (File.Exists(candidate))
+            {
+                openVrApiDllPath = candidate;
+                reason = "";
+                return true;
+            }
+        }
+
+        openVrApiDllPath = "";
+        reason = "openvr_api.dll was not found in the configured SteamVR runtime";
+        return false;
+    }
+
+    private static IEnumerable<string> GetOpenVrRuntimePaths()
+    {
+        var openVrPathsFile = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "openvr",
+            "openvrpaths.vrpath");
+        if (File.Exists(openVrPathsFile))
+        {
+            foreach (var runtimePath in ReadRuntimePathsFromOpenVrPathsFile(openVrPathsFile))
+            {
+                yield return runtimePath;
+            }
+        }
+
+        foreach (var runtimePath in ReadSteamVrInstallLocationsFromRegistry())
+        {
+            yield return runtimePath;
+        }
+    }
+
+    private static IEnumerable<string> ReadRuntimePathsFromOpenVrPathsFile(string path)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        if (!document.RootElement.TryGetProperty("runtime", out var runtimeElement) || runtimeElement.ValueKind != JsonValueKind.Array)
+        {
+            yield break;
+        }
+
+        foreach (var item in runtimeElement.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String && item.GetString() is { Length: > 0 } runtimePath)
+            {
+                yield return runtimePath.TrimEnd('\\', '/');
+            }
+        }
+    }
+
+    private static IEnumerable<string> ReadSteamVrInstallLocationsFromRegistry()
+    {
+        const string steamVrUninstallKeyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 250820";
+        foreach (var registryView in new[] { RegistryView.Registry64, RegistryView.Registry32 })
+        {
+            using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, registryView);
+            using var key = baseKey.OpenSubKey(steamVrUninstallKeyPath);
+            if (key?.GetValue("InstallLocation") is string installLocation && !string.IsNullOrWhiteSpace(installLocation))
+            {
+                yield return installLocation.TrimEnd('\\', '/');
+            }
+        }
+    }
+
+    private static Dictionary<uint, OpenVrTrackedDevicePose> ReadTrackedDevicePoses(GetDeviceToAbsoluteTrackingPoseDelegate getDeviceToAbsoluteTrackingPose)
+    {
+        var poseSize = Marshal.SizeOf<OpenVrTrackedDevicePose>();
+        var poseBuffer = Marshal.AllocHGlobal(poseSize * MaxTrackedDeviceCount);
+        try
+        {
+            getDeviceToAbsoluteTrackingPose(TrackingUniverseStanding, 0, poseBuffer, MaxTrackedDeviceCount);
+            return Enumerable
+                .Range(0, MaxTrackedDeviceCount)
+                .ToDictionary(
+                    index => (uint)index,
+                    index => Marshal.PtrToStructure<OpenVrTrackedDevicePose>(IntPtr.Add(poseBuffer, poseSize * index)));
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(poseBuffer);
+        }
+    }
+
+    private static bool IsActiveTrackingReferencePose(OpenVrTrackedDevicePose pose)
+        => pose.DeviceIsConnected
+            && pose.PoseIsValid
+            && pose.TrackingResult is TrackingResultRunningOk or TrackingResultRunningOutOfRange;
+
+    private static string[] ReadTrackingReferenceIdentityValues(uint deviceIndex, GetStringTrackedDevicePropertyDelegate getStringTrackedDeviceProperty)
+    {
+        return new[]
+            {
+                ReadStringTrackedDeviceProperty(deviceIndex, PropSerialNumberString, getStringTrackedDeviceProperty),
+                ReadStringTrackedDeviceProperty(deviceIndex, PropManufacturerSerialNumberString, getStringTrackedDeviceProperty),
+                ReadStringTrackedDeviceProperty(deviceIndex, PropComputedSerialNumberString, getStringTrackedDeviceProperty),
+                ReadStringTrackedDeviceProperty(deviceIndex, PropRegisteredDeviceTypeString, getStringTrackedDeviceProperty),
+                ReadStringTrackedDeviceProperty(deviceIndex, PropRenderModelNameString, getStringTrackedDeviceProperty),
+                ReadStringTrackedDeviceProperty(deviceIndex, PropModelNumberString, getStringTrackedDeviceProperty),
+                ReadStringTrackedDeviceProperty(deviceIndex, PropTrackingSystemNameString, getStringTrackedDeviceProperty),
+                ReadStringTrackedDeviceProperty(deviceIndex, PropActualTrackingSystemNameString, getStringTrackedDeviceProperty)
+            }
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string ReadStringTrackedDeviceProperty(
+        uint deviceIndex,
+        int property,
+        GetStringTrackedDevicePropertyDelegate getStringTrackedDeviceProperty)
+    {
+        var error = 0;
+        var bufferSize = 256u;
+        var buffer = Marshal.AllocHGlobal((int)bufferSize);
+        try
+        {
+            var requiredSize = getStringTrackedDeviceProperty(deviceIndex, property, buffer, bufferSize, ref error);
+            if (requiredSize > bufferSize)
+            {
+                Marshal.FreeHGlobal(buffer);
+                bufferSize = requiredSize;
+                buffer = Marshal.AllocHGlobal((int)bufferSize);
+                error = 0;
+                requiredSize = getStringTrackedDeviceProperty(deviceIndex, property, buffer, bufferSize, ref error);
+            }
+
+            return requiredSize == 0 ? "" : Marshal.PtrToStringAnsi(buffer) ?? "";
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    private static string DescribeOpenVrInitError(int error, VrGetVrInitErrorAsEnglishDescriptionDelegate? getDescription)
+    {
+        if (error == VrInitErrorNone)
+        {
+            return "none";
+        }
+
+        if (getDescription is null)
+        {
+            return error.ToString(CultureInfo.InvariantCulture);
+        }
+
+        var descriptionPointer = getDescription(error);
+        var description = descriptionPointer == IntPtr.Zero ? "" : Marshal.PtrToStringAnsi(descriptionPointer);
+        return string.IsNullOrWhiteSpace(description)
+            ? error.ToString(CultureInfo.InvariantCulture)
+            : $"{description} ({error.ToString(CultureInfo.InvariantCulture)})";
+    }
+
+    private static T GetExportDelegate<T>(IntPtr library, string exportName) where T : Delegate
+        => CreateDelegate<T>(NativeLibrary.GetExport(library, exportName));
+
+    private static T? GetOptionalExportDelegate<T>(IntPtr library, string exportName) where T : Delegate
+        => NativeLibrary.TryGetExport(library, exportName, out var exportPointer)
+            ? CreateDelegate<T>(exportPointer)
+            : null;
+
+    private static T CreateDelegate<T>(IntPtr functionPointer) where T : Delegate
+    {
+        if (functionPointer == IntPtr.Zero)
+        {
+            throw new InvalidOperationException("OpenVR returned a null function pointer.");
+        }
+
+        return Marshal.GetDelegateForFunctionPointer<T>(functionPointer);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct OpenVrSystemFnTable
+    {
+        public IntPtr GetRecommendedRenderTargetSize;
+        public IntPtr GetProjectionMatrix;
+        public IntPtr GetProjectionRaw;
+        public IntPtr ComputeDistortion;
+        public IntPtr ComputeDistortionSet;
+        public IntPtr GetEyeToHeadTransform;
+        public IntPtr GetTimeSinceLastVsync;
+        public IntPtr GetD3D9AdapterIndex;
+        public IntPtr GetDXGIOutputInfo;
+        public IntPtr GetOutputDevice;
+        public IntPtr IsDisplayOnDesktop;
+        public IntPtr SetDisplayVisibility;
+        public IntPtr GetDeviceToAbsoluteTrackingPose;
+        public IntPtr GetSeatedZeroPoseToStandingAbsoluteTrackingPose;
+        public IntPtr GetRawZeroPoseToStandingAbsoluteTrackingPose;
+        public IntPtr GetSortedTrackedDeviceIndicesOfClass;
+        public IntPtr GetTrackedDeviceActivityLevel;
+        public IntPtr ApplyTransform;
+        public IntPtr GetTrackedDeviceIndexForControllerRole;
+        public IntPtr GetControllerRoleForTrackedDeviceIndex;
+        public IntPtr GetTrackedDeviceClass;
+        public IntPtr IsTrackedDeviceConnected;
+        public IntPtr GetBoolTrackedDeviceProperty;
+        public IntPtr GetFloatTrackedDeviceProperty;
+        public IntPtr GetInt32TrackedDeviceProperty;
+        public IntPtr GetUint64TrackedDeviceProperty;
+        public IntPtr GetMatrix34TrackedDeviceProperty;
+        public IntPtr GetArrayTrackedDeviceProperty;
+        public IntPtr GetStringTrackedDeviceProperty;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct HmdMatrix34
+    {
+        public float M0;
+        public float M1;
+        public float M2;
+        public float M3;
+        public float M4;
+        public float M5;
+        public float M6;
+        public float M7;
+        public float M8;
+        public float M9;
+        public float M10;
+        public float M11;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct HmdVector3
+    {
+        public float X;
+        public float Y;
+        public float Z;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 8)]
+    private struct OpenVrTrackedDevicePose
+    {
+        public HmdMatrix34 DeviceToAbsoluteTracking;
+        public HmdVector3 Velocity;
+        public HmdVector3 AngularVelocity;
+        public int TrackingResult;
+        [MarshalAs(UnmanagedType.I1)]
+        public bool PoseIsValid;
+        [MarshalAs(UnmanagedType.I1)]
+        public bool DeviceIsConnected;
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate IntPtr VrInitInternalDelegate(ref int error, int applicationType);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void VrShutdownInternalDelegate();
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    private delegate IntPtr VrGetGenericInterfaceDelegate(string interfaceVersion, ref int error);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate IntPtr VrGetVrInitErrorAsEnglishDescriptionDelegate(int error);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate void GetDeviceToAbsoluteTrackingPoseDelegate(int origin, float predictedSecondsToPhotonsFromNow, IntPtr trackedDevicePoseArray, uint trackedDevicePoseArrayCount);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int GetTrackedDeviceClassDelegate(uint deviceIndex);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    private delegate bool IsTrackedDeviceConnectedDelegate(uint deviceIndex);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate uint GetStringTrackedDevicePropertyDelegate(uint deviceIndex, int property, IntPtr value, uint bufferSize, ref int error);
 }
 
 internal static class BaseStationEmergencyCleanup

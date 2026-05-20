@@ -37,7 +37,9 @@ internal static class BaseStationCommandTiming
     public static readonly TimeSpan InterStationDelay = TimeSpan.FromSeconds(1);
     public static readonly TimeSpan PowerDownStateReadDelay = TimeSpan.FromSeconds(2);
     public static readonly TimeSpan PowerOnRetryPassDelay = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan OpenVrTrackingCheckDelay = TimeSpan.FromSeconds(10);
     public const int PowerOnPasses = 3;
+    public const int OpenVrPowerOnCycles = 5;
     public const int PowerOnAttempts = 2;
     public const int PowerDownFallbackPasses = 2;
 }

@@ -76,7 +76,8 @@
   // Enable SteamVR base station power automation.
   // Base stations are powered on only once after SteamVR server is running and the Pimax headset is connected.
   // They are not restarted when Pimax or other devices reconnect.
-  // Wake pass 1 starts before managed apps; pass 2 runs after managed apps; V1/unsupported stations get pass 3 after 30 seconds.
+  // When OpenVR is available, startup checks SteamVR tracking 10 seconds after each wake cycle and retries up to 5 cycles until all enabled base stations are active.
+  // If OpenVR is unavailable, wake pass 1 starts before managed apps; pass 2 runs after managed apps; V1/unsupported stations get pass 3 after 30 seconds.
   // After VRChat exits, the supervisor waits for SteamVR server to close before sending the selected power-down command.
   "BaseStationsEnabled": false,
 
