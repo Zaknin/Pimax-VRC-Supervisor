@@ -32,13 +32,15 @@ This is the release-facing companion note for `PimaxVrcSupervisor-v1.2.0.zip`.
 
 ## Install
 
-1. Download `PimaxVrcSupervisor-v1.2.0.zip`.
+1. Download the right zip:
+   - If you already have the .NET 9 Windows Desktop Runtime installed, download `PimaxVrcSupervisor-v1.2.0_noNET9.zip`.
+   - If you do not have .NET 9 installed, download `PimaxVrcSupervisor-v1.2.0.zip`.
 2. Extract it to a writable folder.
 3. Run `PimaxVrcSupervisor.exe`.
 4. Choose your Broken Eye and VRCFaceTracking executables when prompted.
 5. Use `PimaxVrcSupervisorConfigEditor.exe` for later configuration changes, including the **Basics**, **Auto Launch**, **Base Stations**, **OSC Router**, and **Raw JSON** tabs.
 
-No separate .NET install is required for the release zip.
+No separate .NET install is required for `PimaxVrcSupervisor-v1.2.0.zip`; the `_noNET9` zip requires .NET 9 to already be installed.
 
 ## Upgrade
 

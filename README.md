@@ -128,7 +128,9 @@ Both executables are stamped with version `1.2.0`.
 
 ## Install
 
-1. Download `PimaxVrcSupervisor-v1.2.0.zip` from the GitHub release.
+1. Download the right zip from the GitHub release:
+   - If you already have the .NET 9 Windows Desktop Runtime installed, download `PimaxVrcSupervisor-v1.2.0_noNET9.zip`.
+   - If you do not have .NET 9 installed, download `PimaxVrcSupervisor-v1.2.0.zip`.
 2. Extract it somewhere writable, for example:
 
 ```text
