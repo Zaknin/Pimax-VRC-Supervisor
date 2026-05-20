@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
@@ -156,6 +158,7 @@ internal struct ConsoleHotkeys
 {
     public bool LaunchOscGoesBrrr { get; set; }
     public bool RestartCoreApps { get; set; }
+    public bool RetryOscRouter { get; set; }
 }
 
 internal sealed class AppSupervisor
@@ -171,6 +174,7 @@ internal sealed class AppSupervisor
     private readonly TimeSpan _pollInterval;
     private readonly Dictionary<int, Process> _watchedProcessHandles = new();
     private readonly SemaphoreSlim _oscGoesBrrrLaunchLock = new(1, 1);
+    private readonly SemaphoreSlim _oscRouterLaunchLock = new(1, 1);
     private readonly SemaphoreSlim _cleanupLock = new(1, 1);
     private readonly SemaphoreSlim _coreAppRestartLock = new(1, 1);
     private readonly DateTimeOffset _startedAt = DateTimeOffset.Now;
@@ -196,6 +200,8 @@ internal sealed class AppSupervisor
     private bool? _lastLovenseConnected;
     private bool _lovenseIntifaceStarted;
     private bool _lovenseWorkflowTriggered;
+    private OscRouter? _oscRouter;
+    private bool _oscRouterWaitingForRetry;
     private Task? _oscGoesBrrrBleScannerTask;
     private bool _oscGoesBrrrBleScannerWarningShown;
     private DateTimeOffset? _watchedProcessMissingSince;
@@ -260,9 +266,11 @@ internal sealed class AppSupervisor
                 Console.WriteLine("Mouth tracker monitoring is disabled by config.");
             }
 
+            await TryStartOscRouterAsync(cancellationToken);
             await StartManagedAppsAsync(cancellationToken);
             await InitializeOscGoesBrrrWorkflowAsync(cancellationToken);
             await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
+            ShowOscRouterRetryPromptIfNeeded();
 
             Console.WriteLine($"Pimax Crystal initial state: {DescribeConnection(_lastPimaxConnected.Value)}");
             Console.WriteLine("Waiting for Pimax reconnects or VRChat shutdown. Press Ctrl+C to stop.");
@@ -453,6 +461,7 @@ internal sealed class AppSupervisor
         }
         finally
         {
+            StopOscRouter();
             ClearWatchedProcessHandles();
         }
     }
@@ -1903,6 +1912,88 @@ internal sealed class AppSupervisor
         }
     }
 
+    private async Task TryStartOscRouterAsync(CancellationToken cancellationToken)
+    {
+        if (!_config.OscRouterEnabled)
+        {
+            Console.WriteLine("OSC router is disabled by config.");
+            return;
+        }
+
+        if (_oscRouter is not null)
+        {
+            Console.WriteLine("OSC router is already running.");
+            _oscRouterWaitingForRetry = false;
+            return;
+        }
+
+        await _oscRouterLaunchLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_oscRouter is not null)
+            {
+                Console.WriteLine("OSC router is already running.");
+                _oscRouterWaitingForRetry = false;
+                return;
+            }
+
+            try
+            {
+                var router = OscRouter.Start(_config);
+                _oscRouter = router;
+                _oscRouterWaitingForRetry = false;
+                Console.WriteLine(router.DescribeStarted());
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
+            {
+                _oscRouterWaitingForRetry = true;
+                Console.WriteLine($"Warning: OSC router could not bind to 127.0.0.1:{_config.OscRouterReceivePort} because the endpoint is already in use. OSC routing is disabled temporarily.");
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                _oscRouterWaitingForRetry = true;
+                Console.WriteLine($"Warning: OSC router could not start on 127.0.0.1:{_config.OscRouterReceivePort}: {ex.Message}. OSC routing is disabled temporarily.");
+            }
+        }
+        finally
+        {
+            _oscRouterLaunchLock.Release();
+        }
+    }
+
+    private async Task RetryOscRouterAsync(CancellationToken cancellationToken)
+    {
+        if (!_config.OscRouterEnabled)
+        {
+            Console.WriteLine("OSC router is disabled by config.");
+            return;
+        }
+
+        if (_oscRouter is not null)
+        {
+            Console.WriteLine("OSC router is already running; no retry is needed.");
+            return;
+        }
+
+        Console.WriteLine("Retrying OSC routing startup...");
+        await TryStartOscRouterAsync(cancellationToken);
+        ShowOscRouterRetryPromptIfNeeded();
+    }
+
+    private void ShowOscRouterRetryPromptIfNeeded()
+    {
+        if (_oscRouterWaitingForRetry && _config.OscRouterEnabled && _oscRouter is null)
+        {
+            Console.WriteLine("Press Space to retry to restart OSC routing.");
+        }
+    }
+
+    private void StopOscRouter()
+    {
+        _oscRouter?.Dispose();
+        _oscRouter = null;
+    }
+
     private async Task InitializeOscGoesBrrrWorkflowAsync(CancellationToken cancellationToken)
     {
         if (!_config.OscGoesBrrrEnabled)
@@ -2102,6 +2193,11 @@ internal sealed class AppSupervisor
             await RestartCoreAppsAsync(cancellationToken);
         }
 
+        if (hotkeys.RetryOscRouter)
+        {
+            await RetryOscRouterAsync(cancellationToken);
+        }
+
         if (hotkeys.LaunchOscGoesBrrr)
         {
             await HandleOscGoesBrrrHotkeyAsync(cancellationToken, hotkeyAlreadyConsumed: true);
@@ -2171,6 +2267,10 @@ internal sealed class AppSupervisor
                 if (key.Key == ConsoleKey.L)
                 {
                     hotkeys.LaunchOscGoesBrrr = true;
+                }
+                else if (key.Key == ConsoleKey.Spacebar)
+                {
+                    hotkeys.RetryOscRouter = true;
                 }
                 else if (key.Key == ConsoleKey.R)
                 {
@@ -3991,6 +4091,164 @@ internal static class DisplayConfigNative
     public const uint PathActive = 0x00000001;
 }
 
+internal sealed class OscRouter : IDisposable
+{
+    private const int MaxUdpDatagramBytes = 65507;
+    private static readonly IOControlCode SioUdpConnReset = unchecked((IOControlCode)0x9800000C);
+
+    private readonly Socket _receiveSocket;
+    private readonly Socket _sendSocket;
+    private readonly OscRoute[] _routes;
+    private readonly IPEndPoint[] _routeEndpoints;
+    private readonly IPEndPoint _listenEndpoint;
+    private readonly CancellationTokenSource _shutdown = new();
+    private readonly Task _runTask;
+    private DateTimeOffset? _lastReceiveResetLoggedAt;
+
+    private OscRouter(Socket receiveSocket, Socket sendSocket, OscRoute[] routes, IPEndPoint listenEndpoint)
+    {
+        _receiveSocket = receiveSocket;
+        _sendSocket = sendSocket;
+        _routes = routes;
+        _routeEndpoints = routes
+            .Select(route => new IPEndPoint(IPAddress.Loopback, route.AppReceivePort))
+            .ToArray();
+        _listenEndpoint = listenEndpoint;
+        _runTask = Task.Run(Run);
+    }
+
+    public static OscRouter Start(SupervisorConfig config)
+    {
+        if (config.OscRouterReceivePort is < 1 or > 65535)
+        {
+            throw new InvalidOperationException($"OSC router receive port must be between 1 and 65535: {config.OscRouterReceivePort}");
+        }
+
+        var routes = config.OscRoutes
+            .Where(route => route.Enabled)
+            .Where(route => route.AppReceivePort is >= 1 and <= 65535)
+            .ToArray();
+        var endpoint = new IPEndPoint(IPAddress.Loopback, config.OscRouterReceivePort);
+        var receiveSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        var sendSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        try
+        {
+            TryDisableUdpConnectionReset(receiveSocket);
+            TryDisableUdpConnectionReset(sendSocket);
+            receiveSocket.Bind(endpoint);
+            return new OscRouter(receiveSocket, sendSocket, routes, endpoint);
+        }
+        catch
+        {
+            receiveSocket.Dispose();
+            sendSocket.Dispose();
+            throw;
+        }
+    }
+
+    public string DescribeStarted()
+    {
+        var routeText = _routes.Length == 1 ? "1 route" : $"{_routes.Length} routes";
+        return $"OSC router listening on {_listenEndpoint.Address}:{_listenEndpoint.Port}; forwarding to {routeText}.";
+    }
+
+    private void Run()
+    {
+        var buffer = new byte[MaxUdpDatagramBytes];
+        EndPoint remoteEndpoint = new IPEndPoint(IPAddress.Any, 0);
+        while (!_shutdown.IsCancellationRequested)
+        {
+            int receivedBytes;
+            try
+            {
+                receivedBytes = _receiveSocket.ReceiveFrom(buffer, 0, buffer.Length, SocketFlags.None, ref remoteEndpoint);
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+            catch (SocketException ex) when (_shutdown.IsCancellationRequested || ex.SocketErrorCode == SocketError.Interrupted)
+            {
+                return;
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+            {
+                LogReceiveResetThrottled();
+                continue;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"OSC router receive error: {ex.Message}");
+                continue;
+            }
+
+            for (var routeIndex = 0; routeIndex < _routes.Length; routeIndex++)
+            {
+                var route = _routes[routeIndex];
+                var routeEndpoint = _routeEndpoints[routeIndex];
+                try
+                {
+                    _sendSocket.SendTo(buffer, 0, receivedBytes, SocketFlags.None, routeEndpoint);
+                }
+                catch (SocketException ex) when (_shutdown.IsCancellationRequested || ex.SocketErrorCode == SocketError.Interrupted)
+                {
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"OSC router could not forward to {route.DisplayName}: {ex.Message}");
+                }
+            }
+        }
+    }
+
+    private void LogReceiveResetThrottled()
+    {
+        var now = DateTimeOffset.Now;
+        if (_lastReceiveResetLoggedAt is not null && now - _lastReceiveResetLoggedAt < TimeSpan.FromSeconds(30))
+        {
+            return;
+        }
+
+        _lastReceiveResetLoggedAt = now;
+        Console.WriteLine("OSC router ignored a UDP connection reset from Windows. Routing is still running.");
+    }
+
+    private static void TryDisableUdpConnectionReset(Socket socket)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            socket.IOControl(SioUdpConnReset, [0, 0, 0, 0], null);
+        }
+        catch
+        {
+            // Older Windows socket stacks may not support this option; separate sockets still keep routing resilient.
+        }
+    }
+
+    public void Dispose()
+    {
+        _shutdown.Cancel();
+        _receiveSocket.Dispose();
+        _sendSocket.Dispose();
+        try
+        {
+            _runTask.Wait(TimeSpan.FromSeconds(2));
+        }
+        catch
+        {
+            // Shutdown is best-effort; the UDP socket has already been closed.
+        }
+
+        _shutdown.Dispose();
+    }
+}
+
 [StructLayout(LayoutKind.Sequential)]
 internal struct Luid
 {
@@ -4212,6 +4470,9 @@ internal sealed class SupervisorConfig
     public bool OscGoesBrrrBleScannerEnabled { get; init; }
     public int OscGoesBrrrBleScanSeconds { get; init; } = 30;
     public int OscGoesBrrrBleScanIntervalSeconds { get; init; } = 60;
+    public bool OscRouterEnabled { get; init; }
+    public int OscRouterReceivePort { get; init; } = 9001;
+    public OscRoute[] OscRoutes { get; init; } = [];
     public JsonElement MouthTrackerUser { get; set; }
     public JsonElement TurnOffSecondaryMonitors { get; set; }
     public JsonElement AutoLaunchScheduledTask { get; set; }
@@ -4526,4 +4787,31 @@ internal sealed class AutoLaunchAppConfig
     public bool? CloseOnPimaxDisconnect { get; init; }
     public bool RunAsAdmin { get; init; }
     public bool StartMinimized { get; init; }
+}
+
+internal sealed class OscRoute
+{
+    public string Name { get; init; } = "";
+    public int AppReceivePort { get; init; }
+    public int OutputPort
+    {
+        init
+        {
+            if (AppReceivePort == 0)
+            {
+                AppReceivePort = value;
+            }
+        }
+    }
+    public bool Enabled { get; init; } = true;
+
+    [JsonIgnore]
+    public string DisplayName
+    {
+        get
+        {
+            var name = string.IsNullOrWhiteSpace(Name) ? "OSC route" : Name;
+            return $"{name} (127.0.0.1:{AppReceivePort})";
+        }
+    }
 }

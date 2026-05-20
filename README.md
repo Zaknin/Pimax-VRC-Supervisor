@@ -20,6 +20,7 @@ Pimax + VRChat setups can be fragile when USB devices blink, the runtime reconne
 - optionally manage SteamVR base-station power through native Bluetooth LE
 - optionally auto-launch when VRChat starts while SteamVR is running
 - optionally start Intiface and OscGoesBrrr for Lovense workflows
+- optionally route local OSC packets to multiple OSC apps
 
 ## Included Apps
 
@@ -97,6 +98,16 @@ Both executables are stamped with version `1.1.2`.
 - If Intiface is running but OscGoesBrrr is missing, the supervisor can repair the workflow.
 - Pimax reconnects do not restart Intiface/OscGoesBrrr; normal session cleanup closes them.
 
+### OSC Router
+
+- Optional in-process OSC UDP router for sending VRChat OSC output to multiple local apps.
+- Apps keep sending OSC directly to VRChat at `127.0.0.1:9000`.
+- Listens for VRChat output on `127.0.0.1:OscRouterReceivePort`, default `127.0.0.1:9001`.
+- Forwards every received OSC datagram unchanged to each enabled app receive port at `127.0.0.1`; no OSC address filtering is applied.
+- Starts once before Broken Eye and VRCFaceTracking and is independent from SteamVR startup, VRChat waiting, Pimax reconnect restarts, app autostart, and app autoclose.
+- If the configured receive endpoint is already in use, the supervisor logs a warning, continues startup with routing disabled temporarily, then lets you press `Space` in the console to retry routing.
+- OSCQuery-capable apps can coexist with the router because OSCQuery uses separate discovery and HTTP ports. Do not also route to an app port VRChat already discovered through OSCQuery unless duplicate incoming packets are desired.
+
 ## Requirements
 
 - Windows 10/11
@@ -146,6 +157,7 @@ The editor includes tabs for:
 
 - **Basics**: main executable paths and first-run choices
 - **Base Stations**: scan, rename, enable, test, identify, and power SteamVR base stations
+- **OSC Router**: receive endpoint and output routes for local OSC routing
 - **Auto Launch**: extra apps to launch with the VR session
 - **OSCGoesBrrr**: Intiface, OscGoesBrrr, hotkey, BLE scanner, and Lovense rules
 - **Processes**: watched process names and cleanup targets
@@ -173,6 +185,9 @@ The release includes a commented `supervisor.config.json`. Important settings:
 | `OscGoesBrrrEnabled` | `false` | Enables Intiface/OscGoesBrrr workflow support. |
 | `OscGoesBrrrHotkeyEnabled` | `true` | Press `L` to launch the workflow. |
 | `OscGoesBrrrBleScannerEnabled` | `false` | Enables Lovense BLE advertisement scanning. |
+| `OscRouterEnabled` | `false` | Enables in-process OSC UDP routing before app launch. |
+| `OscRouterReceivePort` | `9001` | Local UDP port the OSC router listens on at `127.0.0.1`. |
+| `OscRoutes` | `[]` | Output routes with `Enabled`, `Name`, and `AppReceivePort`. Old `OutputPort` route values still load. |
 | `UsePimaxServiceLogReconnectDetector` | `true` | Watches PiService logs for fast runtime reconnects. |
 | `UseMouthTrackerPnPReconnectDetector` | `true` | Watches Windows PnP events for fast mouth tracker reconnects. |
 | `PollIntervalSeconds` | `2` | Normal device/process polling interval. |

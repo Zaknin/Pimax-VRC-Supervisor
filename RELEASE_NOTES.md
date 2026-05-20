@@ -30,6 +30,10 @@ This is the release-facing companion note for `PimaxVrcSupervisor-v1.1.2.zip`.
 - When OpenVR is available, startup checks SteamVR tracking 10 seconds after each wake cycle and retries up to 5 cycles until all enabled base stations are active.
 - If OpenVR is unavailable or cannot be queried, Base Station 1.0 and stations with unsupported state reads receive a third wake pass 30 seconds after the second pass.
 - Fixes the Config Editor default Base Stations tab width so the Identify button is visible without manually resizing the window.
+- Adds an optional in-process OSC router with a dedicated Config Editor tab.
+- OSC routing listens for VRChat output on `127.0.0.1:9001` by default and forwards every received OSC packet unchanged to enabled app receive ports.
+- Apps still send OSC directly to VRChat at `127.0.0.1:9000`; OSCQuery is left to VRChat and OSCQuery-capable apps.
+- If the OSC receive endpoint is already in use, startup continues and the console lets you press Space to retry routing later.
 - Keeps existing reconnect handling, monitor restore, auto-launch task, mouth tracker, and OscGoesBrrr/Lovense workflow behavior.
 
 ## Install
@@ -38,7 +42,7 @@ This is the release-facing companion note for `PimaxVrcSupervisor-v1.1.2.zip`.
 2. Extract it to a writable folder.
 3. Run `PimaxVrcSupervisor.exe`.
 4. Choose your Broken Eye and VRCFaceTracking executables when prompted.
-5. Use `PimaxVrcSupervisorConfigEditor.exe` for later configuration changes, including the new **Base Stations** tab.
+5. Use `PimaxVrcSupervisorConfigEditor.exe` for later configuration changes, including the **Base Stations** and **OSC Router** tabs.
 
 No separate .NET install is required for the release zip.
 
@@ -47,7 +51,7 @@ No separate .NET install is required for the release zip.
 1. Close any running supervisor or config editor instance.
 2. Extract the new zip over the previous folder or into a fresh folder.
 3. Keep your existing `supervisor.config.json` if it already contains your preferred paths and settings.
-4. Open the config editor and use the **Base Stations** tab to scan and configure stations.
+4. Open the config editor and use the **Base Stations** tab to scan stations or the **OSC Router** tab to configure OSC output routes.
 
 ## Verify
 
@@ -79,7 +83,7 @@ Pimax VRC Supervisor v1.1.2 adds OpenVR-aware base-station startup confirmation 
 
 When SteamVR can report active tracking references, the supervisor checks 10 seconds after each wake cycle and stops retrying once all enabled base stations are active. If OpenVR is unavailable or cannot be queried, startup falls back to the existing three-pass BLE behavior. Shutdown behavior is unchanged.
 
-Download `PimaxVrcSupervisor-v1.1.2.zip`, extract it, and run `PimaxVrcSupervisor.exe`. Use `PimaxVrcSupervisorConfigEditor.exe` to edit paths, detectors, auto-launch apps, timings, OscGoesBrrr settings, and base-station settings.
+Download `PimaxVrcSupervisor-v1.1.2.zip`, extract it, and run `PimaxVrcSupervisor.exe`. Use `PimaxVrcSupervisorConfigEditor.exe` to edit paths, detectors, auto-launch apps, timings, OscGoesBrrr settings, OSC routes, and base-station settings.
 
 The release zip is accompanied by SHA-256 and Sigstore verification files.
 ```

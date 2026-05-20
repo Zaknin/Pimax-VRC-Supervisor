@@ -1,7 +1,9 @@
 using Microsoft.Win32;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -47,6 +49,15 @@ internal sealed class ConfigEditorForm : Form
     private readonly CheckBox _oscGoesBrrrEnabledCheckBox = new() { Text = "Enabled", AutoSize = true };
     private readonly CheckBox _oscGoesBrrrHotkeyCheckBox = new() { Text = "Enable L hotkey launch", AutoSize = true };
     private readonly CheckBox _oscGoesBrrrBleScannerCheckBox = new() { Text = "Enable BLE scanner", AutoSize = true };
+    private readonly CheckBox _oscRouterEnabledCheckBox = new() { Text = "Enable OSC routing", AutoSize = true };
+    private readonly NumericUpDown _oscRouterReceivePortInput = new()
+    {
+        Minimum = 1,
+        Maximum = 65535,
+        Value = 9001,
+        Anchor = AnchorStyles.Left,
+        Width = 110
+    };
     private readonly CheckBox _baseStationsEnabledCheckBox = new() { Text = "Enable base station power automation", AutoSize = true };
     private readonly ComboBox _baseStationPowerDownModeComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     private readonly CheckBox _mouthTrackerCheckBox = CreateOptionalConfigCheckBox("Use Vive mouth tracker");
@@ -68,6 +79,15 @@ internal sealed class ConfigEditorForm : Form
     {
         Dock = DockStyle.Fill,
         AllowUserToAddRows = false,
+        AllowUserToDeleteRows = true,
+        AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+        ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
+        RowHeadersVisible = false
+    };
+    private readonly DataGridView _oscRoutesGrid = new()
+    {
+        Dock = DockStyle.Fill,
+        AllowUserToAddRows = true,
         AllowUserToDeleteRows = true,
         AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
         ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
@@ -99,8 +119,8 @@ internal sealed class ConfigEditorForm : Form
     {
         Text = $"Pimax VRC Supervisor Config Editor {AppVersion.Current}";
         SetWindowIconFromExecutable();
-        MinimumSize = new Size(900, 660);
-        Size = new Size(1180, 760);
+        MinimumSize = new Size(1040, 720);
+        Size = new Size(1260, 820);
         StartPosition = FormStartPosition.CenterScreen;
 
         ConfigureToolTips();
@@ -233,6 +253,7 @@ internal sealed class ConfigEditorForm : Form
         var tabs = new ThemedTabHost { Dock = DockStyle.Fill };
         tabs.AddTab("Basics", BuildBasicsTab());
         tabs.AddTab("Base Stations", BuildBaseStationsTab());
+        tabs.AddTab("OSC Router", BuildOscRouterTab());
         tabs.AddTab("Auto Launch", BuildAutoLaunchTab());
         tabs.AddTab("OSCGoesBrrr", BuildLovenseTab());
         tabs.AddTab("Processes", BuildProcessesTab());
@@ -716,6 +737,87 @@ internal sealed class ConfigEditorForm : Form
             ? mode
             : BaseStationPowerDownMode.Sleep;
 
+    private Control BuildOscRouterTab()
+    {
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Padding = new Padding(8)
+        };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var settings = CreateFormLayout(2);
+        settings.Dock = DockStyle.Top;
+        settings.AutoSize = true;
+        AddFullWidth(settings, _oscRouterEnabledCheckBox, "Checked means the supervisor starts the in-process OSC router before Broken Eye and VRCFaceTracking.");
+        AddLabeledRow(settings, "Receive port", _oscRouterReceivePortInput, "Local UDP port the OSC router listens on at 127.0.0.1. Default is 9001.");
+
+        ConfigureOscRoutesGrid();
+        var routesPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Margin = new Padding(0, 8, 0, 0)
+        };
+        routesPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        routesPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var routesLabel = new Label
+        {
+            Text = "OSC routes",
+            AutoSize = true,
+            Padding = new Padding(0, 0, 0, 4)
+        };
+        const string routesTooltip = "Each enabled route receives every OSC datagram unchanged. No OSC address filtering is applied.";
+        _toolTips.SetToolTip(routesLabel, routesTooltip);
+        _toolTips.SetToolTip(_oscRoutesGrid, routesTooltip);
+        routesPanel.Controls.Add(routesLabel, 0, 0);
+        routesPanel.Controls.Add(_oscRoutesGrid, 0, 1);
+
+        layout.Controls.Add(settings, 0, 0);
+        layout.Controls.Add(routesPanel, 0, 1);
+        return layout;
+    }
+
+    private void ConfigureOscRoutesGrid()
+    {
+        if (_oscRoutesGrid.Columns.Count > 0)
+        {
+            return;
+        }
+
+        _oscRoutesGrid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "Enabled",
+            HeaderText = "Enabled",
+            FillWeight = 8,
+            MinimumWidth = 76
+        });
+        _oscRoutesGrid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "Name",
+            HeaderText = "Name",
+            FillWeight = 24,
+            MinimumWidth = 150
+        });
+        _oscRoutesGrid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = "AppReceivePort",
+            HeaderText = "App Receive Port",
+            FillWeight = 14,
+            MinimumWidth = 140
+        });
+        _oscRoutesGrid.DefaultValuesNeeded += OnOscRoutesGridDefaultValuesNeeded;
+    }
+
+    private void OnOscRoutesGridDefaultValuesNeeded(object? sender, DataGridViewRowEventArgs e)
+    {
+        e.Row.Cells["Enabled"].Value = true;
+    }
+
     private Control BuildLovenseTab()
     {
         var layout = CreateFormLayout(3);
@@ -1184,19 +1286,44 @@ internal sealed class ConfigEditorForm : Form
 
         try
         {
-            Process.Start(new ProcessStartInfo
+            var startInfo = new ProcessStartInfo
             {
                 FileName = supervisorPath,
                 WorkingDirectory = Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory,
-                UseShellExecute = true
-            });
+                UseShellExecute = true,
+                ErrorDialog = true,
+                ErrorDialogParentHandle = Handle
+            };
+            if (!IsAdministrator())
+            {
+                startInfo.Verb = "runas";
+            }
+
+            Process.Start(startInfo);
             SetStatus("Launched " + supervisorPath);
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            MessageBox.Show(
+                this,
+                "Windows cancelled the administrator approval prompt for PimaxVrcSupervisor.exe. Click Launch again and approve the UAC prompt.",
+                "Supervisor launch cancelled",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            SetStatus("Launch cancelled.");
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, ex.Message, "Could not launch supervisor", MessageBoxButtons.OK, MessageBoxIcon.Error);
             SetStatus("Launch failed.");
         }
+    }
+
+    private static bool IsAdministrator()
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+        var principal = new WindowsPrincipal(identity);
+        return principal.IsInRole(WindowsBuiltInRole.Administrator);
     }
 
     private void LoadConfig(string path)
@@ -1240,6 +1367,8 @@ internal sealed class ConfigEditorForm : Form
         _oscGoesBrrrEnabledCheckBox.Checked = GetBoolOrFallback(node, "OscGoesBrrrEnabled", "LovenseAutoLaunchEnabled", defaultValue: false);
         _oscGoesBrrrHotkeyCheckBox.Checked = GetBool(node, "OscGoesBrrrHotkeyEnabled", defaultValue: true);
         _oscGoesBrrrBleScannerCheckBox.Checked = GetBool(node, "OscGoesBrrrBleScannerEnabled", defaultValue: false);
+        _oscRouterEnabledCheckBox.Checked = GetBool(node, "OscRouterEnabled", defaultValue: false);
+        _oscRouterReceivePortInput.Value = Math.Clamp(GetInt(node, "OscRouterReceivePort", 9001), (int)_oscRouterReceivePortInput.Minimum, (int)_oscRouterReceivePortInput.Maximum);
         _mouthTrackerCheckBox.CheckState = GetBoolCheckState(node, "MouthTrackerUser");
         _turnOffMonitorsCheckBox.CheckState = GetBoolCheckState(node, "TurnOffSecondaryMonitors");
         _autoLaunchTaskCheckBox.CheckState = GetBoolCheckState(node, "AutoLaunchScheduledTask");
@@ -1255,6 +1384,7 @@ internal sealed class ConfigEditorForm : Form
 
         PopulateBaseStationsGrid(GetBaseStations(node));
         PopulateAutoLaunchAppsGrid(GetAutoLaunchApps(node));
+        PopulateOscRoutesGrid(GetOscRoutes(node));
         _brokenEyeProcessesTextBox.Text = string.Join(", ", GetStringArray(node, "BrokenEyeProcessNames"));
         _vrcFaceTrackingProcessesTextBox.Text = string.Join(", ", GetStringArray(node, "VrcFaceTrackingProcessNames"));
         _intifaceProcessesTextBox.Text = string.Join(", ", GetStringArrayOrDefault(node, "IntifaceProcessNames", ["intiface_central.exe"]));
@@ -1293,6 +1423,7 @@ internal sealed class ConfigEditorForm : Form
 
             CommitAutoLaunchAppsGridEdits();
             CommitBaseStationsGridEdits();
+            CommitOscRoutesGridEdits();
             var json = ApplyControlValues(_rawJsonTextBox.Text);
             ParseJson(json);
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
@@ -1314,6 +1445,7 @@ internal sealed class ConfigEditorForm : Form
     {
         CommitAutoLaunchAppsGridEdits();
         CommitBaseStationsGridEdits();
+        CommitOscRoutesGridEdits();
         return ApplyControlValues(_rawJsonTextBox.Text);
     }
 
@@ -1377,6 +1509,10 @@ internal sealed class ConfigEditorForm : Form
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrEnabled", _oscGoesBrrrEnabledCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrHotkeyEnabled", _oscGoesBrrrHotkeyCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrBleScannerEnabled", _oscGoesBrrrBleScannerCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "OscRouterEnabled", _oscRouterEnabledCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Remove(json, "OscRouterReceiveAddress");
+        json = JsonPropertyEditor.Replace(json, "OscRouterReceivePort", ((int)_oscRouterReceivePortInput.Value).ToString());
+        json = JsonPropertyEditor.Replace(json, "OscRoutes", Serialize(ReadOscRoutesGrid()));
         json = JsonPropertyEditor.Replace(json, "BaseStationsEnabled", _baseStationsEnabledCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "BaseStationPowerDownMode", Serialize(Convert.ToString(_baseStationPowerDownModeComboBox.SelectedItem) ?? BaseStationPowerDownMode.Sleep.ToString()));
         json = JsonPropertyEditor.Replace(json, "BaseStations", Serialize(ReadBaseStationsGrid()));
@@ -1628,6 +1764,31 @@ internal sealed class ConfigEditorForm : Form
         return baseStations.ToArray();
     }
 
+    private static OscRouteEditorRow[] GetOscRoutes(JsonNode? node)
+    {
+        if (node?["OscRoutes"] is not JsonArray array)
+        {
+            return [];
+        }
+
+        var routes = new List<OscRouteEditorRow>();
+        foreach (var item in array.OfType<JsonObject>())
+        {
+            var appReceivePort = GetInt(item, "AppReceivePort", GetInt(item, "OutputPort", 0));
+            if (appReceivePort is < 1 or > 65535)
+            {
+                continue;
+            }
+
+            routes.Add(new OscRouteEditorRow(
+                GetString(item, "Name").Trim(),
+                appReceivePort,
+                GetBool(item, "Enabled", defaultValue: true)));
+        }
+
+        return routes.ToArray();
+    }
+
     private static BaseStationVersion GetBaseStationVersion(JsonNode? node, string propertyName, BaseStationVersion defaultValue)
     {
         if (node?[propertyName] is not JsonValue value)
@@ -1711,6 +1872,58 @@ internal sealed class ConfigEditorForm : Form
         }
 
         return apps.ToArray();
+    }
+
+    private void PopulateOscRoutesGrid(OscRouteEditorRow[] routes)
+    {
+        ConfigureOscRoutesGrid();
+        _oscRoutesGrid.Rows.Clear();
+        foreach (var route in routes)
+        {
+            AddOscRouteGridRow(route.Name, route.AppReceivePort, route.Enabled);
+        }
+    }
+
+    private int AddOscRouteGridRow(string name, int appReceivePort, bool enabled)
+    {
+        return _oscRoutesGrid.Rows.Add(enabled, name, appReceivePort);
+    }
+
+    private void CommitOscRoutesGridEdits()
+    {
+        if (_oscRoutesGrid.IsCurrentCellDirty)
+        {
+            _oscRoutesGrid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        }
+
+        _oscRoutesGrid.EndEdit();
+        ValidateChildren();
+    }
+
+    private OscRouteEditorRow[] ReadOscRoutesGrid()
+    {
+        CommitOscRoutesGridEdits();
+        var routes = new List<OscRouteEditorRow>();
+        foreach (DataGridViewRow row in _oscRoutesGrid.Rows)
+        {
+            if (row.IsNewRow)
+            {
+                continue;
+            }
+
+            var appReceivePort = GetGridInt(row, "AppReceivePort", defaultValue: 0);
+            if (appReceivePort is < 1 or > 65535)
+            {
+                continue;
+            }
+
+            routes.Add(new OscRouteEditorRow(
+                GetGridString(row, "Name"),
+                appReceivePort,
+                GetGridBool(row, "Enabled", defaultValue: true)));
+        }
+
+        return routes.ToArray();
     }
 
     private void PopulateBaseStationsGrid(BaseStationDevice[] baseStations)
@@ -1885,6 +2098,18 @@ internal sealed class ConfigEditorForm : Form
         {
             bool boolValue => boolValue,
             string text when bool.TryParse(text, out var parsed) => parsed,
+            _ => defaultValue
+        };
+    }
+
+    private static int GetGridInt(DataGridViewRow row, string columnName, int defaultValue)
+    {
+        var value = row.Cells[columnName].Value;
+        return value switch
+        {
+            int intValue => intValue,
+            decimal decimalValue => decimal.ToInt32(decimalValue),
+            string text when int.TryParse(text, out var parsed) => parsed,
             _ => defaultValue
         };
     }
@@ -2067,6 +2292,8 @@ internal static class AppVersion
 }
 
 internal sealed record AutoLaunchAppEditorRow(string Name, string Path, bool Enabled, bool RestartOnPimaxReconnect, bool RunAsAdmin, bool StartMinimized);
+
+internal sealed record OscRouteEditorRow(string Name, int AppReceivePort, bool Enabled);
 
 internal sealed record AppTheme(
     bool IsDark,
@@ -2336,6 +2563,63 @@ internal static class JsonPropertyEditor
 
         var valueEnd = FindValueEnd(json, valueStart);
         return json[..valueStart] + serializedValue + json[valueEnd..];
+    }
+
+    public static string Remove(string json, string propertyName)
+    {
+        var propertyMatch = Regex.Match(json, $"\"{Regex.Escape(propertyName)}\"\\s*:");
+        if (!propertyMatch.Success)
+        {
+            return json;
+        }
+
+        var valueStart = propertyMatch.Index + propertyMatch.Length;
+        while (valueStart < json.Length && char.IsWhiteSpace(json[valueStart]))
+        {
+            valueStart++;
+        }
+
+        var valueEnd = FindValueEnd(json, valueStart);
+        var removeStart = propertyMatch.Index;
+        while (removeStart > 0 && json[removeStart - 1] is not '\r' and not '\n')
+        {
+            removeStart--;
+        }
+
+        var removeEnd = valueEnd;
+        while (removeEnd < json.Length && json[removeEnd] is ' ' or '\t')
+        {
+            removeEnd++;
+        }
+
+        if (removeEnd < json.Length && json[removeEnd] == ',')
+        {
+            removeEnd++;
+            if (removeEnd < json.Length && json[removeEnd] == '\r')
+            {
+                removeEnd++;
+            }
+
+            if (removeEnd < json.Length && json[removeEnd] == '\n')
+            {
+                removeEnd++;
+            }
+        }
+        else
+        {
+            var commaIndex = removeStart - 1;
+            while (commaIndex >= 0 && char.IsWhiteSpace(json[commaIndex]))
+            {
+                commaIndex--;
+            }
+
+            if (commaIndex >= 0 && json[commaIndex] == ',')
+            {
+                removeStart = commaIndex;
+            }
+        }
+
+        return json[..removeStart] + json[removeEnd..];
     }
 
     private static string InsertProperty(string json, string propertyName, string serializedValue)

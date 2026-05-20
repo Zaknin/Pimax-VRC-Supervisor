@@ -25,6 +25,26 @@
   // The L hotkey remains available as a fallback when OscGoesBrrrHotkeyEnabled is true.
   "OscGoesBrrrBleScannerEnabled": false,
 
+  // Enable the in-process OSC router.
+  // The router starts once before Broken Eye and VRCFaceTracking, forwards every OSC UDP packet unchanged,
+  // and is not restarted during Pimax reconnects or app restart cycles.
+  "OscRouterEnabled": false,
+
+  // Local UDP port the OSC router listens on at 127.0.0.1.
+  // If the endpoint is already in use, supervisor startup continues and Space can retry routing later.
+  "OscRouterReceivePort": 9001,
+
+  // OSC output routes. Each enabled route receives every packet VRChat sends to 127.0.0.1:OscRouterReceivePort.
+  // Apps should still send OSC directly to VRChat at 127.0.0.1:9000.
+  // If VRChat also discovers an app through OSCQuery, do not route to that same app receive port unless you want duplicate packets.
+  "OscRoutes": [
+    // {
+    //   "Name": "Example app",
+    //   "AppReceivePort": 9003,
+    //   "Enabled": true
+    // }
+  ],
+
   // Full path to Intiface. The OSCGoesBrrr workflow starts this app first.
   "IntifacePath": "%APPDATA%\\IntifaceCentral\\intiface_central.exe",
 
