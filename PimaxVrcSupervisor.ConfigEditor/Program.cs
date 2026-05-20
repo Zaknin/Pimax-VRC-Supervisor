@@ -345,52 +345,52 @@ internal sealed class ConfigEditorForm : Form
         {
             Name = "Enabled",
             HeaderText = "Enabled",
-            FillWeight = 8,
-            MinimumWidth = 80
+            FillWeight = 6,
+            MinimumWidth = 64
         });
         _baseStationsGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
             Name = "FriendlyName",
             HeaderText = "Friendly name",
-            FillWeight = 20,
-            MinimumWidth = 160
+            FillWeight = 16,
+            MinimumWidth = 130
         });
         _baseStationsGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
             Name = "Name",
             HeaderText = "BLE name",
-            FillWeight = 18,
-            MinimumWidth = 150
+            FillWeight = 14,
+            MinimumWidth = 120
         });
         _baseStationsGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
             Name = "BluetoothAddress",
             HeaderText = "Bluetooth address",
-            FillWeight = 18,
-            MinimumWidth = 150
+            FillWeight = 15,
+            MinimumWidth = 130
         });
         _baseStationsGrid.Columns.Add(new DataGridViewComboBoxColumn
         {
             Name = "Version",
             HeaderText = "Version",
             DataSource = Enum.GetNames<BaseStationVersion>(),
-            FillWeight = 10,
-            MinimumWidth = 100
+            FillWeight = 7,
+            MinimumWidth = 72
         });
         _baseStationsGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
             Name = "Id",
             HeaderText = "V1 ID",
-            FillWeight = 10,
-            MinimumWidth = 90
+            FillWeight = 7,
+            MinimumWidth = 70
         });
         _baseStationsGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
             Name = "State",
             HeaderText = "State",
             ReadOnly = true,
-            FillWeight = 10,
-            MinimumWidth = 100
+            FillWeight = 7,
+            MinimumWidth = 70
         });
         _baseStationsGrid.Columns.Add(new DataGridViewCheckBoxColumn
         {
@@ -404,8 +404,8 @@ internal sealed class ConfigEditorForm : Form
             HeaderText = "",
             Text = "Power On",
             UseColumnTextForButtonValue = true,
-            FillWeight = 10,
-            MinimumWidth = 95
+            FillWeight = 7,
+            MinimumWidth = 76
         });
         _baseStationsGrid.Columns.Add(new DataGridViewButtonColumn
         {
@@ -413,8 +413,8 @@ internal sealed class ConfigEditorForm : Form
             HeaderText = "",
             Text = "Sleep",
             UseColumnTextForButtonValue = true,
-            FillWeight = 8,
-            MinimumWidth = 80
+            FillWeight = 6,
+            MinimumWidth = 66
         });
         _baseStationsGrid.Columns.Add(new DataGridViewButtonColumn
         {
@@ -422,8 +422,8 @@ internal sealed class ConfigEditorForm : Form
             HeaderText = "",
             Text = "Standby",
             UseColumnTextForButtonValue = true,
-            FillWeight = 9,
-            MinimumWidth = 90
+            FillWeight = 7,
+            MinimumWidth = 76
         });
         _baseStationsGrid.Columns.Add(new DataGridViewButtonColumn
         {
@@ -431,8 +431,8 @@ internal sealed class ConfigEditorForm : Form
             HeaderText = "",
             Text = "Identify",
             UseColumnTextForButtonValue = true,
-            FillWeight = 9,
-            MinimumWidth = 90
+            FillWeight = 7,
+            MinimumWidth = 76
         });
         _baseStationsGrid.CellContentClick += OnBaseStationsGridCellContentClick;
         _baseStationsGrid.DefaultValuesNeeded += OnBaseStationsGridDefaultValuesNeeded;
