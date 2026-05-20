@@ -1,4 +1,7 @@
 {
+  // Friendly name shown in the config editor and supervisor startup banner.
+  "DisplayName": "Default",
+
   // Full path to Broken Eye. This app is started first.
   // If this path is missing or invalid, the supervisor opens a browse dialog and saves your selection here.
   "BrokenEyePath": "",

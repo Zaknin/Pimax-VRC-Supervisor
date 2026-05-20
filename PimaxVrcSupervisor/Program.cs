@@ -222,6 +222,10 @@ internal sealed class AppSupervisor
     {
         Console.WriteLine($"Pimax VRC Supervisor {AppVersion.Current}");
         Console.WriteLine("---------------------");
+        if (!string.IsNullOrWhiteSpace(_config.DisplayName))
+        {
+            Console.WriteLine($"Config: {_config.DisplayName}");
+        }
 
         if (!OperatingSystem.IsWindows())
         {
@@ -4413,6 +4417,7 @@ internal enum DisplayConfigPixelFormat : uint
 
 internal sealed class SupervisorConfig
 {
+    public string DisplayName { get; init; } = "";
     public string BrokenEyePath { get; set; } = "";
     public string VrcFaceTrackingPath { get; set; } = "";
     public string IntifacePath { get; set; } = "";

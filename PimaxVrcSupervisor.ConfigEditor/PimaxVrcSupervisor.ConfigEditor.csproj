@@ -21,6 +21,7 @@
     <None Include="..\PimaxVrcSupervisor\supervisor.config.json" Link="supervisor.config.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <EmbeddedResource Include="..\PimaxVrcSupervisor\supervisor.config.json" LogicalName="PimaxVrcSupervisor.ConfigEditor.Defaults.supervisor.config.json" />
     <None Include="..\README.md" Link="README.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

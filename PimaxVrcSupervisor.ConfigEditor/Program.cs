@@ -32,6 +32,10 @@ internal sealed class ConfigEditorForm : Form
     private const int MinimumGridVisibleRows = 10;
     private const int CompactNumberInputWidth = 104;
     private const int PathStatusColumnWidth = 230;
+    private const int MinimumConfigSelectorWidth = 180;
+    private const int MaximumConfigSelectorWidth = 620;
+    private const string DefaultConfigFileName = "supervisor.config.json";
+    private const string DefaultConfigResourceName = "PimaxVrcSupervisor.ConfigEditor.Defaults.supervisor.config.json";
     private const string DefaultVrcFaceTrackingDirectory = @"C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking";
     private static readonly string DefaultIntifacePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -44,7 +48,9 @@ internal sealed class ConfigEditorForm : Form
         "OscGoesBrrr.exe");
     private static readonly string[][] DefaultLovenseDetectors = [["Lovense"], ["LVS-"]];
 
+    private readonly ComboBox _configSelectorComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _configPathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
+    private readonly TextBox _displayNameTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _brokenEyePathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _vrcFaceTrackingPathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _intifacePathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
@@ -146,6 +152,7 @@ internal sealed class ConfigEditorForm : Form
     private bool _hasUnsavedChanges;
     private bool _rawJsonHasUnappliedChanges;
     private bool _suppressDirtyTracking;
+    private bool _suppressConfigSelectorChange;
 
     public ConfigEditorForm(string? requestedConfigPath)
     {
@@ -172,8 +179,10 @@ internal sealed class ConfigEditorForm : Form
         }
         else
         {
-            _configPathTextBox.Text = Path.Combine(AppContext.BaseDirectory, "supervisor.config.json");
-            SetPersistentStatus("Ready");
+            var defaultConfigPath = GetDefaultConfigPath();
+            EnsureDefaultConfigFile(defaultConfigPath);
+            _configPathTextBox.Text = defaultConfigPath;
+            LoadConfig(defaultConfigPath);
         }
     }
 
@@ -243,7 +252,7 @@ internal sealed class ConfigEditorForm : Form
         var panel = new Panel
         {
             Dock = DockStyle.Top,
-            Height = 58,
+            Height = 112,
             Padding = new Padding(0, 6, 0, 12)
         };
 
@@ -251,16 +260,39 @@ internal sealed class ConfigEditorForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 4,
-            RowCount = 1,
+            RowCount = 3,
             GrowStyle = TableLayoutPanelGrowStyle.FixedSize,
             Margin = new Padding(0),
             Padding = new Padding(0)
         };
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        var configSelectorLabel = new Label { Text = "Config", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, 10, 0) };
+        _configSelectorComboBox.Dock = DockStyle.None;
+        _configSelectorComboBox.Anchor = AnchorStyles.Left;
+        _configSelectorComboBox.Width = MinimumConfigSelectorWidth;
+        _configSelectorComboBox.Margin = new Padding(0, 2, 10, 4);
+        _configSelectorComboBox.SelectedIndexChanged += (_, _) => LoadSelectedConfigFromDropdown();
+        _toolTips.SetToolTip(configSelectorLabel, "Named configs in the app folder.");
+        _toolTips.SetToolTip(_configSelectorComboBox, "Select a named *.config.json file from the app folder.");
+
+        var restoreBackupButton = CreateButton("Restore Backup...", autoSize: false, width: 126, height: 28);
+        restoreBackupButton.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        restoreBackupButton.Margin = new Padding(0, 0, 6, 4);
+        restoreBackupButton.Click += (_, _) => RestoreBackup();
+        _toolTips.SetToolTip(restoreBackupButton, "Restore a selected .bak file into the default supervisor.config.json.");
+
+        var deleteButton = CreateButton("Delete", autoSize: false, width: 86, height: 28);
+        deleteButton.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        deleteButton.Margin = new Padding(0, 0, 0, 4);
+        deleteButton.Click += (_, _) => DeleteSelectedConfig();
+        _toolTips.SetToolTip(deleteButton, "Delete the selected named config file from the app folder.");
 
         var browseButton = CreateButton("Browse...", autoSize: false, width: 96, height: 28);
         browseButton.Anchor = AnchorStyles.Left | AnchorStyles.Right;
@@ -274,15 +306,29 @@ internal sealed class ConfigEditorForm : Form
 
         var configPathLabel = new Label { Text = "Config file", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, 10, 0) };
         _configPathTextBox.Dock = DockStyle.Fill;
-        _configPathTextBox.Margin = new Padding(0, 2, 10, 0);
-        browseButton.Margin = new Padding(0, 0, 6, 0);
-        reloadButton.Margin = new Padding(0);
+        _configPathTextBox.Margin = new Padding(0, 2, 10, 4);
+        browseButton.Margin = new Padding(0, 0, 6, 4);
+        reloadButton.Margin = new Padding(0, 0, 0, 4);
         _toolTips.SetToolTip(configPathLabel, "The JSON file that will be loaded and saved.");
         _toolTips.SetToolTip(_configPathTextBox, "Usually this is supervisor.config.json next to the supervisor exe.");
-        layout.Controls.Add(configPathLabel, 0, 0);
-        layout.Controls.Add(_configPathTextBox, 1, 0);
-        layout.Controls.Add(browseButton, 2, 0);
-        layout.Controls.Add(reloadButton, 3, 0);
+
+        var displayNameLabel = new Label { Text = "Display name", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, 10, 0) };
+        _displayNameTextBox.Dock = DockStyle.Fill;
+        _displayNameTextBox.Margin = new Padding(0, 2, 10, 0);
+        _toolTips.SetToolTip(displayNameLabel, "Friendly name saved as DisplayName in the config JSON.");
+        _toolTips.SetToolTip(_displayNameTextBox, "Friendly name shown in the editor config list and console startup.");
+
+        layout.Controls.Add(configSelectorLabel, 0, 0);
+        layout.Controls.Add(_configSelectorComboBox, 1, 0);
+        layout.Controls.Add(restoreBackupButton, 2, 0);
+        layout.Controls.Add(deleteButton, 3, 0);
+        layout.Controls.Add(configPathLabel, 0, 1);
+        layout.Controls.Add(_configPathTextBox, 1, 1);
+        layout.Controls.Add(browseButton, 2, 1);
+        layout.Controls.Add(reloadButton, 3, 1);
+        layout.Controls.Add(displayNameLabel, 0, 2);
+        layout.Controls.Add(_displayNameTextBox, 1, 2);
+        layout.SetColumnSpan(_displayNameTextBox, 3);
         panel.Controls.Add(layout);
         return panel;
     }
@@ -1819,19 +1865,50 @@ internal sealed class ConfigEditorForm : Form
 
     private void AddFolderValidationRow(TableLayoutPanel layout, string label, TextBox textBox, string tooltip)
     {
+        var browseButton = CreateButton("Browse...", autoSize: false, width: 104, height: 27);
+        browseButton.Click += (_, _) =>
+        {
+            using var dialog = new FolderBrowserDialog
+            {
+                Description = "Select " + label,
+                UseDescriptionForTitle = true
+            };
+
+            var expandedTextPath = ExpandPath(textBox.Text);
+            if (Directory.Exists(expandedTextPath))
+            {
+                dialog.SelectedPath = expandedTextPath;
+            }
+
+            if (dialog.ShowDialog(this) == DialogResult.OK)
+            {
+                textBox.Text = dialog.SelectedPath;
+            }
+        };
+
         var labelControl = new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left };
         var statusLabel = CreatePathStatusLabel();
+        var extraPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0)
+        };
+        extraPanel.Controls.Add(browseButton);
+        extraPanel.Controls.Add(statusLabel);
 
         void UpdatePathStatus()
         {
             var currentTooltip = BuildPathTooltip(tooltip, textBox.Text, null);
             _toolTips.SetToolTip(labelControl, currentTooltip);
             _toolTips.SetToolTip(textBox, currentTooltip);
+            _toolTips.SetToolTip(browseButton, currentTooltip);
             _toolTips.SetToolTip(statusLabel, currentTooltip);
             UpdatePathIndicator(statusLabel, textBox.Text, Directory.Exists);
         }
 
-        AddControlRow(layout, labelControl, textBox, statusLabel, tooltip);
+        AddControlRow(layout, labelControl, textBox, extraPanel, tooltip);
         textBox.TextChanged += (_, _) => UpdatePathStatus();
         _pathIndicatorRefreshers.Add(UpdatePathStatus);
         UpdatePathStatus();
@@ -2076,6 +2153,226 @@ internal sealed class ConfigEditorForm : Form
         }
     }
 
+    private static string GetDefaultConfigPath()
+        => Path.Combine(AppContext.BaseDirectory, DefaultConfigFileName);
+
+    private static string GetDefaultConfigTemplateJson()
+    {
+        using var stream = typeof(ConfigEditorForm).Assembly.GetManifestResourceStream(DefaultConfigResourceName)
+            ?? throw new InvalidOperationException("The default supervisor config template is not embedded in the config editor build.");
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var json = reader.ReadToEnd();
+        return string.IsNullOrWhiteSpace(json) ? "{\r\n}\r\n" : json;
+    }
+
+    private static void EnsureDefaultConfigFile(string path)
+    {
+        if (File.Exists(path))
+        {
+            return;
+        }
+
+        WriteDefaultConfigFile(path);
+    }
+
+    private static void WriteDefaultConfigFile(string path)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        File.WriteAllText(path, GetDefaultConfigTemplateJson(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
+    private void RefreshConfigSelector()
+    {
+        _suppressConfigSelectorChange = true;
+        var beganUpdate = false;
+        try
+        {
+            var currentPath = TryGetFullPath(_configPathTextBox.Text.Trim());
+            var items = GetConfigProfileItems().ToArray();
+
+            _configSelectorComboBox.BeginUpdate();
+            beganUpdate = true;
+            _configSelectorComboBox.Items.Clear();
+            foreach (var item in items)
+            {
+                _configSelectorComboBox.Items.Add(item);
+            }
+
+            var selectedIndex = currentPath is null
+                ? -1
+                : Array.FindIndex(items, item => PathsEqual(item.Path, currentPath));
+            UpdateConfigSelectorWidth(items);
+            _configSelectorComboBox.SelectedIndex = selectedIndex;
+            _configSelectorComboBox.Enabled = items.Length > 0;
+            _configSelectorComboBox.EndUpdate();
+            beganUpdate = false;
+            UpdateConfigSelectorTooltip();
+        }
+        catch
+        {
+            if (beganUpdate)
+            {
+                _configSelectorComboBox.EndUpdate();
+            }
+            _configSelectorComboBox.Items.Clear();
+            _configSelectorComboBox.Enabled = false;
+            _configSelectorComboBox.Width = MinimumConfigSelectorWidth;
+            _toolTips.SetToolTip(_configSelectorComboBox, "Could not read named configs from the app folder.");
+        }
+        finally
+        {
+            _suppressConfigSelectorChange = false;
+        }
+    }
+
+    private void UpdateConfigSelectorWidth(IReadOnlyCollection<ConfigProfileItem> items)
+    {
+        var widestText = items.Count == 0
+            ? MinimumConfigSelectorWidth
+            : items.Max(item => TextRenderer.MeasureText(item.DisplayName, _configSelectorComboBox.Font).Width);
+        var desiredWidth = widestText + SystemInformation.VerticalScrollBarWidth + 36;
+        var availableWidth = Math.Max(MinimumConfigSelectorWidth, ClientSize.Width - 430);
+        _configSelectorComboBox.Width = Math.Clamp(
+            desiredWidth,
+            MinimumConfigSelectorWidth,
+            Math.Min(MaximumConfigSelectorWidth, availableWidth));
+        _configSelectorComboBox.DropDownWidth = Math.Max(_configSelectorComboBox.Width, desiredWidth);
+    }
+
+    private IEnumerable<ConfigProfileItem> GetConfigProfileItems()
+    {
+        var directory = AppContext.BaseDirectory;
+        if (!Directory.Exists(directory))
+        {
+            return [];
+        }
+
+        return Directory
+            .EnumerateFiles(directory, "*.config.json", SearchOption.TopDirectoryOnly)
+            .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
+            .Select(path =>
+            {
+                var fileName = Path.GetFileName(path);
+                var displayName = ReadConfigDisplayName(path);
+                return new ConfigProfileItem(
+                    string.IsNullOrWhiteSpace(displayName) ? fileName : displayName.Trim(),
+                    fileName,
+                    Path.GetFullPath(path));
+            })
+            .ToArray();
+    }
+
+    private static string ReadConfigDisplayName(string path)
+    {
+        try
+        {
+            return GetString(ParseJson(File.ReadAllText(path)), "DisplayName");
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private void LoadSelectedConfigFromDropdown()
+    {
+        if (_suppressConfigSelectorChange || _configSelectorComboBox.SelectedItem is not ConfigProfileItem item)
+        {
+            return;
+        }
+
+        var currentPath = TryGetFullPath(_configPathTextBox.Text.Trim());
+        if (currentPath is not null && PathsEqual(currentPath, item.Path))
+        {
+            UpdateConfigSelectorTooltip();
+            return;
+        }
+
+        if (!ConfirmUnsavedChangesBefore("loading another config"))
+        {
+            RefreshConfigSelector();
+            return;
+        }
+
+        _configPathTextBox.Text = item.Path;
+        LoadConfig(item.Path);
+    }
+
+    private void DeleteSelectedConfig()
+    {
+        if (_configSelectorComboBox.SelectedItem is not ConfigProfileItem item)
+        {
+            ShowThemedMessageBox("Select a config to delete.", "Delete config", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            SetStatus("No config selected.");
+            return;
+        }
+
+        var result = ShowThemedMessageBox(
+            "Do you really wish to delete the config and its name?",
+            "Delete config",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+        if (result != DialogResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            var deletedCurrentConfig = PathsEqual(_configPathTextBox.Text.Trim(), item.Path);
+            File.Delete(item.Path);
+
+            if (deletedCurrentConfig)
+            {
+                var nextConfig = GetConfigProfileItems().FirstOrDefault(config => !PathsEqual(config.Path, item.Path));
+                if (nextConfig is not null)
+                {
+                    _configPathTextBox.Text = nextConfig.Path;
+                    LoadConfig(nextConfig.Path);
+                }
+                else
+                {
+                    var defaultConfigPath = GetDefaultConfigPath();
+                    WriteDefaultConfigFile(defaultConfigPath);
+                    _configPathTextBox.Text = defaultConfigPath;
+                    LoadConfig(defaultConfigPath);
+                }
+            }
+            else
+            {
+                RefreshConfigSelector();
+            }
+
+            SetTemporaryStatus($"Deleted config {item.FileName}.");
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessageBox(ex.Message, "Could not delete config", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus("Delete config failed.");
+        }
+    }
+
+    private void UpdateConfigSelectorTooltip()
+    {
+        var tooltip = _configSelectorComboBox.SelectedItem is ConfigProfileItem item
+            ? $"Config: {item.DisplayName}\r\nFile: {item.FileName}\r\nPath:\r\n{item.Path}"
+            : "Select a named *.config.json file from the app folder.";
+        _toolTips.SetToolTip(_configSelectorComboBox, tooltip);
+    }
+
+    private static string GetFallbackDisplayName(string path)
+    {
+        var fileName = string.IsNullOrWhiteSpace(path) ? "" : Path.GetFileName(path);
+        return string.IsNullOrWhiteSpace(fileName) ? "supervisor.config.json" : fileName;
+    }
+
+    private static bool PathsEqual(string first, string second)
+        => string.Equals(
+            TryGetFullPath(first) ?? first,
+            TryGetFullPath(second) ?? second,
+            StringComparison.OrdinalIgnoreCase);
+
     private void BrowseConfig()
     {
         if (!ConfirmUnsavedChangesBefore("loading another config"))
@@ -2129,6 +2426,132 @@ internal sealed class ConfigEditorForm : Form
             _configPathTextBox.Text = dialog.FileName;
             SaveConfig();
         }
+    }
+
+    private void RestoreBackup()
+    {
+        var backups = GetBackupFileItems().ToArray();
+        if (backups.Length == 0)
+        {
+            ShowThemedMessageBox("No .bak backups were found in the app folder.", "Restore backup", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            SetStatus("No backups found.");
+            return;
+        }
+
+        if (!ConfirmUnsavedChangesBefore("restoring a backup"))
+        {
+            return;
+        }
+
+        var selectedBackup = ShowBackupSelectionDialog(backups);
+        if (selectedBackup is null)
+        {
+            return;
+        }
+
+        var defaultConfigPath = Path.Combine(AppContext.BaseDirectory, "supervisor.config.json");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(defaultConfigPath)!);
+            var preRestoreBackupPath = CreateConfigBackup(defaultConfigPath);
+            File.Copy(selectedBackup.Path, defaultConfigPath, overwrite: true);
+            _configPathTextBox.Text = defaultConfigPath;
+            LoadConfig(defaultConfigPath);
+            var tooltip = preRestoreBackupPath is null
+                ? "Restored from:\r\n" + selectedBackup.Path
+                : "Restored from:\r\n" + selectedBackup.Path + "\r\n\r\nPrevious default config backup:\r\n" + preRestoreBackupPath;
+            SetTemporaryStatus("Restored backup to supervisor.config.json.", tooltip);
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessageBox(ex.Message, "Could not restore backup", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus("Backup restore failed.");
+        }
+    }
+
+    private IEnumerable<BackupFileItem> GetBackupFileItems()
+    {
+        var directory = AppContext.BaseDirectory;
+        if (!Directory.Exists(directory))
+        {
+            return [];
+        }
+
+        return Directory
+            .EnumerateFiles(directory, "*.bak", SearchOption.TopDirectoryOnly)
+            .Select(path => new BackupFileItem(
+                Path.GetFileName(path),
+                Path.GetFullPath(path),
+                File.GetLastWriteTime(path)))
+            .OrderByDescending(item => item.LastWriteTime)
+            .ThenBy(item => item.FileName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private BackupFileItem? ShowBackupSelectionDialog(IReadOnlyList<BackupFileItem> backups)
+    {
+        using var dialog = new Form
+        {
+            Text = "Restore backup",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ClientSize = new Size(560, 152),
+            ShowInTaskbar = false
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 3,
+            Padding = new Padding(12)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var label = CreateMutedLabel("Choose a backup to restore into the app folder's supervisor.config.json.");
+        label.Margin = new Padding(0, 0, 0, 8);
+
+        var comboBox = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Dock = DockStyle.Top,
+            Margin = new Padding(0, 0, 0, 12)
+        };
+        foreach (var backup in backups)
+        {
+            comboBox.Items.Add(backup);
+        }
+        comboBox.SelectedIndex = 0;
+
+        var buttons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Bottom,
+            FlowDirection = FlowDirection.RightToLeft,
+            Height = 40,
+            WrapContents = false
+        };
+        var restoreButton = CreateButton("Restore", autoSize: false, width: 92, dialogResult: DialogResult.OK);
+        restoreButton.Tag = "Primary";
+        var cancelButton = CreateButton("Cancel", autoSize: false, width: 86, dialogResult: DialogResult.Cancel);
+        buttons.Controls.Add(restoreButton);
+        buttons.Controls.Add(cancelButton);
+
+        root.Controls.Add(label, 0, 0);
+        root.Controls.Add(comboBox, 0, 1);
+        root.Controls.Add(buttons, 0, 2);
+        dialog.Controls.Add(root);
+        dialog.AcceptButton = restoreButton;
+        dialog.CancelButton = cancelButton;
+        ApplyThemeTo(dialog);
+        WindowsTitleBar.ApplyTheme(dialog.Handle, _theme.IsDark);
+
+        return dialog.ShowDialog(this) == DialogResult.OK
+            ? comboBox.SelectedItem as BackupFileItem
+            : null;
     }
 
     private void LaunchSupervisor()
@@ -2207,10 +2630,10 @@ internal sealed class ConfigEditorForm : Form
             _suppressDirtyTracking = true;
             if (!File.Exists(path))
             {
-                _loadedJson = "{\r\n}\r\n";
+                _loadedJson = GetDefaultConfigTemplateJson();
                 _appliedRawJson = _loadedJson;
                 _rawJsonTextBox.Text = _loadedJson;
-                PopulateControls(null);
+                PopulateControls(ParseJson(_loadedJson));
                 _loadedJson = BuildCurrentJson();
                 _appliedRawJson = _loadedJson;
                 _rawJsonTextBox.Text = _loadedJson;
@@ -2240,12 +2663,14 @@ internal sealed class ConfigEditorForm : Form
         {
             _suppressDirtyTracking = false;
             ValidateRawJsonText(showStatus: false);
+            RefreshConfigSelector();
             UpdateWindowTitle();
         }
     }
 
     private void PopulateControls(JsonNode? node)
     {
+        _displayNameTextBox.Text = GetStringOrDefault(node, "DisplayName", GetFallbackDisplayName(_configPathTextBox.Text));
         _brokenEyePathTextBox.Text = GetString(node, "BrokenEyePath");
         _vrcFaceTrackingPathTextBox.Text = GetString(node, "VrcFaceTrackingPath");
         _intifacePathTextBox.Text = GetStringOrDefault(node, "IntifacePath", DefaultIntifacePath);
@@ -2331,6 +2756,7 @@ internal sealed class ConfigEditorForm : Form
             _rawJsonTextBox.Text = json;
             _suppressDirtyTracking = false;
             _editorState.LastConfigPath = Path.GetFullPath(path);
+            RefreshConfigSelector();
             var savedStatus = backupPath is null
                 ? $"Saved config at {DateTime.Now:HH:mm}."
                 : $"Saved config and created backup at {DateTime.Now:HH:mm}.";
@@ -2469,6 +2895,7 @@ internal sealed class ConfigEditorForm : Form
     private string ApplyControlValues(string baseJson)
     {
         var json = string.IsNullOrWhiteSpace(baseJson) ? "{\r\n}\r\n" : baseJson;
+        json = JsonPropertyEditor.Replace(json, "DisplayName", Serialize(_displayNameTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "BrokenEyePath", Serialize(_brokenEyePathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "VrcFaceTrackingPath", Serialize(_vrcFaceTrackingPathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "IntifacePath", Serialize(_intifacePathTextBox.Text.Trim()));
@@ -3342,7 +3769,7 @@ internal sealed class ConfigEditorForm : Form
             case NumericUpDown input:
                 input.ValueChanged += (_, _) => MarkDirty();
                 break;
-            case ComboBox comboBox:
+            case ComboBox comboBox when !ReferenceEquals(comboBox, _configSelectorComboBox):
                 comboBox.SelectedIndexChanged += (_, _) => MarkDirty();
                 break;
             case DataGridView grid:
@@ -3539,9 +3966,9 @@ internal sealed class ConfigEditorForm : Form
         try
         {
             _suppressDirtyTracking = true;
-            _appliedRawJson = "{\r\n}\r\n";
+            _appliedRawJson = GetDefaultConfigTemplateJson();
             _rawJsonTextBox.Text = _appliedRawJson;
-            PopulateControls(null);
+            PopulateControls(ParseJson(_appliedRawJson));
             _rawJsonHasUnappliedChanges = false;
         }
         finally
@@ -4351,6 +4778,16 @@ internal enum LaunchUnsavedChoice
     SaveAndLaunch,
     LaunchWithoutSaving,
     Cancel
+}
+
+internal sealed record ConfigProfileItem(string DisplayName, string FileName, string Path)
+{
+    public override string ToString() => DisplayName;
+}
+
+internal sealed record BackupFileItem(string FileName, string Path, DateTime LastWriteTime)
+{
+    public override string ToString() => $"{FileName} ({LastWriteTime:yyyy-MM-dd HH:mm})";
 }
 
 internal sealed class ValidationResult
