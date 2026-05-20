@@ -1,13 +1,13 @@
 # Pimax VRC Supervisor
 
-![Version](https://img.shields.io/badge/version-1.0.9-2563eb)
+![Version](https://img.shields.io/badge/version-1.1.1-2563eb)
 ![Platform](https://img.shields.io/badge/platform-Windows-0f766e)
 ![Runtime](https://img.shields.io/badge/.NET-9.0-512bd4)
 ![Release](https://img.shields.io/badge/release-signed%20%2B%20attested-16a34a)
 
 A small Windows companion app for Pimax Crystal and VRChat sessions. It waits for the headset, starts the tools you rely on, watches for device reconnects, and cleans everything up when VRChat is done.
 
-The current release is **v1.0.9**.
+The current release is **v1.1.1**.
 
 ## Why It Exists
 
@@ -17,6 +17,7 @@ Pimax + VRChat setups can be fragile when USB devices blink, the runtime reconne
 - launch Broken Eye, then VRCFaceTracking
 - restart the right apps after headset or mouth tracker reconnects
 - optionally manage secondary monitors during VR
+- optionally manage SteamVR base-station power through native Bluetooth LE
 - optionally auto-launch when VRChat starts while SteamVR is running
 - optionally start Intiface and OscGoesBrrr for Lovense workflows
 
@@ -28,7 +29,7 @@ Pimax + VRChat setups can be fragile when USB devices blink, the runtime reconne
 | `PimaxVrcSupervisorConfigEditor.exe` | GUI editor for `supervisor.config.json`. |
 | `supervisor.config.json` | Documented configuration file copied next to the executables. |
 
-Both executables are stamped with version `1.0.9`.
+Both executables are stamped with version `1.1.1`.
 
 ## Features
 
@@ -57,6 +58,18 @@ Both executables are stamped with version `1.0.9`.
 - Optionally waits for SteamVR `vrserver.exe` before restoring monitors.
 - Closes Broken Eye, VRCFaceTracking, OscGoesBrrr workflow apps, and configured auto-launch apps.
 - Uses graceful shutdown first, then force-closes after the configured timeout.
+
+### Base Station Power
+
+- Optional native Bluetooth LE control for SteamVR Base Station 1.0 and 2.0.
+- Config Editor can scan for stations, rename them, enable/disable rows, add manual rows, and send Power On, Sleep, Standby, and Identify test commands.
+- Supervisor powers enabled stations on only after the Pimax headset is connected and SteamVR `vrserver.exe` is running.
+- Base stations are not restarted during Pimax, mouth tracker, or other device reconnect handling.
+- When OpenVR is available, startup checks SteamVR tracking 10 seconds after each wake cycle and retries up to 5 cycles until all enabled base stations are active.
+- If OpenVR is unavailable or cannot be queried, startup sends two normal wake passes; Base Station 1.0 and stations whose firmware does not support power-state reads get a third wake pass 30 seconds later.
+- Base Station 2.0 firmware with readable state is checked before wake so already-awake stations are not power-cycled.
+- Firmware that reports power-state reads as unsupported is cached per station as `PowerStateReadUnsupported` to speed later launches. Use Config Editor **Refresh State** to manually retry detection.
+- Session cleanup sends the configured Sleep or Standby command. Console-window close also starts a detached base-station cleanup helper so slow BLE shutdown can finish after the console closes.
 
 ### Monitor Management
 
@@ -96,7 +109,7 @@ Both executables are stamped with version `1.0.9`.
 
 ## Install
 
-1. Download `PimaxVrcSupervisor-v1.0.9.zip` from the GitHub release.
+1. Download `PimaxVrcSupervisor-v1.1.1.zip` from the GitHub release.
 2. Extract it somewhere writable, for example:
 
 ```text
@@ -132,6 +145,7 @@ Run:
 The editor includes tabs for:
 
 - **Basics**: main executable paths and first-run choices
+- **Base Stations**: scan, rename, enable, test, identify, and power SteamVR base stations
 - **Auto Launch**: extra apps to launch with the VR session
 - **OSCGoesBrrr**: Intiface, OscGoesBrrr, hotkey, BLE scanner, and Lovense rules
 - **Processes**: watched process names and cleanup targets
@@ -153,6 +167,9 @@ The release includes a commented `supervisor.config.json`. Important settings:
 | `TurnOffSecondaryMonitors` | empty | Empty means ask on first run; true enables monitor layout handling. |
 | `AutoLaunchScheduledTask` | empty | Empty means ask on first setup; true creates/repairs the task. |
 | `AutoLaunchApps` | `[]` | Extra apps started after Broken Eye and VRCFaceTracking. |
+| `BaseStationsEnabled` | `false` | Enables native SteamVR base-station power automation. |
+| `BaseStationPowerDownMode` | `Sleep` | Cleanup command: `Sleep` or `Standby` for Base Station 2.0. Base Station 1.0 falls back to sleep. |
+| `BaseStations` | `[]` | Configured base stations. Use the editor to scan and manage these rows. |
 | `OscGoesBrrrEnabled` | `false` | Enables Intiface/OscGoesBrrr workflow support. |
 | `OscGoesBrrrHotkeyEnabled` | `true` | Press `L` to launch the workflow. |
 | `OscGoesBrrrBleScannerEnabled` | `false` | Enables Lovense BLE advertisement scanning. |
@@ -178,6 +195,26 @@ Example extra app:
 
 Set `RestartOnPimaxReconnect` to `false` for apps that should stay running during the Pimax reconnect restart cycle. They will still be closed when the VRChat session ends.
 
+Example Base Station 2.0 row:
+
+```json
+"BaseStationsEnabled": true,
+"BaseStationPowerDownMode": "Standby",
+"BaseStations": [
+  {
+    "FriendlyName": "Front left",
+    "Name": "LHB-00000000",
+    "BluetoothAddress": "AA:BB:CC:DD:EE:FF",
+    "Version": "V2",
+    "Enabled": true,
+    "Id": "",
+    "PowerStateReadUnsupported": true
+  }
+]
+```
+
+`PowerStateReadUnsupported` is set automatically when a station or firmware does not support reading power state. The supervisor skips future state reads for that station; Config Editor **Refresh State** can retry detection manually.
+
 Example OscGoesBrrr workflow:
 
 ```json
@@ -199,22 +236,22 @@ GitHub Actions publishes signed and attested release assets when a `v*` tag is p
 
 Expected release files:
 
-- `PimaxVrcSupervisor-v1.0.9.zip`
-- `PimaxVrcSupervisor-v1.0.9.zip.sha256`
-- `PimaxVrcSupervisor-v1.0.9.zip.sigstore.json`
+- `PimaxVrcSupervisor-v1.1.1.zip`
+- `PimaxVrcSupervisor-v1.1.1.zip.sha256`
+- `PimaxVrcSupervisor-v1.1.1.zip.sigstore.json`
 
 Verify the checksum:
 
 ```powershell
-Get-FileHash .\PimaxVrcSupervisor-v1.0.9.zip -Algorithm SHA256
-Get-Content .\PimaxVrcSupervisor-v1.0.9.zip.sha256
+Get-FileHash .\PimaxVrcSupervisor-v1.1.1.zip -Algorithm SHA256
+Get-Content .\PimaxVrcSupervisor-v1.1.1.zip.sha256
 ```
 
 Verify the Sigstore bundle with cosign:
 
 ```powershell
-cosign verify-blob .\PimaxVrcSupervisor-v1.0.9.zip `
-  --bundle .\PimaxVrcSupervisor-v1.0.9.zip.sigstore.json `
+cosign verify-blob .\PimaxVrcSupervisor-v1.1.1.zip `
+  --bundle .\PimaxVrcSupervisor-v1.1.1.zip.sigstore.json `
   --certificate-identity-regexp "^https://github.com/.+/.+/.github/workflows/release.yml@refs/(heads|tags)/.+$" `
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 ```
@@ -226,8 +263,8 @@ Sigstore verification proves the zip was signed by the repository workflow and r
 Install the .NET 9 SDK, then run:
 
 ```powershell
-dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.9
-dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.0.9
+dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.1.1
+dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.1.1
 ```
 
 The output folder will contain both executables, the config file, and this README.
@@ -241,6 +278,9 @@ The output folder will contain both executables, the config file, and this READM
 | Reconnects are not detected | Confirm `PimaxDetectors`, `UsePimaxServiceLogReconnectDetector`, and the PiService log directory. |
 | Mouth tracker reconnects do nothing | Set `MouthTrackerUser` to `true` and verify `MouthTrackerDetectors`. |
 | Monitors are not restored | Let SteamVR fully exit; the supervisor waits for `vrserver.exe` before restoring when monitor handling is enabled. |
+| Base stations do not scan | Confirm Windows Bluetooth LE is enabled and try the Base Stations tab **Scan** button again. Add a manual row if Windows discovery exposes the address elsewhere. |
+| Base stations wake slowly | Keep `PowerStateReadUnsupported` enabled for unsupported firmware. When OpenVR is available, SteamVR tracking can stop retries early; otherwise the supervisor sends a third delayed wake pass only to V1/unsupported stations. |
+| Base stations stay on after console X | Use the latest release; console close starts a detached helper that sends the configured Sleep/Standby command after the main console exits. |
 | OscGoesBrrr does not start | Check `OscGoesBrrrEnabled`, the Intiface/OscGoesBrrr paths, and whether the hotkey or BLE scanner mode is enabled. |
 
 ## Notes

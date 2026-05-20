@@ -73,6 +73,36 @@
   // SteamVR server process names. After VRChat exits, monitors are restored only after these processes are gone.
   "SteamVrServerProcessNames": [ "vrserver" ],
 
+  // Enable SteamVR base station power automation.
+  // Base stations are powered on only once after SteamVR server is running and the Pimax headset is connected.
+  // They are not restarted when Pimax or other devices reconnect.
+  // When OpenVR is available, startup checks SteamVR tracking 10 seconds after each wake cycle and retries up to 5 cycles until all enabled base stations are active.
+  // If OpenVR is unavailable, wake pass 1 starts before managed apps; pass 2 runs after managed apps; V1/unsupported stations get pass 3 after 30 seconds.
+  // After VRChat exits, the supervisor waits for SteamVR server to close before sending the selected power-down command.
+  "BaseStationsEnabled": false,
+
+  // Power-down command sent after VRChat and SteamVR have both closed.
+  // Sleep works for Base Station 1.0 and 2.0. Standby is used only for Base Station 2.0; Base Station 1.0 falls back to sleep.
+  "BaseStationPowerDownMode": "Sleep",
+
+  // SteamVR base stations to manage.
+  // Use the config editor's Base Stations tab to scan, rename, and test commands.
+  // FriendlyName is only a user-facing alias; Name and BluetoothAddress keep the actual BLE identity visible.
+  // Base Station 1.0 requires Id: the 8-character ID printed on the back label.
+  // PowerStateReadUnsupported is set automatically when the station or firmware cannot report power state.
+  // When true, the supervisor skips state reads for faster startup; use Config Editor Refresh State to retry manually.
+  "BaseStations": [
+    // {
+    //   "FriendlyName": "Front left",
+    //   "Name": "LHB-00000000",
+    //   "BluetoothAddress": "AA:BB:CC:DD:EE:FF",
+    //   "Version": "V2",
+    //   "Enabled": true,
+    //   "Id": "",
+    //   "PowerStateReadUnsupported": false
+    // }
+  ],
+
   // Set to true if you use a Vive face/mouth tracker exposed as HTC Multimedia Camera.
   // Set to false to ignore all mouth-tracker detection and VRCFaceTracking-only restart logic.
   // Leave empty to show a Yes/No dialog on first run; the answer is saved here as true or false.
