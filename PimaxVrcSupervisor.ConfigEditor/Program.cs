@@ -27,6 +27,7 @@ internal static class Program
 internal sealed class ConfigEditorForm : Form
 {
     private static readonly string BaseWindowTitle = $"Pimax VRC Supervisor Config Editor {AppVersion.Current}";
+    private const int TemporaryStatusMilliseconds = 15000;
     private const string DefaultVrcFaceTrackingDirectory = @"C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking";
     private static readonly string DefaultIntifacePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -113,6 +114,8 @@ internal sealed class ConfigEditorForm : Form
     private readonly TextBox _rawJsonTextBox = CreateMultilineTextBox(readOnly: false);
     private readonly Label _rawJsonValidationLabel = new() { AutoSize = true, Padding = new Padding(0, 4, 0, 0) };
     private readonly Label _statusLabel = new() { AutoSize = true };
+    private readonly ThemedTabHost _tabs = new() { Dock = DockStyle.Fill };
+    private readonly System.Windows.Forms.Timer _statusTimer = new() { Interval = TemporaryStatusMilliseconds };
     private readonly ToolTip _toolTips = new()
     {
         AutoPopDelay = 12000,
@@ -123,9 +126,12 @@ internal sealed class ConfigEditorForm : Form
     private readonly Dictionary<string, NumericUpDown> _numberInputs = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _numberLabels = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _numberUnits = new(StringComparer.Ordinal);
+    private readonly List<Action> _pathIndicatorRefreshers = [];
+    private readonly EditorState _editorState = EditorState.Load();
     private AppTheme _theme = AppTheme.Light;
     private string _loadedJson = "{\r\n}\r\n";
     private string _appliedRawJson = "{\r\n}\r\n";
+    private string _persistentStatus = "";
     private bool _hasUnsavedChanges;
     private bool _rawJsonHasUnappliedChanges;
     private bool _suppressDirtyTracking;
@@ -137,14 +143,17 @@ internal sealed class ConfigEditorForm : Form
         MinimumSize = new Size(1040, 720);
         Size = new Size(1260, 820);
         StartPosition = FormStartPosition.CenterScreen;
+        KeyPreview = true;
+        RestoreWindowState();
 
         ConfigureToolTips();
         BuildLayout();
         RegisterDirtyTracking(this);
         ApplyWindowsTheme();
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
+        _statusTimer.Tick += (_, _) => RestorePersistentStatus();
 
-        var configPath = FindConfigPath(requestedConfigPath);
+        var configPath = FindConfigPath(requestedConfigPath, requestedConfigPath is null ? _editorState.LastConfigPath : null);
         if (configPath is not null)
         {
             _configPathTextBox.Text = configPath;
@@ -153,7 +162,7 @@ internal sealed class ConfigEditorForm : Form
         else
         {
             _configPathTextBox.Text = Path.Combine(AppContext.BaseDirectory, "supervisor.config.json");
-            SetStatus("Choose or save a config file to begin.");
+            SetPersistentStatus("Choose or save a config file to begin.");
         }
     }
 
@@ -184,6 +193,7 @@ internal sealed class ConfigEditorForm : Form
         if (disposing)
         {
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+            _statusTimer.Dispose();
             _toolTips.Dispose();
         }
 
@@ -222,8 +232,8 @@ internal sealed class ConfigEditorForm : Form
         var panel = new Panel
         {
             Dock = DockStyle.Top,
-            Height = 42,
-            Padding = new Padding(0, 0, 0, 10)
+            Height = 58,
+            Padding = new Padding(0, 6, 0, 12)
         };
 
         var layout = new TableLayoutPanel
@@ -241,23 +251,17 @@ internal sealed class ConfigEditorForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-        var browseButton = new Button { Text = "Browse...", Width = 96, Anchor = AnchorStyles.Top | AnchorStyles.Right };
+        var browseButton = new Button { Text = "Browse...", Width = 96, Height = 28, Anchor = AnchorStyles.Left | AnchorStyles.Right };
         browseButton.Click += (_, _) => BrowseConfig();
-        _toolTips.SetToolTip(browseButton, "Choose the supervisor.config.json file you want this editor to load.");
+        _toolTips.SetToolTip(browseButton, "Open config (Ctrl+O). Choose the supervisor.config.json file you want this editor to load.");
 
-        var reloadButton = new Button { Text = "Reload", Width = 86, Anchor = AnchorStyles.Top | AnchorStyles.Right };
-        reloadButton.Click += (_, _) =>
-        {
-            if (ConfirmUnsavedChangesBefore("reloading"))
-            {
-                LoadConfig(_configPathTextBox.Text);
-            }
-        };
-        _toolTips.SetToolTip(reloadButton, "Reload values from disk and discard unsaved edits in the editor.");
+        var reloadButton = new Button { Text = "Reload", Width = 86, Height = 28, Anchor = AnchorStyles.Left | AnchorStyles.Right };
+        reloadButton.Click += (_, _) => ReloadConfig();
+        _toolTips.SetToolTip(reloadButton, "Reload (F5 or Ctrl+R). Reload values from disk and discard unsaved edits in the editor.");
 
-        var configPathLabel = new Label { Text = "Config file", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 6, 8, 0) };
+        var configPathLabel = new Label { Text = "Config file", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, 10, 0) };
         _configPathTextBox.Dock = DockStyle.Fill;
-        _configPathTextBox.Margin = new Padding(0, 3, 6, 0);
+        _configPathTextBox.Margin = new Padding(0, 2, 10, 0);
         browseButton.Margin = new Padding(0, 0, 6, 0);
         reloadButton.Margin = new Padding(0);
         _toolTips.SetToolTip(configPathLabel, "The JSON file that will be loaded and saved.");
@@ -272,17 +276,19 @@ internal sealed class ConfigEditorForm : Form
 
     private Control BuildTabs()
     {
-        var tabs = new ThemedTabHost { Dock = DockStyle.Fill };
-        tabs.AddTab("Basics", BuildBasicsTab());
-        tabs.AddTab("Auto Launch", BuildAutoLaunchTab());
-        tabs.AddTab("Base Stations", BuildBaseStationsTab());
-        tabs.AddTab("Detectors", BuildDetectorsTab());
-        tabs.AddTab("Processes", BuildProcessesTab());
-        tabs.AddTab("OSC Router", BuildOscRouterTab());
-        tabs.AddTab("OSCGoesBrrr", BuildLovenseTab());
-        tabs.AddTab("Timing", BuildTimingTab());
-        tabs.AddTab("Raw JSON", BuildRawJsonTab());
-        return tabs;
+        var selectedTab = _editorState.LastSelectedTab;
+        _tabs.AddTab("Basics", BuildBasicsTab());
+        _tabs.AddTab("Auto Launch", BuildAutoLaunchTab());
+        _tabs.AddTab("Base Stations", BuildBaseStationsTab());
+        _tabs.AddTab("Detectors", BuildDetectorsTab());
+        _tabs.AddTab("Processes", BuildProcessesTab());
+        _tabs.AddTab("OSC Router", BuildOscRouterTab());
+        _tabs.AddTab("OSCGoesBrrr", BuildLovenseTab());
+        _tabs.AddTab("Timing", BuildTimingTab());
+        _tabs.AddTab("Raw JSON", BuildRawJsonTab());
+        _tabs.SelectTab(Math.Clamp(selectedTab, 0, _tabs.TabCount - 1));
+        _tabs.SelectedIndexChanged += (_, _) => _editorState.LastSelectedTab = _tabs.SelectedIndex;
+        return _tabs;
     }
 
     private Control BuildBasicsTab()
@@ -305,7 +311,7 @@ internal sealed class ConfigEditorForm : Form
         AddFullWidth(layout, _autoLaunchTaskCheckBox, "Checked lets the app create or repair the elevated auto-launch Scheduled Task. Filled square is shown only when the config asks on first setup.");
         AddFullWidth(layout, _usePimaxLogCheckBox, "Also scan PiService logs for quick HID remove/add reconnects that normal USB polling can miss.");
         AddFullWidth(layout, _useMouthTrackerPnPCheckBox, "Also scan Windows Kernel-PnP events for quick mouth tracker reconnects that normal USB polling can miss.");
-        AddLabeledRow(layout, "PiService log folder", _pimaxServiceLogDirectoryTextBox, ToolTipWithConfigKey("Folder containing PiService__*.log files. Environment variables such as %LOCALAPPDATA% are expanded by the supervisor.", "PimaxServiceLogDirectory"));
+        AddFolderValidationRow(layout, "PiService log folder", _pimaxServiceLogDirectoryTextBox, ToolTipWithConfigKey("Folder containing PiService__*.log files. Environment variables such as %LOCALAPPDATA% are expanded by the supervisor.", "PimaxServiceLogDirectory"));
 
         var buttons = new FlowLayoutPanel
         {
@@ -921,6 +927,11 @@ internal sealed class ConfigEditorForm : Form
         var layout = CreateFormLayout(3);
 
         AddSectionHeader(layout, "Feature enablement");
+        _oscGoesBrrrEnabledCheckBox.Margin = new Padding(0, 2, 0, 2);
+        _oscGoesBrrrHotkeyCheckBox.Margin = new Padding(0, 2, 0, 2);
+        _oscGoesBrrrBleScannerCheckBox.Margin = new Padding(0, 2, 0, 2);
+        _intifaceStartMinimizedCheckBox.Margin = new Padding(0, 2, 0, 2);
+        _oscGoesBrrrStartMinimizedCheckBox.Margin = new Padding(0, 2, 0, 2);
         AddFullWidth(layout, _oscGoesBrrrEnabledCheckBox, ToolTipWithConfigKey("Checked means the OscGoesBrrr workflow is available during headset sessions.", "OscGoesBrrrEnabled"));
         AddFullWidth(layout, _oscGoesBrrrHotkeyCheckBox, ToolTipWithConfigKey("Checked means the supervisor shows Press L to launch OSCGoesBrrr and starts Intiface plus OscGoesBrrr when L is pressed.", "OscGoesBrrrHotkeyEnabled"));
         AddFullWidth(layout, _oscGoesBrrrBleScannerCheckBox, ToolTipWithConfigKey("Checked means the supervisor scans nearby BLE advertisements for Lovense names such as LVS- and auto-launches the workflow when one matches.", "OscGoesBrrrBleScannerEnabled"));
@@ -959,8 +970,9 @@ internal sealed class ConfigEditorForm : Form
             Dock = DockStyle.Top,
             ColumnCount = 1,
             RowCount = 2,
-            Height = 180,
-            Margin = new Padding(0, 8, 0, 0)
+            Height = 156,
+            Margin = new Padding(0, 2, 0, 0),
+            Padding = new Padding(0)
         };
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -981,14 +993,15 @@ internal sealed class ConfigEditorForm : Form
     {
         var layout = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Top,
             ColumnCount = 1,
             RowCount = 3,
-            Padding = new Padding(8)
+            Padding = new Padding(8),
+            AutoSize = true
         };
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         ConfigureAutoLaunchAppsGrid();
 
@@ -1018,6 +1031,8 @@ internal sealed class ConfigEditorForm : Form
         appButtons.Controls.Add(deleteAppButton);
 
         _toolTips.SetToolTip(label, tooltip);
+        _autoLaunchAppsGrid.Dock = DockStyle.Top;
+        _autoLaunchAppsGrid.Height = 178;
         _toolTips.SetToolTip(_autoLaunchAppsGrid, tooltip);
         layout.Controls.Add(label, 0, 0);
         layout.Controls.Add(appButtons, 0, 1);
@@ -1091,7 +1106,7 @@ internal sealed class ConfigEditorForm : Form
         _autoLaunchAppsGrid.CellFormatting += OnAutoLaunchAppsGridCellFormatting;
         _autoLaunchAppsGrid.DefaultValuesNeeded += OnAutoLaunchAppsGridDefaultValuesNeeded;
         _autoLaunchAppsGrid.KeyDown += OnManagedGridKeyDown;
-        _autoLaunchAppsGrid.Paint += (_, e) => DrawEmptyGridPlaceholder(_autoLaunchAppsGrid, e, "No app configured");
+        _autoLaunchAppsGrid.Paint += (_, e) => DrawEmptyGridPlaceholder(_autoLaunchAppsGrid, e, "No auto-launch apps configured. Click Add App to create one.");
     }
 
     private void OnAutoLaunchAppsGridCellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
@@ -1286,7 +1301,6 @@ internal sealed class ConfigEditorForm : Form
                 CancellationToken.None);
             var matches = SplitDeviceBlocks(output)
                 .Where(block => rules.Any(rule => DetectorRuleMatchesBlock(rule, block)))
-                .Select(TrimDeviceBlockForDisplay)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
@@ -1298,11 +1312,7 @@ internal sealed class ConfigEditorForm : Form
             }
 
             SetStatus($"{detectorName} detector test matched {matches.Length} device block(s).");
-            ShowThemedMessageBox(
-                $"{detectorName} detector test matched:\r\n\r\n" + string.Join("\r\n\r\n", matches.Take(8)),
-                $"{detectorName} detector test",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            ShowDetectorTestDialog(detectorName, matches);
         }
         catch (Exception ex)
         {
@@ -1315,20 +1325,149 @@ internal sealed class ConfigEditorForm : Form
         => Regex
             .Split(pnputilOutput.Trim(), @"(?:\r?\n){2,}")
             .Where(block => !string.IsNullOrWhiteSpace(block))
-            .Select(block => block.ToLowerInvariant())
+            .Select(block => block.Trim())
             .ToArray();
 
-    private static bool DetectorRuleMatchesBlock(string[] rule, string normalizedDeviceBlock)
+    private static bool DetectorRuleMatchesBlock(string[] rule, string deviceBlock)
     {
         var keywords = rule.Where(keyword => !string.IsNullOrWhiteSpace(keyword)).ToArray();
+        var normalizedDeviceBlock = deviceBlock.ToLowerInvariant();
         return keywords.Length > 0 && keywords.All(keyword => normalizedDeviceBlock.Contains(keyword.ToLowerInvariant(), StringComparison.Ordinal));
     }
 
-    private static string TrimDeviceBlockForDisplay(string block)
-        => string.Join(
-            Environment.NewLine,
-            block.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Take(6));
+    private void ShowDetectorTestDialog(string detectorName, string[] matches)
+    {
+        using var dialog = new Form
+        {
+            Text = $"{detectorName} detector test",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            ClientSize = new Size(760, 520),
+            KeyPreview = true
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 3,
+            Padding = new Padding(18, 16, 18, 12)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var summary = new Label
+        {
+            Text = $"{detectorName} detector test matched {matches.Length} device block(s).",
+            AutoSize = true,
+            Font = new Font(FontFamily.GenericSansSerif, 9.5F, FontStyle.Bold),
+            Padding = new Padding(0, 0, 0, 10)
+        };
+        var detailsText = FormatDetectorMatches(matches);
+        var details = new TextBox
+        {
+            Dock = DockStyle.Fill,
+            Multiline = true,
+            ReadOnly = true,
+            ScrollBars = ScrollBars.Both,
+            WordWrap = false,
+            Font = new Font(FontFamily.GenericMonospace, 9F),
+            Text = detailsText,
+            HideSelection = true
+        };
+        var buttons = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            Padding = new Padding(0, 12, 0, 0)
+        };
+        var closeButton = new Button { Text = "Close", DialogResult = DialogResult.OK, Width = 86 };
+        var copyButton = new Button { Text = "Copy", Width = 86 };
+        copyButton.Click += (_, _) =>
+        {
+            try
+            {
+                Clipboard.SetText(detailsText);
+                SetStatus($"{detectorName} detector test details copied.");
+            }
+            catch (Exception ex)
+            {
+                ShowThemedMessageBox(ex.Message, "Could not copy detector details", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        };
+        buttons.Controls.Add(closeButton);
+        buttons.Controls.Add(copyButton);
+        root.Controls.Add(summary, 0, 0);
+        root.Controls.Add(details, 0, 1);
+        root.Controls.Add(buttons, 0, 2);
+        dialog.Controls.Add(root);
+        dialog.AcceptButton = closeButton;
+        dialog.CancelButton = closeButton;
+        dialog.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Escape)
+            {
+                dialog.DialogResult = DialogResult.Cancel;
+                dialog.Close();
+            }
+        };
+        ApplyThemeTo(dialog);
+        WindowsTitleBar.ApplyTheme(dialog.Handle, _theme.IsDark);
+        dialog.Shown += (_, _) =>
+        {
+            details.SelectionLength = 0;
+            closeButton.Focus();
+        };
+        dialog.ShowDialog(this);
+    }
+
+    private static string FormatDetectorMatches(string[] matches)
+    {
+        var builder = new StringBuilder();
+        for (var index = 0; index < matches.Length; index++)
+        {
+            if (index > 0)
+            {
+                builder.AppendLine();
+            }
+
+            builder.AppendLine($"Match {index + 1}");
+            builder.AppendLine("Device: " + GetDeviceField(matches[index], "Device Description", "Description", "Device"));
+            builder.AppendLine("Class: " + GetDeviceField(matches[index], "Class Name", "Class"));
+            builder.AppendLine("Manufacturer: " + GetDeviceField(matches[index], "Manufacturer Name", "Manufacturer"));
+            builder.AppendLine("Status: " + GetDeviceField(matches[index], "Status"));
+            builder.AppendLine("Instance ID:");
+            builder.AppendLine(GetDeviceField(matches[index], "Instance ID", "InstanceId"));
+        }
+
+        return builder.ToString();
+    }
+
+    private static string GetDeviceField(string block, params string[] names)
+    {
+        foreach (var line in block.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var separator = line.IndexOf(':');
+            if (separator <= 0)
+            {
+                continue;
+            }
+
+            var label = line[..separator].Trim();
+            var value = line[(separator + 1)..].Trim();
+            if (names.Any(name => string.Equals(label, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                return string.IsNullOrWhiteSpace(value) ? "-" : value;
+            }
+        }
+
+        return "-";
+    }
 
     private static async Task<string> RunProcessForOutputAsync(string fileName, string arguments, TimeSpan timeout, CancellationToken cancellationToken)
     {
@@ -1453,20 +1592,21 @@ internal sealed class ConfigEditorForm : Form
 
         var validateButton = new Button { Text = "Validate", AutoSize = true };
         validateButton.Click += (_, _) => ValidateConfigFromButton();
-        _toolTips.SetToolTip(validateButton, "Validate the currently loaded editor values without saving.");
+        _toolTips.SetToolTip(validateButton, "Validate (Ctrl+Shift+V). Validate the currently loaded editor values without saving.");
 
         var launchButton = new Button { Text = "Launch Supervisor", AutoSize = true };
         launchButton.Click += (_, _) => LaunchSupervisor();
         launchButton.FlatStyle = FlatStyle.Flat;
-        _toolTips.SetToolTip(launchButton, "Starts the console supervisor using the currently selected config file. Save changes first if you want the launched supervisor to use them.");
+        _toolTips.SetToolTip(launchButton, "Launch Supervisor (Ctrl+L). Starts the console supervisor using the currently selected config file. Save changes first if you want the launched supervisor to use them.");
 
         var saveButton = new Button { Text = "Save", AutoSize = true };
+        saveButton.Tag = "Primary";
         saveButton.Click += (_, _) => SaveConfig();
-        _toolTips.SetToolTip(saveButton, "Save the current editor values into the selected config file.");
+        _toolTips.SetToolTip(saveButton, "Save (Ctrl+S). Save the current editor values into the selected config file.");
 
         var saveAsButton = new Button { Text = "Save As...", AutoSize = true };
         saveAsButton.Click += (_, _) => SaveConfigAs();
-        _toolTips.SetToolTip(saveAsButton, "Choose a different JSON file path, then save the current editor values.");
+        _toolTips.SetToolTip(saveAsButton, "Save As (Ctrl+Shift+S). Choose a different JSON file path, then save the current editor values.");
 
         layout.Controls.Add(_statusLabel, 0, 0);
         layout.Controls.Add(validateButton, 1, 0);
@@ -1517,7 +1657,7 @@ internal sealed class ConfigEditorForm : Form
 
             content.Dock = DockStyle.Top;
             content.AutoSize = true;
-            content.MaximumSize = new Size(860, 0);
+            content.MaximumSize = new Size(960, 0);
             if (content is TableLayoutPanel tableLayout)
             {
                 tableLayout.AutoSize = true;
@@ -1546,7 +1686,7 @@ internal sealed class ConfigEditorForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         if (columns > 2)
         {
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 188));
         }
 
         return layout;
@@ -1561,7 +1701,7 @@ internal sealed class ConfigEditorForm : Form
         string? configKey = null,
         string? defaultFileName = null)
     {
-        var browseButton = new Button { Text = "Browse...", Width = 104 };
+        var browseButton = new Button { Text = "Browse...", Width = 104, Height = 27 };
         browseButton.Click += (_, _) =>
         {
             var browseFileName = string.IsNullOrWhiteSpace(Path.GetFileName(textBox.Text))
@@ -1590,14 +1730,87 @@ internal sealed class ConfigEditorForm : Form
         };
 
         var labelControl = new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left };
-        AddControlRow(layout, labelControl, textBox, browseButton, BuildPathTooltip(tooltip, textBox.Text, configKey));
-        textBox.TextChanged += (_, _) =>
+        var statusLabel = CreatePathStatusLabel();
+        var extraPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0)
+        };
+        extraPanel.Controls.Add(browseButton);
+        extraPanel.Controls.Add(statusLabel);
+
+        void UpdatePathStatus()
         {
             var currentTooltip = BuildPathTooltip(tooltip, textBox.Text, configKey);
             _toolTips.SetToolTip(labelControl, currentTooltip);
             _toolTips.SetToolTip(textBox, currentTooltip);
             _toolTips.SetToolTip(browseButton, currentTooltip);
+            _toolTips.SetToolTip(statusLabel, currentTooltip);
+            UpdatePathIndicator(statusLabel, textBox.Text, File.Exists);
+        }
+
+        AddControlRow(layout, labelControl, textBox, extraPanel, BuildPathTooltip(tooltip, textBox.Text, configKey));
+        textBox.TextChanged += (_, _) =>
+        {
+            UpdatePathStatus();
         };
+        _pathIndicatorRefreshers.Add(UpdatePathStatus);
+        UpdatePathStatus();
+    }
+
+    private void AddFolderValidationRow(TableLayoutPanel layout, string label, TextBox textBox, string tooltip)
+    {
+        var labelControl = new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left };
+        var statusLabel = CreatePathStatusLabel();
+
+        void UpdatePathStatus()
+        {
+            var currentTooltip = BuildPathTooltip(tooltip, textBox.Text, null);
+            _toolTips.SetToolTip(labelControl, currentTooltip);
+            _toolTips.SetToolTip(textBox, currentTooltip);
+            _toolTips.SetToolTip(statusLabel, currentTooltip);
+            UpdatePathIndicator(statusLabel, textBox.Text, Directory.Exists);
+        }
+
+        AddControlRow(layout, labelControl, textBox, statusLabel, tooltip);
+        textBox.TextChanged += (_, _) => UpdatePathStatus();
+        _pathIndicatorRefreshers.Add(UpdatePathStatus);
+        UpdatePathStatus();
+    }
+
+    private static Label CreatePathStatusLabel() => new()
+    {
+        AutoSize = true,
+        Anchor = AnchorStyles.Left,
+        Margin = new Padding(8, 5, 0, 0),
+        Tag = "PathStatus"
+    };
+
+    private void UpdatePathIndicator(Label statusLabel, string pathText, Func<string, bool> exists)
+    {
+        var path = ExpandPath(pathText);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            statusLabel.Text = "";
+            statusLabel.ForeColor = _theme.Text;
+            return;
+        }
+
+        var found = exists(path);
+        statusLabel.Text = found ? "Found" : "Not found";
+        statusLabel.ForeColor = found
+            ? (_theme.IsDark ? Color.FromArgb(147, 197, 153) : Color.FromArgb(35, 118, 61))
+            : (_theme.IsDark ? Color.FromArgb(231, 170, 117) : Color.FromArgb(158, 82, 28));
+    }
+
+    private void RefreshPathIndicators()
+    {
+        foreach (var refresh in _pathIndicatorRefreshers)
+        {
+            refresh();
+        }
     }
 
     private void AddLabeledRow(TableLayoutPanel layout, string label, Control control, string tooltip)
@@ -1642,8 +1855,8 @@ internal sealed class ConfigEditorForm : Form
     {
         Text = text,
         AutoSize = true,
-        Font = new Font(FontFamily.GenericSansSerif, 9F, FontStyle.Bold),
-        Padding = new Padding(0, 10, 0, 4),
+        Font = new Font(FontFamily.GenericSansSerif, 9.5F, FontStyle.Bold),
+        Padding = new Padding(0, 16, 0, 5),
         Tag = "Section"
     };
 
@@ -1752,6 +1965,14 @@ internal sealed class ConfigEditorForm : Form
         }
     }
 
+    private void ReloadConfig()
+    {
+        if (ConfirmUnsavedChangesBefore("reloading"))
+        {
+            LoadConfig(_configPathTextBox.Text);
+        }
+    }
+
     private void SaveConfigAs()
     {
         using var dialog = new SaveFileDialog
@@ -1857,6 +2078,7 @@ internal sealed class ConfigEditorForm : Form
                 _appliedRawJson = _loadedJson;
                 _rawJsonTextBox.Text = _loadedJson;
                 _rawJsonHasUnappliedChanges = false;
+                _editorState.LastConfigPath = Path.GetFullPath(path);
                 SetCleanStatus("Config file does not exist yet. Fill values, then Save.");
                 return;
             }
@@ -1869,6 +2091,7 @@ internal sealed class ConfigEditorForm : Form
             _appliedRawJson = _loadedJson;
             _rawJsonTextBox.Text = _loadedJson;
             _rawJsonHasUnappliedChanges = false;
+            _editorState.LastConfigPath = Path.GetFullPath(path);
             SetCleanStatus("Loaded " + path);
         }
         catch (Exception ex)
@@ -1962,7 +2185,7 @@ internal sealed class ConfigEditorForm : Form
             var json = BuildCurrentJson();
             ParseJson(json);
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-            CreateConfigBackup(path);
+            var backupPath = CreateConfigBackup(path);
             File.WriteAllText(path, json, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             _loadedJson = json;
             _appliedRawJson = json;
@@ -1970,7 +2193,14 @@ internal sealed class ConfigEditorForm : Form
             _suppressDirtyTracking = true;
             _rawJsonTextBox.Text = json;
             _suppressDirtyTracking = false;
-            SetCleanStatus($"Saved {path} at {DateTime.Now:HH:mm}");
+            _editorState.LastConfigPath = Path.GetFullPath(path);
+            SetCleanStatus(backupPath is null
+                ? $"Saved config at {DateTime.Now:HH:mm}."
+                : $"Saved config and created backup at {DateTime.Now:HH:mm}.");
+            if (backupPath is not null)
+            {
+                _toolTips.SetToolTip(_statusLabel, "Backup path:\r\n" + backupPath);
+            }
             return true;
         }
         catch (Exception ex)
@@ -2024,7 +2254,82 @@ internal sealed class ConfigEditorForm : Form
             return;
         }
 
+        SaveEditorState();
         base.OnFormClosing(e);
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        switch (keyData)
+        {
+            case Keys.Control | Keys.S:
+                SaveConfig();
+                return true;
+            case Keys.Control | Keys.Shift | Keys.S:
+                SaveConfigAs();
+                return true;
+            case Keys.Control | Keys.O:
+                BrowseConfig();
+                return true;
+            case Keys.F5:
+            case Keys.Control | Keys.R:
+                ReloadConfig();
+                return true;
+            case Keys.Control | Keys.L:
+                LaunchSupervisor();
+                return true;
+            case Keys.Control | Keys.Shift | Keys.V:
+                ValidateConfigFromButton();
+                return true;
+        }
+
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    private void RestoreWindowState()
+    {
+        if (_editorState.WindowBounds is not { Width: > 0, Height: > 0 } bounds)
+        {
+            return;
+        }
+
+        var visible = Screen.AllScreens.Any(screen => screen.WorkingArea.IntersectsWith(bounds));
+        if (!visible)
+        {
+            return;
+        }
+
+        StartPosition = FormStartPosition.Manual;
+        Bounds = bounds;
+        WindowState = _editorState.WindowState is FormWindowState.Maximized
+            ? FormWindowState.Maximized
+            : FormWindowState.Normal;
+    }
+
+    private void SaveEditorState()
+    {
+        _editorState.LastConfigPath = TryGetFullPath(_configPathTextBox.Text.Trim()) ?? _editorState.LastConfigPath;
+        _editorState.LastSelectedTab = _tabs.SelectedIndex;
+        _editorState.WindowState = WindowState;
+        _editorState.WindowBounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+        _editorState.Save();
+    }
+
+    private static string? TryGetFullPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private string ApplyControlValues(string baseJson)
@@ -2739,13 +3044,38 @@ internal sealed class ConfigEditorForm : Form
 
     private void SetStatus(string message)
     {
+        _statusTimer.Stop();
         _statusLabel.Text = message;
+        _toolTips.SetToolTip(_statusLabel, message);
+        _statusTimer.Start();
+    }
+
+    private void SetPersistentStatus(string message)
+    {
+        _statusTimer.Stop();
+        _persistentStatus = message;
+        _statusLabel.Text = message;
+        _toolTips.SetToolTip(_statusLabel, message);
+    }
+
+    private void RestorePersistentStatus()
+    {
+        _statusTimer.Stop();
+        _statusLabel.Text = string.IsNullOrWhiteSpace(_persistentStatus)
+            ? ""
+            : _persistentStatus;
+        _toolTips.SetToolTip(_statusLabel, _statusLabel.Text);
+    }
+
+    private void SetLastActionStatus(string message)
+    {
+        SetPersistentStatus("Last action: " + message);
     }
 
     private void SetCleanStatus(string message)
     {
         _hasUnsavedChanges = false;
-        SetStatus(message);
+        SetPersistentStatus(message);
         UpdateWindowTitle();
     }
 
@@ -2758,7 +3088,7 @@ internal sealed class ConfigEditorForm : Form
 
         _hasUnsavedChanges = true;
         UpdateWindowTitle();
-        SetStatus(status);
+        SetPersistentStatus(status);
         UpdateGridWarnings();
         if (syncRawJson && !_rawJsonHasUnappliedChanges)
         {
@@ -3283,19 +3613,19 @@ internal sealed class ConfigEditorForm : Form
         return builder.ToString();
     }
 
-    private void CreateConfigBackup(string path)
+    private string? CreateConfigBackup(string path)
     {
         if (!File.Exists(path))
         {
-            return;
+            return null;
         }
 
         var directory = Path.GetDirectoryName(Path.GetFullPath(path)) ?? "";
         var fileName = Path.GetFileNameWithoutExtension(path);
-        var extension = Path.GetExtension(path);
         var timestamp = DateTime.Now.ToString("yyyy-MM-dd-HHmm", CultureInfo.InvariantCulture);
         var backupPath = Path.Combine(directory, $"{fileName}.{timestamp}.bak");
         File.Copy(path, backupPath, overwrite: true);
+        return backupPath;
     }
 
     private LaunchUnsavedChoice ShowLaunchUnsavedChangesDialog()
@@ -3433,7 +3763,8 @@ internal sealed class ConfigEditorForm : Form
         }
 
         var bounds = new Rectangle(12, grid.ColumnHeadersHeight + 18, grid.Width - 24, 28);
-        TextRenderer.DrawText(e.Graphics, message, grid.Font, bounds, _theme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+        var color = _theme.IsDark ? Color.FromArgb(170, 170, 170) : SystemColors.GrayText;
+        TextRenderer.DrawText(e.Graphics, message, grid.Font, bounds, color, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
     }
 
     private DialogResult ShowThemedMessageBox(
@@ -3621,6 +3952,7 @@ internal sealed class ConfigEditorForm : Form
         _toolTips.BackColor = _theme.ToolTipBack;
         _toolTips.ForeColor = _theme.ToolTipFore;
         WindowsTitleBar.ApplyTheme(Handle, _theme.IsDark);
+        RefreshPathIndicators();
         Invalidate(invalidateChildren: true);
     }
 
@@ -3654,10 +3986,10 @@ internal sealed class ConfigEditorForm : Form
             case Button button:
                 button.UseVisualStyleBackColor = false;
                 button.FlatStyle = FlatStyle.Flat;
-                button.FlatAppearance.BorderColor = _theme.Border;
+                button.FlatAppearance.BorderColor = Equals(button.Tag, "Primary") ? _theme.StrongBorder : _theme.Border;
                 button.FlatAppearance.MouseOverBackColor = _theme.ButtonHover;
                 button.FlatAppearance.MouseDownBackColor = _theme.ButtonPressed;
-                button.BackColor = _theme.ButtonBack;
+                button.BackColor = Equals(button.Tag, "Primary") ? _theme.PrimaryButtonBack : _theme.ButtonBack;
                 button.ForeColor = _theme.Text;
                 break;
             case CheckBox checkBox:
@@ -3667,9 +3999,12 @@ internal sealed class ConfigEditorForm : Form
                 break;
             case Label label:
                 label.BackColor = _theme.WindowBack;
-                label.ForeColor = Equals(label.Tag, "Muted")
-                    ? (_theme.IsDark ? Color.FromArgb(178, 178, 178) : SystemColors.GrayText)
-                    : _theme.Text;
+                if (!Equals(label.Tag, "PathStatus"))
+                {
+                    label.ForeColor = Equals(label.Tag, "Muted")
+                        ? (_theme.IsDark ? Color.FromArgb(178, 178, 178) : SystemColors.GrayText)
+                        : _theme.Text;
+                }
                 break;
             case Panel or TableLayoutPanel:
                 control.BackColor = _theme.WindowBack;
@@ -3695,7 +4030,7 @@ internal sealed class ConfigEditorForm : Form
     private void ApplyThemeToGrid(DataGridView grid)
     {
         grid.BackgroundColor = _theme.WindowBack;
-        grid.GridColor = _theme.Border;
+        grid.GridColor = _theme.IsDark ? Color.FromArgb(62, 62, 62) : Color.FromArgb(214, 214, 214);
         grid.BorderStyle = BorderStyle.FixedSingle;
         grid.EnableHeadersVisualStyles = false;
         grid.ColumnHeadersDefaultCellStyle.BackColor = _theme.ButtonBack;
@@ -3712,11 +4047,12 @@ internal sealed class ConfigEditorForm : Form
         grid.AlternatingRowsDefaultCellStyle.ForeColor = _theme.Text;
     }
 
-    private static string? FindConfigPath(string? requestedConfigPath)
+    private static string? FindConfigPath(string? requestedConfigPath, string? lastConfigPath)
     {
         var candidates = new[]
         {
             requestedConfigPath,
+            lastConfigPath,
             Path.Combine(AppContext.BaseDirectory, "supervisor.config.json"),
             Path.Combine(Environment.CurrentDirectory, "supervisor.config.json"),
             Path.Combine(AppContext.BaseDirectory, "..", "supervisor.config.json")
@@ -3724,7 +4060,8 @@ internal sealed class ConfigEditorForm : Form
 
         return candidates
             .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Select(path => Path.GetFullPath(path!))
+            .Select(path => TryGetFullPath(path!))
+            .Where(path => !string.IsNullOrWhiteSpace(path))
             .FirstOrDefault(File.Exists);
     }
 }
@@ -3762,6 +4099,47 @@ internal sealed class ValidationResult
     public bool HasWarnings => Warnings.Count > 0;
 }
 
+internal sealed class EditorState
+{
+    private static readonly string StatePath = Path.Combine(Application.UserAppDataPath, "config-editor-state.json");
+
+    public string? LastConfigPath { get; set; }
+    public Rectangle? WindowBounds { get; set; }
+    public FormWindowState WindowState { get; set; } = FormWindowState.Normal;
+    public int LastSelectedTab { get; set; }
+
+    public static EditorState Load()
+    {
+        try
+        {
+            if (!File.Exists(StatePath))
+            {
+                return new EditorState();
+            }
+
+            return JsonSerializer.Deserialize<EditorState>(File.ReadAllText(StatePath)) ?? new EditorState();
+        }
+        catch
+        {
+            return new EditorState();
+        }
+    }
+
+    public void Save()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
+            var json = JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(StatePath, json, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+        catch
+        {
+            // Editor state is only a convenience; ignore persistence failures.
+        }
+    }
+}
+
 internal sealed record AppTheme(
     bool IsDark,
     Color WindowBack,
@@ -3774,7 +4152,9 @@ internal sealed record AppTheme(
     Color ToolTipBack,
     Color ToolTipFore,
     Color Text,
-    Color Border)
+    Color Border,
+    Color StrongBorder,
+    Color PrimaryButtonBack)
 {
     public static readonly AppTheme Light = new(
         IsDark: false,
@@ -3788,7 +4168,9 @@ internal sealed record AppTheme(
         ToolTipBack: SystemColors.Info,
         ToolTipFore: SystemColors.InfoText,
         Text: SystemColors.ControlText,
-        Border: SystemColors.ControlDark);
+        Border: SystemColors.ControlDark,
+        StrongBorder: Color.FromArgb(92, 92, 92),
+        PrimaryButtonBack: Color.FromArgb(232, 232, 232));
 
     public static readonly AppTheme Dark = new(
         IsDark: true,
@@ -3798,11 +4180,36 @@ internal sealed record AppTheme(
         ButtonHover: Color.FromArgb(74, 74, 74),
         ButtonPressed: Color.FromArgb(88, 88, 88),
         TabBack: Color.FromArgb(40, 40, 40),
-        TabSelectedBack: Color.FromArgb(54, 54, 54),
+        TabSelectedBack: Color.FromArgb(52, 52, 52),
         ToolTipBack: Color.FromArgb(45, 45, 45),
         ToolTipFore: Color.WhiteSmoke,
         Text: Color.WhiteSmoke,
-        Border: Color.FromArgb(92, 92, 92));
+        Border: Color.FromArgb(86, 86, 86),
+        StrongBorder: Color.FromArgb(136, 136, 136),
+        PrimaryButtonBack: Color.FromArgb(68, 68, 68));
+}
+
+internal sealed class ThemedTabButton : Button
+{
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool Selected { get; set; }
+
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public AppTheme Theme { get; set; } = AppTheme.Light;
+
+    protected override void OnPaint(PaintEventArgs pevent)
+    {
+        base.OnPaint(pevent);
+        if (!Selected)
+        {
+            return;
+        }
+
+        using var pen = new Pen(Theme.StrongBorder);
+        pevent.Graphics.DrawLine(pen, 1, 1, Width - 2, 1);
+    }
 }
 
 internal sealed class ThemedTabHost : UserControl
@@ -3823,9 +4230,12 @@ internal sealed class ThemedTabHost : UserControl
         Margin = new Padding(0),
         Padding = new Padding(0)
     };
-    private readonly List<(Button Button, Control Content)> _tabs = [];
+    private readonly List<(ThemedTabButton Button, Control Content)> _tabs = [];
     private int _selectedIndex = -1;
     private AppTheme _theme = AppTheme.Light;
+    public event EventHandler? SelectedIndexChanged;
+    public int SelectedIndex => _selectedIndex;
+    public int TabCount => _tabs.Count;
 
     public ThemedTabHost()
     {
@@ -3847,7 +4257,7 @@ internal sealed class ThemedTabHost : UserControl
     public void AddTab(string title, Control content)
     {
         var tabIndex = _tabs.Count;
-        var button = new Button
+        var button = new ThemedTabButton
         {
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
@@ -3890,19 +4300,27 @@ internal sealed class ThemedTabHost : UserControl
         {
             var selected = index == _selectedIndex;
             var button = _tabs[index].Button;
+            button.Selected = selected;
+            button.Theme = theme;
             button.BackColor = selected ? theme.TabSelectedBack : theme.TabBack;
             button.ForeColor = theme.Text;
-            button.FlatAppearance.BorderColor = selected ? theme.Text : theme.Border;
-            button.FlatAppearance.BorderSize = selected ? 2 : 1;
+            button.FlatAppearance.BorderColor = selected ? theme.StrongBorder : theme.Border;
+            button.FlatAppearance.BorderSize = 1;
             button.FlatAppearance.MouseOverBackColor = theme.ButtonHover;
             button.FlatAppearance.MouseDownBackColor = theme.ButtonPressed;
+            button.Invalidate();
             ApplyThemeToContent(_tabs[index].Content);
         }
     }
 
-    private void SelectTab(int index)
+    public void SelectTab(int index)
     {
         if (index < 0 || index >= _tabs.Count)
+        {
+            return;
+        }
+
+        if (_selectedIndex == index && _contentPanel.Controls.Count > 0)
         {
             return;
         }
@@ -3913,6 +4331,7 @@ internal sealed class ThemedTabHost : UserControl
         _contentPanel.Controls.Add(_tabs[index].Content);
         _contentPanel.ResumeLayout();
         ApplyTheme(_theme);
+        SelectedIndexChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void ApplyThemeToContent(Control control)
@@ -3938,10 +4357,10 @@ internal sealed class ThemedTabHost : UserControl
             case Button button:
                 button.UseVisualStyleBackColor = false;
                 button.FlatStyle = FlatStyle.Flat;
-                button.FlatAppearance.BorderColor = _theme.Border;
+                button.FlatAppearance.BorderColor = Equals(button.Tag, "Primary") ? _theme.StrongBorder : _theme.Border;
                 button.FlatAppearance.MouseOverBackColor = _theme.ButtonHover;
                 button.FlatAppearance.MouseDownBackColor = _theme.ButtonPressed;
-                button.BackColor = _theme.ButtonBack;
+                button.BackColor = Equals(button.Tag, "Primary") ? _theme.PrimaryButtonBack : _theme.ButtonBack;
                 button.ForeColor = _theme.Text;
                 break;
             case CheckBox checkBox:
@@ -3951,9 +4370,12 @@ internal sealed class ThemedTabHost : UserControl
                 break;
             case Label label:
                 label.BackColor = _theme.WindowBack;
-                label.ForeColor = Equals(label.Tag, "Muted")
-                    ? (_theme.IsDark ? Color.FromArgb(178, 178, 178) : SystemColors.GrayText)
-                    : _theme.Text;
+                if (!Equals(label.Tag, "PathStatus"))
+                {
+                    label.ForeColor = Equals(label.Tag, "Muted")
+                        ? (_theme.IsDark ? Color.FromArgb(178, 178, 178) : SystemColors.GrayText)
+                        : _theme.Text;
+                }
                 break;
             default:
                 control.BackColor = _theme.WindowBack;
@@ -3970,7 +4392,7 @@ internal sealed class ThemedTabHost : UserControl
     private void ApplyThemeToGrid(DataGridView grid)
     {
         grid.BackgroundColor = _theme.WindowBack;
-        grid.GridColor = _theme.Border;
+        grid.GridColor = _theme.IsDark ? Color.FromArgb(62, 62, 62) : Color.FromArgb(214, 214, 214);
         grid.BorderStyle = BorderStyle.FixedSingle;
         grid.EnableHeadersVisualStyles = false;
         grid.ColumnHeadersDefaultCellStyle.BackColor = _theme.ButtonBack;
