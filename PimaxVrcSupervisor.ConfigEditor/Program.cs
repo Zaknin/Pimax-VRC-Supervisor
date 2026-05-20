@@ -1,6 +1,7 @@
 using Microsoft.Win32;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -28,6 +29,9 @@ internal sealed class ConfigEditorForm : Form
 {
     private static readonly string BaseWindowTitle = $"Pimax VRC Supervisor Config Editor {AppVersion.Current}";
     private const int TemporaryStatusMilliseconds = 15000;
+    private const int MinimumGridVisibleRows = 10;
+    private const int CompactNumberInputWidth = 104;
+    private const int PathStatusColumnWidth = 230;
     private const string DefaultVrcFaceTrackingDirectory = @"C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking";
     private static readonly string DefaultIntifacePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -131,7 +135,14 @@ internal sealed class ConfigEditorForm : Form
     private AppTheme _theme = AppTheme.Light;
     private string _loadedJson = "{\r\n}\r\n";
     private string _appliedRawJson = "{\r\n}\r\n";
-    private string _persistentStatus = "";
+    private string _persistentStatus = "Ready";
+    private string _persistentStatusToolTip = "Ready";
+    private string _rawJsonStatus = "";
+    private string? _temporaryStatus;
+    private string? _temporaryStatusToolTip;
+    private DateTime _temporaryStatusExpiresAt;
+    private int _temporaryStatusTabIndex = -1;
+    private bool _temporaryStatusIsActiveOperation;
     private bool _hasUnsavedChanges;
     private bool _rawJsonHasUnappliedChanges;
     private bool _suppressDirtyTracking;
@@ -151,7 +162,7 @@ internal sealed class ConfigEditorForm : Form
         RegisterDirtyTracking(this);
         ApplyWindowsTheme();
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
-        _statusTimer.Tick += (_, _) => RestorePersistentStatus();
+        _statusTimer.Tick += (_, _) => ExpireTemporaryStatus();
 
         var configPath = FindConfigPath(requestedConfigPath, requestedConfigPath is null ? _editorState.LastConfigPath : null);
         if (configPath is not null)
@@ -162,7 +173,7 @@ internal sealed class ConfigEditorForm : Form
         else
         {
             _configPathTextBox.Text = Path.Combine(AppContext.BaseDirectory, "supervisor.config.json");
-            SetPersistentStatus("Choose or save a config file to begin.");
+            SetPersistentStatus("Ready");
         }
     }
 
@@ -251,11 +262,13 @@ internal sealed class ConfigEditorForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-        var browseButton = new Button { Text = "Browse...", Width = 96, Height = 28, Anchor = AnchorStyles.Left | AnchorStyles.Right };
+        var browseButton = CreateButton("Browse...", autoSize: false, width: 96, height: 28);
+        browseButton.Anchor = AnchorStyles.Left | AnchorStyles.Right;
         browseButton.Click += (_, _) => BrowseConfig();
         _toolTips.SetToolTip(browseButton, "Open config (Ctrl+O). Choose the supervisor.config.json file you want this editor to load.");
 
-        var reloadButton = new Button { Text = "Reload", Width = 86, Height = 28, Anchor = AnchorStyles.Left | AnchorStyles.Right };
+        var reloadButton = CreateButton("Reload", autoSize: false, width: 86, height: 28);
+        reloadButton.Anchor = AnchorStyles.Left | AnchorStyles.Right;
         reloadButton.Click += (_, _) => ReloadConfig();
         _toolTips.SetToolTip(reloadButton, "Reload (F5 or Ctrl+R). Reload values from disk and discard unsaved edits in the editor.");
 
@@ -274,6 +287,32 @@ internal sealed class ConfigEditorForm : Form
         return panel;
     }
 
+    private static Button CreateButton(
+        string text,
+        bool autoSize = true,
+        int width = 0,
+        int height = 0,
+        DialogResult dialogResult = DialogResult.None)
+    {
+        var button = new ThemedActionButton
+        {
+            Text = text,
+            AutoSize = autoSize,
+            DialogResult = dialogResult
+        };
+        if (width > 0)
+        {
+            button.Width = width;
+        }
+
+        if (height > 0)
+        {
+            button.Height = height;
+        }
+
+        return button;
+    }
+
     private Control BuildTabs()
     {
         var selectedTab = _editorState.LastSelectedTab;
@@ -287,7 +326,11 @@ internal sealed class ConfigEditorForm : Form
         _tabs.AddTab("Timing", BuildTimingTab());
         _tabs.AddTab("Raw JSON", BuildRawJsonTab());
         _tabs.SelectTab(Math.Clamp(selectedTab, 0, _tabs.TabCount - 1));
-        _tabs.SelectedIndexChanged += (_, _) => _editorState.LastSelectedTab = _tabs.SelectedIndex;
+        _tabs.SelectedIndexChanged += (_, _) =>
+        {
+            _editorState.LastSelectedTab = _tabs.SelectedIndex;
+            RefreshVisibleStatus();
+        };
         return _tabs;
     }
 
@@ -320,11 +363,11 @@ internal sealed class ConfigEditorForm : Form
             WrapContents = false,
             Padding = new Padding(0, 8, 0, 0)
         };
-        var restoreButton = new Button { Text = "Restore Defaults", AutoSize = true };
+        var restoreButton = CreateButton("Restore Defaults");
         restoreButton.Click += (_, _) => RestoreDefaults();
         _toolTips.SetToolTip(restoreButton, "Replace current editor values with default configuration values. The config file is not overwritten until Save.");
         buttons.Controls.Add(restoreButton);
-        var aboutButton = new Button { Text = "About", AutoSize = true };
+        var aboutButton = CreateButton("About");
         aboutButton.Click += (_, _) => ShowAboutDialog();
         _toolTips.SetToolTip(aboutButton, "Show editor version and supervisor executable path.");
         buttons.Controls.Add(aboutButton);
@@ -369,25 +412,25 @@ internal sealed class ConfigEditorForm : Form
             WrapContents = false,
             Padding = new Padding(0, 0, 0, 8)
         };
-        var scanButton = new Button { Text = "Scan", AutoSize = true };
+        var scanButton = CreateButton("Scan");
         scanButton.Click += async (_, _) => await ScanBaseStationsAsync();
         _toolTips.SetToolTip(scanButton, "Scan nearby Bluetooth LE devices for SteamVR base stations and merge them into the list.");
         buttons.Controls.Add(scanButton);
-        var refreshStateButton = new Button { Text = "Refresh State", AutoSize = true };
+        var refreshStateButton = CreateButton("Refresh State");
         refreshStateButton.Click += async (_, _) => await RefreshBaseStationStatesAsync();
         _toolTips.SetToolTip(refreshStateButton, "Read live power state from enabled Base Station 2.0 devices when firmware supports it.");
         buttons.Controls.Add(refreshStateButton);
-        var turnOnButton = new Button { Text = "Turn On", AutoSize = true };
+        var turnOnButton = CreateButton("Turn On");
         turnOnButton.Click += async (_, _) => await SendBaseStationPowerOnToEnabledRowsAsync();
         _toolTips.SetToolTip(turnOnButton, "Power on every enabled base station in the list.");
         buttons.Controls.Add(turnOnButton);
-        var turnOffButton = new Button { Text = "Turn Off", AutoSize = true };
+        var turnOffButton = CreateButton("Turn Off");
         turnOffButton.Click += async (_, _) => await SendBaseStationCommandToEnabledRowsAsync(
             "Turn Off",
             (client, baseStation, token) => client.PowerDownAsync(baseStation, SelectedBaseStationPowerDownMode(), token));
         _toolTips.SetToolTip(turnOffButton, "Power down every enabled base station using the selected power-down mode.");
         buttons.Controls.Add(turnOffButton);
-        var addManualButton = new Button { Text = "Add Manual", AutoSize = true };
+        var addManualButton = CreateButton("Add Manual");
         addManualButton.Click += (_, _) =>
         {
             var rowIndex = AddBaseStationGridRow(new BaseStationDevice
@@ -404,15 +447,17 @@ internal sealed class ConfigEditorForm : Form
         };
         _toolTips.SetToolTip(addManualButton, "Add a base station row manually if Windows discovery does not expose it.");
         buttons.Controls.Add(addManualButton);
-        var deleteButton = new Button { Text = "Delete", AutoSize = true };
+        var deleteButton = CreateButton("Delete");
         deleteButton.Click += (_, _) => DeleteSelectedGridRow(_baseStationsGrid, "Deleted selected base station row.");
         _toolTips.SetToolTip(deleteButton, "Delete the selected base station row. Changes are written only when you save the config.");
         buttons.Controls.Add(deleteButton);
 
         ConfigureBaseStationsGrid();
+        ConfigureDynamicGridSizing(_baseStationsGrid);
         layout.Controls.Add(settings, 0, 0);
         layout.Controls.Add(buttons, 0, 1);
         layout.Controls.Add(_baseStationsGrid, 0, 2);
+        UpdateDynamicGridHeight(_baseStationsGrid);
         return BuildTabWithDescription(
             "Base station power and identification",
             "Scan for SteamVR base stations, test power states, and use Identify to confirm each device before saving.",
@@ -536,7 +581,7 @@ internal sealed class ConfigEditorForm : Form
     {
         try
         {
-            SetStatus("Scanning for base stations...");
+            SetActiveOperationStatus("Scanning for base stations...");
             var discovered = await BaseStationDiscovery.ScanAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
             var existingAddresses = ReadBaseStationsGrid()
                 .Select(station => station.BluetoothAddress)
@@ -598,7 +643,7 @@ internal sealed class ConfigEditorForm : Form
 
         try
         {
-            SetStatus($"{columnName} test for {baseStation.DisplayName}...");
+            SetActiveOperationStatus($"{columnName} test for {baseStation.DisplayName}...");
             var client = new BaseStationGattClient();
             switch (columnName)
             {
@@ -644,11 +689,11 @@ internal sealed class ConfigEditorForm : Form
 
         var failures = new List<string>();
         var client = new BaseStationGattClient();
-        SetStatus($"{action}: controlling {baseStations.Length} base station(s)...");
+        SetActiveOperationStatus($"{action}: controlling {baseStations.Length} base station(s)...");
         for (var index = 0; index < baseStations.Length; index++)
         {
             var baseStation = baseStations[index];
-            SetStatus($"{action}: {index + 1}/{baseStations.Length} {baseStation.DisplayName}...");
+            SetActiveOperationStatus($"{action}: {index + 1}/{baseStations.Length} {baseStation.DisplayName}...");
             Exception? lastException = null;
             try
             {
@@ -722,7 +767,7 @@ internal sealed class ConfigEditorForm : Form
 
             if (pass == 3)
             {
-                SetStatus($"Turn On: waiting before pass {pass}/{BaseStationCommandTiming.PowerOnPasses}...");
+                SetActiveOperationStatus($"Turn On: waiting before pass {pass}/{BaseStationCommandTiming.PowerOnPasses}...");
                 await Task.Delay(BaseStationCommandTiming.PowerOnRetryPassDelay);
             }
 
@@ -767,11 +812,11 @@ internal sealed class ConfigEditorForm : Form
         Action<int>? onSuccess = null)
     {
         var failures = new List<string>();
-        SetStatus($"{action}: controlling {baseStations.Length} base station(s)...");
+        SetActiveOperationStatus($"{action}: controlling {baseStations.Length} base station(s)...");
         for (var index = 0; index < baseStations.Length; index++)
         {
             var baseStation = baseStations[index];
-            SetStatus($"{action}: {index + 1}/{baseStations.Length} {baseStation.DisplayName}...");
+            SetActiveOperationStatus($"{action}: {index + 1}/{baseStations.Length} {baseStation.DisplayName}...");
             Exception? lastException = null;
             try
             {
@@ -837,6 +882,7 @@ internal sealed class ConfigEditorForm : Form
         AddLabeledRow(settings, "Supervisor receive port", _oscRouterReceivePortInput, ToolTipWithConfigKey("Local UDP port the OSC router listens on at 127.0.0.1. Default is 9001.", "OscRouterReceivePort"));
 
         ConfigureOscRoutesGrid();
+        ConfigureDynamicGridSizing(_oscRoutesGrid);
         var routesPanel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -860,11 +906,11 @@ internal sealed class ConfigEditorForm : Form
             WrapContents = false,
             Padding = new Padding(0, 0, 0, 8)
         };
-        var addRouteButton = new Button { Text = "Add Route", AutoSize = true };
+        var addRouteButton = CreateButton("Add Route");
         addRouteButton.Click += (_, _) => SelectGridRow(_oscRoutesGrid, AddOscRouteGridRow("", "", enabled: true));
         _toolTips.SetToolTip(addRouteButton, "Add a new OSC route row.");
         routeButtons.Controls.Add(addRouteButton);
-        var deleteRouteButton = new Button { Text = "Delete", AutoSize = true };
+        var deleteRouteButton = CreateButton("Delete");
         deleteRouteButton.Click += (_, _) => DeleteSelectedGridRow(_oscRoutesGrid, "Deleted selected OSC route.");
         _toolTips.SetToolTip(deleteRouteButton, "Delete the selected OSC route row. Changes are written only when you save the config.");
         routeButtons.Controls.Add(deleteRouteButton);
@@ -874,6 +920,7 @@ internal sealed class ConfigEditorForm : Form
         routesPanel.Controls.Add(routesLabel, 0, 0);
         routesPanel.Controls.Add(routeButtons, 0, 1);
         routesPanel.Controls.Add(_oscRoutesGrid, 0, 2);
+        UpdateDynamicGridHeight(_oscRoutesGrid);
 
         layout.Controls.Add(settings, 0, 0);
         layout.Controls.Add(routesPanel, 0, 1);
@@ -914,7 +961,7 @@ internal sealed class ConfigEditorForm : Form
         _oscRoutesGrid.DefaultValuesNeeded += OnOscRoutesGridDefaultValuesNeeded;
         _oscRoutesGrid.CellFormatting += OnWarningGridCellFormatting;
         _oscRoutesGrid.KeyDown += OnManagedGridKeyDown;
-        _oscRoutesGrid.Paint += (_, e) => DrawEmptyGridPlaceholder(_oscRoutesGrid, e, "No OSC routes configured");
+        _oscRoutesGrid.Paint += (_, e) => DrawEmptyGridPlaceholder(_oscRoutesGrid, e, "No OSC routes configured. Click Add Route to create one.");
     }
 
     private void OnOscRoutesGridDefaultValuesNeeded(object? sender, DataGridViewRowEventArgs e)
@@ -924,7 +971,7 @@ internal sealed class ConfigEditorForm : Form
 
     private Control BuildLovenseTab()
     {
-        var layout = CreateFormLayout(3);
+        var layout = CreateFormLayout(3, compact: true);
 
         AddSectionHeader(layout, "Feature enablement");
         _oscGoesBrrrEnabledCheckBox.Margin = new Padding(0, 2, 0, 2);
@@ -965,13 +1012,20 @@ internal sealed class ConfigEditorForm : Form
 
     private Control BuildLovenseDetectorPanel()
     {
-        var panel = new TableLayoutPanel
+        var host = new Panel
         {
             Dock = DockStyle.Top,
+            Height = 148,
+            Margin = new Padding(0, 0, 0, 0),
+            Padding = new Padding(8),
+            BorderStyle = BorderStyle.FixedSingle
+        };
+        var panel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
             ColumnCount = 1,
             RowCount = 2,
-            Height = 156,
-            Margin = new Padding(0, 2, 0, 0),
+            Margin = new Padding(0),
             Padding = new Padding(0)
         };
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -986,22 +1040,22 @@ internal sealed class ConfigEditorForm : Form
         _lovenseDetectorsTextBox.Dock = DockStyle.Fill;
         panel.Controls.Add(label, 0, 0);
         panel.Controls.Add(_lovenseDetectorsTextBox, 0, 1);
-        return panel;
+        host.Controls.Add(panel);
+        return host;
     }
 
     private Control BuildAutoLaunchTab()
     {
         var layout = new TableLayoutPanel
         {
-            Dock = DockStyle.Top,
+            Dock = DockStyle.Fill,
             ColumnCount = 1,
             RowCount = 3,
-            Padding = new Padding(8),
-            AutoSize = true
+            Padding = new Padding(8)
         };
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         ConfigureAutoLaunchAppsGrid();
 
@@ -1019,24 +1073,24 @@ internal sealed class ConfigEditorForm : Form
             WrapContents = false,
             Padding = new Padding(0, 0, 0, 8)
         };
-        var addAppButton = new Button { Text = "Add App", AutoSize = true };
+        var addAppButton = CreateButton("Add App");
         addAppButton.Click += (_, _) => SelectGridRow(
             _autoLaunchAppsGrid,
             AddAutoLaunchAppGridRow("", "", enabled: true, restartOnPimaxReconnect: true, runAsAdmin: false, startMinimized: false));
         _toolTips.SetToolTip(addAppButton, "Add a new auto-launch app row.");
         appButtons.Controls.Add(addAppButton);
-        var deleteAppButton = new Button { Text = "Delete", AutoSize = true };
+        var deleteAppButton = CreateButton("Delete");
         deleteAppButton.Click += (_, _) => DeleteSelectedGridRow(_autoLaunchAppsGrid, "Deleted selected auto-launch app.");
         _toolTips.SetToolTip(deleteAppButton, "Delete the selected auto-launch app row. Changes are written only when you save the config.");
         appButtons.Controls.Add(deleteAppButton);
 
         _toolTips.SetToolTip(label, tooltip);
-        _autoLaunchAppsGrid.Dock = DockStyle.Top;
-        _autoLaunchAppsGrid.Height = 178;
+        ConfigureDynamicGridSizing(_autoLaunchAppsGrid);
         _toolTips.SetToolTip(_autoLaunchAppsGrid, tooltip);
         layout.Controls.Add(label, 0, 0);
         layout.Controls.Add(appButtons, 0, 1);
         layout.Controls.Add(_autoLaunchAppsGrid, 0, 2);
+        UpdateDynamicGridHeight(_autoLaunchAppsGrid);
         return BuildTabWithDescription(
             "Auto-launch apps",
             "Configure optional tools that should start with the supervisor or restart after a Pimax reconnect.",
@@ -1266,7 +1320,8 @@ internal sealed class ConfigEditorForm : Form
         var helperLabel = CreateMutedLabel(helperText);
         helperLabel.Padding = new Padding(0, 0, 0, 4);
         textBox.Dock = DockStyle.Fill;
-        var testButton = new Button { Text = buttonText, AutoSize = true, Margin = new Padding(0, 6, 0, 0) };
+        var testButton = CreateButton(buttonText);
+        testButton.Margin = new Padding(0, 6, 0, 0);
         testButton.Click += async (_, _) => await testAsync();
         _toolTips.SetToolTip(label, tooltip);
         _toolTips.SetToolTip(textBox, tooltip);
@@ -1290,7 +1345,7 @@ internal sealed class ConfigEditorForm : Form
                 return;
             }
 
-            SetStatus($"Testing {detectorName} detector rules...");
+            SetActiveOperationStatus($"Testing {detectorName} detector rules...");
             var timeoutSeconds = _numberInputs.TryGetValue("DeviceProbeTimeoutSeconds", out var timeoutInput)
                 ? (int)timeoutInput.Value
                 : 10;
@@ -1384,10 +1439,10 @@ internal sealed class ConfigEditorForm : Form
             AutoSize = true,
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.RightToLeft,
-            Padding = new Padding(0, 12, 0, 0)
+            Padding = new Padding(0, 20, 0, 0)
         };
-        var closeButton = new Button { Text = "Close", DialogResult = DialogResult.OK, Width = 86 };
-        var copyButton = new Button { Text = "Copy", Width = 86 };
+        var closeButton = CreateButton("Close", autoSize: false, width: 86, dialogResult: DialogResult.OK);
+        var copyButton = CreateButton("Copy", autoSize: false, width: 86);
         copyButton.Click += (_, _) =>
         {
             try
@@ -1548,17 +1603,17 @@ internal sealed class ConfigEditorForm : Form
             WrapContents = false,
             Padding = new Padding(0, 0, 0, 8)
         };
-        var applyButton = new Button { Text = "Apply JSON to editor", AutoSize = true };
+        var applyButton = CreateButton("Apply JSON to editor");
         applyButton.Click += (_, _) => ApplyRawJsonToEditor();
         _toolTips.SetToolTip(applyButton, "Parse the Raw JSON text and update all other tabs with those values.");
         buttons.Controls.Add(applyButton);
 
-        var revertButton = new Button { Text = "Revert JSON changes", AutoSize = true };
+        var revertButton = CreateButton("Revert JSON changes");
         revertButton.Click += (_, _) => RevertRawJsonChanges();
         _toolTips.SetToolTip(revertButton, "Discard unapplied Raw JSON edits and restore JSON from the current editor values.");
         buttons.Controls.Add(revertButton);
 
-        var formatButton = new Button { Text = "Format JSON", AutoSize = true };
+        var formatButton = CreateButton("Format JSON");
         formatButton.Click += (_, _) => FormatRawJson();
         _toolTips.SetToolTip(formatButton, "Pretty-print the Raw JSON text after validating it.");
         buttons.Controls.Add(formatButton);
@@ -1590,21 +1645,21 @@ internal sealed class ConfigEditorForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-        var validateButton = new Button { Text = "Validate", AutoSize = true };
+        var validateButton = CreateButton("Validate");
         validateButton.Click += (_, _) => ValidateConfigFromButton();
         _toolTips.SetToolTip(validateButton, "Validate (Ctrl+Shift+V). Validate the currently loaded editor values without saving.");
 
-        var launchButton = new Button { Text = "Launch Supervisor", AutoSize = true };
+        var launchButton = CreateButton("Launch Supervisor");
         launchButton.Click += (_, _) => LaunchSupervisor();
         launchButton.FlatStyle = FlatStyle.Flat;
         _toolTips.SetToolTip(launchButton, "Launch Supervisor (Ctrl+L). Starts the console supervisor using the currently selected config file. Save changes first if you want the launched supervisor to use them.");
 
-        var saveButton = new Button { Text = "Save", AutoSize = true };
+        var saveButton = CreateButton("Save");
         saveButton.Tag = "Primary";
         saveButton.Click += (_, _) => SaveConfig();
         _toolTips.SetToolTip(saveButton, "Save (Ctrl+S). Save the current editor values into the selected config file.");
 
-        var saveAsButton = new Button { Text = "Save As...", AutoSize = true };
+        var saveAsButton = CreateButton("Save As...");
         saveAsButton.Click += (_, _) => SaveConfigAs();
         _toolTips.SetToolTip(saveAsButton, "Save As (Ctrl+Shift+S). Choose a different JSON file path, then save the current editor values.");
 
@@ -1673,20 +1728,21 @@ internal sealed class ConfigEditorForm : Form
         return root;
     }
 
-    private static TableLayoutPanel CreateFormLayout(int columns)
+    private static TableLayoutPanel CreateFormLayout(int columns, bool compact = false)
     {
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             AutoScroll = true,
             ColumnCount = columns,
-            Padding = new Padding(8)
+            Padding = compact ? new Padding(6) : new Padding(8),
+            Tag = compact ? "CompactForm" : null
         };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 230));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, compact ? 220 : 230));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         if (columns > 2)
         {
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 188));
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, compact ? PathStatusColumnWidth - 8 : PathStatusColumnWidth));
         }
 
         return layout;
@@ -1701,7 +1757,7 @@ internal sealed class ConfigEditorForm : Form
         string? configKey = null,
         string? defaultFileName = null)
     {
-        var browseButton = new Button { Text = "Browse...", Width = 104, Height = 27 };
+        var browseButton = CreateButton("Browse...", autoSize: false, width: 104, height: 27);
         browseButton.Click += (_, _) =>
         {
             var browseFileName = string.IsNullOrWhiteSpace(Path.GetFileName(textBox.Text))
@@ -1714,9 +1770,10 @@ internal sealed class ConfigEditorForm : Form
                 FileName = browseFileName
             };
 
-            if (File.Exists(textBox.Text))
+            var expandedTextPath = ExpandPath(textBox.Text);
+            if (File.Exists(expandedTextPath))
             {
-                dialog.InitialDirectory = Path.GetDirectoryName(textBox.Text);
+                dialog.InitialDirectory = Path.GetDirectoryName(expandedTextPath);
             }
             else if (!string.IsNullOrWhiteSpace(suggestedDirectory) && Directory.Exists(suggestedDirectory))
             {
@@ -1785,6 +1842,7 @@ internal sealed class ConfigEditorForm : Form
         AutoSize = true,
         Anchor = AnchorStyles.Left,
         Margin = new Padding(8, 5, 0, 0),
+        MinimumSize = new Size(92, 0),
         Tag = "PathStatus"
     };
 
@@ -1799,7 +1857,7 @@ internal sealed class ConfigEditorForm : Form
         }
 
         var found = exists(path);
-        statusLabel.Text = found ? "Found" : "Not found";
+        statusLabel.Text = found ? "✓ Found" : "⚠ Not found";
         statusLabel.ForeColor = found
             ? (_theme.IsDark ? Color.FromArgb(147, 197, 153) : Color.FromArgb(35, 118, 61))
             : (_theme.IsDark ? Color.FromArgb(231, 170, 117) : Color.FromArgb(158, 82, 28));
@@ -1811,6 +1869,80 @@ internal sealed class ConfigEditorForm : Form
         {
             refresh();
         }
+    }
+
+    private void ConfigureDynamicGridSizing(DataGridView grid)
+    {
+        grid.Dock = DockStyle.Top;
+        grid.Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right;
+        grid.ScrollBars = ScrollBars.Both;
+        grid.MinimumSize = new Size(0, CalculateGridHeight(grid, MinimumGridVisibleRows));
+        grid.Height = grid.MinimumSize.Height;
+
+        grid.RowsAdded += (_, _) => UpdateDynamicGridHeight(grid);
+        grid.RowsRemoved += (_, _) => UpdateDynamicGridHeight(grid);
+        grid.RowHeightChanged += (_, _) => UpdateDynamicGridHeight(grid);
+        grid.ColumnHeadersHeightChanged += (_, _) => UpdateDynamicGridHeight(grid);
+        grid.HandleCreated += (_, _) => UpdateDynamicGridHeight(grid);
+        grid.ParentChanged += (_, _) =>
+        {
+            if (grid.Parent is Control parent)
+            {
+                parent.SizeChanged += (_, _) => UpdateDynamicGridHeight(grid);
+                UpdateDynamicGridHeight(grid);
+            }
+        };
+    }
+
+    private void UpdateDynamicGridHeight(DataGridView grid)
+    {
+        if (grid.IsDisposed)
+        {
+            return;
+        }
+
+        var minimumHeight = CalculateGridHeight(grid, MinimumGridVisibleRows);
+        var rowCount = grid.Rows
+            .Cast<DataGridViewRow>()
+            .Count(row => !row.IsNewRow);
+        var desiredHeight = CalculateGridHeight(grid, Math.Max(MinimumGridVisibleRows, rowCount));
+        if (grid.Parent is Control parent)
+        {
+            var availableHeight = parent.ClientSize.Height - grid.Top - parent.Padding.Bottom;
+            if (availableHeight > 0)
+            {
+                desiredHeight = Math.Min(desiredHeight, Math.Max(minimumHeight, availableHeight));
+            }
+        }
+
+        grid.MinimumSize = new Size(0, minimumHeight);
+        if (grid.Height != desiredHeight)
+        {
+            grid.Height = desiredHeight;
+        }
+    }
+
+    private static int CalculateGridHeight(DataGridView grid, int visibleRows)
+    {
+        var rowHeight = grid.RowTemplate.Height > 0
+            ? grid.RowTemplate.Height
+            : grid.Font.Height + 8;
+        foreach (DataGridViewRow row in grid.Rows)
+        {
+            if (!row.IsNewRow)
+            {
+                rowHeight = Math.Max(rowHeight, row.Height);
+                break;
+            }
+        }
+
+        var headerHeight = grid.ColumnHeadersVisible ? grid.ColumnHeadersHeight : 0;
+        var borderHeight = grid.BorderStyle == BorderStyle.None ? 0 : SystemInformation.BorderSize.Height * 2;
+        return headerHeight
+            + (rowHeight * visibleRows)
+            + SystemInformation.HorizontalScrollBarHeight
+            + borderHeight
+            + 4;
     }
 
     private void AddLabeledRow(TableLayoutPanel layout, string label, Control control, string tooltip)
@@ -1848,15 +1980,15 @@ internal sealed class ConfigEditorForm : Form
 
     private void AddSectionHeader(TableLayoutPanel layout, string text)
     {
-        AddFullWidth(layout, CreateSectionLabel(text), text);
+        AddFullWidth(layout, CreateSectionLabel(text, Equals(layout.Tag, "CompactForm")), text);
     }
 
-    private static Label CreateSectionLabel(string text) => new()
+    private static Label CreateSectionLabel(string text, bool compact = false) => new()
     {
         Text = text,
         AutoSize = true,
         Font = new Font(FontFamily.GenericSansSerif, 9.5F, FontStyle.Bold),
-        Padding = new Padding(0, 16, 0, 5),
+        Padding = compact ? new Padding(0, 10, 0, 3) : new Padding(0, 16, 0, 5),
         Tag = "Section"
     };
 
@@ -1883,7 +2015,7 @@ internal sealed class ConfigEditorForm : Form
             Minimum = minimum,
             Maximum = maximum,
             Anchor = AnchorStyles.Left,
-            Width = 96
+            Width = CompactNumberInputWidth
         };
         _numberInputs[propertyName] = input;
         _numberLabels[propertyName] = label;
@@ -1912,10 +2044,15 @@ internal sealed class ConfigEditorForm : Form
     private static string BuildPathTooltip(string tooltip, string pathText, string? configKey)
     {
         var builder = new StringBuilder(tooltip);
-        if (!string.IsNullOrWhiteSpace(pathText))
+        var rawPath = pathText.Trim();
+        if (!string.IsNullOrWhiteSpace(rawPath))
         {
-            builder.Append("\r\n\r\nExpanded path:\r\n");
-            builder.Append(ExpandPath(pathText));
+            var expandedPath = ExpandPath(rawPath);
+            if (!string.Equals(rawPath, expandedPath, StringComparison.OrdinalIgnoreCase))
+            {
+                builder.Append("\r\n\r\nExpanded path:\r\n");
+                builder.Append(expandedPath);
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(configKey))
@@ -2194,13 +2331,10 @@ internal sealed class ConfigEditorForm : Form
             _rawJsonTextBox.Text = json;
             _suppressDirtyTracking = false;
             _editorState.LastConfigPath = Path.GetFullPath(path);
-            SetCleanStatus(backupPath is null
+            var savedStatus = backupPath is null
                 ? $"Saved config at {DateTime.Now:HH:mm}."
-                : $"Saved config and created backup at {DateTime.Now:HH:mm}.");
-            if (backupPath is not null)
-            {
-                _toolTips.SetToolTip(_statusLabel, "Backup path:\r\n" + backupPath);
-            }
+                : $"Saved config and created backup at {DateTime.Now:HH:mm}.";
+            SetCleanStatus(savedStatus, backupPath is null ? null : "Backup path:\r\n" + backupPath);
             return true;
         }
         catch (Exception ex)
@@ -2892,7 +3026,7 @@ internal sealed class ConfigEditorForm : Form
 
             try
             {
-                SetStatus($"Reading state for {baseStation.DisplayName}...");
+                SetActiveOperationStatus($"Reading state for {baseStation.DisplayName}...");
                 var state = await client.ReadPowerStateAsync(baseStation, CancellationToken.None);
                 row.Cells["State"].Value = state;
                 row.Cells["PowerStateReadUnsupported"].Value = state == BaseStationPowerState.Unsupported;
@@ -2901,7 +3035,7 @@ internal sealed class ConfigEditorForm : Form
             catch (Exception ex)
             {
                 row.Cells["State"].Value = "Unknown";
-                SetStatus($"Could not read state for {baseStation.DisplayName}: {ex.Message}");
+                SetActiveOperationStatus($"Could not read state for {baseStation.DisplayName}: {ex.Message}");
             }
 
             await Task.Delay(BaseStationCommandTiming.InterStationDelay);
@@ -3042,40 +3176,126 @@ internal sealed class ConfigEditorForm : Form
         };
     }
 
-    private void SetStatus(string message)
+    private void SetStatus(string message) => SetTemporaryStatus(message);
+
+    private void SetTemporaryStatus(string message, string? tooltip = null)
     {
+        _temporaryStatus = message;
+        _temporaryStatusToolTip = tooltip ?? message;
+        _temporaryStatusTabIndex = _tabs.SelectedIndex;
+        _temporaryStatusIsActiveOperation = false;
+        _temporaryStatusExpiresAt = DateTime.UtcNow.AddMilliseconds(TemporaryStatusMilliseconds);
         _statusTimer.Stop();
-        _statusLabel.Text = message;
-        _toolTips.SetToolTip(_statusLabel, message);
         _statusTimer.Start();
+        RefreshVisibleStatus();
     }
 
-    private void SetPersistentStatus(string message)
+    private void SetActiveOperationStatus(string message, string? tooltip = null)
     {
+        _temporaryStatus = message;
+        _temporaryStatusToolTip = tooltip ?? message;
+        _temporaryStatusTabIndex = _tabs.SelectedIndex;
+        _temporaryStatusIsActiveOperation = true;
+        _temporaryStatusExpiresAt = DateTime.MaxValue;
         _statusTimer.Stop();
-        _persistentStatus = message;
-        _statusLabel.Text = message;
-        _toolTips.SetToolTip(_statusLabel, message);
+        RefreshVisibleStatus();
     }
 
-    private void RestorePersistentStatus()
+    private void SetPersistentStatus(string message, string? tooltip = null)
     {
+        _persistentStatus = string.IsNullOrWhiteSpace(message) ? "Ready" : message;
+        _persistentStatusToolTip = tooltip ?? _persistentStatus;
+        RefreshVisibleStatus();
+    }
+
+    private void ExpireTemporaryStatus()
+    {
+        if (_temporaryStatusIsActiveOperation)
+        {
+            return;
+        }
+
+        if (_temporaryStatus is null || DateTime.UtcNow < _temporaryStatusExpiresAt)
+        {
+            return;
+        }
+
         _statusTimer.Stop();
-        _statusLabel.Text = string.IsNullOrWhiteSpace(_persistentStatus)
-            ? ""
-            : _persistentStatus;
-        _toolTips.SetToolTip(_statusLabel, _statusLabel.Text);
+        ClearTemporaryStatus();
+        RefreshVisibleStatus();
+    }
+
+    private void ClearTemporaryStatus()
+    {
+        _temporaryStatus = null;
+        _temporaryStatusToolTip = null;
+        _temporaryStatusExpiresAt = default;
+        _temporaryStatusTabIndex = -1;
+        _temporaryStatusIsActiveOperation = false;
+    }
+
+    private void RefreshVisibleStatus()
+    {
+        if (_temporaryStatus is not null)
+        {
+            if (!_temporaryStatusIsActiveOperation && DateTime.UtcNow >= _temporaryStatusExpiresAt)
+            {
+                ClearTemporaryStatus();
+            }
+            else
+            {
+                var visibleTemporaryStatus = _temporaryStatus;
+                if (!_temporaryStatusIsActiveOperation
+                    && _temporaryStatusTabIndex >= 0
+                    && _temporaryStatusTabIndex != _tabs.SelectedIndex
+                    && !visibleTemporaryStatus.StartsWith("Last action:", StringComparison.OrdinalIgnoreCase))
+                {
+                    visibleTemporaryStatus = "Last action: " + visibleTemporaryStatus;
+                }
+
+                _statusLabel.Text = visibleTemporaryStatus;
+                _toolTips.SetToolTip(_statusLabel, _temporaryStatusToolTip ?? visibleTemporaryStatus);
+                return;
+            }
+        }
+
+        var (status, tooltip) = ResolvePersistentStatus();
+        _statusLabel.Text = status;
+        _toolTips.SetToolTip(_statusLabel, tooltip);
+    }
+
+    private (string Status, string ToolTip) ResolvePersistentStatus()
+    {
+        if (_hasUnsavedChanges)
+        {
+            return ("Unsaved changes", "Unsaved changes");
+        }
+
+        if (_tabs.SelectedIndex == _tabs.TabCount - 1 && !string.IsNullOrWhiteSpace(_rawJsonStatus))
+        {
+            return (_rawJsonStatus, _rawJsonStatus);
+        }
+
+        if (!string.IsNullOrWhiteSpace(_persistentStatus))
+        {
+            return (_persistentStatus, _persistentStatusToolTip);
+        }
+
+        return ("Ready", "Ready");
     }
 
     private void SetLastActionStatus(string message)
     {
-        SetPersistentStatus("Last action: " + message);
+        SetTemporaryStatus(message.StartsWith("Last action:", StringComparison.OrdinalIgnoreCase)
+            ? message
+            : "Last action: " + message);
     }
 
-    private void SetCleanStatus(string message)
+    private void SetCleanStatus(string message, string? tooltip = null)
     {
         _hasUnsavedChanges = false;
-        SetPersistentStatus(message);
+        ClearTemporaryStatus();
+        SetPersistentStatus(message, tooltip);
         UpdateWindowTitle();
     }
 
@@ -3180,9 +3400,10 @@ internal sealed class ConfigEditorForm : Form
             _rawJsonValidationLabel.Text = _rawJsonHasUnappliedChanges
                 ? "Raw JSON is valid but has not been applied to the editor."
                 : "Raw JSON is valid.";
+            _rawJsonStatus = _rawJsonValidationLabel.Text;
             if (showStatus)
             {
-                SetStatus(_rawJsonHasUnappliedChanges ? "Raw JSON is valid. Apply JSON to editor to use it." : "Raw JSON is valid.");
+                RefreshVisibleStatus();
             }
 
             return true;
@@ -3191,9 +3412,10 @@ internal sealed class ConfigEditorForm : Form
         {
             var message = FormatJsonError(ex);
             _rawJsonValidationLabel.Text = message;
+            _rawJsonStatus = message;
             if (showStatus)
             {
-                SetStatus(message);
+                RefreshVisibleStatus();
             }
 
             return false;
@@ -3202,9 +3424,10 @@ internal sealed class ConfigEditorForm : Form
         {
             var message = "Invalid JSON: " + ex.Message;
             _rawJsonValidationLabel.Text = message;
+            _rawJsonStatus = message;
             if (showStatus)
             {
-                SetStatus(message);
+                RefreshVisibleStatus();
             }
 
             return false;
@@ -3243,7 +3466,8 @@ internal sealed class ConfigEditorForm : Form
             _suppressDirtyTracking = false;
         }
 
-        MarkDirty("Raw JSON applied to editor.");
+        MarkDirty("Unsaved changes");
+        SetTemporaryStatus("Raw JSON applied to editor.");
     }
 
     private void RevertRawJsonChanges()
@@ -3295,7 +3519,8 @@ internal sealed class ConfigEditorForm : Form
             _suppressDirtyTracking = false;
         }
 
-        MarkDirty("Raw JSON formatted.", syncRawJson: false);
+        MarkDirty("Unsaved Raw JSON changes", syncRawJson: false);
+        SetTemporaryStatus("Raw JSON formatted.");
     }
 
     private void RestoreDefaults()
@@ -3324,7 +3549,8 @@ internal sealed class ConfigEditorForm : Form
             _suppressDirtyTracking = false;
         }
 
-        MarkDirty("Default values restored. Save to write them to disk.");
+        MarkDirty("Unsaved changes");
+        SetTemporaryStatus("Default values restored. Save to write them to disk.");
     }
 
     private void ShowAboutDialog()
@@ -3412,6 +3638,7 @@ internal sealed class ConfigEditorForm : Form
         CommitAutoLaunchAppsGridEdits();
         CommitBaseStationsGridEdits();
         CommitOscRoutesGridEdits();
+        RefreshPathIndicators();
 
         if (!ValidateRawJsonText(showStatus: false))
         {
@@ -3435,6 +3662,7 @@ internal sealed class ConfigEditorForm : Form
             ValidatePath(result, "OscGoesBrrr executable path", _oscGoesBrrrPathTextBox.Text, required: false);
         }
 
+        ValidateAutoLaunchApps(result);
         ValidateProcessList(result, "Broken Eye process name", _brokenEyeProcessesTextBox.Text);
         ValidateProcessList(result, "VRCFaceTracking process name", _vrcFaceTrackingProcessesTextBox.Text);
         ValidateProcessList(result, "Apps that trigger cleanup when closed", _watchedShutdownProcessesTextBox.Text);
@@ -3476,6 +3704,41 @@ internal sealed class ConfigEditorForm : Form
         if (!File.Exists(expanded))
         {
             result.Warnings.Add($"{label} does not exist.");
+            return;
+        }
+
+        if (!string.Equals(Path.GetExtension(expanded), ".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            result.Warnings.Add($"{label} should point to an .exe file.");
+        }
+    }
+
+    private void ValidateAutoLaunchApps(ValidationResult result)
+    {
+        foreach (DataGridViewRow row in _autoLaunchAppsGrid.Rows)
+        {
+            if (row.IsNewRow)
+            {
+                continue;
+            }
+
+            var enabled = GetGridBool(row, "Enabled", defaultValue: true);
+            var name = GetGridString(row, "Name");
+            var path = GetGridString(row, "Path");
+            var label = string.IsNullOrWhiteSpace(name)
+                ? $"Auto-launch app row {row.Index + 1} executable path"
+                : $"Auto-launch app '{name}' executable path";
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                if (enabled)
+                {
+                    result.Errors.Add($"{label} is required when the row is enabled.");
+                }
+
+                continue;
+            }
+
+            ValidatePath(result, label, path, required: enabled);
         }
     }
 
@@ -3656,9 +3919,9 @@ internal sealed class ConfigEditorForm : Form
             Padding = new Padding(8),
             WrapContents = false
         };
-        var cancelButton = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Width = 86 };
-        var launchButton = new Button { Text = "Launch Without Saving", DialogResult = DialogResult.No, Width = 148 };
-        var saveButton = new Button { Text = "Save and Launch", DialogResult = DialogResult.Yes, Width = 124 };
+        var cancelButton = CreateButton("Cancel", autoSize: false, width: 86, dialogResult: DialogResult.Cancel);
+        var launchButton = CreateButton("Launch Without Saving", autoSize: false, width: 148, dialogResult: DialogResult.No);
+        var saveButton = CreateButton("Save and Launch", autoSize: false, width: 124, dialogResult: DialogResult.Yes);
         buttons.Controls.Add(cancelButton);
         buttons.Controls.Add(launchButton);
         buttons.Controls.Add(saveButton);
@@ -3885,14 +4148,12 @@ internal sealed class ConfigEditorForm : Form
 
     private static Button[] CreateDialogButtons(MessageBoxButtons buttons)
     {
-        static Button Create(string text, DialogResult result) => new()
+        static Button Create(string text, DialogResult result)
         {
-            Text = text,
-            DialogResult = result,
-            Width = 88,
-            Height = 28,
-            Margin = new Padding(6, 0, 0, 0)
-        };
+            var button = CreateButton(text, autoSize: false, width: 88, height: 28, dialogResult: result);
+            button.Margin = new Padding(6, 0, 0, 0);
+            return button;
+        }
 
         return buttons switch
         {
@@ -3991,6 +4252,7 @@ internal sealed class ConfigEditorForm : Form
                 button.FlatAppearance.MouseDownBackColor = _theme.ButtonPressed;
                 button.BackColor = Equals(button.Tag, "Primary") ? _theme.PrimaryButtonBack : _theme.ButtonBack;
                 button.ForeColor = _theme.Text;
+                button.Invalidate();
                 break;
             case CheckBox checkBox:
                 checkBox.UseVisualStyleBackColor = false;
@@ -4164,13 +4426,13 @@ internal sealed record AppTheme(
         ButtonHover: Color.FromArgb(229, 241, 251),
         ButtonPressed: Color.FromArgb(204, 228, 247),
         TabBack: SystemColors.Control,
-        TabSelectedBack: SystemColors.Window,
+        TabSelectedBack: Color.FromArgb(250, 250, 250),
         ToolTipBack: SystemColors.Info,
         ToolTipFore: SystemColors.InfoText,
         Text: SystemColors.ControlText,
         Border: SystemColors.ControlDark,
-        StrongBorder: Color.FromArgb(92, 92, 92),
-        PrimaryButtonBack: Color.FromArgb(232, 232, 232));
+        StrongBorder: Color.FromArgb(76, 128, 176),
+        PrimaryButtonBack: Color.FromArgb(240, 247, 252));
 
     public static readonly AppTheme Dark = new(
         IsDark: true,
@@ -4180,17 +4442,129 @@ internal sealed record AppTheme(
         ButtonHover: Color.FromArgb(74, 74, 74),
         ButtonPressed: Color.FromArgb(88, 88, 88),
         TabBack: Color.FromArgb(40, 40, 40),
-        TabSelectedBack: Color.FromArgb(52, 52, 52),
+        TabSelectedBack: Color.FromArgb(62, 62, 62),
         ToolTipBack: Color.FromArgb(45, 45, 45),
         ToolTipFore: Color.WhiteSmoke,
         Text: Color.WhiteSmoke,
         Border: Color.FromArgb(86, 86, 86),
-        StrongBorder: Color.FromArgb(136, 136, 136),
-        PrimaryButtonBack: Color.FromArgb(68, 68, 68));
+        StrongBorder: Color.FromArgb(160, 160, 160),
+        PrimaryButtonBack: Color.FromArgb(76, 76, 76));
+}
+
+internal sealed class ThemedActionButton : Button
+{
+    private const int Radius = 4;
+    private bool _hovered;
+    private bool _pressed;
+
+    public ThemedActionButton()
+    {
+        FlatStyle = FlatStyle.Flat;
+        FlatAppearance.BorderSize = 1;
+        UseVisualStyleBackColor = false;
+        Padding = new Padding(8, 2, 8, 2);
+    }
+
+    protected override void OnMouseEnter(EventArgs e)
+    {
+        _hovered = true;
+        Invalidate();
+        base.OnMouseEnter(e);
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        _hovered = false;
+        _pressed = false;
+        Invalidate();
+        base.OnMouseLeave(e);
+    }
+
+    protected override void OnMouseDown(MouseEventArgs mevent)
+    {
+        if (mevent.Button == MouseButtons.Left)
+        {
+            _pressed = true;
+            Invalidate();
+        }
+
+        base.OnMouseDown(mevent);
+    }
+
+    protected override void OnMouseUp(MouseEventArgs mevent)
+    {
+        _pressed = false;
+        Invalidate();
+        base.OnMouseUp(mevent);
+    }
+
+    protected override void OnEnabledChanged(EventArgs e)
+    {
+        Invalidate();
+        base.OnEnabledChanged(e);
+    }
+
+    protected override void OnPaint(PaintEventArgs pevent)
+    {
+        pevent.Graphics.Clear(Parent?.BackColor ?? SystemColors.Control);
+        pevent.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+        var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
+        var backColor = BackColor;
+        if (!Enabled)
+        {
+            backColor = SystemColors.Control;
+        }
+        else if (_pressed)
+        {
+            backColor = ColorOrFallback(FlatAppearance.MouseDownBackColor, BackColor);
+        }
+        else if (_hovered)
+        {
+            backColor = ColorOrFallback(FlatAppearance.MouseOverBackColor, BackColor);
+        }
+
+        using var path = CreateRoundedRectanglePath(bounds, Radius);
+        using var background = new SolidBrush(backColor);
+        using var border = new Pen(Enabled ? ColorOrFallback(FlatAppearance.BorderColor, SystemColors.ControlDark) : SystemColors.ControlDark);
+        pevent.Graphics.FillPath(background, path);
+        pevent.Graphics.DrawPath(border, path);
+
+        var textColor = Enabled ? ForeColor : SystemColors.GrayText;
+        TextRenderer.DrawText(
+            pevent.Graphics,
+            Text,
+            Font,
+            bounds,
+            textColor,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+        if (Focused && ShowFocusCues)
+        {
+            ControlPaint.DrawFocusRectangle(pevent.Graphics, Rectangle.Inflate(bounds, -4, -4), textColor, backColor);
+        }
+    }
+
+    private static GraphicsPath CreateRoundedRectanglePath(Rectangle bounds, int radius)
+    {
+        var diameter = radius * 2;
+        var path = new GraphicsPath();
+        path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    private static Color ColorOrFallback(Color color, Color fallback)
+        => color.IsEmpty ? fallback : color;
 }
 
 internal sealed class ThemedTabButton : Button
 {
+    private const int Radius = 3;
+
     [Browsable(false)]
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public bool Selected { get; set; }
@@ -4201,14 +4575,41 @@ internal sealed class ThemedTabButton : Button
 
     protected override void OnPaint(PaintEventArgs pevent)
     {
-        base.OnPaint(pevent);
-        if (!Selected)
-        {
-            return;
-        }
+        pevent.Graphics.Clear(Parent?.BackColor ?? Theme.WindowBack);
+        pevent.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
-        using var pen = new Pen(Theme.StrongBorder);
-        pevent.Graphics.DrawLine(pen, 1, 1, Width - 2, 1);
+        var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
+        using var path = CreateRoundedRectanglePath(bounds, Radius);
+        using var background = new SolidBrush(Selected ? Theme.TabSelectedBack : Theme.TabBack);
+        using var border = new Pen(Selected ? Theme.StrongBorder : Theme.Border);
+        pevent.Graphics.FillPath(background, path);
+        pevent.Graphics.DrawPath(border, path);
+
+        TextRenderer.DrawText(
+            pevent.Graphics,
+            Text,
+            Font,
+            bounds,
+            ForeColor,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+        if (Focused && ShowFocusCues)
+        {
+            var focusBounds = Rectangle.Inflate(bounds, -4, -4);
+            ControlPaint.DrawFocusRectangle(pevent.Graphics, focusBounds, ForeColor, Selected ? Theme.TabSelectedBack : Theme.TabBack);
+        }
+    }
+
+    private static GraphicsPath CreateRoundedRectanglePath(Rectangle bounds, int radius)
+    {
+        var diameter = radius * 2;
+        var path = new GraphicsPath();
+        path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
     }
 }
 
@@ -4362,6 +4763,7 @@ internal sealed class ThemedTabHost : UserControl
                 button.FlatAppearance.MouseDownBackColor = _theme.ButtonPressed;
                 button.BackColor = Equals(button.Tag, "Primary") ? _theme.PrimaryButtonBack : _theme.ButtonBack;
                 button.ForeColor = _theme.Text;
+                button.Invalidate();
                 break;
             case CheckBox checkBox:
                 checkBox.UseVisualStyleBackColor = false;
