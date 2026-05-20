@@ -35,9 +35,11 @@ internal enum BaseStationPowerState
 internal static class BaseStationCommandTiming
 {
     public static readonly TimeSpan InterStationDelay = TimeSpan.FromSeconds(1);
+    public static readonly TimeSpan PowerDownStateReadDelay = TimeSpan.FromSeconds(2);
     public static readonly TimeSpan PowerOnRetryPassDelay = TimeSpan.FromSeconds(30);
     public const int PowerOnPasses = 3;
     public const int PowerOnAttempts = 2;
+    public const int PowerDownFallbackPasses = 2;
 }
 
 internal sealed class BaseStationDevice
@@ -85,6 +87,149 @@ internal sealed class BaseStationDevice
         }
 
         return BaseStationVersion.Unknown;
+    }
+}
+
+internal sealed class BaseStationPowerDownResult
+{
+    public int StationCount { get; init; }
+    public int HandledCount { get; init; }
+    public bool SettingsChanged { get; init; }
+    public bool AllStationsHandled => HandledCount == StationCount;
+}
+
+internal static class BaseStationPowerDownRoutine
+{
+    public static async Task<BaseStationPowerDownResult> RunAsync(
+        BaseStationDevice[] baseStations,
+        BaseStationPowerDownMode mode,
+        BaseStationGattClient client,
+        Action<string> log,
+        Action? saveSettings,
+        CancellationToken cancellationToken)
+    {
+        var handledAddresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var fallbackBaseStations = new List<BaseStationDevice>();
+        var settingsChanged = false;
+        var action = mode == BaseStationPowerDownMode.Standby ? "standby" : "sleep";
+
+        for (var index = 0; index < baseStations.Length; index++)
+        {
+            var baseStation = baseStations[index];
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (NeedsFallbackShutdownWithoutStateRead(baseStation))
+            {
+                fallbackBaseStations.Add(baseStation);
+                log($"Base station {baseStation.DisplayName}: using two-pass {action} shutdown without status read.");
+            }
+            else if (await TrySendAndConfirmPowerDownAsync(baseStation, mode, client, log, cancellationToken))
+            {
+                handledAddresses.Add(baseStation.BluetoothAddress);
+            }
+            else
+            {
+                fallbackBaseStations.Add(baseStation);
+            }
+
+            if (index < baseStations.Length - 1)
+            {
+                await Task.Delay(BaseStationCommandTiming.InterStationDelay, cancellationToken);
+            }
+        }
+
+        for (var pass = 1; pass <= BaseStationCommandTiming.PowerDownFallbackPasses && fallbackBaseStations.Count > 0; pass++)
+        {
+            log(pass == 1
+                ? $"Running two-pass base station {action} shutdown for {fallbackBaseStations.Count} station(s)."
+                : $"Repeating base station {action} shutdown pass {pass}/{BaseStationCommandTiming.PowerDownFallbackPasses}.");
+
+            for (var index = 0; index < fallbackBaseStations.Count; index++)
+            {
+                var baseStation = fallbackBaseStations[index];
+                cancellationToken.ThrowIfCancellationRequested();
+
+                try
+                {
+                    await client.PowerDownAsync(baseStation, mode, cancellationToken);
+                    handledAddresses.Add(baseStation.BluetoothAddress);
+                    log($"Base station {baseStation.DisplayName}: {action} pass {pass} succeeded.");
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    log($"Base station {baseStation.DisplayName}: could not {action} on pass {pass}: {ex.Message}");
+                }
+
+                if (index < fallbackBaseStations.Count - 1)
+                {
+                    await Task.Delay(BaseStationCommandTiming.InterStationDelay, cancellationToken);
+                }
+            }
+        }
+
+        if (settingsChanged && saveSettings is not null)
+        {
+            saveSettings();
+        }
+
+        return new BaseStationPowerDownResult
+        {
+            StationCount = baseStations.Length,
+            HandledCount = baseStations.Count(baseStation => handledAddresses.Contains(baseStation.BluetoothAddress)),
+            SettingsChanged = settingsChanged
+        };
+
+        async Task<bool> TrySendAndConfirmPowerDownAsync(
+            BaseStationDevice baseStation,
+            BaseStationPowerDownMode requestedMode,
+            BaseStationGattClient gattClient,
+            Action<string> writeLog,
+            CancellationToken token)
+        {
+            try
+            {
+                await gattClient.PowerDownAsync(baseStation, requestedMode, token);
+                writeLog($"Base station {baseStation.DisplayName}: {action} command sent; waiting for status.");
+                await Task.Delay(BaseStationCommandTiming.PowerDownStateReadDelay, token);
+
+                var state = await gattClient.ReadPowerStateAsync(baseStation, token);
+                if (state == BaseStationPowerState.Unsupported)
+                {
+                    baseStation.PowerStateReadUnsupported = true;
+                    settingsChanged = true;
+                    writeLog($"Base station {baseStation.DisplayName}: power-state read is unsupported; using two-pass {action} shutdown.");
+                    return false;
+                }
+
+                writeLog($"Base station {baseStation.DisplayName}: reported state {state} after {action} command.");
+                if (IsConfirmedPowerDownState(state, requestedMode, baseStation))
+                {
+                    return true;
+                }
+
+                writeLog($"Base station {baseStation.DisplayName}: status did not confirm {action}; using two-pass shutdown.");
+                return false;
+            }
+            catch (Exception ex) when (!token.IsCancellationRequested)
+            {
+                writeLog($"Base station {baseStation.DisplayName}: could not confirm {action}: {ex.Message}. Using two-pass shutdown.");
+                return false;
+            }
+        }
+    }
+
+    private static bool NeedsFallbackShutdownWithoutStateRead(BaseStationDevice baseStation)
+        => baseStation.EffectiveVersion == BaseStationVersion.V1 || baseStation.PowerStateReadUnsupported;
+
+    private static bool IsConfirmedPowerDownState(
+        BaseStationPowerState state,
+        BaseStationPowerDownMode requestedMode,
+        BaseStationDevice baseStation)
+    {
+        var expectedState = requestedMode == BaseStationPowerDownMode.Standby && baseStation.SupportsStandby
+            ? BaseStationPowerState.Standby
+            : BaseStationPowerState.Sleeping;
+        return state == expectedState;
     }
 }
 

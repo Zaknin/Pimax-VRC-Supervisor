@@ -1476,13 +1476,15 @@ internal sealed class AppSupervisor
 
         var mode = _config.BaseStationPowerDownMode;
         Console.WriteLine($"Sending {mode.ToString().ToLowerInvariant()} to {baseStations.Length} base station(s)...");
-        var successes = await SendBaseStationCommandsAsync(
+        var result = await BaseStationPowerDownRoutine.RunAsync(
             baseStations,
-            mode == BaseStationPowerDownMode.Standby ? "standby" : "sleep",
-            (baseStation, token) => _baseStationGattClient.PowerDownAsync(baseStation, mode, token),
+            mode,
+            _baseStationGattClient,
+            Console.WriteLine,
+            _config.SaveBaseStationSettings,
             cancellationToken);
 
-        if (successes == baseStations.Length)
+        if (result.AllStationsHandled)
         {
             _baseStationPowerOnAttempted = false;
             _baseStationsPoweredOn = false;
@@ -2852,52 +2854,13 @@ internal static class BaseStationEmergencyCleanup
             return;
         }
 
-        var client = new BaseStationGattClient();
-        for (var pass = 1; pass <= 2; pass++)
-        {
-            for (var index = 0; index < baseStations.Length; index++)
-            {
-                var baseStation = baseStations[index];
-                cancellationToken.ThrowIfCancellationRequested();
-
-                try
-                {
-                    if (!baseStation.PowerStateReadUnsupported)
-                    {
-                        var state = await client.ReadPowerStateAsync(baseStation, cancellationToken);
-                        if (state is BaseStationPowerState.Sleeping or BaseStationPowerState.Standby)
-                        {
-                            Console.WriteLine($"Base station {baseStation.DisplayName}: already {state}.");
-                            continue;
-                        }
-                    }
-                }
-                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
-                {
-                    Console.WriteLine($"Base station {baseStation.DisplayName}: cleanup helper could not read state: {ex.Message}");
-                }
-
-                try
-                {
-                    await client.PowerDownAsync(baseStation, config.BaseStationPowerDownMode, cancellationToken);
-                    Console.WriteLine($"Base station {baseStation.DisplayName}: cleanup helper sent {config.BaseStationPowerDownMode}.");
-                }
-                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
-                {
-                    Console.WriteLine($"Base station {baseStation.DisplayName}: cleanup helper could not power down: {ex.Message}");
-                }
-
-                if (index < baseStations.Length - 1)
-                {
-                    await Task.Delay(BaseStationCommandTiming.InterStationDelay, cancellationToken);
-                }
-            }
-
-            if (pass < 2)
-            {
-                await Task.Delay(BaseStationCommandTiming.PowerOnRetryPassDelay, cancellationToken);
-            }
-        }
+        await BaseStationPowerDownRoutine.RunAsync(
+            baseStations,
+            config.BaseStationPowerDownMode,
+            new BaseStationGattClient(),
+            Console.WriteLine,
+            config.SaveBaseStationSettings,
+            cancellationToken);
     }
 }
 
