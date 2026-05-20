@@ -137,9 +137,10 @@ Both executables are stamped with version `1.2.0`.
 C:\Tools\PimaxVrcSupervisor
 ```
 
-3. Run `PimaxVrcSupervisor.exe`.
-4. Answer the first-run prompts.
-5. Use `PimaxVrcSupervisorConfigEditor.exe` later if you want to edit paths, timers, detectors, or auto-launch apps without touching JSON by hand.
+3. Choose one initial setup path:
+   - 3a. Run `PimaxVrcSupervisor.exe` and answer the first-run prompts.
+   - 3b. Use `PimaxVrcSupervisorConfigEditor.exe` for the initial config.
+4. Use `PimaxVrcSupervisorConfigEditor.exe` later if you want to edit paths, timers, detectors, or auto-launch apps without touching JSON by hand.
 
 The supervisor requests administrator privileges through its manifest because some managed tools and monitor actions may require elevation.
 
@@ -311,5 +312,6 @@ The output folder will contain both executables, the config file, and this READM
 ## Notes
 
 - This is a Windows-only utility.
-- The release zip is self-contained and intentionally large because it includes the Windows .NET runtime.
+- `PimaxVrcSupervisor-v1.2.0.zip` is the full self-contained release and includes the Windows .NET runtime.
+- `PimaxVrcSupervisor-v1.2.0_noNET9.zip` is smaller and requires the .NET 9 Windows Desktop Runtime to already be installed.
 - The app edits only its nearby `supervisor.config.json` unless you choose a different config path in the editor.
