@@ -69,11 +69,13 @@ internal sealed class ConfigEditorForm : Form
     private readonly DataGridView _autoLaunchAppsGrid = new()
     {
         Dock = DockStyle.Fill,
-        AllowUserToAddRows = true,
+        AllowUserToAddRows = false,
         AllowUserToDeleteRows = true,
         AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
         ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
-        RowHeadersVisible = false
+        RowHeadersVisible = false,
+        MultiSelect = false,
+        SelectionMode = DataGridViewSelectionMode.FullRowSelect
     };
     private readonly DataGridView _baseStationsGrid = new()
     {
@@ -82,16 +84,20 @@ internal sealed class ConfigEditorForm : Form
         AllowUserToDeleteRows = true,
         AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
         ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
-        RowHeadersVisible = false
+        RowHeadersVisible = false,
+        MultiSelect = false,
+        SelectionMode = DataGridViewSelectionMode.FullRowSelect
     };
     private readonly DataGridView _oscRoutesGrid = new()
     {
         Dock = DockStyle.Fill,
-        AllowUserToAddRows = true,
+        AllowUserToAddRows = false,
         AllowUserToDeleteRows = true,
         AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
         ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
-        RowHeadersVisible = false
+        RowHeadersVisible = false,
+        MultiSelect = false,
+        SelectionMode = DataGridViewSelectionMode.FullRowSelect
     };
     private readonly TextBox _brokenEyeProcessesTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _vrcFaceTrackingProcessesTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
@@ -337,16 +343,24 @@ internal sealed class ConfigEditorForm : Form
         _toolTips.SetToolTip(turnOffButton, "Power down every enabled base station using the selected power-down mode.");
         buttons.Controls.Add(turnOffButton);
         var addManualButton = new Button { Text = "Add Manual", AutoSize = true };
-        addManualButton.Click += (_, _) => AddBaseStationGridRow(new BaseStationDevice
+        addManualButton.Click += (_, _) =>
         {
-            FriendlyName = "Base station",
-            Name = "",
-            BluetoothAddress = "",
-            Version = BaseStationVersion.V2,
-            Enabled = true
-        });
+            var rowIndex = AddBaseStationGridRow(new BaseStationDevice
+            {
+                FriendlyName = "Base station",
+                Name = "",
+                BluetoothAddress = "",
+                Version = BaseStationVersion.V2,
+                Enabled = true
+            });
+            SelectGridRow(_baseStationsGrid, rowIndex);
+        };
         _toolTips.SetToolTip(addManualButton, "Add a base station row manually if Windows discovery does not expose it.");
         buttons.Controls.Add(addManualButton);
+        var deleteButton = new Button { Text = "Delete", AutoSize = true };
+        deleteButton.Click += (_, _) => DeleteSelectedGridRow(_baseStationsGrid, "Deleted selected base station row.");
+        _toolTips.SetToolTip(deleteButton, "Delete the selected base station row. Changes are written only when you save the config.");
+        buttons.Controls.Add(deleteButton);
 
         ConfigureBaseStationsGrid();
         layout.Controls.Add(settings, 0, 0);
@@ -457,6 +471,7 @@ internal sealed class ConfigEditorForm : Form
         });
         _baseStationsGrid.CellContentClick += OnBaseStationsGridCellContentClick;
         _baseStationsGrid.DefaultValuesNeeded += OnBaseStationsGridDefaultValuesNeeded;
+        _baseStationsGrid.KeyDown += OnManagedGridKeyDown;
     }
 
     private void OnBaseStationsGridDefaultValuesNeeded(object? sender, DataGridViewRowEventArgs e)
@@ -760,9 +775,10 @@ internal sealed class ConfigEditorForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 2,
+            RowCount = 3,
             Margin = new Padding(0, 8, 0, 0)
         };
+        routesPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         routesPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         routesPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var routesLabel = new Label
@@ -771,11 +787,27 @@ internal sealed class ConfigEditorForm : Form
             AutoSize = true,
             Padding = new Padding(0, 0, 0, 4)
         };
+        var routeButtons = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Padding = new Padding(0, 0, 0, 8)
+        };
+        var addRouteButton = new Button { Text = "Add Route", AutoSize = true };
+        addRouteButton.Click += (_, _) => SelectGridRow(_oscRoutesGrid, AddOscRouteGridRow("", "", enabled: true));
+        _toolTips.SetToolTip(addRouteButton, "Add a new OSC route row.");
+        routeButtons.Controls.Add(addRouteButton);
+        var deleteRouteButton = new Button { Text = "Delete", AutoSize = true };
+        deleteRouteButton.Click += (_, _) => DeleteSelectedGridRow(_oscRoutesGrid, "Deleted selected OSC route.");
+        _toolTips.SetToolTip(deleteRouteButton, "Delete the selected OSC route row. Changes are written only when you save the config.");
+        routeButtons.Controls.Add(deleteRouteButton);
         const string routesTooltip = "Each enabled route receives every OSC datagram unchanged. No OSC address filtering is applied.";
         _toolTips.SetToolTip(routesLabel, routesTooltip);
         _toolTips.SetToolTip(_oscRoutesGrid, routesTooltip);
         routesPanel.Controls.Add(routesLabel, 0, 0);
-        routesPanel.Controls.Add(_oscRoutesGrid, 0, 1);
+        routesPanel.Controls.Add(routeButtons, 0, 1);
+        routesPanel.Controls.Add(_oscRoutesGrid, 0, 2);
 
         layout.Controls.Add(settings, 0, 0);
         layout.Controls.Add(routesPanel, 0, 1);
@@ -811,6 +843,7 @@ internal sealed class ConfigEditorForm : Form
             MinimumWidth = 140
         });
         _oscRoutesGrid.DefaultValuesNeeded += OnOscRoutesGridDefaultValuesNeeded;
+        _oscRoutesGrid.KeyDown += OnManagedGridKeyDown;
     }
 
     private void OnOscRoutesGridDefaultValuesNeeded(object? sender, DataGridViewRowEventArgs e)
@@ -870,9 +903,10 @@ internal sealed class ConfigEditorForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 2,
+            RowCount = 3,
             Padding = new Padding(8)
         };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -885,11 +919,29 @@ internal sealed class ConfigEditorForm : Form
             AutoSize = true,
             Padding = new Padding(0, 0, 0, 4)
         };
+        var appButtons = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Padding = new Padding(0, 0, 0, 8)
+        };
+        var addAppButton = new Button { Text = "Add App", AutoSize = true };
+        addAppButton.Click += (_, _) => SelectGridRow(
+            _autoLaunchAppsGrid,
+            AddAutoLaunchAppGridRow("", "", enabled: true, restartOnPimaxReconnect: true, runAsAdmin: false, startMinimized: false));
+        _toolTips.SetToolTip(addAppButton, "Add a new auto-launch app row.");
+        appButtons.Controls.Add(addAppButton);
+        var deleteAppButton = new Button { Text = "Delete", AutoSize = true };
+        deleteAppButton.Click += (_, _) => DeleteSelectedGridRow(_autoLaunchAppsGrid, "Deleted selected auto-launch app.");
+        _toolTips.SetToolTip(deleteAppButton, "Delete the selected auto-launch app row. Changes are written only when you save the config.");
+        appButtons.Controls.Add(deleteAppButton);
 
         _toolTips.SetToolTip(label, tooltip);
         _toolTips.SetToolTip(_autoLaunchAppsGrid, tooltip);
         layout.Controls.Add(label, 0, 0);
-        layout.Controls.Add(_autoLaunchAppsGrid, 0, 1);
+        layout.Controls.Add(appButtons, 0, 1);
+        layout.Controls.Add(_autoLaunchAppsGrid, 0, 2);
         return layout;
     }
 
@@ -955,6 +1007,7 @@ internal sealed class ConfigEditorForm : Form
         _autoLaunchAppsGrid.CellContentClick += OnAutoLaunchAppsGridCellContentClick;
         _autoLaunchAppsGrid.CellFormatting += OnAutoLaunchAppsGridCellFormatting;
         _autoLaunchAppsGrid.DefaultValuesNeeded += OnAutoLaunchAppsGridDefaultValuesNeeded;
+        _autoLaunchAppsGrid.KeyDown += OnManagedGridKeyDown;
     }
 
     private void OnAutoLaunchAppsGridCellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
@@ -1003,13 +1056,10 @@ internal sealed class ConfigEditorForm : Form
             return;
         }
 
-        var row = selectedRow.IsNewRow
-            ? _autoLaunchAppsGrid.Rows[AddAutoLaunchAppGridRow("", "", enabled: true, restartOnPimaxReconnect: true, runAsAdmin: false, startMinimized: false)]
-            : selectedRow;
-        row.Cells["Path"].Value = dialog.FileName;
-        if (string.IsNullOrWhiteSpace(GetGridString(row, "Name")))
+        selectedRow.Cells["Path"].Value = dialog.FileName;
+        if (string.IsNullOrWhiteSpace(GetGridString(selectedRow, "Name")))
         {
-            row.Cells["Name"].Value = Path.GetFileNameWithoutExtension(dialog.FileName);
+            selectedRow.Cells["Name"].Value = Path.GetFileNameWithoutExtension(dialog.FileName);
         }
     }
 
@@ -1884,7 +1934,7 @@ internal sealed class ConfigEditorForm : Form
         }
     }
 
-    private int AddOscRouteGridRow(string name, int appReceivePort, bool enabled)
+    private int AddOscRouteGridRow(string name, object appReceivePort, bool enabled)
     {
         return _oscRoutesGrid.Rows.Add(enabled, name, appReceivePort);
     }
@@ -2112,6 +2162,72 @@ internal sealed class ConfigEditorForm : Form
             string text when int.TryParse(text, out var parsed) => parsed,
             _ => defaultValue
         };
+    }
+
+    private void OnManagedGridKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.KeyCode != Keys.Delete || sender is not DataGridView grid)
+        {
+            return;
+        }
+
+        if (grid.IsCurrentCellInEditMode || grid.EditingControl is not null)
+        {
+            return;
+        }
+
+        DeleteSelectedGridRow(grid, "Deleted selected row.");
+        e.Handled = true;
+        e.SuppressKeyPress = true;
+    }
+
+    private void DeleteSelectedGridRow(DataGridView grid, string statusMessage)
+    {
+        var row = GetSelectedGridRow(grid);
+        if (row is null)
+        {
+            SetStatus("No row selected to delete.");
+            return;
+        }
+
+        var removedIndex = row.Index;
+        grid.Rows.RemoveAt(removedIndex);
+        if (grid.Rows.Count > 0)
+        {
+            SelectGridRow(grid, Math.Min(removedIndex, grid.Rows.Count - 1));
+        }
+
+        SetStatus(statusMessage);
+    }
+
+    private static DataGridViewRow? GetSelectedGridRow(DataGridView grid)
+    {
+        if (grid.SelectedRows.Count > 0 && !grid.SelectedRows[0].IsNewRow)
+        {
+            return grid.SelectedRows[0];
+        }
+
+        var currentRow = grid.CurrentRow;
+        return currentRow is not null && !currentRow.IsNewRow ? currentRow : null;
+    }
+
+    private static void SelectGridRow(DataGridView grid, int rowIndex)
+    {
+        if (rowIndex < 0 || rowIndex >= grid.Rows.Count)
+        {
+            return;
+        }
+
+        grid.ClearSelection();
+        var row = grid.Rows[rowIndex];
+        row.Selected = true;
+        var firstVisibleCell = row.Cells
+            .Cast<DataGridViewCell>()
+            .FirstOrDefault(cell => cell.Visible);
+        if (firstVisibleCell is not null)
+        {
+            grid.CurrentCell = firstVisibleCell;
+        }
     }
 
     private static CheckBox CreateOptionalConfigCheckBox(string text)
