@@ -3983,12 +3983,222 @@ internal sealed class ConfigEditorForm : Form
     private void ShowAboutDialog()
     {
         var supervisorPath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.exe");
-        ShowThemedMessageBox(
-            $"Pimax VRC Supervisor Config Editor\r\nVersion {AppVersion.Current}\r\nSupervisor executable: {supervisorPath}",
-            "About",
-            MessageBoxButtons.OK,
-            MessageBoxIcon.Information);
+        using var dialog = new Form
+        {
+            Text = "About",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            ClientSize = new Size(560, 240)
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Padding = new Padding(18, 16, 18, 12)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var content = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1
+        };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+        var iconBox = new PictureBox
+        {
+            Width = 42,
+            Height = 42,
+            Margin = new Padding(0, 4, 14, 0),
+            SizeMode = PictureBoxSizeMode.CenterImage,
+            Image = SystemIcons.Information.ToBitmap()
+        };
+
+        var details = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 5
+        };
+        details.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        details.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        details.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        details.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        details.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var titleLabel = new Label
+        {
+            Text = "Pimax VRC Supervisor Config Editor",
+            AutoSize = true,
+            Font = new Font(Font, FontStyle.Bold),
+            Margin = new Padding(0, 0, 0, 8)
+        };
+        var versionLabel = new Label
+        {
+            Text = $"Version {AppVersion.Current}",
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 10)
+        };
+        var integrationLabel = new Label
+        {
+            Text = "Uses optional SteamVR/OpenVR runtime integration when available.",
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 10)
+        };
+        var supervisorPathLabel = new Label
+        {
+            Text = "Supervisor executable:",
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 3)
+        };
+        var supervisorPathTextBox = new TextBox
+        {
+            Text = supervisorPath,
+            ReadOnly = true,
+            BorderStyle = BorderStyle.FixedSingle,
+            Anchor = AnchorStyles.Left | AnchorStyles.Right,
+            Margin = new Padding(0),
+            Width = 450
+        };
+
+        details.Controls.Add(titleLabel, 0, 0);
+        details.Controls.Add(versionLabel, 0, 1);
+        details.Controls.Add(integrationLabel, 0, 2);
+        details.Controls.Add(supervisorPathLabel, 0, 3);
+        details.Controls.Add(supervisorPathTextBox, 0, 4);
+
+        content.Controls.Add(iconBox, 0, 0);
+        content.Controls.Add(details, 1, 0);
+
+        var buttonPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            Padding = new Padding(0, 12, 0, 0)
+        };
+
+        var okButton = CreateButton("OK", autoSize: false, width: 88, height: 28, dialogResult: DialogResult.OK);
+        okButton.Margin = new Padding(6, 0, 0, 0);
+        var moreButton = CreateButton("More", autoSize: false, width: 88, height: 28);
+        moreButton.Margin = new Padding(6, 0, 0, 0);
+        moreButton.Click += (_, _) => ShowAboutDetailsDialog(dialog);
+        buttonPanel.Controls.Add(okButton);
+        buttonPanel.Controls.Add(moreButton);
+
+        root.Controls.Add(content, 0, 0);
+        root.Controls.Add(buttonPanel, 0, 1);
+        dialog.Controls.Add(root);
+
+        dialog.AcceptButton = okButton;
+        dialog.CancelButton = okButton;
+
+        ApplyThemeTo(dialog);
+        WindowsTitleBar.ApplyTheme(dialog.Handle, _theme.IsDark);
+        dialog.ShowDialog(this);
     }
+
+    private void ShowAboutDetailsDialog(IWin32Window owner)
+    {
+        using var dialog = new Form
+        {
+            Text = "Third-party notices",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.Sizable,
+            MinimizeBox = false,
+            MaximizeBox = true,
+            ShowInTaskbar = false,
+            MinimumSize = new Size(560, 420),
+            ClientSize = new Size(760, 600)
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Padding = new Padding(14, 14, 14, 12)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var noticesTextBox = new TextBox
+        {
+            Text = BuildAboutDetailsText(),
+            ReadOnly = true,
+            Multiline = true,
+            ScrollBars = ScrollBars.Both,
+            WordWrap = true,
+            Dock = DockStyle.Fill,
+            Font = new Font(FontFamily.GenericMonospace, Font.Size)
+        };
+
+        var buttonPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            Padding = new Padding(0, 10, 0, 0)
+        };
+        var closeButton = CreateButton("Close", autoSize: false, width: 88, height: 28, dialogResult: DialogResult.OK);
+        closeButton.Margin = new Padding(6, 0, 0, 0);
+        buttonPanel.Controls.Add(closeButton);
+
+        root.Controls.Add(noticesTextBox, 0, 0);
+        root.Controls.Add(buttonPanel, 0, 1);
+        dialog.Controls.Add(root);
+
+        dialog.AcceptButton = closeButton;
+        dialog.CancelButton = closeButton;
+
+        ApplyThemeTo(dialog);
+        WindowsTitleBar.ApplyTheme(dialog.Handle, _theme.IsDark);
+        dialog.ShowDialog(owner);
+    }
+
+    private static string BuildAboutDetailsText()
+        => """
+           Pimax VRC Supervisor - Third-party notices
+
+           SteamVR/OpenVR runtime integration
+           Pimax VRC Supervisor can optionally query the user's installed SteamVR/OpenVR runtime to confirm active tracking references for SteamVR base-station startup. The app does not bundle SteamVR, OpenVR, or openvr_api.dll. When this feature is available, it loads openvr_api.dll from the user's configured SteamVR/OpenVR runtime.
+
+           OpenVR SDK attribution
+           OpenVR SDK
+           Copyright (c) 2015, Valve Corporation
+           License: BSD-3-Clause
+           Source: https://github.com/ValveSoftware/openvr
+           License source: https://raw.githubusercontent.com/ValveSoftware/openvr/master/LICENSE
+
+           OpenVR SDK license text
+           Copyright (c) 2015, Valve Corporation
+           All rights reserved.
+
+           Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+           1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+           2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+           3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+
+           THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+           IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+           Named integrations and devices
+           This app contains compatibility logic, default paths, process names, or device detection labels for Pimax, SteamVR/OpenVR, SteamVR Base Station, HTC Vive/Vive mouth tracker, VRChat, VRCFaceTracking, Broken Eye, Intiface, Lovense, and OscGoesBrrr.
+
+           Trademark notice
+           Product names, company names, trademarks, and registered trademarks are property of their respective owners. Their mention here describes compatibility or user-configurable integration points and does not imply endorsement, sponsorship, or affiliation.
+           """;
 
     private void ValidateConfigFromButton()
     {
