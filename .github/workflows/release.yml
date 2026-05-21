@@ -51,6 +51,7 @@ jobs:
         run: |
           dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o $env:RELEASE_DIR
           dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o $env:RELEASE_DIR
+          dotnet publish .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release -r win-x64 --self-contained true -o $env:RELEASE_DIR
 
       - name: Authenticode-sign app binaries
         shell: pwsh
@@ -84,7 +85,9 @@ jobs:
             "PimaxVrcSupervisor.exe",
             "PimaxVrcSupervisor.dll",
             "PimaxVrcSupervisorConfigEditor.exe",
-            "PimaxVrcSupervisorConfigEditor.dll"
+            "PimaxVrcSupervisorConfigEditor.dll",
+            "PimaxVrcSupervisorSteamVrHost.exe",
+            "PimaxVrcSupervisorSteamVrHost.dll"
           )
 
           $files = Get-ChildItem -Path $env:RELEASE_DIR -Recurse -File |

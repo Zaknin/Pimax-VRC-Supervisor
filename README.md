@@ -19,6 +19,7 @@ Pimax + VRChat setups can be fragile when USB devices blink, the runtime reconne
 - optionally manage secondary monitors during VR
 - optionally manage SteamVR base-station power through native Bluetooth LE
 - optionally auto-launch when VRChat starts while SteamVR is running
+- optionally start from SteamVR through a VR app manifest with a small SteamVR-launched control dashboard
 - optionally start Intiface and OscGoesBrrr for Lovense workflows
 - optionally route local OSC packets to multiple OSC apps
 
@@ -153,6 +154,7 @@ On first launch, the supervisor may ask:
 - whether you use a Vive mouth tracker
 - whether to turn off secondary monitors during headset sessions
 - whether to create the elevated VRChat/SteamVR auto-launch Scheduled Task
+- whether to start with SteamVR through the SteamVR manifest host
 
 Answers are saved to `supervisor.config.json` next to the exe.
 
@@ -166,7 +168,7 @@ Run:
 
 The editor includes tabs for:
 
-- **Basics**: main executable paths and first-run choices
+- **Basics**: main executable paths, Startup choices, and first-run choices
 - **Base Stations**: scan, rename, enable, test, identify, and power SteamVR base stations
 - **OSC Router**: receive endpoint and output routes for local OSC routing
 - **Auto Launch**: extra apps to launch with the VR session
@@ -175,6 +177,16 @@ The editor includes tabs for:
 - **Detectors**: Pimax, mouth tracker, and Lovense detection rules
 - **Timing**: poll intervals, startup delays, reconnect waits, and shutdown grace periods
 - **Raw JSON**: direct config editing when you need it
+
+## SteamVR Startup
+
+The **Basics** tab has a **Startup** section:
+
+- **Create/evaluate VRChat auto-launch Scheduled Task** keeps the existing behavior: a hidden elevated watcher starts the supervisor only after `VRChat.exe` and SteamVR `vrserver.exe` are both running.
+- **Start with SteamVR** registers `PimaxVrcSupervisorSteamVrHost.exe` as a SteamVR dashboard overlay app and creates a separate on-demand elevated helper task. SteamVR starts the host, the host starts the elevated supervisor with `--steamvr-start`, and the supervisor starts managed apps immediately after SteamVR startup.
+- **Stop with SteamVR** is forced on for SteamVR startup mode. When `vrserver.exe` exits, the supervisor powers down base stations if needed, restores monitors, closes managed apps, and exits.
+
+The SteamVR host dashboard includes buttons for restarting Broken Eye/VRCFaceTracking, turning base stations on or off, and restarting the OSC router.
 
 ## Key Configuration
 
@@ -189,6 +201,8 @@ The release includes a commented `supervisor.config.json`. Important settings:
 | `MouthTrackerUser` | empty | Empty means ask on first run; true enables mouth tracker monitoring. |
 | `TurnOffSecondaryMonitors` | empty | Empty means ask on first run; true enables monitor layout handling. |
 | `AutoLaunchScheduledTask` | empty | Empty means ask on first setup; true creates/repairs the task. |
+| `StartupLaunchMode` | `Unspecified` | `None`, `ScheduledTask`, or `SteamVrManifest`. SteamVR mode starts when SteamVR starts. |
+| `StopWithSteamVr` | `false` | Forced true for SteamVR manifest startup; cleanup runs when `vrserver.exe` exits. |
 | `AutoLaunchApps` | `[]` | Extra apps started after Broken Eye and VRCFaceTracking. |
 | `BaseStationsEnabled` | `false` | Enables native SteamVR base-station power automation. |
 | `BaseStationPowerDownMode` | `Sleep` | Cleanup command: `Sleep` or `Standby` for Base Station 2.0. Base Station 1.0 falls back to sleep. |
@@ -291,6 +305,7 @@ Install the .NET 9 SDK, then run:
 ```powershell
 dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.2.0
 dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.2.0
+dotnet publish .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.2.0
 ```
 
 The output folder will contain both executables, the config file, and this README.

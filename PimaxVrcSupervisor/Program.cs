@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.IO.Pipes;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
@@ -18,6 +19,9 @@ using Windows.Devices.Bluetooth.Advertisement;
 using var shutdown = new CancellationTokenSource();
 
 var commandLineArgs = Environment.GetCommandLineArgs().Skip(1).ToArray();
+var configPath = TryGetCommandOption(commandLineArgs, "--config", out var requestedConfigPath)
+    ? requestedConfigPath
+    : null;
 if (TryGetCommandOption(commandLineArgs, "--emergency-base-station-cleanup", out var emergencyConfigPath))
 {
     var initialDelaySeconds = TryGetCommandOption(commandLineArgs, "--delay-seconds", out var delayText)
@@ -29,10 +33,45 @@ if (TryGetCommandOption(commandLineArgs, "--emergency-base-station-cleanup", out
     return;
 }
 
-var config = SupervisorConfig.Load();
+var config = SupervisorConfig.Load(configPath);
 if (commandLineArgs.Any(arg => string.Equals(arg, "--install-auto-launch-task", StringComparison.OrdinalIgnoreCase)))
 {
     await InstallAutoLaunchScheduledTaskFromCommandLineAsync(config, shutdown.Token);
+    return;
+}
+if (commandLineArgs.Any(arg => string.Equals(arg, "--apply-startup-integration", StringComparison.OrdinalIgnoreCase)))
+{
+    var showResult = commandLineArgs.Any(arg => string.Equals(arg, "--show-result", StringComparison.OrdinalIgnoreCase));
+    try
+    {
+        await StartupIntegration.ApplyAsync(config, shutdown.Token);
+        if (showResult)
+        {
+            MessageBox.Show(
+                "Startup integration was applied successfully.",
+                "Pimax VRC Supervisor",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+    }
+    catch (Exception ex)
+    {
+        if (showResult)
+        {
+            MessageBox.Show(
+                ex.Message,
+                "Could not apply startup integration",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+        else
+        {
+            Console.Error.WriteLine(ex.Message);
+        }
+
+        Environment.ExitCode = 1;
+    }
+
     return;
 }
 if (commandLineArgs.Any(arg => string.Equals(arg, "--watch-vrchat-auto-launch", StringComparison.OrdinalIgnoreCase)))
@@ -48,7 +87,8 @@ if (!ownsSupervisorMutex)
     return;
 }
 
-var supervisor = new AppSupervisor(config);
+var steamVrStart = commandLineArgs.Any(arg => string.Equals(arg, "--steamvr-start", StringComparison.OrdinalIgnoreCase));
+var supervisor = new AppSupervisor(config, steamVrStart);
 var supervisorStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 Console.CancelKeyPress += (_, eventArgs) =>
 {
@@ -145,6 +185,14 @@ internal enum ManagedAppStopReason
     PimaxReconnect
 }
 
+internal enum StartupLaunchMode
+{
+    Unspecified,
+    None,
+    ScheduledTask,
+    SteamVrManifest
+}
+
 internal enum WatchedProcessState
 {
     NotSeenYet,
@@ -168,6 +216,7 @@ internal sealed class AppSupervisor
     private static readonly TimeSpan LovenseBluetoothRegistryRecentWindow = TimeSpan.FromHours(1);
 
     private readonly SupervisorConfig _config;
+    private readonly bool _steamVrStart;
     private readonly BaseStationGattClient _baseStationGattClient = new();
     private readonly SteamVrTrackingReferenceReader _steamVrTrackingReferenceReader = new();
     private readonly MonitorLayoutController _monitorLayout = new();
@@ -203,6 +252,7 @@ internal sealed class AppSupervisor
     private OscRouter? _oscRouter;
     private bool _oscRouterWaitingForRetry;
     private Task? _oscGoesBrrrBleScannerTask;
+    private SupervisorCommandServer? _commandServer;
     private bool _oscGoesBrrrBleScannerWarningShown;
     private DateTimeOffset? _watchedProcessMissingSince;
     private DateTimeOffset? _lastPimaxServiceLogEventSeenAt;
@@ -212,9 +262,10 @@ internal sealed class AppSupervisor
     private DateTimeOffset? _lastMouthTrackerPnPEventSeenAt;
     private bool _mouthTrackerPnPEventWarningShown;
 
-    public AppSupervisor(SupervisorConfig config)
+    public AppSupervisor(SupervisorConfig config, bool steamVrStart = false)
     {
         _config = config;
+        _steamVrStart = steamVrStart;
         _pollInterval = TimeSpan.FromSeconds(Math.Max(1, config.PollIntervalSeconds));
     }
 
@@ -245,10 +296,17 @@ internal sealed class AppSupervisor
 
         _mouthTrackerUser = await EnsureMouthTrackerPreferenceAsync(cancellationToken);
         _turnOffSecondaryMonitors = await EnsureTurnOffSecondaryMonitorsPreferenceAsync(cancellationToken);
-        await EnsureAutoLaunchScheduledTaskPreferenceAsync(cancellationToken);
+        await EnsureStartupIntegrationPreferenceAsync(cancellationToken);
+        _commandServer = SupervisorCommandServer.Start(this, cancellationToken);
 
         try
         {
+            if (_steamVrStart && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+            {
+                Console.WriteLine($"SteamVR startup mode requested, but no SteamVR server process is running: {string.Join(", ", _config.SteamVrServerProcessNames)}");
+                return;
+            }
+
             _lastPimaxConnected = await WaitForPimaxOnStartupAsync(cancellationToken);
 
             await TryPowerOnBaseStationsForSessionAsync(1, cancellationToken);
@@ -277,7 +335,9 @@ internal sealed class AppSupervisor
             ShowOscRouterRetryPromptIfNeeded();
 
             Console.WriteLine($"Pimax Crystal initial state: {DescribeConnection(_lastPimaxConnected.Value)}");
-            Console.WriteLine("Waiting for Pimax reconnects or VRChat shutdown. Press Ctrl+C to stop.");
+            Console.WriteLine(_steamVrStart
+                ? "Waiting for Pimax reconnects or SteamVR shutdown. Press Ctrl+C to stop."
+                : "Waiting for Pimax reconnects or VRChat shutdown. Press Ctrl+C to stop.");
 
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -289,24 +349,34 @@ internal sealed class AppSupervisor
                     await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
                 }
 
-                var watchedProcessState = ObserveWatchedShutdownProcesses();
-                if (watchedProcessState == WatchedProcessState.NormalExit)
+                if (_steamVrStart && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
                 {
-                    var waitForSteamVrServerExit = ShouldWaitForSteamVrServerExitBeforeCleanup();
-                    Console.WriteLine(waitForSteamVrServerExit
-                        ? "VRChat has shut down. Waiting for SteamVR if needed, restoring monitors, then closing managed apps."
-                        : "VRChat has shut down. Closing managed apps and exiting.");
-                    await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit, cancellationToken);
+                    Console.WriteLine("SteamVR has shut down. Restoring monitors, closing managed apps, and exiting.");
+                    await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
                     return;
                 }
-                if (watchedProcessState == WatchedProcessState.CrashGraceExpired)
+
+                if (!_steamVrStart)
                 {
-                    var waitForSteamVrServerExit = ShouldWaitForSteamVrServerExitBeforeCleanup();
-                    Console.WriteLine(waitForSteamVrServerExit
-                        ? "VRChat did not relaunch after a likely crash. Waiting for SteamVR if needed, restoring monitors, then closing managed apps."
-                        : "VRChat did not relaunch after a likely crash. Closing managed apps and exiting.");
-                    await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit, cancellationToken);
-                    return;
+                    var watchedProcessState = ObserveWatchedShutdownProcesses();
+                    if (watchedProcessState == WatchedProcessState.NormalExit)
+                    {
+                        var waitForSteamVrServerExit = ShouldWaitForSteamVrServerExitBeforeCleanup();
+                        Console.WriteLine(waitForSteamVrServerExit
+                            ? "VRChat has shut down. Waiting for SteamVR if needed, restoring monitors, then closing managed apps."
+                            : "VRChat has shut down. Closing managed apps and exiting.");
+                        await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit, cancellationToken);
+                        return;
+                    }
+                    if (watchedProcessState == WatchedProcessState.CrashGraceExpired)
+                    {
+                        var waitForSteamVrServerExit = ShouldWaitForSteamVrServerExitBeforeCleanup();
+                        Console.WriteLine(waitForSteamVrServerExit
+                            ? "VRChat did not relaunch after a likely crash. Waiting for SteamVR if needed, restoring monitors, then closing managed apps."
+                            : "VRChat did not relaunch after a likely crash. Closing managed apps and exiting.");
+                        await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit, cancellationToken);
+                        return;
+                    }
                 }
 
                 var pimaxConnected = await ReadDeviceConnectedOrPreviousAsync(
@@ -380,7 +450,7 @@ internal sealed class AppSupervisor
                             continue;
                         }
 
-                        if (_watchedProcessHasBeenSeen && !IsAnyProcessRunning(_config.WatchedShutdownProcessNames))
+                        if (!_steamVrStart && _watchedProcessHasBeenSeen && !IsAnyProcessRunning(_config.WatchedShutdownProcessNames))
                         {
                             var waitForSteamVrServerExit = ShouldWaitForSteamVrServerExitBeforeCleanup();
                             Console.WriteLine(waitForSteamVrServerExit
@@ -465,6 +535,8 @@ internal sealed class AppSupervisor
         }
         finally
         {
+            _commandServer?.Dispose();
+            _commandServer = null;
             StopOscRouter();
             ClearWatchedProcessHandles();
         }
@@ -614,15 +686,29 @@ internal sealed class AppSupervisor
         return answer;
     }
 
-    private async Task EnsureAutoLaunchScheduledTaskPreferenceAsync(CancellationToken cancellationToken)
+    private async Task EnsureStartupIntegrationPreferenceAsync(CancellationToken cancellationToken)
     {
-        if (_config.TryGetAutoLaunchScheduledTask(out var autoLaunchScheduledTask))
+        var startupMode = _config.GetEffectiveStartupLaunchMode();
+        if (startupMode == StartupLaunchMode.ScheduledTask)
         {
-            if (autoLaunchScheduledTask)
-            {
-                await EnsureAutoLaunchScheduledTaskInstalledAsync(cancellationToken);
-            }
+            await EnsureAutoLaunchScheduledTaskInstalledAsync(cancellationToken);
+            await SteamVrStartupInstaller.DisableAsync(cancellationToken);
+            await ScheduledTaskInstaller.DeleteSteamVrStartHelperAsync(cancellationToken);
+            return;
+        }
 
+        if (startupMode == StartupLaunchMode.SteamVrManifest)
+        {
+            await ScheduledTaskInstaller.DeleteAutoLaunchTaskAsync(cancellationToken);
+            await EnsureSteamVrStartupInstalledAsync(cancellationToken);
+            return;
+        }
+
+        if (startupMode == StartupLaunchMode.None)
+        {
+            await ScheduledTaskInstaller.DeleteAutoLaunchTaskAsync(cancellationToken);
+            await SteamVrStartupInstaller.DisableAsync(cancellationToken);
+            await ScheduledTaskInstaller.DeleteSteamVrStartHelperAsync(cancellationToken);
             return;
         }
 
@@ -631,6 +717,7 @@ internal sealed class AppSupervisor
         if (!answer)
         {
             _config.SetAutoLaunchScheduledTask(false);
+            _config.StartupLaunchMode = StartupLaunchMode.None;
             _config.SaveAutoLaunchScheduledTaskPreference();
             Console.WriteLine("Elevated auto-launch scheduled task was not created.");
             return;
@@ -640,6 +727,7 @@ internal sealed class AppSupervisor
         {
             var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(cancellationToken);
             _config.SetAutoLaunchScheduledTask(true);
+            _config.StartupLaunchMode = StartupLaunchMode.ScheduledTask;
             _config.SaveAutoLaunchScheduledTaskPreference();
             Console.WriteLine($"Created elevated auto-launch scheduled task: {taskDetails.TaskName}");
             Console.WriteLine($"Trigger: {taskDetails.TriggerDescription}");
@@ -649,6 +737,22 @@ internal sealed class AppSupervisor
             Console.WriteLine("Could not create elevated auto-launch scheduled task:");
             Console.WriteLine(ex.Message);
             Console.WriteLine("The preference was not saved, so the app can ask again next run.");
+        }
+    }
+
+    private async Task EnsureSteamVrStartupInstalledAsync(CancellationToken cancellationToken)
+    {
+        Console.WriteLine("Ensuring SteamVR manifest startup is installed.");
+        try
+        {
+            var details = await SteamVrStartupInstaller.CreateOrUpdateAsync(cancellationToken);
+            Console.WriteLine($"Installed SteamVR startup manifest: {details.ManifestPath}");
+            Console.WriteLine($"App key: {details.AppKey}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Could not install SteamVR startup manifest:");
+            Console.WriteLine(ex.Message);
         }
     }
 
@@ -1359,6 +1463,91 @@ internal sealed class AppSupervisor
         {
             _coreAppRestartLock.Release();
         }
+    }
+
+    internal async Task<string> ExecuteSupervisorCommandAsync(string command, CancellationToken cancellationToken)
+    {
+        command = command.Trim().ToLowerInvariant();
+        try
+        {
+            switch (command)
+            {
+                case "status":
+                    return BuildSupervisorStatus();
+                case "restart-core-apps":
+                    await RestartCoreAppsAsync(cancellationToken);
+                    return "Restarted Broken Eye and VRCFaceTracking.";
+                case "base-stations-on":
+                    await ManualPowerOnBaseStationsAsync(cancellationToken);
+                    return "Base station power-on requested.";
+                case "base-stations-off":
+                    await ManualPowerDownBaseStationsAsync(cancellationToken);
+                    return "Base station power-off requested.";
+                case "restart-osc-router":
+                    await RestartOscRouterAsync(cancellationToken);
+                    return "OSC router restart requested.";
+                default:
+                    return "Unknown command: " + command;
+            }
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            return "Command failed: " + ex.Message;
+        }
+    }
+
+    private string BuildSupervisorStatus()
+    {
+        var mode = _steamVrStart ? "SteamVR" : "VRChat";
+        var steamVrRunning = IsAnyProcessRunning(_config.SteamVrServerProcessNames) ? "running" : "not running";
+        var coreApps = IsAnyProcessRunning(_config.BrokenEyeProcessNames) && IsAnyProcessRunning(_config.VrcFaceTrackingProcessNames)
+            ? "running"
+            : "incomplete";
+        var baseStations = _config.BaseStationsEnabled
+            ? $"{GetEnabledBaseStations().Length} enabled, powered={_baseStationsPoweredOn}"
+            : "disabled";
+        var oscRouter = _oscRouter is null ? "stopped" : "running";
+        return $"Mode={mode}; SteamVR={steamVrRunning}; CoreApps={coreApps}; BaseStations={baseStations}; OscRouter={oscRouter}";
+    }
+
+    private async Task ManualPowerOnBaseStationsAsync(CancellationToken cancellationToken)
+    {
+        var baseStations = GetEnabledBaseStations();
+        if (!_config.BaseStationsEnabled || baseStations.Length == 0)
+        {
+            Console.WriteLine("No enabled base stations to power on.");
+            return;
+        }
+
+        _baseStationPowerOnAttempted = false;
+        _baseStationsPoweredOn = false;
+        _baseStationPowerOnComplete = false;
+        _baseStationPowerOnPassesCompleted = 0;
+        _baseStationSecondPowerOnPassCompletedAt = null;
+        _baseStationPowerOnCommandSucceeded.Clear();
+        _nextBaseStationPowerOnAttemptAt = null;
+        await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
+    }
+
+    private async Task ManualPowerDownBaseStationsAsync(CancellationToken cancellationToken)
+    {
+        var baseStations = GetEnabledBaseStations();
+        if (!_config.BaseStationsEnabled || baseStations.Length == 0)
+        {
+            Console.WriteLine("No enabled base stations to power off.");
+            return;
+        }
+
+        _baseStationPowerOnAttempted = true;
+        _baseStationsPoweredOn = true;
+        await TryPowerDownBaseStationsForSessionAsync(cancellationToken);
+    }
+
+    private async Task RestartOscRouterAsync(CancellationToken cancellationToken)
+    {
+        StopOscRouter();
+        await TryStartOscRouterAsync(cancellationToken);
+        ShowOscRouterRetryPromptIfNeeded();
     }
 
     private async Task TryPowerOnBaseStationsForSessionAsync(int targetPowerOnPasses, CancellationToken cancellationToken)
@@ -2981,6 +3170,126 @@ internal sealed class AppSupervisor
     private static string DescribeConnection(bool connected) => connected ? "connected" : "not connected";
 }
 
+internal sealed class SupervisorCommandServer : IDisposable
+{
+    public const string PipeName = "PimaxVrcSupervisor.Command";
+    public const int TcpPort = 37957;
+    private readonly CancellationTokenSource _shutdown = new();
+    private readonly Task _serverTask;
+
+    private SupervisorCommandServer(AppSupervisor supervisor)
+    {
+        _serverTask = Task.WhenAll(
+            Task.Run(() => RunPipeAsync(supervisor, _shutdown.Token), CancellationToken.None),
+            Task.Run(() => RunTcpAsync(supervisor, _shutdown.Token), CancellationToken.None));
+    }
+
+    public static SupervisorCommandServer Start(AppSupervisor supervisor, CancellationToken cancellationToken)
+    {
+        var server = new SupervisorCommandServer(supervisor);
+        Console.WriteLine($"Dashboard command pipe ready: {PipeName}");
+        return server;
+    }
+
+    public void Dispose()
+    {
+        if (_shutdown.IsCancellationRequested)
+        {
+            return;
+        }
+
+        _shutdown.Cancel();
+        try
+        {
+            _serverTask.Wait(TimeSpan.FromSeconds(2));
+        }
+        catch
+        {
+            // Shutdown should never block supervisor cleanup.
+        }
+
+        _shutdown.Dispose();
+    }
+
+    private static async Task RunPipeAsync(AppSupervisor supervisor, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await using var pipe = new NamedPipeServerStream(
+                    PipeName,
+                    PipeDirection.InOut,
+                    maxNumberOfServerInstances: 1,
+                    PipeTransmissionMode.Byte,
+                    PipeOptions.Asynchronous);
+
+                await pipe.WaitForConnectionAsync(cancellationToken);
+                using var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+                await using var writer = new StreamWriter(pipe, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true)
+                {
+                    AutoFlush = true
+                };
+
+                var command = await reader.ReadLineAsync(cancellationToken) ?? "";
+                var response = await supervisor.ExecuteSupervisorCommandAsync(command, cancellationToken);
+                await writer.WriteLineAsync(response.AsMemory(), cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Dashboard command pipe error: {ex.Message}");
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+            }
+        }
+    }
+
+    private static async Task RunTcpAsync(AppSupervisor supervisor, CancellationToken cancellationToken)
+    {
+        var listener = new TcpListener(IPAddress.Loopback, TcpPort);
+        try
+        {
+            listener.Start();
+            Console.WriteLine($"Dashboard command TCP endpoint ready: 127.0.0.1:{TcpPort}");
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                using var client = await listener.AcceptTcpClientAsync(cancellationToken);
+                await using var stream = client.GetStream();
+                using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+                await using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true)
+                {
+                    AutoFlush = true
+                };
+
+                var command = await reader.ReadLineAsync(cancellationToken) ?? "";
+                var response = await supervisor.ExecuteSupervisorCommandAsync(command, cancellationToken);
+                await writer.WriteLineAsync(response.AsMemory(), cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Dashboard command TCP endpoint error: {ex.Message}");
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+}
+
 internal sealed record SteamVrTrackingReference(uint DeviceIndex, string[] IdentityValues);
 
 internal sealed record SteamVrBaseStationMatchResult(
@@ -3690,7 +3999,9 @@ internal sealed record ProcessResult(int ExitCode, string Output, string Error);
 internal static class ScheduledTaskInstaller
 {
     private const string TaskName = "Pimax VRC Supervisor Auto Launch";
+    public const string SteamVrStartTaskName = "Pimax VRC Supervisor SteamVR Start";
     private const string WatcherArgument = "--watch-vrchat-auto-launch";
+    private const string SteamVrStartArgument = "--steamvr-start";
 
     public static async Task<bool> ExistsAsync(CancellationToken cancellationToken)
     {
@@ -3702,11 +4013,26 @@ internal static class ScheduledTaskInstaller
         return result.ExitCode == 0;
     }
 
+    public static async Task<bool> ExistsAsync(string taskName, CancellationToken cancellationToken)
+    {
+        var result = await RunProcessCaptureAsync(
+            "schtasks.exe",
+            ["/Query", "/TN", taskName],
+            cancellationToken);
+
+        return result.ExitCode == 0;
+    }
+
     public static async Task<ScheduledTaskDetails> CreateOrUpdateAsync(CancellationToken cancellationToken)
     {
         var supervisorPath = GetSupervisorExecutablePath();
         var supervisorWorkingDirectory = Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory;
-        var taskXml = BuildTaskXml(supervisorPath, supervisorWorkingDirectory);
+        var taskXml = BuildTaskXml(
+            supervisorPath,
+            supervisorWorkingDirectory,
+            "Runs an elevated hidden watcher that starts Pimax VRC Supervisor when VRChat starts while vrserver.exe is running.",
+            WatcherArgument,
+            includeLogonTrigger: true);
         var taskXmlPath = Path.Combine(Path.GetTempPath(), $"PimaxVrcSupervisorAutoLaunch-{Guid.NewGuid():N}.xml");
 
         try
@@ -3735,23 +4061,80 @@ internal static class ScheduledTaskInstaller
         return new ScheduledTaskDetails(TaskName, "Hidden elevated watcher at Windows sign-in; launches supervisor when VRChat.exe and vrserver.exe are running.");
     }
 
+    public static async Task<ScheduledTaskDetails> CreateOrUpdateSteamVrStartHelperAsync(CancellationToken cancellationToken)
+    {
+        var supervisorPath = GetSupervisorExecutablePath();
+        var supervisorWorkingDirectory = Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory;
+        var taskXml = BuildDirectTaskXml(
+            supervisorPath,
+            supervisorWorkingDirectory,
+            "Starts Pimax VRC Supervisor elevated when the SteamVR manifest host requests SteamVR startup mode.",
+            SteamVrStartArgument);
+        var taskXmlPath = Path.Combine(Path.GetTempPath(), $"PimaxVrcSupervisorSteamVrStart-{Guid.NewGuid():N}.xml");
+
+        try
+        {
+            await File.WriteAllTextAsync(taskXmlPath, taskXml, Encoding.Unicode, cancellationToken);
+            await RunProcessAsync(
+                "schtasks.exe",
+                ["/Create", "/TN", SteamVrStartTaskName, "/XML", taskXmlPath, "/F"],
+                cancellationToken);
+        }
+        finally
+        {
+            TryDeleteFile(taskXmlPath);
+        }
+
+        if (!await ExistsAsync(SteamVrStartTaskName, cancellationToken))
+        {
+            throw new InvalidOperationException("schtasks.exe reported success, but the SteamVR start helper task could not be queried afterward.");
+        }
+
+        return new ScheduledTaskDetails(SteamVrStartTaskName, "Elevated on-demand task launched by the SteamVR host.");
+    }
+
+    public static async Task DeleteAutoLaunchTaskAsync(CancellationToken cancellationToken)
+        => await DeleteTaskAsync(TaskName, cancellationToken);
+
+    public static async Task DeleteSteamVrStartHelperAsync(CancellationToken cancellationToken)
+        => await DeleteTaskAsync(SteamVrStartTaskName, cancellationToken);
+
+    private static async Task DeleteTaskAsync(string taskName, CancellationToken cancellationToken)
+    {
+        if (!await ExistsAsync(taskName, cancellationToken))
+        {
+            return;
+        }
+
+        await RunProcessAsync(
+            "schtasks.exe",
+            ["/Delete", "/TN", taskName, "/F"],
+            cancellationToken);
+    }
+
     private static string BuildTaskXml(
         string supervisorPath,
-        string supervisorWorkingDirectory)
+        string supervisorWorkingDirectory,
+        string description,
+        string argument,
+        bool includeLogonTrigger)
     {
         XNamespace ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
         var identity = WindowsIdentity.GetCurrent();
-        var command = BuildPowerShellCommand(supervisorPath, supervisorWorkingDirectory);
+        var command = BuildPowerShellCommand(supervisorPath, supervisorWorkingDirectory, argument);
+        var triggerElement = includeLogonTrigger
+            ? new XElement(ns + "Triggers",
+                new XElement(ns + "LogonTrigger",
+                    new XElement(ns + "Enabled", "true")))
+            : null;
 
         var document = new XDocument(
             new XDeclaration("1.0", "UTF-16", null),
             new XElement(ns + "Task",
                 new XAttribute("version", "1.4"),
                 new XElement(ns + "RegistrationInfo",
-                    new XElement(ns + "Description", "Runs an elevated hidden watcher that starts Pimax VRC Supervisor when VRChat starts while vrserver.exe is running.")),
-                new XElement(ns + "Triggers",
-                    new XElement(ns + "LogonTrigger",
-                        new XElement(ns + "Enabled", "true"))),
+                    new XElement(ns + "Description", description)),
+                triggerElement,
                 new XElement(ns + "Principals",
                     new XElement(ns + "Principal",
                         new XAttribute("id", "Author"),
@@ -3784,11 +4167,58 @@ internal static class ScheduledTaskInstaller
         return document.ToString(SaveOptions.DisableFormatting);
     }
 
-    private static string BuildPowerShellCommand(string supervisorPath, string workingDirectory)
+    private static string BuildDirectTaskXml(
+        string supervisorPath,
+        string supervisorWorkingDirectory,
+        string description,
+        string argument)
+    {
+        XNamespace ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+        var identity = WindowsIdentity.GetCurrent();
+        var document = new XDocument(
+            new XDeclaration("1.0", "UTF-16", null),
+            new XElement(ns + "Task",
+                new XAttribute("version", "1.4"),
+                new XElement(ns + "RegistrationInfo",
+                    new XElement(ns + "Description", description)),
+                new XElement(ns + "Principals",
+                    new XElement(ns + "Principal",
+                        new XAttribute("id", "Author"),
+                        new XElement(ns + "UserId", identity.User?.Value ?? throw new InvalidOperationException("Could not resolve the current Windows user SID.")),
+                        new XElement(ns + "LogonType", "InteractiveToken"),
+                        new XElement(ns + "RunLevel", "HighestAvailable"))),
+                new XElement(ns + "Settings",
+                    new XElement(ns + "MultipleInstancesPolicy", "IgnoreNew"),
+                    new XElement(ns + "DisallowStartIfOnBatteries", "false"),
+                    new XElement(ns + "StopIfGoingOnBatteries", "false"),
+                    new XElement(ns + "AllowHardTerminate", "true"),
+                    new XElement(ns + "StartWhenAvailable", "true"),
+                    new XElement(ns + "RunOnlyIfNetworkAvailable", "false"),
+                    new XElement(ns + "IdleSettings",
+                        new XElement(ns + "StopOnIdleEnd", "false"),
+                        new XElement(ns + "RestartOnIdle", "false")),
+                    new XElement(ns + "AllowStartOnDemand", "true"),
+                    new XElement(ns + "Enabled", "true"),
+                    new XElement(ns + "Hidden", "false"),
+                    new XElement(ns + "RunOnlyIfIdle", "false"),
+                    new XElement(ns + "WakeToRun", "false"),
+                    new XElement(ns + "ExecutionTimeLimit", "PT0S"),
+                    new XElement(ns + "Priority", "7")),
+                new XElement(ns + "Actions",
+                    new XAttribute("Context", "Author"),
+                    new XElement(ns + "Exec",
+                        new XElement(ns + "Command", supervisorPath),
+                        new XElement(ns + "Arguments", argument),
+                        new XElement(ns + "WorkingDirectory", supervisorWorkingDirectory)))));
+
+        return document.ToString(SaveOptions.DisableFormatting);
+    }
+
+    private static string BuildPowerShellCommand(string supervisorPath, string workingDirectory, string argument)
     {
         var supervisorPathLiteral = ToPowerShellSingleQuotedString(supervisorPath);
         var workingDirectoryLiteral = ToPowerShellSingleQuotedString(workingDirectory);
-        var watcherArgumentLiteral = ToPowerShellSingleQuotedString(WatcherArgument);
+        var watcherArgumentLiteral = ToPowerShellSingleQuotedString(argument);
 
         return $"Start-Process -WindowStyle Hidden -FilePath {supervisorPathLiteral} -ArgumentList {watcherArgumentLiteral} -WorkingDirectory {workingDirectoryLiteral}";
     }
@@ -3877,6 +4307,546 @@ internal static class ScheduledTaskInstaller
     private static string QuotePowerShellArgument(string value) => "\"" + value.Replace("\"", "\\\"") + "\"";
 
     private static string ToPowerShellSingleQuotedString(string value) => "'" + value.Replace("'", "''") + "'";
+}
+
+internal sealed record SteamVrStartupDetails(string AppKey, string ManifestPath);
+
+internal static class StartupIntegration
+{
+    public static async Task ApplyAsync(SupervisorConfig config, CancellationToken cancellationToken)
+    {
+        switch (config.GetEffectiveStartupLaunchMode())
+        {
+            case StartupLaunchMode.ScheduledTask:
+                await ScheduledTaskInstaller.CreateOrUpdateAsync(cancellationToken);
+                await SteamVrStartupInstaller.DisableAsync(cancellationToken);
+                await ScheduledTaskInstaller.DeleteSteamVrStartHelperAsync(cancellationToken);
+                break;
+            case StartupLaunchMode.SteamVrManifest:
+                await ScheduledTaskInstaller.DeleteAutoLaunchTaskAsync(cancellationToken);
+                await SteamVrStartupInstaller.CreateOrUpdateAsync(cancellationToken);
+                break;
+            case StartupLaunchMode.None:
+                await ScheduledTaskInstaller.DeleteAutoLaunchTaskAsync(cancellationToken);
+                await SteamVrStartupInstaller.DisableAsync(cancellationToken);
+                await ScheduledTaskInstaller.DeleteSteamVrStartHelperAsync(cancellationToken);
+                break;
+        }
+    }
+}
+
+internal static class SteamVrStartupInstaller
+{
+    public const string AppKey = "pimax.vrcsupervisor.dashboard";
+    private const string ManifestFileName = "PimaxVrcSupervisor.vrmanifest";
+    private const string HostExecutableName = "PimaxVrcSupervisorSteamVrHost.exe";
+    private const string HostIconRelativePath = @"Assets\vr-overlay-icon.png";
+
+    public static async Task<SteamVrStartupDetails> CreateOrUpdateAsync(CancellationToken cancellationToken)
+    {
+        await ScheduledTaskInstaller.CreateOrUpdateSteamVrStartHelperAsync(cancellationToken);
+
+        var manifestPath = GetManifestPath();
+        var hostPath = GetHostExecutablePath();
+        var iconPath = GetHostIconPath(hostPath);
+        if (!File.Exists(hostPath))
+        {
+            throw new FileNotFoundException("SteamVR host executable was not found. Publish/copy PimaxVrcSupervisorSteamVrHost.exe next to PimaxVrcSupervisor.exe.", hostPath);
+        }
+
+        using var registry = OpenVrApplicationRegistry.Open();
+        registry.TrySetApplicationAutoLaunch(AppKey, false);
+        foreach (var staleManifestPath in GetKnownPimaxManifestPaths(manifestPath))
+        {
+            registry.TryRemoveApplicationManifest(staleManifestPath);
+        }
+
+        if (File.Exists(manifestPath))
+        {
+            File.Delete(manifestPath);
+        }
+
+        await File.WriteAllTextAsync(manifestPath, BuildManifestJson(hostPath, iconPath), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
+        registry.AddApplicationManifest(manifestPath);
+        registry.SetApplicationAutoLaunch(AppKey, true);
+        return new SteamVrStartupDetails(AppKey, manifestPath);
+    }
+
+    public static async Task DisableAsync(CancellationToken cancellationToken)
+    {
+        var manifestPath = GetManifestPath();
+        try
+        {
+            using var registry = OpenVrApplicationRegistry.Open();
+            registry.TrySetApplicationAutoLaunch(AppKey, false);
+            foreach (var staleManifestPath in GetKnownPimaxManifestPaths(manifestPath))
+            {
+                registry.TryRemoveApplicationManifest(staleManifestPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"SteamVR manifest disable skipped: {ex.Message}");
+        }
+
+        if (File.Exists(manifestPath))
+        {
+            File.Delete(manifestPath);
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private static string GetManifestPath()
+        => Path.Combine(AppContext.BaseDirectory, ManifestFileName);
+
+    private static string GetHostExecutablePath()
+        => Path.Combine(Path.GetDirectoryName(ScheduledTaskInstaller.GetSupervisorExecutablePath()) ?? AppContext.BaseDirectory, HostExecutableName);
+
+    private static string GetHostIconPath(string hostPath)
+        => Path.Combine(Path.GetDirectoryName(hostPath) ?? AppContext.BaseDirectory, HostIconRelativePath);
+
+    private static string BuildManifestJson(string hostPath, string iconPath)
+    {
+        var workingDirectory = Path.GetDirectoryName(hostPath) ?? AppContext.BaseDirectory;
+        var manifest = new
+        {
+            source = "builtin",
+            applications = new[]
+            {
+                new
+                {
+                    app_key = AppKey,
+                    launch_type = "binary",
+                    binary_path_windows = hostPath,
+                    working_directory = workingDirectory,
+                    image_path = iconPath,
+                    is_dashboard_overlay = true,
+                    strings = new
+                    {
+                        en_us = new
+                        {
+                            name = "Pimax VRC Supervisor",
+                            description = "Pimax VRC Supervisor SteamVR dashboard controls"
+                        }
+                    }
+                }
+            }
+        };
+
+        return JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static IEnumerable<string> GetKnownPimaxManifestPaths(string currentManifestPath)
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            Path.GetFullPath(currentManifestPath)
+        };
+
+        var openVrPathsFile = GetOpenVrPathsFile();
+        if (File.Exists(openVrPathsFile))
+        {
+            foreach (var registeredManifestPath in ReadRegisteredApplicationManifestPaths(openVrPathsFile))
+            {
+                if (IsPimaxManifestPath(registeredManifestPath))
+                {
+                    paths.Add(Path.GetFullPath(registeredManifestPath));
+                }
+            }
+
+            foreach (var appConfigPath in GetSteamVrAppConfigPaths(openVrPathsFile))
+            {
+                foreach (var registeredManifestPath in ReadSteamVrAppConfigManifestPaths(appConfigPath))
+                {
+                    if (IsPimaxManifestPath(registeredManifestPath))
+                    {
+                        paths.Add(Path.GetFullPath(registeredManifestPath));
+                    }
+                }
+            }
+        }
+
+        return paths;
+    }
+
+    private static bool IsPimaxManifestPath(string manifestPath)
+    {
+        if (string.Equals(Path.GetFileName(manifestPath), ManifestFileName, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        try
+        {
+            if (!File.Exists(manifestPath))
+            {
+                return false;
+            }
+
+            using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            if (!document.RootElement.TryGetProperty("applications", out var applicationsElement)
+                || applicationsElement.ValueKind != JsonValueKind.Array)
+            {
+                return false;
+            }
+
+            foreach (var applicationElement in applicationsElement.EnumerateArray())
+            {
+                if (applicationElement.TryGetProperty("app_key", out var appKeyElement)
+                    && string.Equals(appKeyElement.GetString(), AppKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<string> ReadRegisteredApplicationManifestPaths(string openVrPathsFile)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(openVrPathsFile));
+        if (!document.RootElement.TryGetProperty("applications", out var applicationsElement)
+            || applicationsElement.ValueKind != JsonValueKind.Array)
+        {
+            yield break;
+        }
+
+        foreach (var item in applicationsElement.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String && item.GetString() is { Length: > 0 } manifestPath)
+            {
+                yield return manifestPath;
+            }
+        }
+    }
+
+    private static IEnumerable<string> GetSteamVrAppConfigPaths(string openVrPathsFile)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(openVrPathsFile));
+        if (!document.RootElement.TryGetProperty("config", out var configElement)
+            || configElement.ValueKind != JsonValueKind.Array)
+        {
+            yield break;
+        }
+
+        foreach (var item in configElement.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String && item.GetString() is { Length: > 0 } configDirectory)
+            {
+                yield return Path.Combine(configDirectory.TrimEnd('\\', '/'), "appconfig.json");
+            }
+        }
+    }
+
+    private static IEnumerable<string> ReadSteamVrAppConfigManifestPaths(string appConfigPath)
+    {
+        if (!File.Exists(appConfigPath))
+        {
+            yield break;
+        }
+
+        using var document = JsonDocument.Parse(File.ReadAllText(appConfigPath));
+        if (!document.RootElement.TryGetProperty("manifest_paths", out var manifestPathsElement)
+            || manifestPathsElement.ValueKind != JsonValueKind.Array)
+        {
+            yield break;
+        }
+
+        foreach (var item in manifestPathsElement.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String && item.GetString() is { Length: > 0 } manifestPath)
+            {
+                yield return manifestPath;
+            }
+        }
+    }
+
+    private static string GetOpenVrPathsFile()
+        => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "openvr",
+            "openvrpaths.vrpath");
+}
+
+internal sealed class OpenVrApplicationRegistry : IDisposable
+{
+    private const string OpenVrApplicationsFnTableVersion = "FnTable:IVRApplications_007";
+    private const int VrApplicationUtility = 4;
+    private const int VrInitErrorNone = 0;
+    private const int VrApplicationErrorNone = 0;
+
+    private readonly IntPtr _library;
+    private readonly VrShutdownInternalDelegate _shutdownInternal;
+    private readonly VrGetVrInitErrorAsEnglishDescriptionDelegate? _getInitErrorDescription;
+    private readonly AddApplicationManifestDelegate _addApplicationManifest;
+    private readonly RemoveApplicationManifestDelegate _removeApplicationManifest;
+    private readonly SetApplicationAutoLaunchDelegate _setApplicationAutoLaunch;
+    private readonly GetApplicationsErrorNameFromEnumDelegate _getApplicationsErrorNameFromEnum;
+    private bool _initialized = true;
+
+    private OpenVrApplicationRegistry(
+        IntPtr library,
+        VrShutdownInternalDelegate shutdownInternal,
+        VrGetVrInitErrorAsEnglishDescriptionDelegate? getInitErrorDescription,
+        OpenVrApplicationsFnTable table)
+    {
+        _library = library;
+        _shutdownInternal = shutdownInternal;
+        _getInitErrorDescription = getInitErrorDescription;
+        _addApplicationManifest = CreateDelegate<AddApplicationManifestDelegate>(table.AddApplicationManifest);
+        _removeApplicationManifest = CreateDelegate<RemoveApplicationManifestDelegate>(table.RemoveApplicationManifest);
+        _setApplicationAutoLaunch = CreateDelegate<SetApplicationAutoLaunchDelegate>(table.SetApplicationAutoLaunch);
+        _getApplicationsErrorNameFromEnum = CreateDelegate<GetApplicationsErrorNameFromEnumDelegate>(table.GetApplicationsErrorNameFromEnum);
+    }
+
+    public static OpenVrApplicationRegistry Open()
+    {
+        if (!TryFindOpenVrApiDll(out var openVrApiDllPath, out var reason))
+        {
+            throw new InvalidOperationException(reason);
+        }
+
+        var library = NativeLibrary.Load(openVrApiDllPath);
+        try
+        {
+            var initInternal = GetExportDelegate<VrInitInternalDelegate>(library, "VR_InitInternal");
+            var shutdownInternal = GetExportDelegate<VrShutdownInternalDelegate>(library, "VR_ShutdownInternal");
+            var getGenericInterface = GetExportDelegate<VrGetGenericInterfaceDelegate>(library, "VR_GetGenericInterface");
+            var getInitErrorDescription = GetOptionalExportDelegate<VrGetVrInitErrorAsEnglishDescriptionDelegate>(library, "VR_GetVRInitErrorAsEnglishDescription");
+
+            var initError = 0;
+            _ = initInternal(ref initError, VrApplicationUtility);
+            if (initError != VrInitErrorNone)
+            {
+                throw new InvalidOperationException($"OpenVR init failed: {DescribeOpenVrInitError(initError, getInitErrorDescription)}");
+            }
+
+            var interfaceError = 0;
+            var applicationsTablePointer = getGenericInterface(OpenVrApplicationsFnTableVersion, ref interfaceError);
+            if (applicationsTablePointer == IntPtr.Zero || interfaceError != VrInitErrorNone)
+            {
+                shutdownInternal();
+                throw new InvalidOperationException($"OpenVR applications interface unavailable: {DescribeOpenVrInitError(interfaceError, getInitErrorDescription)}");
+            }
+
+            var table = Marshal.PtrToStructure<OpenVrApplicationsFnTable>(applicationsTablePointer);
+            return new OpenVrApplicationRegistry(library, shutdownInternal, getInitErrorDescription, table);
+        }
+        catch
+        {
+            NativeLibrary.Free(library);
+            throw;
+        }
+    }
+
+    public void AddApplicationManifest(string manifestPath)
+        => ThrowIfApplicationError(_addApplicationManifest(manifestPath, false), "AddApplicationManifest");
+
+    public void RemoveApplicationManifest(string manifestPath)
+        => ThrowIfApplicationError(_removeApplicationManifest(manifestPath), "RemoveApplicationManifest");
+
+    public void TryRemoveApplicationManifest(string manifestPath)
+    {
+        try
+        {
+            _removeApplicationManifest(manifestPath);
+        }
+        catch
+        {
+            // Re-registration should continue if the manifest was not already registered.
+        }
+    }
+
+    public void SetApplicationAutoLaunch(string appKey, bool autoLaunch)
+        => ThrowIfApplicationError(_setApplicationAutoLaunch(appKey, autoLaunch), "SetApplicationAutoLaunch");
+
+    public void TrySetApplicationAutoLaunch(string appKey, bool autoLaunch)
+    {
+        try
+        {
+            _setApplicationAutoLaunch(appKey, autoLaunch);
+        }
+        catch
+        {
+            // The app may not be registered yet, or SteamVR may still hold an old manifest entry.
+        }
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (_initialized)
+            {
+                _shutdownInternal();
+                _initialized = false;
+            }
+        }
+        finally
+        {
+            NativeLibrary.Free(_library);
+        }
+    }
+
+    private void ThrowIfApplicationError(int error, string operation)
+    {
+        if (error == VrApplicationErrorNone)
+        {
+            return;
+        }
+
+        var errorNamePointer = _getApplicationsErrorNameFromEnum(error);
+        var errorName = errorNamePointer == IntPtr.Zero ? "" : Marshal.PtrToStringAnsi(errorNamePointer);
+        throw new InvalidOperationException($"{operation} failed: {(string.IsNullOrWhiteSpace(errorName) ? error.ToString(CultureInfo.InvariantCulture) : errorName)}");
+    }
+
+    private static bool TryFindOpenVrApiDll(out string openVrApiDllPath, out string reason)
+    {
+        foreach (var runtimePath in GetOpenVrRuntimePaths())
+        {
+            var candidate = Path.Combine(runtimePath, "bin", "win64", "openvr_api.dll");
+            if (File.Exists(candidate))
+            {
+                openVrApiDllPath = candidate;
+                reason = "";
+                return true;
+            }
+        }
+
+        openVrApiDllPath = "";
+        reason = "openvr_api.dll was not found in the configured SteamVR runtime";
+        return false;
+    }
+
+    private static IEnumerable<string> GetOpenVrRuntimePaths()
+    {
+        var openVrPathsFile = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "openvr",
+            "openvrpaths.vrpath");
+        if (File.Exists(openVrPathsFile))
+        {
+            foreach (var runtimePath in ReadRuntimePathsFromOpenVrPathsFile(openVrPathsFile))
+            {
+                yield return runtimePath;
+            }
+        }
+
+        const string steamVrUninstallKeyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 250820";
+        foreach (var registryView in new[] { RegistryView.Registry64, RegistryView.Registry32 })
+        {
+            using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, registryView);
+            using var key = baseKey.OpenSubKey(steamVrUninstallKeyPath);
+            if (key?.GetValue("InstallLocation") is string installLocation && !string.IsNullOrWhiteSpace(installLocation))
+            {
+                yield return installLocation.TrimEnd('\\', '/');
+            }
+        }
+    }
+
+    private static IEnumerable<string> ReadRuntimePathsFromOpenVrPathsFile(string path)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        if (!document.RootElement.TryGetProperty("runtime", out var runtimeElement) || runtimeElement.ValueKind != JsonValueKind.Array)
+        {
+            yield break;
+        }
+
+        foreach (var item in runtimeElement.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String && item.GetString() is { Length: > 0 } runtimePath)
+            {
+                yield return runtimePath.TrimEnd('\\', '/');
+            }
+        }
+    }
+
+    private static string DescribeOpenVrInitError(int error, VrGetVrInitErrorAsEnglishDescriptionDelegate? getDescription)
+    {
+        if (error == VrInitErrorNone)
+        {
+            return "none";
+        }
+
+        if (getDescription is null)
+        {
+            return error.ToString(CultureInfo.InvariantCulture);
+        }
+
+        var descriptionPointer = getDescription(error);
+        var description = descriptionPointer == IntPtr.Zero ? "" : Marshal.PtrToStringAnsi(descriptionPointer);
+        return string.IsNullOrWhiteSpace(description)
+            ? error.ToString(CultureInfo.InvariantCulture)
+            : $"{description} ({error.ToString(CultureInfo.InvariantCulture)})";
+    }
+
+    private static T GetExportDelegate<T>(IntPtr library, string exportName) where T : Delegate
+        => CreateDelegate<T>(NativeLibrary.GetExport(library, exportName));
+
+    private static T? GetOptionalExportDelegate<T>(IntPtr library, string exportName) where T : Delegate
+        => NativeLibrary.TryGetExport(library, exportName, out var exportPointer)
+            ? CreateDelegate<T>(exportPointer)
+            : null;
+
+    private static T CreateDelegate<T>(IntPtr functionPointer) where T : Delegate
+    {
+        if (functionPointer == IntPtr.Zero)
+        {
+            throw new InvalidOperationException("OpenVR returned a null function pointer.");
+        }
+
+        return Marshal.GetDelegateForFunctionPointer<T>(functionPointer);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct OpenVrApplicationsFnTable
+    {
+        public IntPtr AddApplicationManifest;
+        public IntPtr RemoveApplicationManifest;
+        public IntPtr IsApplicationInstalled;
+        public IntPtr GetApplicationCount;
+        public IntPtr GetApplicationKeyByIndex;
+        public IntPtr GetApplicationKeyByProcessId;
+        public IntPtr LaunchApplication;
+        public IntPtr LaunchTemplateApplication;
+        public IntPtr LaunchApplicationFromMimeType;
+        public IntPtr LaunchDashboardOverlay;
+        public IntPtr CancelApplicationLaunch;
+        public IntPtr IdentifyApplication;
+        public IntPtr GetApplicationProcessId;
+        public IntPtr GetApplicationsErrorNameFromEnum;
+        public IntPtr GetApplicationPropertyString;
+        public IntPtr GetApplicationPropertyBool;
+        public IntPtr GetApplicationPropertyUint64;
+        public IntPtr SetApplicationAutoLaunch;
+        public IntPtr GetApplicationAutoLaunch;
+        public IntPtr SetDefaultApplicationForMimeType;
+        public IntPtr GetDefaultApplicationForMimeType;
+        public IntPtr GetApplicationSupportedMimeTypes;
+        public IntPtr GetApplicationsThatSupportMimeType;
+        public IntPtr GetApplicationLaunchArguments;
+        public IntPtr GetStartingApplication;
+        public IntPtr GetSceneApplicationState;
+        public IntPtr PerformApplicationPrelaunchCheck;
+        public IntPtr GetSceneApplicationStateNameFromEnum;
+        public IntPtr LaunchInternalProcess;
+        public IntPtr RegisterSubprocess;
+        public IntPtr GetCurrentSceneProcessId;
+    }
+
+    private delegate IntPtr VrInitInternalDelegate(ref int error, int applicationType);
+    private delegate void VrShutdownInternalDelegate();
+    private delegate IntPtr VrGetGenericInterfaceDelegate(string interfaceVersion, ref int error);
+    private delegate IntPtr VrGetVrInitErrorAsEnglishDescriptionDelegate(int error);
+    private delegate int AddApplicationManifestDelegate([MarshalAs(UnmanagedType.LPStr)] string manifestPath, [MarshalAs(UnmanagedType.I1)] bool temporary);
+    private delegate int RemoveApplicationManifestDelegate([MarshalAs(UnmanagedType.LPStr)] string manifestPath);
+    private delegate int SetApplicationAutoLaunchDelegate([MarshalAs(UnmanagedType.LPStr)] string appKey, [MarshalAs(UnmanagedType.I1)] bool autoLaunch);
+    private delegate IntPtr GetApplicationsErrorNameFromEnumDelegate(int error);
 }
 
 internal sealed class MonitorLayoutController
@@ -4481,6 +5451,8 @@ internal sealed class SupervisorConfig
     public JsonElement MouthTrackerUser { get; set; }
     public JsonElement TurnOffSecondaryMonitors { get; set; }
     public JsonElement AutoLaunchScheduledTask { get; set; }
+    public StartupLaunchMode StartupLaunchMode { get; set; } = StartupLaunchMode.Unspecified;
+    public bool StopWithSteamVr { get; set; }
     public string[][] PimaxDetectors { get; init; } =
     [
         ["USB\\VID_34A4&PID_0012"],
@@ -4650,6 +5622,19 @@ internal sealed class SupervisorConfig
     public void SetAutoLaunchScheduledTask(bool autoLaunchScheduledTask)
     {
         AutoLaunchScheduledTask = JsonSerializer.SerializeToElement(autoLaunchScheduledTask);
+        StartupLaunchMode = autoLaunchScheduledTask ? StartupLaunchMode.ScheduledTask : StartupLaunchMode.None;
+    }
+
+    public StartupLaunchMode GetEffectiveStartupLaunchMode()
+    {
+        if (StartupLaunchMode != StartupLaunchMode.Unspecified)
+        {
+            return StartupLaunchMode;
+        }
+
+        return TryGetAutoLaunchScheduledTask(out var autoLaunchScheduledTask)
+            ? autoLaunchScheduledTask ? StartupLaunchMode.ScheduledTask : StartupLaunchMode.None
+            : StartupLaunchMode.Unspecified;
     }
 
     public void SaveAutoLaunchScheduledTaskPreference()
@@ -4658,6 +5643,8 @@ internal sealed class SupervisorConfig
         var json = File.Exists(configPath) ? File.ReadAllText(configPath) : "{\n}";
 
         json = ReplaceJsonBooleanOrStringProperty(json, nameof(AutoLaunchScheduledTask), TryGetAutoLaunchScheduledTask(out var value) && value);
+        json = ReplaceJsonValueProperty(json, nameof(StartupLaunchMode), JsonSerializer.Serialize(GetEffectiveStartupLaunchMode(), JsonOptions()));
+        json = ReplaceJsonBooleanOrStringProperty(json, nameof(StopWithSteamVr), StopWithSteamVr || GetEffectiveStartupLaunchMode() == StartupLaunchMode.SteamVrManifest);
 
         File.WriteAllText(configPath, json);
         Console.WriteLine($"Saved scheduled task preference to: {configPath}");

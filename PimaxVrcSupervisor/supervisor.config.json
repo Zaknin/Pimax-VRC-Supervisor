@@ -140,6 +140,14 @@
   // When enabled, the task starts this supervisor when VRChat.exe launches, but only if vrserver.exe is running.
   "AutoLaunchScheduledTask": "",
 
+  // Startup integration mode. Unspecified preserves the first-run AutoLaunchScheduledTask question.
+  // None disables automatic startup. ScheduledTask uses the existing VRChat/SteamVR watcher task.
+  // SteamVrManifest registers a SteamVR dashboard host manifest and starts the supervisor when SteamVR starts.
+  "StartupLaunchMode": "Unspecified",
+
+  // Stop the supervisor when SteamVR closes. Forced on when StartupLaunchMode is SteamVrManifest.
+  "StopWithSteamVr": false,
+
   // Pimax headset detection rules. Each inner array is one possible match rule.
   // A device counts as connected when any inner array has all of its keywords inside one connected-device block.
   // The USB\VID_34A4 rules are the actual Pimax HMD/runtime interfaces; EyeChip alone is not enough to count as a headset reconnect.

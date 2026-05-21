@@ -76,6 +76,8 @@ internal sealed class ConfigEditorForm : Form
     private readonly CheckBox _mouthTrackerCheckBox = CreateOptionalConfigCheckBox("Use Vive mouth tracker");
     private readonly CheckBox _turnOffMonitorsCheckBox = CreateOptionalConfigCheckBox("Turn off secondary monitors during headset sessions");
     private readonly CheckBox _autoLaunchTaskCheckBox = CreateOptionalConfigCheckBox("Create/evaluate VRChat auto-launch Scheduled Task");
+    private readonly CheckBox _startWithSteamVrCheckBox = new() { Text = "Start with SteamVR", AutoSize = true };
+    private readonly CheckBox _stopWithSteamVrCheckBox = new() { Text = "Stop with SteamVR", AutoSize = true };
     private readonly CheckBox _usePimaxLogCheckBox = new() { Text = "Watch Pimax PiService logs for fast reconnects", AutoSize = true };
     private readonly CheckBox _useMouthTrackerPnPCheckBox = new() { Text = "Watch Windows PnP events for fast mouth tracker reconnects", AutoSize = true };
     private readonly TextBox _pimaxServiceLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
@@ -166,6 +168,7 @@ internal sealed class ConfigEditorForm : Form
 
         ConfigureToolTips();
         BuildLayout();
+        ConfigureStartupOptionInteractions();
         RegisterDirtyTracking(this);
         ApplyWindowsTheme();
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
@@ -397,7 +400,10 @@ internal sealed class ConfigEditorForm : Form
         AddFullWidth(layout, _vrcFaceTrackingStartMinimizedCheckBox, "Checked means the supervisor starts VRCFaceTracking minimized and tries to minimize its main window after launch.");
         AddFullWidth(layout, _mouthTrackerCheckBox, "Checked means you use a Vive mouth tracker. Unchecked disables mouth-tracker monitoring. Filled square is shown only when the config leaves the first-run question enabled.");
         AddFullWidth(layout, _turnOffMonitorsCheckBox, "Checked saves the current monitor layout and disables secondary monitors during the VR session. The layout is restored after VRChat and SteamVR close.");
+        AddSectionHeader(layout, "Startup");
         AddFullWidth(layout, _autoLaunchTaskCheckBox, "Checked lets the app create or repair the elevated auto-launch Scheduled Task. Filled square is shown only when the config asks on first setup.");
+        AddFullWidth(layout, _startWithSteamVrCheckBox, "Checked registers the SteamVR dashboard host manifest and starts the supervisor when SteamVR starts.");
+        AddFullWidth(layout, _stopWithSteamVrCheckBox, "Checked means SteamVR startup mode cleans up and exits when SteamVR closes. This is forced on when Start with SteamVR is enabled.");
         AddFullWidth(layout, _usePimaxLogCheckBox, "Also scan PiService logs for quick HID remove/add reconnects that normal USB polling can miss.");
         AddFullWidth(layout, _useMouthTrackerPnPCheckBox, "Also scan Windows Kernel-PnP events for quick mouth tracker reconnects that normal USB polling can miss.");
         AddFolderValidationRow(layout, "PiService log folder", _pimaxServiceLogDirectoryTextBox, ToolTipWithConfigKey("Folder containing PiService__*.log files. Environment variables such as %LOCALAPPDATA% are expanded by the supervisor.", "PimaxServiceLogDirectory"));
@@ -424,6 +430,54 @@ internal sealed class ConfigEditorForm : Form
             "Configure core behavior used by the console supervisor and choose whether helper features are enabled.",
             layout,
             limitWidth: true);
+    }
+
+    private void ConfigureStartupOptionInteractions()
+    {
+        _autoLaunchTaskCheckBox.CheckStateChanged += (_, _) =>
+        {
+            if (_suppressDirtyTracking)
+            {
+                return;
+            }
+
+            if (_autoLaunchTaskCheckBox.Checked && _startWithSteamVrCheckBox.Checked)
+            {
+                _startWithSteamVrCheckBox.Checked = false;
+            }
+
+            RefreshStartupOptionStates();
+        };
+
+        _startWithSteamVrCheckBox.CheckedChanged += (_, _) =>
+        {
+            if (_startWithSteamVrCheckBox.Checked && _autoLaunchTaskCheckBox.Checked)
+            {
+                _autoLaunchTaskCheckBox.Checked = false;
+            }
+
+            RefreshStartupOptionStates();
+        };
+
+        RefreshStartupOptionStates();
+    }
+
+    private void RefreshStartupOptionStates()
+    {
+        if (_startWithSteamVrCheckBox.Checked)
+        {
+            _stopWithSteamVrCheckBox.Checked = true;
+            _stopWithSteamVrCheckBox.Enabled = false;
+        }
+        else if (_autoLaunchTaskCheckBox.Checked)
+        {
+            _stopWithSteamVrCheckBox.Checked = false;
+            _stopWithSteamVrCheckBox.Enabled = false;
+        }
+        else
+        {
+            _stopWithSteamVrCheckBox.Enabled = true;
+        }
     }
 
     private Control BuildBaseStationsTab()
@@ -2686,7 +2740,30 @@ internal sealed class ConfigEditorForm : Form
         _oscRouterReceivePortInput.Value = Math.Clamp(GetInt(node, "OscRouterReceivePort", 9001), (int)_oscRouterReceivePortInput.Minimum, (int)_oscRouterReceivePortInput.Maximum);
         _mouthTrackerCheckBox.CheckState = GetBoolCheckState(node, "MouthTrackerUser");
         _turnOffMonitorsCheckBox.CheckState = GetBoolCheckState(node, "TurnOffSecondaryMonitors");
-        _autoLaunchTaskCheckBox.CheckState = GetBoolCheckState(node, "AutoLaunchScheduledTask");
+        var startupLaunchMode = GetStartupLaunchMode(node);
+        if (startupLaunchMode == "ScheduledTask")
+        {
+            _autoLaunchTaskCheckBox.CheckState = CheckState.Checked;
+            _startWithSteamVrCheckBox.Checked = false;
+        }
+        else if (startupLaunchMode == "SteamVrManifest")
+        {
+            _autoLaunchTaskCheckBox.CheckState = CheckState.Unchecked;
+            _startWithSteamVrCheckBox.Checked = true;
+        }
+        else if (startupLaunchMode == "None")
+        {
+            _autoLaunchTaskCheckBox.CheckState = CheckState.Unchecked;
+            _startWithSteamVrCheckBox.Checked = false;
+        }
+        else
+        {
+            _autoLaunchTaskCheckBox.CheckState = GetBoolCheckState(node, "AutoLaunchScheduledTask");
+            _startWithSteamVrCheckBox.Checked = false;
+        }
+
+        _stopWithSteamVrCheckBox.Checked = _startWithSteamVrCheckBox.Checked || GetBool(node, "StopWithSteamVr", defaultValue: false);
+        RefreshStartupOptionStates();
         _usePimaxLogCheckBox.Checked = GetBool(node, "UsePimaxServiceLogReconnectDetector", defaultValue: true);
         _useMouthTrackerPnPCheckBox.Checked = GetBool(node, "UseMouthTrackerPnPReconnectDetector", defaultValue: true);
         _pimaxServiceLogDirectoryTextBox.Text = GetString(node, "PimaxServiceLogDirectory");
@@ -2746,6 +2823,7 @@ internal sealed class ConfigEditorForm : Form
             CommitOscRoutesGridEdits();
             var json = BuildCurrentJson();
             ParseJson(json);
+            var shouldApplyStartupIntegration = StartupIntegrationSelectionChanged(_loadedJson, json);
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
             var backupPath = CreateConfigBackup(path);
             File.WriteAllText(path, json, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
@@ -2761,6 +2839,10 @@ internal sealed class ConfigEditorForm : Form
                 ? $"Saved config at {DateTime.Now:HH:mm}."
                 : $"Saved config and created backup at {DateTime.Now:HH:mm}.";
             SetCleanStatus(savedStatus, backupPath is null ? null : "Backup path:\r\n" + backupPath);
+            if (shouldApplyStartupIntegration)
+            {
+                ApplyStartupIntegration(path);
+            }
             return true;
         }
         catch (Exception ex)
@@ -2777,6 +2859,122 @@ internal sealed class ConfigEditorForm : Form
         CommitBaseStationsGridEdits();
         CommitOscRoutesGridEdits();
         return ApplyControlValues(_appliedRawJson);
+    }
+
+    private static bool StartupIntegrationSelectionChanged(string previousJson, string currentJson)
+    {
+        try
+        {
+            var previous = ParseJson(previousJson);
+            var current = ParseJson(currentJson);
+            var currentMode = GetEffectiveStartupLaunchMode(current);
+            if (!string.Equals(GetEffectiveStartupLaunchMode(previous), currentMode, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            return currentMode == "SteamVrManifest"
+                && !File.Exists(Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.vrmanifest"));
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private static string GetEffectiveStartupLaunchMode(JsonNode? node)
+    {
+        var startupLaunchMode = GetStartupLaunchMode(node);
+        if (!string.IsNullOrWhiteSpace(startupLaunchMode))
+        {
+            return startupLaunchMode;
+        }
+
+        var autoLaunchTask = GetBoolCheckState(node, "AutoLaunchScheduledTask");
+        return autoLaunchTask switch
+        {
+            CheckState.Checked => "ScheduledTask",
+            CheckState.Unchecked => "None",
+            _ => "Unspecified"
+        };
+    }
+
+    private void ApplyStartupIntegration(string configPath)
+    {
+        var startupLaunchMode = GetSelectedStartupLaunchMode();
+        if (startupLaunchMode == "Unspecified")
+        {
+            return;
+        }
+
+        var supervisorPath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.exe");
+        if (!File.Exists(supervisorPath))
+        {
+            SetStatus("Startup integration was saved but not applied because PimaxVrcSupervisor.exe was not found.");
+            return;
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = supervisorPath,
+                WorkingDirectory = Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory,
+                UseShellExecute = !IsAdministrator(),
+                ErrorDialog = true,
+                ErrorDialogParentHandle = Handle
+            };
+            startInfo.ArgumentList.Add("--apply-startup-integration");
+            startInfo.ArgumentList.Add("--show-result");
+            startInfo.ArgumentList.Add("--config");
+            startInfo.ArgumentList.Add(Path.GetFullPath(configPath));
+
+            if (!IsAdministrator())
+            {
+                startInfo.Verb = "runas";
+            }
+            else
+            {
+                startInfo.RedirectStandardOutput = true;
+                startInfo.RedirectStandardError = true;
+                startInfo.CreateNoWindow = true;
+            }
+
+            using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start PimaxVrcSupervisor.exe.");
+            process.WaitForExit(30000);
+            if (!process.HasExited)
+            {
+                SetStatus("Startup integration is still applying.");
+                return;
+            }
+
+            if (process.ExitCode != 0)
+            {
+                var output = IsAdministrator()
+                    ? process.StandardError.ReadToEnd() + process.StandardOutput.ReadToEnd()
+                    : "";
+                throw new InvalidOperationException(string.IsNullOrWhiteSpace(output)
+                    ? $"Startup integration exited with code {process.ExitCode}."
+                    : output.Trim());
+            }
+
+            SetStatus(startupLaunchMode switch
+            {
+                "ScheduledTask" => "Saved and applied Scheduled Task startup.",
+                "SteamVrManifest" => "Saved and applied SteamVR startup manifest.",
+                "None" => "Saved and disabled startup integrations.",
+                _ => "Saved startup integration."
+            });
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            SetStatus("Startup integration was saved but Windows cancelled the administrator approval prompt.");
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessageBox(ex.Message, "Could not apply startup integration", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus("Startup integration apply failed.");
+        }
     }
 
     private bool HasUnsavedChanges()
@@ -2923,7 +3121,10 @@ internal sealed class ConfigEditorForm : Form
         json = JsonPropertyEditor.Replace(json, "SteamVrServerProcessNames", Serialize(ParseStringList(_steamVrServerProcessesTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "MouthTrackerUser", SerializeTriState(_mouthTrackerCheckBox.CheckState));
         json = JsonPropertyEditor.Replace(json, "TurnOffSecondaryMonitors", SerializeTriState(_turnOffMonitorsCheckBox.CheckState));
-        json = JsonPropertyEditor.Replace(json, "AutoLaunchScheduledTask", SerializeTriState(_autoLaunchTaskCheckBox.CheckState));
+        var startupLaunchMode = GetSelectedStartupLaunchMode();
+        json = JsonPropertyEditor.Replace(json, "StartupLaunchMode", Serialize(startupLaunchMode));
+        json = JsonPropertyEditor.Replace(json, "StopWithSteamVr", (_stopWithSteamVrCheckBox.Checked || startupLaunchMode == "SteamVrManifest") ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "AutoLaunchScheduledTask", startupLaunchMode == "ScheduledTask" ? "true" : startupLaunchMode == "SteamVrManifest" || startupLaunchMode == "None" ? "false" : SerializeTriState(_autoLaunchTaskCheckBox.CheckState));
         json = JsonPropertyEditor.Replace(json, "PimaxDetectors", Serialize(ParseStringMatrix(_pimaxDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "MouthTrackerDetectors", Serialize(ParseStringMatrix(_mouthTrackerDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "LovenseDetectors", Serialize(ParseStringMatrix(_lovenseDetectorsTextBox.Text)));
@@ -2993,6 +3194,27 @@ internal sealed class ConfigEditorForm : Form
     {
         var value = GetStringOrFallback(node, propertyName, fallbackPropertyName);
         return string.IsNullOrWhiteSpace(value) ? defaultValue : value;
+    }
+
+    private static string GetStartupLaunchMode(JsonNode? node)
+    {
+        var value = GetString(node, "StartupLaunchMode");
+        return value is "None" or "ScheduledTask" or "SteamVrManifest" ? value : "";
+    }
+
+    private string GetSelectedStartupLaunchMode()
+    {
+        if (_startWithSteamVrCheckBox.Checked)
+        {
+            return "SteamVrManifest";
+        }
+
+        return _autoLaunchTaskCheckBox.CheckState switch
+        {
+            CheckState.Checked => "ScheduledTask",
+            CheckState.Unchecked => "None",
+            _ => "Unspecified"
+        };
     }
 
     private static bool GetBool(JsonNode? node, string propertyName, bool defaultValue)
@@ -4049,7 +4271,7 @@ internal sealed class ConfigEditorForm : Form
         };
         var integrationLabel = new Label
         {
-            Text = "Uses optional SteamVR/OpenVR runtime integration when available.",
+            Text = "Uses optional SteamVR/OpenVR runtime integration for base-station checks and SteamVR startup.",
             AutoSize = true,
             Margin = new Padding(0, 0, 0, 10)
         };
@@ -4171,7 +4393,7 @@ internal sealed class ConfigEditorForm : Form
            Pimax VRC Supervisor - Third-party notices
 
            SteamVR/OpenVR runtime integration
-           Pimax VRC Supervisor can optionally query the user's installed SteamVR/OpenVR runtime to confirm active tracking references for SteamVR base-station startup. The app does not bundle SteamVR, OpenVR, or openvr_api.dll. When this feature is available, it loads openvr_api.dll from the user's configured SteamVR/OpenVR runtime.
+           Pimax VRC Supervisor can optionally query the user's installed SteamVR/OpenVR runtime to confirm active tracking references for SteamVR base-station startup and to register the SteamVR dashboard host manifest. The app does not bundle SteamVR, OpenVR, or openvr_api.dll. When this feature is available, it loads openvr_api.dll from the user's configured SteamVR/OpenVR runtime.
 
            OpenVR SDK attribution
            OpenVR SDK

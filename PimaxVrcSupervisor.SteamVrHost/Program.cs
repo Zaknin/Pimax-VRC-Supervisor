@@ -1,0 +1,1037 @@
+using System.Diagnostics;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Net.Sockets;
+using System.IO.Pipes;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Json;
+using Microsoft.Win32;
+
+namespace PimaxVrcSupervisor.SteamVrHost;
+
+internal static class Program
+{
+    [STAThread]
+    private static async Task Main()
+    {
+        ApplicationConfiguration.Initialize();
+        using var shutdown = new CancellationTokenSource();
+        using var host = new SteamVrDashboardHost();
+        await host.RunAsync(shutdown.Token);
+    }
+}
+
+internal sealed class SteamVrDashboardHost : IDisposable
+{
+    private const string HelperTaskName = "Pimax VRC Supervisor SteamVR Start";
+    private const string CommandPipeName = "PimaxVrcSupervisor.Command";
+    private const int CommandTcpPort = 37957;
+    private const string OverlayKey = "pimax.vrcsupervisor.dashboard";
+    private const string OverlayName = "Pimax VRC Supervisor";
+    private const string OverlayIconRelativePath = @"Assets\vr-overlay-icon.png";
+    private const int OverlayWidth = 900;
+    private const int OverlayHeight = 620;
+    private const int ButtonTop = 154;
+    private const int ButtonLeft = 70;
+    private const int ButtonColumnGap = 28;
+    private const int ButtonRowGap = 26;
+    private const int ButtonWidth = 366;
+    private const int ButtonHeight = 126;
+    private const int ButtonRight = ButtonLeft + ButtonWidth + ButtonColumnGap;
+    private const int ButtonBottom = ButtonTop + ButtonHeight + ButtonRowGap;
+    private readonly string _logPath = Path.Combine(Path.GetTempPath(), "PimaxVrcSupervisorSteamVrHost.log");
+    private readonly object _renderLock = new();
+    private readonly Queue<string> _surfacePaths = new();
+    private int _surfaceGeneration;
+    private readonly DashboardButton[] _buttons =
+    [
+        new("Restart VRC face tracking", "restart-core-apps", new Rectangle(ButtonLeft, ButtonTop, ButtonWidth, ButtonHeight)),
+        new("Restart OSC router", "restart-osc-router", new Rectangle(ButtonRight, ButtonTop, ButtonWidth, ButtonHeight)),
+        new("Base stations on", "base-stations-on", new Rectangle(ButtonLeft, ButtonBottom, ButtonWidth, ButtonHeight)),
+        new("Base stations off", "base-stations-off", new Rectangle(ButtonRight, ButtonBottom, ButtonWidth, ButtonHeight))
+    ];
+    private OpenVrOverlaySession? _overlay;
+    private string _status = "Starting supervisor...";
+    private string? _pressedCommand;
+    private string? _runningCommand;
+    private OverlayPointer? _lastPointer;
+    private DateTimeOffset _lastMouseMoveLoggedAt = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastCommandStartedAt = DateTimeOffset.MinValue;
+    private OpenVrEventType? _lastEventType;
+    private uint _overlayEventCount;
+    private bool _commandInFlight;
+    private bool _disposed;
+
+    public async Task RunAsync(CancellationToken cancellationToken)
+    {
+        Log("Host starting from " + AppContext.BaseDirectory);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => Log("Host process exiting.");
+        await StartSupervisorAsync();
+
+        try
+        {
+            _overlay = OpenVrOverlaySession.Open(OverlayKey, OverlayName);
+            _overlay.SetOverlayWidthInMeters(1.6f);
+            _overlay.SetOverlayMouseScale(OverlayWidth, OverlayHeight);
+            _overlay.SetOverlayInputMethodMouse();
+            _overlay.SetInteractiveDashboardFlags();
+            RefreshOverlayTexture();
+            var overlayIconPath = GetOverlayIconPath();
+            if (File.Exists(overlayIconPath))
+            {
+                _overlay.SetThumbnailFromFile(overlayIconPath);
+            }
+
+            Log("Dashboard overlay created.");
+            Log($"OpenVR event layout: size={Marshal.SizeOf<OpenVrEvent>()}; mouse=16,20; button=24; cursor=28.");
+        }
+        catch (Exception ex)
+        {
+            Log("Could not create overlay: " + ex);
+            MessageBox.Show(ex.Message, "Could not create SteamVR dashboard overlay", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        var lastStatusRefresh = DateTimeOffset.MinValue;
+        while (!cancellationToken.IsCancellationRequested && IsSteamVrRunning())
+        {
+            ProcessOverlayEvents(cancellationToken);
+            if (DateTimeOffset.UtcNow - lastStatusRefresh > TimeSpan.FromSeconds(5))
+            {
+                lastStatusRefresh = DateTimeOffset.UtcNow;
+                if (!_commandInFlight)
+                {
+                    _ = RefreshStatusAsync();
+                }
+            }
+
+            await Task.Delay(50, cancellationToken);
+        }
+
+        Log($"Host loop exiting; cancellation={cancellationToken.IsCancellationRequested}; steamvr={IsSteamVrRunning()}");
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _overlay?.Dispose();
+        while (_surfacePaths.TryDequeue(out var path))
+        {
+            TryDelete(path);
+        }
+    }
+
+    private async Task StartSupervisorAsync()
+    {
+        try
+        {
+            Log("Requesting elevated supervisor via scheduled task.");
+            await RunProcessAsync("schtasks.exe", ["/Run", "/TN", HelperTaskName], TimeSpan.FromSeconds(15));
+            SetStatus("Supervisor start requested.");
+            await Task.Delay(1500);
+            await RefreshStatusAsync();
+        }
+        catch (Exception ex)
+        {
+            Log("Could not start elevated supervisor: " + ex);
+            SetStatus("Could not start elevated supervisor: " + ex.Message);
+        }
+    }
+
+    private async Task RefreshStatusAsync()
+    {
+        try
+        {
+            SetStatus(await SendCommandAsync("status", TimeSpan.FromSeconds(2)));
+        }
+        catch
+        {
+            if (_status.StartsWith("Could not start", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            SetStatus("Waiting for elevated supervisor command bridge...");
+        }
+    }
+
+    private void ProcessOverlayEvents(CancellationToken cancellationToken)
+    {
+        if (_overlay is null)
+        {
+            return;
+        }
+
+        while (_overlay.PollNextOverlayEvent(out var vrEvent))
+        {
+            _overlayEventCount++;
+            _lastEventType = vrEvent.EventType;
+            var pointer = GetMousePointer(vrEvent, DateTimeOffset.UtcNow);
+            if (vrEvent.EventType is OpenVrEventType.MouseMove or OpenVrEventType.TouchPadMove)
+            {
+                TrackPointerMove(pointer);
+            }
+            else if (vrEvent.EventType == OpenVrEventType.ButtonPress)
+            {
+                Log($"ButtonPress ignored; cursor={pointer.CursorIndex}; raw={pointer.Raw.X:0.0},{pointer.Raw.Y:0.0}; dashboard mouse clicks are handled by MouseButtonDown.");
+            }
+            else if (vrEvent.EventType == OpenVrEventType.ButtonUnpress)
+            {
+                Log($"ButtonUnpress; pressed={_pressedCommand ?? "none"}");
+                _pressedCommand = null;
+            }
+            else if (vrEvent.EventType == OpenVrEventType.MouseButtonDown)
+            {
+                var resolution = ResolveClickButton(pointer);
+                LogPointerEvent("MouseButtonDown", pointer, resolution);
+                _pressedCommand = resolution.Button?.Command;
+                if (resolution.Button is not null)
+                {
+                    TryStartButtonCommand(resolution.Button, cancellationToken);
+                }
+                else
+                {
+                    Log("Click ignored: " + resolution.MissReason);
+                }
+            }
+            else if (vrEvent.EventType == OpenVrEventType.MouseButtonUp)
+            {
+                LogPointerEvent("MouseButtonUp", pointer, new ClickResolution(null, pointer, "event", "button-up"));
+                _pressedCommand = null;
+            }
+            else if (vrEvent.EventType == OpenVrEventType.MouseFocusLeave)
+            {
+                _pressedCommand = null;
+            }
+            else if (vrEvent.EventType == OpenVrEventType.OverlayClosed)
+            {
+                Log("OverlayClosed event received.");
+                Environment.ExitCode = 0;
+                return;
+            }
+        }
+    }
+
+    private static OverlayPointer GetMousePointer(OpenVrEvent vrEvent, DateTimeOffset timestamp)
+    {
+        var raw = new PointF(vrEvent.MouseX, vrEvent.MouseY);
+        var layout = new PointF(vrEvent.MouseX, OverlayHeight - vrEvent.MouseY);
+        return new OverlayPointer(
+            vrEvent.CursorIndex,
+            raw,
+            layout,
+            timestamp);
+    }
+
+    private void TrackPointerMove(OverlayPointer pointer)
+    {
+        var valid = IsTrackablePointer(pointer);
+        if (valid)
+        {
+            _lastPointer = pointer;
+        }
+
+        if (DateTimeOffset.UtcNow - _lastMouseMoveLoggedAt >= TimeSpan.FromMilliseconds(500))
+        {
+            _lastMouseMoveLoggedAt = DateTimeOffset.UtcNow;
+            LogPointerEvent(
+                "MouseMove",
+                pointer,
+                new ClickResolution(null, pointer, valid ? "event" : "ignored", valid ? "tracked" : GetPointerInvalidReason(pointer)));
+        }
+    }
+
+    private ClickResolution ResolveClickButton(OverlayPointer eventPointer)
+    {
+        if (!IsValidOverlayPoint(eventPointer.Raw))
+        {
+            return new ClickResolution(null, eventPointer, "event", GetPointerInvalidReason(eventPointer));
+        }
+
+        var button = HitTestLayout(eventPointer.Layout);
+        return new ClickResolution(
+            button,
+            eventPointer,
+            "event",
+            button is null ? GetNoHitReason(eventPointer) : "none");
+    }
+
+    private static bool IsTrackablePointer(OverlayPointer pointer)
+        => IsValidOverlayPoint(pointer.Raw);
+
+    private static bool IsValidOverlayPoint(PointF point)
+        => HasFiniteCoordinates(point)
+            && point.X >= 0
+            && point.X < OverlayWidth
+            && point.Y >= 0
+            && point.Y < OverlayHeight;
+
+    private static bool HasFiniteCoordinates(PointF point)
+        => float.IsFinite(point.X) && float.IsFinite(point.Y);
+
+    private static string GetPointerInvalidReason(OverlayPointer pointer)
+    {
+        if (!HasFiniteCoordinates(pointer.Raw))
+        {
+            return "invalid coordinate";
+        }
+
+        if (pointer.Raw.X < 0 || pointer.Raw.X >= OverlayWidth)
+        {
+            return "invalid-x";
+        }
+
+        if (pointer.Raw.Y < 0 || pointer.Raw.Y >= OverlayHeight)
+        {
+            return "invalid-y";
+        }
+
+        return "outside overlay";
+    }
+
+    private static string GetNoHitReason(OverlayPointer pointer)
+        => pointer.Layout.X < 0
+            || pointer.Layout.X >= OverlayWidth
+            || pointer.Layout.Y < 0
+            || pointer.Layout.Y >= OverlayHeight
+                ? "outside overlay"
+                : "gap/margin click";
+
+    private void LogPointerEvent(string eventName, OverlayPointer pointer, ClickResolution resolution)
+        => Log(
+            $"{eventName}; cursor={pointer.CursorIndex}; raw={pointer.Raw.X:0.0},{pointer.Raw.Y:0.0}; layout={pointer.Layout.X:0.0},{pointer.Layout.Y:0.0}; source={resolution.Source}; resolved={resolution.Button?.Command ?? "none"}; miss={resolution.MissReason}; pressed={_pressedCommand ?? "none"}");
+
+    private DashboardButton? FindButtonByCommand(string? command)
+        => string.IsNullOrWhiteSpace(command)
+            ? null
+            : _buttons.FirstOrDefault(candidate => string.Equals(candidate.Command, command, StringComparison.Ordinal));
+
+    private void TryStartButtonCommand(DashboardButton button, CancellationToken cancellationToken)
+    {
+        if (_commandInFlight || DateTimeOffset.UtcNow - _lastCommandStartedAt < TimeSpan.FromMilliseconds(250))
+        {
+            Log($"Command ignored for {button.Command}; inFlight={_commandInFlight}");
+            SetStatus("Already running a command...");
+            return;
+        }
+
+        _commandInFlight = true;
+        _runningCommand = button.Command;
+        _lastCommandStartedAt = DateTimeOffset.UtcNow;
+        Log("Command queued: " + button.Command);
+        SetStatus("Clicked: " + button.Label);
+        _ = ExecuteButtonAsync(button, cancellationToken);
+    }
+
+    private async Task ExecuteButtonAsync(DashboardButton button, CancellationToken cancellationToken)
+    {
+        try
+        {
+            Log("Command starting: " + button.Command);
+            SetStatus("Running " + button.Label + "...");
+            var response = await SendCommandAsync(button.Command, TimeSpan.FromSeconds(45));
+            Log("Command response: " + response);
+            SetStatus(response);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            Log("Command failed: " + ex);
+            SetStatus("Command failed: " + ex.Message);
+        }
+        finally
+        {
+            Log("Command finished: " + button.Command);
+            _runningCommand = null;
+            _commandInFlight = false;
+            RefreshOverlayTexture();
+        }
+    }
+
+    private DashboardButton? HitTestLayout(PointF layoutPosition)
+        => _buttons.FirstOrDefault(button => Contains(button.Bounds, layoutPosition));
+
+    private static bool Contains(Rectangle bounds, PointF point)
+        => point.X >= bounds.Left
+            && point.X < bounds.Right
+            && point.Y >= bounds.Top
+            && point.Y < bounds.Bottom;
+
+    private void SetStatus(string status)
+    {
+        if (string.Equals(_status, status, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _status = status;
+        RefreshOverlayTexture();
+    }
+
+    private void RefreshOverlayTexture()
+    {
+        lock (_renderLock)
+        {
+            try
+            {
+                using var bitmap = RenderOverlay();
+                var surfacePath = SaveOverlaySurface(bitmap);
+                _overlay?.SetOverlayFromFile(surfacePath);
+            }
+            catch (Exception ex)
+            {
+                Log("Render refresh failed: " + ex);
+            }
+        }
+    }
+
+    private Bitmap RenderOverlay()
+    {
+        var bitmap = new Bitmap(OverlayWidth, OverlayHeight, PixelFormat.Format32bppArgb);
+        using var graphics = Graphics.FromImage(bitmap);
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        graphics.Clear(Color.FromArgb(24, 26, 32));
+
+        using var titleFont = new Font(FontFamily.GenericSansSerif, 34, FontStyle.Bold);
+        using var buttonFont = new Font(FontFamily.GenericSansSerif, 23, FontStyle.Regular);
+        using var statusFont = new Font(FontFamily.GenericSansSerif, 14, FontStyle.Regular);
+        using var titleBrush = new SolidBrush(Color.White);
+        using var statusBrush = new SolidBrush(Color.FromArgb(210, 215, 225));
+        using var accentBrush = new SolidBrush(Color.FromArgb(45, 128, 255));
+        using var normalBrush = new SolidBrush(Color.FromArgb(48, 52, 62));
+        using var runningBrush = new SolidBrush(Color.FromArgb(63, 75, 96));
+
+        graphics.FillRectangle(accentBrush, 0, 0, OverlayWidth, 8);
+        DrawOverlayIcon(graphics, new Rectangle(68, 42, 76, 76));
+        graphics.DrawString("Pimax VRC Supervisor", titleFont, titleBrush, 164, 48);
+        graphics.DrawString("SteamVR dashboard controls", statusFont, statusBrush, 168, 98);
+
+        foreach (var button in _buttons)
+        {
+            var running = string.Equals(_runningCommand, button.Command, StringComparison.Ordinal);
+            using var path = RoundedRect(button.Bounds, 12);
+            graphics.FillPath(running ? runningBrush : normalBrush, path);
+            using var activeBorderPen = new Pen(
+                running ? Color.FromArgb(45, 128, 255) : Color.FromArgb(110, 126, 150),
+                running ? 4 : 2);
+            graphics.DrawPath(activeBorderPen, path);
+            DrawCenteredText(graphics, running ? "Running..." : button.Label, buttonFont, titleBrush, button.Bounds);
+        }
+
+        var statusBounds = new Rectangle(70, 560, 760, 48);
+        using var statusFormat = new StringFormat
+        {
+            Alignment = StringAlignment.Near,
+            LineAlignment = StringAlignment.Near,
+            Trimming = StringTrimming.EllipsisWord
+        };
+        graphics.DrawString(TrimStatus(BuildStatusLine()), statusFont, statusBrush, statusBounds, statusFormat);
+        return bitmap;
+    }
+
+    private string SaveOverlaySurface(Bitmap bitmap)
+    {
+        var surfacePath = GetNextSurfacePath();
+        bitmap.Save(surfacePath, ImageFormat.Png);
+        TrackSurfacePath(surfacePath);
+        return surfacePath;
+    }
+
+    private string GetNextSurfacePath()
+        => Path.Combine(
+            Path.GetTempPath(),
+            $"PimaxVrcSupervisorSteamVrOverlay_{Environment.ProcessId}_{Interlocked.Increment(ref _surfaceGeneration):000000}.png");
+
+    private void TrackSurfacePath(string surfacePath)
+    {
+        _surfacePaths.Enqueue(surfacePath);
+        while (_surfacePaths.Count > 8)
+        {
+            TryDelete(_surfacePaths.Dequeue());
+        }
+    }
+
+    private string BuildStatusLine()
+        => FormatStatusForOverlay(_status);
+
+    private static string FormatStatusForOverlay(string status)
+    {
+        if (!status.StartsWith("Mode=", StringComparison.OrdinalIgnoreCase))
+        {
+            return status;
+        }
+
+        var values = status
+            .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(part => part.Split('=', 2, StringSplitOptions.TrimEntries))
+            .Where(parts => parts.Length == 2)
+            .ToDictionary(parts => parts[0], parts => parts[1], StringComparer.OrdinalIgnoreCase);
+
+        var coreApps = values.TryGetValue("CoreApps", out var coreAppsValue) ? coreAppsValue : "unknown";
+        var oscRouter = values.TryGetValue("OscRouter", out var oscRouterValue) ? oscRouterValue : "unknown";
+        var baseStations = values.TryGetValue("BaseStations", out var baseStationsValue) ? baseStationsValue : "unknown";
+        return $"Ready. Core apps: {coreApps}. OSC router: {oscRouter}. Base stations: {baseStations}.";
+    }
+
+    private static void DrawOverlayIcon(Graphics graphics, Rectangle bounds)
+    {
+        var overlayIconPath = GetOverlayIconPath();
+        if (!File.Exists(overlayIconPath))
+        {
+            return;
+        }
+
+        try
+        {
+            using var image = Image.FromFile(overlayIconPath);
+            DrawImageContained(graphics, image, bounds);
+        }
+        catch
+        {
+        }
+    }
+
+    private static string GetOverlayIconPath()
+        => Path.Combine(AppContext.BaseDirectory, OverlayIconRelativePath);
+
+    private static void DrawImageContained(Graphics graphics, Image image, Rectangle bounds)
+    {
+        var scale = Math.Min(bounds.Width / (float)image.Width, bounds.Height / (float)image.Height);
+        var width = Math.Max(1, (int)Math.Round(image.Width * scale));
+        var height = Math.Max(1, (int)Math.Round(image.Height * scale));
+        var x = bounds.Left + (bounds.Width - width) / 2;
+        var y = bounds.Top + (bounds.Height - height) / 2;
+        graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        graphics.DrawImage(image, new Rectangle(x, y, width, height));
+    }
+
+    private static GraphicsPath RoundedRect(Rectangle bounds, int radius)
+    {
+        var path = new GraphicsPath();
+        var diameter = radius * 2;
+        path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    private static void DrawCenteredText(Graphics graphics, string text, Font font, Brush brush, Rectangle bounds)
+    {
+        using var format = new StringFormat
+        {
+            Alignment = StringAlignment.Center,
+            LineAlignment = StringAlignment.Center
+        };
+        graphics.DrawString(text, font, brush, bounds, format);
+    }
+
+    private static string TrimStatus(string status)
+        => status.Length <= 120 ? status : status[..117] + "...";
+
+    private static bool IsSteamVrRunning()
+    {
+        var processes = Process.GetProcessesByName("vrserver");
+        foreach (var process in processes)
+        {
+            process.Dispose();
+        }
+
+        return processes.Length > 0;
+    }
+
+    private async Task<string> SendCommandAsync(string command, TimeSpan timeout)
+    {
+        try
+        {
+            Log("Sending TCP command: " + command);
+            var response = await SendTcpCommandAsync(command, timeout);
+            Log("TCP command completed: " + command);
+            return response;
+        }
+        catch (Exception tcpEx)
+        {
+            Log("TCP command failed, trying pipe: " + tcpEx.Message);
+            var response = await SendPipeCommandAsync(command, timeout);
+            Log("Pipe command completed: " + command);
+            return response;
+        }
+    }
+
+    private static async Task<string> SendTcpCommandAsync(string command, TimeSpan timeout)
+    {
+        using var timeoutSource = new CancellationTokenSource(timeout);
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", CommandTcpPort, timeoutSource.Token);
+        await using var stream = client.GetStream();
+        await using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true)
+        {
+            AutoFlush = true
+        };
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+        await writer.WriteLineAsync(command.AsMemory(), timeoutSource.Token);
+        return await reader.ReadLineAsync(timeoutSource.Token) ?? "No response.";
+    }
+
+    private static async Task<string> SendPipeCommandAsync(string command, TimeSpan timeout)
+    {
+        using var timeoutSource = new CancellationTokenSource(timeout);
+        await using var pipe = new NamedPipeClientStream(".", CommandPipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await pipe.ConnectAsync(timeoutSource.Token);
+        await using var writer = new StreamWriter(pipe, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true)
+        {
+            AutoFlush = true
+        };
+        using var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+        await writer.WriteLineAsync(command.AsMemory(), timeoutSource.Token);
+        return await reader.ReadLineAsync(timeoutSource.Token) ?? "No response.";
+    }
+
+    private void Log(string message)
+    {
+        try
+        {
+            File.AppendAllText(
+                _logPath,
+                $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz} {message}{Environment.NewLine}",
+                Encoding.UTF8);
+        }
+        catch
+        {
+        }
+    }
+
+    private static async Task RunProcessAsync(string fileName, string[] arguments, TimeSpan timeout)
+    {
+        using var timeoutSource = new CancellationTokenSource(timeout);
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = fileName,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start {fileName}.");
+        var outputTask = process.StandardOutput.ReadToEndAsync(timeoutSource.Token);
+        var errorTask = process.StandardError.ReadToEndAsync(timeoutSource.Token);
+        await process.WaitForExitAsync(timeoutSource.Token);
+        var output = await outputTask;
+        var error = await errorTask;
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"{fileName} exited with code {process.ExitCode}: {error}{output}");
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+        }
+    }
+}
+
+internal sealed record DashboardButton(string Label, string Command, Rectangle Bounds);
+
+internal readonly record struct OverlayPointer(uint CursorIndex, PointF Raw, PointF Layout, DateTimeOffset Timestamp);
+
+internal readonly record struct ClickResolution(DashboardButton? Button, OverlayPointer Pointer, string Source, string MissReason);
+
+internal enum OpenVrEventType : uint
+{
+    ButtonPress = 200,
+    ButtonUnpress = 201,
+    MouseMove = 300,
+    MouseButtonDown = 301,
+    MouseButtonUp = 302,
+    MouseFocusEnter = 303,
+    MouseFocusLeave = 304,
+    TouchPadMove = 306,
+    OverlayClosed = 534
+}
+
+[StructLayout(LayoutKind.Explicit, Size = 64)]
+internal struct OpenVrEvent
+{
+    [FieldOffset(0)]
+    public OpenVrEventType EventType;
+    [FieldOffset(4)]
+    public uint TrackedDeviceIndex;
+    [FieldOffset(8)]
+    public float EventAgeSeconds;
+    [FieldOffset(16)]
+    public float MouseX;
+    [FieldOffset(20)]
+    public float MouseY;
+    [FieldOffset(24)]
+    public uint MouseButton;
+    [FieldOffset(28)]
+    public uint CursorIndex;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct OpenVrVector2
+{
+    public float X;
+    public float Y;
+}
+
+internal sealed class OpenVrOverlaySession : IDisposable
+{
+    private const string OpenVrOverlayFnTableVersion = "FnTable:IVROverlay_028";
+    private const int VrApplicationOverlay = 2;
+    private const int VrInitErrorNone = 0;
+    private const int VrOverlayErrorNone = 0;
+
+    private readonly IntPtr _library;
+    private readonly VrShutdownInternalDelegate _shutdownInternal;
+    private readonly GetOverlayErrorNameFromEnumDelegate _getOverlayErrorNameFromEnum;
+    private readonly DestroyOverlayDelegate _destroyOverlay;
+    private readonly SetOverlayWidthInMetersDelegate _setOverlayWidthInMeters;
+    private readonly SetOverlayFlagDelegate _setOverlayFlag;
+    private readonly PollNextOverlayEventDelegate _pollNextOverlayEvent;
+    private readonly SetOverlayInputMethodDelegate _setOverlayInputMethod;
+    private readonly SetOverlayMouseScaleDelegate _setOverlayMouseScale;
+    private readonly SetOverlayFromFileDelegate _setOverlayFromFile;
+    private readonly CreateDashboardOverlayDelegate _createDashboardOverlay;
+    private bool _initialized = true;
+    private ulong _mainHandle;
+    private ulong _thumbnailHandle;
+
+    private OpenVrOverlaySession(
+        IntPtr library,
+        VrShutdownInternalDelegate shutdownInternal,
+        OpenVrOverlayFnTable table,
+        ulong mainHandle,
+        ulong thumbnailHandle)
+    {
+        _library = library;
+        _shutdownInternal = shutdownInternal;
+        _getOverlayErrorNameFromEnum = CreateDelegate<GetOverlayErrorNameFromEnumDelegate>(table.GetOverlayErrorNameFromEnum);
+        _destroyOverlay = CreateDelegate<DestroyOverlayDelegate>(table.DestroyOverlay);
+        _setOverlayWidthInMeters = CreateDelegate<SetOverlayWidthInMetersDelegate>(table.SetOverlayWidthInMeters);
+        _setOverlayFlag = CreateDelegate<SetOverlayFlagDelegate>(table.SetOverlayFlag);
+        _pollNextOverlayEvent = CreateDelegate<PollNextOverlayEventDelegate>(table.PollNextOverlayEvent);
+        _setOverlayInputMethod = CreateDelegate<SetOverlayInputMethodDelegate>(table.SetOverlayInputMethod);
+        _setOverlayMouseScale = CreateDelegate<SetOverlayMouseScaleDelegate>(table.SetOverlayMouseScale);
+        _setOverlayFromFile = CreateDelegate<SetOverlayFromFileDelegate>(table.SetOverlayFromFile);
+        _createDashboardOverlay = CreateDelegate<CreateDashboardOverlayDelegate>(table.CreateDashboardOverlay);
+        _mainHandle = mainHandle;
+        _thumbnailHandle = thumbnailHandle;
+    }
+
+    public static OpenVrOverlaySession Open(string overlayKey, string overlayName)
+    {
+        if (!TryFindOpenVrApiDll(out var openVrApiDllPath, out var reason))
+        {
+            throw new InvalidOperationException(reason);
+        }
+
+        var library = NativeLibrary.Load(openVrApiDllPath);
+        try
+        {
+            var initInternal = GetExportDelegate<VrInitInternalDelegate>(library, "VR_InitInternal");
+            var shutdownInternal = GetExportDelegate<VrShutdownInternalDelegate>(library, "VR_ShutdownInternal");
+            var getGenericInterface = GetExportDelegate<VrGetGenericInterfaceDelegate>(library, "VR_GetGenericInterface");
+            var getInitErrorDescription = GetOptionalExportDelegate<VrGetVrInitErrorAsEnglishDescriptionDelegate>(library, "VR_GetVRInitErrorAsEnglishDescription");
+
+            var initError = 0;
+            _ = initInternal(ref initError, VrApplicationOverlay);
+            if (initError != VrInitErrorNone)
+            {
+                throw new InvalidOperationException($"OpenVR overlay init failed: {DescribeOpenVrInitError(initError, getInitErrorDescription)}");
+            }
+
+            var interfaceError = 0;
+            var overlayTablePointer = getGenericInterface(OpenVrOverlayFnTableVersion, ref interfaceError);
+            if (overlayTablePointer == IntPtr.Zero || interfaceError != VrInitErrorNone)
+            {
+                shutdownInternal();
+                throw new InvalidOperationException($"OpenVR overlay interface unavailable: {DescribeOpenVrInitError(interfaceError, getInitErrorDescription)}");
+            }
+
+            var table = Marshal.PtrToStructure<OpenVrOverlayFnTable>(overlayTablePointer);
+            var createDashboardOverlay = CreateDelegate<CreateDashboardOverlayDelegate>(table.CreateDashboardOverlay);
+            ulong mainHandle = 0;
+            ulong thumbnailHandle = 0;
+            var overlayError = createDashboardOverlay(overlayKey, overlayName, ref mainHandle, ref thumbnailHandle);
+            var session = new OpenVrOverlaySession(library, shutdownInternal, table, mainHandle, thumbnailHandle);
+            session.ThrowIfOverlayError(overlayError, "CreateDashboardOverlay");
+            return session;
+        }
+        catch
+        {
+            NativeLibrary.Free(library);
+            throw;
+        }
+    }
+
+    public void SetOverlayWidthInMeters(float width)
+        => ThrowIfOverlayError(_setOverlayWidthInMeters(_mainHandle, width), "SetOverlayWidthInMeters");
+
+    public void SetOverlayInputMethodMouse()
+        => ThrowIfOverlayError(_setOverlayInputMethod(_mainHandle, 1), "SetOverlayInputMethod");
+
+    public void SetInteractiveDashboardFlags()
+    {
+        const int visibleInDashboard = 1 << 15;
+        const int makeInteractiveIfVisible = 1 << 16;
+        const int clickStabilization = 1 << 27;
+        ThrowIfOverlayError(_setOverlayFlag(_mainHandle, visibleInDashboard, true), "SetOverlayFlag VisibleInDashboard");
+        ThrowIfOverlayError(_setOverlayFlag(_mainHandle, makeInteractiveIfVisible, true), "SetOverlayFlag MakeOverlaysInteractiveIfVisible");
+        TrySetOverlayFlag(clickStabilization, true);
+    }
+
+    private void TrySetOverlayFlag(int flag, bool enabled)
+    {
+        try
+        {
+            _ = _setOverlayFlag(_mainHandle, flag, enabled);
+        }
+        catch
+        {
+            // Optional OpenVR flags vary by runtime version.
+        }
+    }
+
+    public void SetOverlayMouseScale(float width, float height)
+    {
+        var scale = new OpenVrVector2 { X = width, Y = height };
+        ThrowIfOverlayError(_setOverlayMouseScale(_mainHandle, ref scale), "SetOverlayMouseScale");
+    }
+
+    public void SetOverlayFromFile(string path)
+        => ThrowIfOverlayError(_setOverlayFromFile(_mainHandle, path), "SetOverlayFromFile");
+
+    public void SetThumbnailFromFile(string path)
+        => ThrowIfOverlayError(_setOverlayFromFile(_thumbnailHandle, path), "SetOverlayFromFile thumbnail");
+
+    public bool PollNextOverlayEvent(out OpenVrEvent vrEvent)
+    {
+        vrEvent = default;
+        return _pollNextOverlayEvent(_mainHandle, ref vrEvent, (uint)Marshal.SizeOf<OpenVrEvent>());
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (_mainHandle != 0)
+            {
+                _destroyOverlay(_mainHandle);
+                _mainHandle = 0;
+            }
+
+            if (_thumbnailHandle != 0)
+            {
+                _destroyOverlay(_thumbnailHandle);
+                _thumbnailHandle = 0;
+            }
+
+            if (_initialized)
+            {
+                _shutdownInternal();
+                _initialized = false;
+            }
+        }
+        finally
+        {
+            NativeLibrary.Free(_library);
+        }
+    }
+
+    private void ThrowIfOverlayError(int error, string operation)
+    {
+        if (error == VrOverlayErrorNone)
+        {
+            return;
+        }
+
+        var errorNamePointer = _getOverlayErrorNameFromEnum(error);
+        var errorName = errorNamePointer == IntPtr.Zero ? "" : Marshal.PtrToStringAnsi(errorNamePointer);
+        throw new InvalidOperationException($"{operation} failed: {(string.IsNullOrWhiteSpace(errorName) ? error.ToString() : errorName)}");
+    }
+
+    private static bool TryFindOpenVrApiDll(out string openVrApiDllPath, out string reason)
+    {
+        foreach (var runtimePath in GetOpenVrRuntimePaths())
+        {
+            var candidate = Path.Combine(runtimePath, "bin", "win64", "openvr_api.dll");
+            if (File.Exists(candidate))
+            {
+                openVrApiDllPath = candidate;
+                reason = "";
+                return true;
+            }
+        }
+
+        openVrApiDllPath = "";
+        reason = "openvr_api.dll was not found in the configured SteamVR runtime";
+        return false;
+    }
+
+    private static IEnumerable<string> GetOpenVrRuntimePaths()
+    {
+        var openVrPathsFile = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "openvr",
+            "openvrpaths.vrpath");
+        if (File.Exists(openVrPathsFile))
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(openVrPathsFile));
+            if (document.RootElement.TryGetProperty("runtime", out var runtimeElement) && runtimeElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in runtimeElement.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.String && item.GetString() is { Length: > 0 } runtimePath)
+                    {
+                        yield return runtimePath.TrimEnd('\\', '/');
+                    }
+                }
+            }
+        }
+
+        const string steamVrUninstallKeyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 250820";
+        foreach (var registryView in new[] { RegistryView.Registry64, RegistryView.Registry32 })
+        {
+            using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, registryView);
+            using var key = baseKey.OpenSubKey(steamVrUninstallKeyPath);
+            if (key?.GetValue("InstallLocation") is string installLocation && !string.IsNullOrWhiteSpace(installLocation))
+            {
+                yield return installLocation.TrimEnd('\\', '/');
+            }
+        }
+    }
+
+    private static string DescribeOpenVrInitError(int error, VrGetVrInitErrorAsEnglishDescriptionDelegate? getDescription)
+    {
+        if (getDescription is null)
+        {
+            return error.ToString();
+        }
+
+        var descriptionPointer = getDescription(error);
+        var description = descriptionPointer == IntPtr.Zero ? "" : Marshal.PtrToStringAnsi(descriptionPointer);
+        return string.IsNullOrWhiteSpace(description) ? error.ToString() : $"{description} ({error})";
+    }
+
+    private static T GetExportDelegate<T>(IntPtr library, string exportName) where T : Delegate
+        => CreateDelegate<T>(NativeLibrary.GetExport(library, exportName));
+
+    private static T? GetOptionalExportDelegate<T>(IntPtr library, string exportName) where T : Delegate
+        => NativeLibrary.TryGetExport(library, exportName, out var exportPointer)
+            ? CreateDelegate<T>(exportPointer)
+            : null;
+
+    private static T CreateDelegate<T>(IntPtr functionPointer) where T : Delegate
+        => Marshal.GetDelegateForFunctionPointer<T>(functionPointer);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct OpenVrOverlayFnTable
+    {
+        public IntPtr FindOverlay;
+        public IntPtr CreateOverlay;
+        public IntPtr CreateSubviewOverlay;
+        public IntPtr DestroyOverlay;
+        public IntPtr GetOverlayKey;
+        public IntPtr GetOverlayName;
+        public IntPtr SetOverlayName;
+        public IntPtr GetOverlayImageData;
+        public IntPtr GetOverlayErrorNameFromEnum;
+        public IntPtr SetOverlayRenderingPid;
+        public IntPtr GetOverlayRenderingPid;
+        public IntPtr SetOverlayFlag;
+        public IntPtr GetOverlayFlag;
+        public IntPtr GetOverlayFlags;
+        public IntPtr SetOverlayColor;
+        public IntPtr GetOverlayColor;
+        public IntPtr SetOverlayAlpha;
+        public IntPtr GetOverlayAlpha;
+        public IntPtr SetOverlayTexelAspect;
+        public IntPtr GetOverlayTexelAspect;
+        public IntPtr SetOverlaySortOrder;
+        public IntPtr GetOverlaySortOrder;
+        public IntPtr SetOverlayWidthInMeters;
+        public IntPtr GetOverlayWidthInMeters;
+        public IntPtr SetOverlayCurvature;
+        public IntPtr GetOverlayCurvature;
+        public IntPtr SetOverlayPreCurvePitch;
+        public IntPtr GetOverlayPreCurvePitch;
+        public IntPtr SetOverlayTextureColorSpace;
+        public IntPtr GetOverlayTextureColorSpace;
+        public IntPtr SetOverlayTextureBounds;
+        public IntPtr GetOverlayTextureBounds;
+        public IntPtr GetOverlayTransformType;
+        public IntPtr SetOverlayTransformAbsolute;
+        public IntPtr GetOverlayTransformAbsolute;
+        public IntPtr SetOverlayTransformTrackedDeviceRelative;
+        public IntPtr GetOverlayTransformTrackedDeviceRelative;
+        public IntPtr SetOverlayTransformTrackedDeviceComponent;
+        public IntPtr GetOverlayTransformTrackedDeviceComponent;
+        public IntPtr SetOverlayTransformCursor;
+        public IntPtr GetOverlayTransformCursor;
+        public IntPtr SetOverlayTransformProjection;
+        public IntPtr SetSubviewPosition;
+        public IntPtr ShowOverlay;
+        public IntPtr HideOverlay;
+        public IntPtr IsOverlayVisible;
+        public IntPtr GetTransformForOverlayCoordinates;
+        public IntPtr WaitFrameSync;
+        public IntPtr PollNextOverlayEvent;
+        public IntPtr GetOverlayInputMethod;
+        public IntPtr SetOverlayInputMethod;
+        public IntPtr GetOverlayMouseScale;
+        public IntPtr SetOverlayMouseScale;
+        public IntPtr ComputeOverlayIntersection;
+        public IntPtr IsHoverTargetOverlay;
+        public IntPtr SetOverlayIntersectionMask;
+        public IntPtr TriggerLaserMouseHapticVibration;
+        public IntPtr SetOverlayCursor;
+        public IntPtr SetOverlayCursorPositionOverride;
+        public IntPtr ClearOverlayCursorPositionOverride;
+        public IntPtr SetOverlayTexture;
+        public IntPtr ClearOverlayTexture;
+        public IntPtr SetOverlayRaw;
+        public IntPtr SetOverlayFromFile;
+        public IntPtr GetOverlayTexture;
+        public IntPtr ReleaseNativeOverlayHandle;
+        public IntPtr GetOverlayTextureSize;
+        public IntPtr CreateDashboardOverlay;
+        public IntPtr IsDashboardVisible;
+        public IntPtr IsActiveDashboardOverlay;
+    }
+
+    private delegate IntPtr VrInitInternalDelegate(ref int error, int applicationType);
+    private delegate void VrShutdownInternalDelegate();
+    private delegate IntPtr VrGetGenericInterfaceDelegate(string interfaceVersion, ref int error);
+    private delegate IntPtr VrGetVrInitErrorAsEnglishDescriptionDelegate(int error);
+    private delegate int DestroyOverlayDelegate(ulong overlayHandle);
+    private delegate IntPtr GetOverlayErrorNameFromEnumDelegate(int error);
+    private delegate int SetOverlayWidthInMetersDelegate(ulong overlayHandle, float widthInMeters);
+    private delegate int SetOverlayFlagDelegate(ulong overlayHandle, int flag, [MarshalAs(UnmanagedType.I1)] bool enabled);
+    private delegate bool PollNextOverlayEventDelegate(ulong overlayHandle, ref OpenVrEvent vrEvent, uint eventSize);
+    private delegate int SetOverlayInputMethodDelegate(ulong overlayHandle, int inputMethod);
+    private delegate int SetOverlayMouseScaleDelegate(ulong overlayHandle, ref OpenVrVector2 mouseScale);
+    private delegate int SetOverlayFromFileDelegate(ulong overlayHandle, [MarshalAs(UnmanagedType.LPStr)] string filePath);
+    private delegate int CreateDashboardOverlayDelegate([MarshalAs(UnmanagedType.LPStr)] string overlayKey, [MarshalAs(UnmanagedType.LPStr)] string overlayName, ref ulong mainHandle, ref ulong thumbnailHandle);
+}
