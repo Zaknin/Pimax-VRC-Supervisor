@@ -17,6 +17,7 @@ using PimaxVrcSupervisor.BaseStations;
 using Windows.Devices.Bluetooth.Advertisement;
 
 using var shutdown = new CancellationTokenSource();
+using var consoleLog = SupervisorConsoleLog.Install();
 
 var commandLineArgs = Environment.GetCommandLineArgs().Skip(1).ToArray();
 var configPath = TryGetCommandOption(commandLineArgs, "--config", out var requestedConfigPath)
@@ -171,6 +172,112 @@ internal static class AppVersion
         typeof(AppVersion).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
         ?? typeof(AppVersion).Assembly.GetName().Version?.ToString()
         ?? "unknown";
+}
+
+internal static class SupervisorConsoleLog
+{
+    private const int Capacity = 80;
+    private static readonly object Sync = new();
+    private static readonly Queue<string> Lines = new();
+
+    public static IDisposable Install()
+    {
+        var originalOut = Console.Out;
+        var writer = new TeeConsoleWriter(originalOut, AppendLine);
+        Console.SetOut(writer);
+        return new RestoreConsoleWriter(originalOut, writer);
+    }
+
+    public static string[] GetRecentLines(int count)
+    {
+        lock (Sync)
+        {
+            return Lines
+                .TakeLast(Math.Clamp(count, 0, Capacity))
+                .ToArray();
+        }
+    }
+
+    private static void AppendLine(string? value)
+    {
+        var line = value ?? "";
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return;
+        }
+
+        var stamped = $"{DateTimeOffset.Now:HH:mm:ss} {line.Trim()}";
+        lock (Sync)
+        {
+            Lines.Enqueue(stamped);
+            while (Lines.Count > Capacity)
+            {
+                Lines.Dequeue();
+            }
+        }
+    }
+
+    private sealed class TeeConsoleWriter(TextWriter inner, Action<string?> appendLine) : TextWriter
+    {
+        public override Encoding Encoding => inner.Encoding;
+
+        public override IFormatProvider FormatProvider => inner.FormatProvider;
+
+        public override void Flush()
+            => inner.Flush();
+
+        public override Task FlushAsync()
+            => inner.FlushAsync();
+
+        public override void Write(char value)
+            => inner.Write(value);
+
+        public override void Write(string? value)
+            => inner.Write(value);
+
+        public override void WriteLine()
+        {
+            appendLine("");
+            inner.WriteLine();
+        }
+
+        public override void WriteLine(string? value)
+        {
+            appendLine(value);
+            inner.WriteLine(value);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                inner.Flush();
+            }
+
+            base.Dispose(disposing);
+        }
+    }
+
+    private sealed class RestoreConsoleWriter(TextWriter originalOut, TextWriter installedWriter) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            if (ReferenceEquals(Console.Out, installedWriter))
+            {
+                Console.SetOut(originalOut);
+            }
+
+            installedWriter.Dispose();
+        }
+    }
 }
 
 internal sealed record ResolvedExecutablePath(string Path, bool WasSelected);
@@ -1474,6 +1581,8 @@ internal sealed class AppSupervisor
             {
                 case "status":
                     return BuildSupervisorStatus();
+                case "log":
+                    return JsonSerializer.Serialize(SupervisorConsoleLog.GetRecentLines(14));
                 case "restart-core-apps":
                     await RestartCoreAppsAsync(cancellationToken);
                     return "Restarted Broken Eye and VRCFaceTracking.";
@@ -3217,23 +3326,23 @@ internal sealed class SupervisorCommandServer : IDisposable
         {
             try
             {
-                await using var pipe = new NamedPipeServerStream(
+                var pipe = new NamedPipeServerStream(
                     PipeName,
                     PipeDirection.InOut,
-                    maxNumberOfServerInstances: 1,
+                    maxNumberOfServerInstances: 4,
                     PipeTransmissionMode.Byte,
                     PipeOptions.Asynchronous);
 
                 await pipe.WaitForConnectionAsync(cancellationToken);
-                using var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
-                await using var writer = new StreamWriter(pipe, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true)
+                var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+                var writer = new StreamWriter(pipe, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true)
                 {
                     AutoFlush = true
                 };
 
-                var command = await reader.ReadLineAsync(cancellationToken) ?? "";
-                var response = await supervisor.ExecuteSupervisorCommandAsync(command, cancellationToken);
-                await writer.WriteLineAsync(response.AsMemory(), cancellationToken);
+                _ = Task.Run(
+                    () => HandleCommandPipeAsync(supervisor, pipe, reader, writer, cancellationToken),
+                    CancellationToken.None);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -3254,6 +3363,23 @@ internal sealed class SupervisorCommandServer : IDisposable
         }
     }
 
+    private static async Task HandleCommandPipeAsync(
+        AppSupervisor supervisor,
+        NamedPipeServerStream pipe,
+        StreamReader reader,
+        StreamWriter writer,
+        CancellationToken cancellationToken)
+    {
+        await using (pipe)
+        using (reader)
+        await using (writer)
+        {
+            var command = await reader.ReadLineAsync(cancellationToken) ?? "";
+            var response = await supervisor.ExecuteSupervisorCommandAsync(command, cancellationToken);
+            await writer.WriteLineAsync(response.AsMemory(), cancellationToken);
+        }
+    }
+
     private static async Task RunTcpAsync(AppSupervisor supervisor, CancellationToken cancellationToken)
     {
         var listener = new TcpListener(IPAddress.Loopback, TcpPort);
@@ -3263,17 +3389,10 @@ internal sealed class SupervisorCommandServer : IDisposable
             Console.WriteLine($"Dashboard command TCP endpoint ready: 127.0.0.1:{TcpPort}");
             while (!cancellationToken.IsCancellationRequested)
             {
-                using var client = await listener.AcceptTcpClientAsync(cancellationToken);
-                await using var stream = client.GetStream();
-                using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
-                await using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true)
-                {
-                    AutoFlush = true
-                };
-
-                var command = await reader.ReadLineAsync(cancellationToken) ?? "";
-                var response = await supervisor.ExecuteSupervisorCommandAsync(command, cancellationToken);
-                await writer.WriteLineAsync(response.AsMemory(), cancellationToken);
+                var client = await listener.AcceptTcpClientAsync(cancellationToken);
+                _ = Task.Run(
+                    () => HandleCommandTcpClientAsync(supervisor, client, cancellationToken),
+                    CancellationToken.None);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -3286,6 +3405,22 @@ internal sealed class SupervisorCommandServer : IDisposable
         finally
         {
             listener.Stop();
+        }
+    }
+
+    private static async Task HandleCommandTcpClientAsync(AppSupervisor supervisor, TcpClient client, CancellationToken cancellationToken)
+    {
+        using (client)
+        await using (var stream = client.GetStream())
+        using (var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true))
+        await using (var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true)
+        {
+            AutoFlush = true
+        })
+        {
+            var command = await reader.ReadLineAsync(cancellationToken) ?? "";
+            var response = await supervisor.ExecuteSupervisorCommandAsync(command, cancellationToken);
+            await writer.WriteLineAsync(response.AsMemory(), cancellationToken);
         }
     }
 }
