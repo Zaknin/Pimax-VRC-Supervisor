@@ -1,0 +1,87 @@
+site_name: Pimax VRC Supervisor Manual
+site_description: User manual and technical reference for Pimax VRC Supervisor
+site_url: https://zaknin.github.io/Pimax-VRC-Supervisor/
+
+repo_url: https://github.com/Zaknin/Pimax-VRC-Supervisor
+repo_name: Zaknin/Pimax-VRC-Supervisor
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.tabs.link
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Overview: getting-started.md
+      - Installation: installation.md
+      - Configuration: configuration.md
+  - GUI Manual:
+      - Overview: gui/index.md
+      - Basics: gui/basics.md
+      - Base Stations: gui/base-stations.md
+      - OSC Router: gui/osc-router.md
+      - Auto Launch: gui/auto-launch.md
+      - OSCGoesBrrr: gui/oscgoesbrrr.md
+      - Processes: gui/processes.md
+      - Detectors: gui/detectors.md
+      - Timing: gui/timing.md
+      - Raw JSON: gui/raw-json.md
+  - VR Overlay:
+      - Overview: overlay/index.md
+      - Controls: overlay/controls.md
+      - Configuration: overlay/configuration.md
+      - Troubleshooting: overlay/troubleshooting.md
+  - Workflows:
+      - Overview: workflows/index.md
+      - Startup Flow: workflows/startup-flow.md
+      - Headset Detection: workflows/headset-detection.md
+      - Base Station Power: workflows/base-station-power.md
+      - OSC Routing: workflows/osc-routing.md
+      - Auto Launch: workflows/auto-launch.md
+      - VR Overlay Workflow: workflows/vr-overlay-workflow.md
+  - Reference:
+      - Overview: reference/index.md
+      - Configuration Fields: reference/configuration-fields.md
+      - Supervisor Functions: reference/supervisor-functions.md
+      - Config Editor Functions: reference/config-editor-functions.md
+      - Overlay Functions: reference/overlay-functions.md
+  - Troubleshooting:
+      - Overview: troubleshooting/index.md
+      - Install Issues: troubleshooting/install-issues.md
+      - Config Editor Issues: troubleshooting/config-editor-issues.md
+      - OSC Issues: troubleshooting/osc-issues.md
+      - Base Station Issues: troubleshooting/base-station-issues.md
+      - Overlay Issues: troubleshooting/overlay-issues.md

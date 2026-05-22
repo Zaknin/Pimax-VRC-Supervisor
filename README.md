@@ -324,6 +324,16 @@ The output folder will contain both executables, the config file, and this READM
 | Base stations stay on after console X | Use the latest release; console close starts a detached helper that sends the configured Sleep/Standby command after the main console exits. |
 | OscGoesBrrr does not start | Check `OscGoesBrrrEnabled`, the Intiface/OscGoesBrrr paths, and whether the hotkey or BLE scanner mode is enabled. |
 
+## Documentation
+
+The full user manual and technical reference are available online:
+
+- [Documentation Home](docs/index.md)
+- [GUI Manual](docs/gui/index.md)
+- [VR Overlay](docs/overlay/index.md)
+- [Reference](docs/reference/index.md)
+- [Troubleshooting](docs/troubleshooting/index.md)
+
 ## Notes
 
 - This is a Windows-only utility.
