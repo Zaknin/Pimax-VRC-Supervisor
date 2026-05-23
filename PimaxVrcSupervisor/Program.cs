@@ -89,6 +89,11 @@ if (!ownsSupervisorMutex)
 }
 
 var steamVrStart = commandLineArgs.Any(arg => string.Equals(arg, "--steamvr-start", StringComparison.OrdinalIgnoreCase));
+if (steamVrStart)
+{
+    ConsoleWindow.HideIfPresent();
+}
+
 var supervisor = new AppSupervisor(config, steamVrStart);
 var supervisorStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 Console.CancelKeyPress += (_, eventArgs) =>
@@ -172,6 +177,32 @@ internal static class AppVersion
         typeof(AppVersion).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
         ?? typeof(AppVersion).Assembly.GetName().Version?.ToString()
         ?? "unknown";
+}
+
+internal static class ConsoleWindow
+{
+    private const int ShowWindowHide = 0;
+
+    public static void HideIfPresent()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var consoleWindow = GetConsoleWindow();
+        if (consoleWindow != IntPtr.Zero)
+        {
+            ShowWindow(consoleWindow, ShowWindowHide);
+        }
+    }
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetConsoleWindow();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 }
 
 internal static class SupervisorConsoleLog
@@ -1586,6 +1617,9 @@ internal sealed class AppSupervisor
                 case "restart-core-apps":
                     await RestartCoreAppsAsync(cancellationToken);
                     return "Restarted Broken Eye and VRCFaceTracking.";
+                case "start-osc-goes-brrr":
+                    await StartLovenseOscAsync(cancellationToken);
+                    return "OSCGoesBrrr workflow start requested.";
                 case "base-stations-on":
                     await ManualPowerOnBaseStationsAsync(cancellationToken);
                     return "Base station power-on requested.";

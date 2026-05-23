@@ -33,7 +33,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private const string OverlayKey = "pimax.vrcsupervisor.dashboard";
     private const string OverlayName = "Pimax VRC Supervisor";
     private const string OverlayIconRelativePath = @"Assets\vr-overlay-icon.png";
-    private const int OverlayWidth = 900;
+    private const int OverlayWidth = 1294;
     private const int OverlayHeight = 820;
     private const int ButtonTop = 154;
     private const int ButtonLeft = 70;
@@ -42,7 +42,9 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private const int ButtonWidth = 366;
     private const int ButtonHeight = 126;
     private const int ButtonRight = ButtonLeft + ButtonWidth + ButtonColumnGap;
+    private const int ButtonThird = ButtonRight + ButtonWidth + ButtonColumnGap;
     private const int ButtonBottom = ButtonTop + ButtonHeight + ButtonRowGap;
+    private const int ContentWidth = ButtonThird + ButtonWidth - ButtonLeft;
     private readonly string _logPath = Path.Combine(Path.GetTempPath(), "PimaxVrcSupervisorSteamVrHost.log");
     private readonly object _renderLock = new();
     private readonly Queue<string> _surfacePaths = new();
@@ -51,6 +53,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
     [
         new("Restart VRC face tracking", "restart-core-apps", new Rectangle(ButtonLeft, ButtonTop, ButtonWidth, ButtonHeight)),
         new("Restart OSC router", "restart-osc-router", new Rectangle(ButtonRight, ButtonTop, ButtonWidth, ButtonHeight)),
+        new("OSCGoesBrr", "start-osc-goes-brrr", new Rectangle(ButtonThird, ButtonTop, ButtonWidth, ButtonHeight)),
         new("Base stations on", "base-stations-on", new Rectangle(ButtonLeft, ButtonBottom, ButtonWidth, ButtonHeight)),
         new("Base stations off", "base-stations-off", new Rectangle(ButtonRight, ButtonBottom, ButtonWidth, ButtonHeight))
     ];
@@ -78,7 +81,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         try
         {
             _overlay = OpenVrOverlaySession.Open(OverlayKey, OverlayName);
-            _overlay.SetOverlayWidthInMeters(1.75f);
+            _overlay.SetOverlayWidthInMeters(2.5f);
             _overlay.SetOverlayMouseScale(OverlayWidth, OverlayHeight);
             _overlay.SetOverlayInputMethodMouse();
             _overlay.SetInteractiveDashboardFlags();
@@ -544,7 +547,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
             DrawCenteredText(graphics, running ? "Running..." : button.Label, buttonFont, titleBrush, button.Bounds);
         }
 
-        var statusBounds = new Rectangle(70, 458, 760, 42);
+        var statusBounds = new Rectangle(ButtonLeft, 458, ContentWidth, 42);
         using var statusFormat = new StringFormat
         {
             Alignment = StringAlignment.Near,
@@ -565,7 +568,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         Brush mutedBrush,
         Brush panelBrush)
     {
-        var bounds = new Rectangle(70, 505, 760, 260);
+        var bounds = new Rectangle(ButtonLeft, 505, ContentWidth, 260);
         using var path = RoundedRect(bounds, 10);
         graphics.FillPath(panelBrush, path);
         using var borderPen = new Pen(Color.FromArgb(82, 96, 118), 2);
@@ -599,7 +602,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
 
     private static string[] BuildConsoleDisplayLines(string[] sourceLines)
     {
-        const int maxChars = 92;
+        const int maxChars = 142;
         const int maxLines = 11;
         var wrapped = new List<string>();
         foreach (var line in sourceLines)
