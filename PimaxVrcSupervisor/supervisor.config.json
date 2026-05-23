@@ -21,11 +21,12 @@
   // These apps are closed during normal VRChat/session cleanup, but they are not restarted when Pimax reconnects.
   "OscGoesBrrrEnabled": false,
 
-  // When enabled, press L in the supervisor console to launch Intiface and then OscGoesBrrr.
+  // Legacy setting name. When enabled, the OSCGoesBrrr workflow stays in manual console launch mode.
+  // Press 2 in the visible supervisor console to launch Intiface and then OscGoesBrrr.
   "OscGoesBrrrHotkeyEnabled": true,
 
   // Optional experimental BLE scanner. When enabled, the supervisor scans nearby BLE advertisements for Lovense names.
-  // The L hotkey remains available as a fallback when OscGoesBrrrHotkeyEnabled is true.
+  // Console hotkey 2 remains available as a fallback when OscGoesBrrr is enabled.
   "OscGoesBrrrBleScannerEnabled": false,
 
   // Enable the in-process OSC router.
@@ -145,7 +146,8 @@
   // SteamVrManifest registers a SteamVR dashboard host manifest and starts the supervisor when SteamVR starts.
   "StartupLaunchMode": "Unspecified",
 
-  // Stop the supervisor when SteamVR closes. Forced on when StartupLaunchMode is SteamVrManifest.
+  // Compatibility field. SteamVR shutdown behavior is controlled by StartupLaunchMode=SteamVrManifest.
+  // Config Editor writes this as true only for SteamVrManifest mode.
   "StopWithSteamVr": false,
 
   // Pimax headset detection rules. Each inner array is one possible match rule.

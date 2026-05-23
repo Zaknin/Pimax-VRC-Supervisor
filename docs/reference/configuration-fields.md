@@ -12,7 +12,7 @@ Complete reference for all fields in `supervisor.config.json`.
 | `VrcFaceTrackingPath` | string | `""` | Full path to VRCFaceTracking executable. Prompts on first run if empty. |
 | `VrcFaceTrackingStartMinimized` | bool | `false` | Start VRCFaceTracking minimized. |
 | `OscGoesBrrrEnabled` | bool | `false` | Enable OscGoesBrrr workflow. |
-| `OscGoesBrrrHotkeyEnabled` | bool | `true` | Enable `L` hotkey for workflow. |
+| `OscGoesBrrrHotkeyEnabled` | bool | `true` | Legacy name for manual console launch mode. Console hotkey `2` launches the workflow when `OscGoesBrrrEnabled` is true. |
 | `OscGoesBrrrBleScannerEnabled` | bool | `false` | Enable Lovense BLE scanning. |
 | `OscRouterEnabled` | bool | `false` | Enable OSC UDP routing. |
 | `OscRouterReceivePort` | int | `9001` | Local UDP port for OSC router at `127.0.0.1`. |
@@ -35,7 +35,7 @@ Complete reference for all fields in `supervisor.config.json`.
 | `TurnOffSecondaryMonitors` | bool \| string | `""` | `true`/`false` or `""` to ask on first run. |
 | `AutoLaunchScheduledTask` | bool \| string | `""` | `true`/`false` or `""` to ask on first setup. |
 | `StartupLaunchMode` | string | `"Unspecified"` | `None`, `ScheduledTask`, `SteamVrManifest`, or `Unspecified`. |
-| `StopWithSteamVr` | bool | `false` | Cleanup when SteamVR closes. Forced `true` for SteamVrManifest mode. |
+| `StopWithSteamVr` | bool | `false` | Compatibility field. SteamVR cleanup follows `StartupLaunchMode = SteamVrManifest`. |
 | `PimaxDetectors` | string[][] | See below | Pimax headset detection rules. |
 | `MouthTrackerDetectors` | string[][] | See below | Mouth tracker detection rules. |
 | `LovenseDetectors` | string[][] | See below | Lovense detection rules. |

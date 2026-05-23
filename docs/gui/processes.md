@@ -21,6 +21,13 @@ The **Processes** tab configures the process names the supervisor uses to detect
 | --- | --- | --- | --- |
 | SteamVR server process name | `SteamVrServerProcessNames` | `vrserver` | After VRChat exits, monitors are restored only after these processes are gone. |
 
+## Fast Reconnect Detection
+
+| Checkbox | Config Key | Default | Description |
+| --- | --- | --- | --- |
+| Watch Pimax PiService logs for fast reconnects | `UsePimaxServiceLogReconnectDetector` | `true` | Scans PiService logs for quick HID remove/add sequences that normal USB polling can miss. |
+| Watch Windows PnP events for fast mouth tracker reconnects | `UseMouthTrackerPnPReconnectDetector` | `true` | Scans Windows Kernel-PnP events for quick mouth tracker reconnects that normal USB polling can miss. |
+
 ## OscGoesBrrr Processes
 
 | Field | Config Key | Default | Description |

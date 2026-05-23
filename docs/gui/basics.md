@@ -25,13 +25,6 @@ Both paths support environment variables like `%APPDATA%` and `%LOCALAPPDATA%`. 
 | Use Vive mouth tracker | `MouthTrackerUser` | Enables mouth tracker monitoring. When the mouth tracker reconnects, only VRCFaceTracking is restarted. A filled square means the config leaves the first-run question enabled. |
 | Turn off secondary monitors | `TurnOffSecondaryMonitors` | Saves the current monitor layout and disables secondary monitors during the VR session. Restored after VRChat and SteamVR close. A filled square means the config leaves the first-run question enabled. |
 
-## Reconnect Detection
-
-| Checkbox | Config Key | Description |
-| --- | --- | --- |
-| Watch Pimax PiService logs for fast reconnects | `UsePimaxServiceLogReconnectDetector` | Scans PiService logs for quick HID remove/add sequences that normal USB polling can miss. |
-| Watch Windows PnP events for fast mouth tracker reconnects | `UseMouthTrackerPnPReconnectDetector` | Scans Windows Kernel-PnP events for quick mouth tracker reconnects that normal USB polling can miss. |
-
 ## PiService Log Folder
 
 | Field | Config Key | Description |
@@ -46,9 +39,8 @@ The Startup section controls how the supervisor is launched:
 | --- | --- | --- |
 | Create/evaluate VRChat auto-launch Scheduled Task | `AutoLaunchScheduledTask` | Creates or repairs an elevated Windows Scheduled Task that watches for `VRChat.exe` and starts the supervisor when `vrserver.exe` is already running. |
 | Start with SteamVR | `StartupLaunchMode` = `SteamVrManifest` | Registers the SteamVR dashboard host manifest and starts the supervisor when SteamVR starts. |
-| Stop with SteamVR | `StopWithSteamVr` | When enabled, cleanup runs and the supervisor exits when SteamVR closes. Forced on when "Start with SteamVR" is enabled. |
 
-> **Note:** "Create/evaluate VRChat auto-launch Scheduled Task" and "Start with SteamVR" are mutually exclusive. Selecting one clears the other.
+> **Note:** "Create/evaluate VRChat auto-launch Scheduled Task" and "Start with SteamVR" are mutually exclusive. Selecting one clears the other. SteamVR manifest startup exits automatically when `vrserver.exe` closes.
 
 ## Editor Utilities
 

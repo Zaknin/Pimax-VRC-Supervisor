@@ -172,7 +172,7 @@ The editor includes tabs for:
 - **Base Stations**: scan, rename, enable, test, identify, and power SteamVR base stations
 - **OSC Router**: receive endpoint and output routes for local OSC routing
 - **Auto Launch**: extra apps to launch with the VR session
-- **OSCGoesBrrr**: Intiface, OscGoesBrrr, hotkey, BLE scanner, and Lovense rules
+- **OSCGoesBrrr**: Intiface, OscGoesBrrr, manual console launch mode, BLE scanner, and Lovense rules
 - **Processes**: watched process names and cleanup targets
 - **Detectors**: Pimax, mouth tracker, and Lovense detection rules
 - **Timing**: poll intervals, startup delays, reconnect waits, and shutdown grace periods
@@ -184,7 +184,7 @@ The **Basics** tab has a **Startup** section:
 
 - **Create/evaluate VRChat auto-launch Scheduled Task** keeps the existing behavior: a hidden elevated watcher starts the supervisor only after `VRChat.exe` and SteamVR `vrserver.exe` are both running.
 - **Start with SteamVR** registers `PimaxVrcSupervisorSteamVrHost.exe` as a SteamVR dashboard overlay app and creates a separate on-demand elevated helper task. SteamVR starts the host, the host starts the elevated supervisor with `--steamvr-start`, and the supervisor starts managed apps immediately after SteamVR startup.
-- **Stop with SteamVR** is forced on for SteamVR startup mode. When `vrserver.exe` exits, the supervisor powers down base stations if needed, restores monitors, closes managed apps, and exits.
+SteamVR manifest startup exits with SteamVR. When `vrserver.exe` exits, the supervisor powers down base stations if needed, restores monitors, closes managed apps, and exits.
 
 The SteamVR host dashboard includes buttons for restarting Broken Eye/VRCFaceTracking, turning base stations on or off, and restarting the OSC router.
 
@@ -202,13 +202,13 @@ The release includes a commented `supervisor.config.json`. Important settings:
 | `TurnOffSecondaryMonitors` | empty | Empty means ask on first run; true enables monitor layout handling. |
 | `AutoLaunchScheduledTask` | empty | Empty means ask on first setup; true creates/repairs the task. |
 | `StartupLaunchMode` | `Unspecified` | `None`, `ScheduledTask`, or `SteamVrManifest`. SteamVR mode starts when SteamVR starts. |
-| `StopWithSteamVr` | `false` | Forced true for SteamVR manifest startup; cleanup runs when `vrserver.exe` exits. |
+| `StopWithSteamVr` | `false` | Compatibility field. SteamVR cleanup follows `StartupLaunchMode = SteamVrManifest`. |
 | `AutoLaunchApps` | `[]` | Extra apps started after Broken Eye and VRCFaceTracking. |
 | `BaseStationsEnabled` | `false` | Enables native SteamVR base-station power automation. |
 | `BaseStationPowerDownMode` | `Sleep` | Cleanup command: `Sleep` or `Standby` for Base Station 2.0. Base Station 1.0 falls back to sleep. |
 | `BaseStations` | `[]` | Configured base stations. Use the editor to scan and manage these rows. |
 | `OscGoesBrrrEnabled` | `false` | Enables Intiface/OscGoesBrrr workflow support. |
-| `OscGoesBrrrHotkeyEnabled` | `true` | Press `L` to launch the workflow. |
+| `OscGoesBrrrHotkeyEnabled` | `true` | Legacy name for manual console launch mode. Press `2` in a visible console to launch the workflow. |
 | `OscGoesBrrrBleScannerEnabled` | `false` | Enables Lovense BLE advertisement scanning. |
 | `OscRouterEnabled` | `false` | Enables in-process OSC UDP routing before app launch. |
 | `OscRouterReceivePort` | `9001` | Local UDP port the OSC router listens on at `127.0.0.1`. |
@@ -322,7 +322,7 @@ The output folder will contain both executables, the config file, and this READM
 | Base stations do not scan | Confirm Windows Bluetooth LE is enabled and try the Base Stations tab **Scan** button again. Add a manual row if Windows discovery exposes the address elsewhere. |
 | Base stations wake slowly | Keep `PowerStateReadUnsupported` enabled for unsupported firmware. When OpenVR is available, SteamVR tracking can stop retries early; otherwise the supervisor sends a third delayed wake pass only to V1/unsupported stations. |
 | Base stations stay on after console X | Use the latest release; console close starts a detached helper that sends the configured Sleep/Standby command after the main console exits. |
-| OscGoesBrrr does not start | Check `OscGoesBrrrEnabled`, the Intiface/OscGoesBrrr paths, and whether the hotkey or BLE scanner mode is enabled. |
+| OscGoesBrrr does not start | Check `OscGoesBrrrEnabled`, the Intiface/OscGoesBrrr paths, and whether manual console launch mode or BLE scanner mode is enabled. |
 
 ## Documentation
 

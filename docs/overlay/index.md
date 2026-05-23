@@ -20,7 +20,7 @@ The SteamVR host dashboard includes buttons for:
 
 ## Shutdown Behavior
 
-**Stop with SteamVR** is forced on for SteamVR startup mode. When `vrserver.exe` exits:
+SteamVR manifest startup exits with SteamVR. When `vrserver.exe` exits:
 
 1. Base stations are powered down (if needed).
 2. Monitors are restored.

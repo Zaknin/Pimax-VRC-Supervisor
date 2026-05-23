@@ -14,13 +14,13 @@ The release includes a commented `supervisor.config.json`. This page covers the 
 | `TurnOffSecondaryMonitors` | empty | Empty means ask on first run; `true` enables monitor layout handling. |
 | `AutoLaunchScheduledTask` | empty | Empty means ask on first setup; `true` creates/repairs the task. |
 | `StartupLaunchMode` | `Unspecified` | `None`, `ScheduledTask`, or `SteamVrManifest`. |
-| `StopWithSteamVr` | `false` | Forced `true` for SteamVR manifest startup; cleanup runs when `vrserver.exe` exits. |
+| `StopWithSteamVr` | `false` | Compatibility field. SteamVR cleanup follows `StartupLaunchMode = SteamVrManifest`. |
 | `AutoLaunchApps` | `[]` | Extra apps started after Broken Eye and VRCFaceTracking. |
 | `BaseStationsEnabled` | `false` | Enables native SteamVR base-station power automation. |
 | `BaseStationPowerDownMode` | `Sleep` | Cleanup command: `Sleep` or `Standby` for Base Station 2.0. |
 | `BaseStations` | `[]` | Configured base stations. Use the editor to scan and manage. |
 | `OscGoesBrrrEnabled` | `false` | Enables Intiface/OscGoesBrrr workflow support. |
-| `OscGoesBrrrHotkeyEnabled` | `true` | Press `L` to launch the workflow. |
+| `OscGoesBrrrHotkeyEnabled` | `true` | Legacy name for manual console launch mode. Press `2` in a visible console to launch the workflow. |
 | `OscGoesBrrrBleScannerEnabled` | `false` | Enables Lovense BLE advertisement scanning. |
 | `OscRouterEnabled` | `false` | Enables in-process OSC UDP routing before app launch. |
 | `OscRouterReceivePort` | `9001` | Local UDP port the OSC router listens on at `127.0.0.1`. |
@@ -92,4 +92,4 @@ The **Basics** tab in the Config Editor has a **Startup** section:
 
 - **Create/evaluate VRChat auto-launch Scheduled Task** — a hidden elevated watcher starts the supervisor only after `VRChat.exe` and SteamVR `vrserver.exe` are both running.
 - **Start with SteamVR** — registers `PimaxVrcSupervisorSteamVrHost.exe` as a SteamVR dashboard overlay app and creates a separate on-demand elevated helper task.
-- **Stop with SteamVR** — forced on for SteamVR startup mode. When `vrserver.exe` exits, the supervisor powers down base stations, restores monitors, closes managed apps, and exits.
+- SteamVR manifest startup exits with SteamVR. When `vrserver.exe` exits, the supervisor powers down base stations, restores monitors, closes managed apps, and exits.

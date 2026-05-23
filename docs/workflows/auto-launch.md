@@ -37,7 +37,7 @@ During session cleanup:
 
 When `OscGoesBrrrEnabled` is `true`, Intiface and OscGoesBrrr are managed separately from auto-launch apps:
 
-- They start via the OscGoesBrrr workflow (hotkey, BLE scanner, or immediate).
+- They start via the OscGoesBrrr workflow (console hotkey `2`, BLE scanner, or immediate).
 - They are **not** restarted during Pimax reconnects.
 - They are closed during normal session cleanup (OscGoesBrrr first, then Intiface).
 

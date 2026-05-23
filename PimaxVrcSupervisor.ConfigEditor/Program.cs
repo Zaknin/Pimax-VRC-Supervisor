@@ -47,6 +47,27 @@ internal sealed class ConfigEditorForm : Form
         "OscGoesBrrr",
         "OscGoesBrrr.exe");
     private static readonly string[][] DefaultLovenseDetectors = [["Lovense"], ["LVS-"]];
+    private static readonly string[] ConsoleShortcutLines =
+    [
+        "1 = Broken Eye + VRCFaceTracking routine",
+        "2 = OSCGoesBrrr + Intiface routine",
+        "3 = Turn on all controlled base stations",
+        "4 = Turn off all controlled base stations",
+        "5 = OSC Router launch/restart",
+        "6 = After-launch apps routine",
+        "F1 = Show console shortcuts"
+    ];
+    private static readonly string[] EditorShortcutLines =
+    [
+        "Ctrl+S = Save",
+        "Ctrl+Shift+S = Save As",
+        "Ctrl+O = Browse config",
+        "F5 = Reload",
+        "Ctrl+R = Reload",
+        "Ctrl+L = Launch Supervisor",
+        "Ctrl+Shift+V = Validate",
+        "Delete = Delete selected row in Auto Launch, Base Stations, or OSC Routes grids"
+    ];
 
     private readonly ComboBox _configSelectorComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _configPathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
@@ -60,7 +81,7 @@ internal sealed class ConfigEditorForm : Form
     private readonly CheckBox _intifaceStartMinimizedCheckBox = new() { Text = "Start Intiface minimized", AutoSize = true };
     private readonly CheckBox _oscGoesBrrrStartMinimizedCheckBox = new() { Text = "Start OscGoesBrrr minimized", AutoSize = true };
     private readonly CheckBox _oscGoesBrrrEnabledCheckBox = new() { Text = "Enabled", AutoSize = true };
-    private readonly CheckBox _oscGoesBrrrHotkeyCheckBox = new() { Text = "Enable L hotkey launch", AutoSize = true };
+    private readonly CheckBox _oscGoesBrrrHotkeyCheckBox = new() { Text = "Use manual console launch mode", AutoSize = true };
     private readonly CheckBox _oscGoesBrrrBleScannerCheckBox = new() { Text = "Enable BLE scanner", AutoSize = true };
     private readonly CheckBox _oscRouterEnabledCheckBox = new() { Text = "Enable OSC routing", AutoSize = true };
     private readonly NumericUpDown _oscRouterReceivePortInput = new()
@@ -77,7 +98,6 @@ internal sealed class ConfigEditorForm : Form
     private readonly CheckBox _turnOffMonitorsCheckBox = CreateOptionalConfigCheckBox("Turn off secondary monitors during headset sessions");
     private readonly CheckBox _autoLaunchTaskCheckBox = CreateOptionalConfigCheckBox("Create/evaluate VRChat auto-launch Scheduled Task");
     private readonly CheckBox _startWithSteamVrCheckBox = new() { Text = "Start with SteamVR", AutoSize = true };
-    private readonly CheckBox _stopWithSteamVrCheckBox = new() { Text = "Stop with SteamVR", AutoSize = true };
     private readonly CheckBox _usePimaxLogCheckBox = new() { Text = "Watch Pimax PiService logs for fast reconnects", AutoSize = true };
     private readonly CheckBox _useMouthTrackerPnPCheckBox = new() { Text = "Watch Windows PnP events for fast mouth tracker reconnects", AutoSize = true };
     private readonly TextBox _pimaxServiceLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
@@ -386,6 +406,9 @@ internal sealed class ConfigEditorForm : Form
     private Control BuildBasicsTab()
     {
         var layout = CreateFormLayout(3);
+        layout.Dock = DockStyle.Top;
+        layout.AutoSize = true;
+        layout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
         AddPathRow(layout, "Broken Eye executable", _brokenEyePathTextBox, "Full path to Broken Eye.exe. The supervisor starts this app first.", configKey: "BrokenEyePath", defaultFileName: "Broken Eye.exe");
         AddFullWidth(layout, _brokenEyeStartMinimizedCheckBox, "Checked means the supervisor starts Broken Eye minimized and tries to minimize its main window after launch.");
@@ -403,9 +426,6 @@ internal sealed class ConfigEditorForm : Form
         AddSectionHeader(layout, "Startup");
         AddFullWidth(layout, _autoLaunchTaskCheckBox, "Checked lets the app create or repair the elevated auto-launch Scheduled Task. Filled square is shown only when the config asks on first setup.");
         AddFullWidth(layout, _startWithSteamVrCheckBox, "Checked registers the SteamVR dashboard host manifest and starts the supervisor when SteamVR starts.");
-        AddFullWidth(layout, _stopWithSteamVrCheckBox, "Checked means SteamVR startup mode cleans up and exits when SteamVR closes. This is forced on when Start with SteamVR is enabled.");
-        AddFullWidth(layout, _usePimaxLogCheckBox, "Also scan PiService logs for quick HID remove/add reconnects that normal USB polling can miss.");
-        AddFullWidth(layout, _useMouthTrackerPnPCheckBox, "Also scan Windows Kernel-PnP events for quick mouth tracker reconnects that normal USB polling can miss.");
         AddFolderValidationRow(layout, "PiService log folder", _pimaxServiceLogDirectoryTextBox, ToolTipWithConfigKey("Folder containing PiService__*.log files. Environment variables such as %LOCALAPPDATA% are expanded by the supervisor.", "PimaxServiceLogDirectory"));
 
         var buttons = new FlowLayoutPanel
@@ -425,12 +445,69 @@ internal sealed class ConfigEditorForm : Form
         buttons.Controls.Add(aboutButton);
         AddFullWidth(layout, buttons, "Editor utilities.");
 
+        var content = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoScroll = true,
+            ColumnCount = 2,
+            RowCount = 1,
+            Padding = new Padding(0)
+        };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 64));
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 36));
+        content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        content.Controls.Add(layout, 0, 0);
+        content.Controls.Add(BuildHotkeysPanel(), 1, 0);
+
         return BuildTabWithDescription(
             "General supervisor options",
             "Configure core behavior used by the console supervisor and choose whether helper features are enabled.",
-            layout,
-            limitWidth: true);
+            content);
     }
+
+    private Control BuildHotkeysPanel()
+    {
+        var panel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1,
+            Padding = new Padding(18, 8, 8, 8),
+            Margin = new Padding(12, 0, 0, 0)
+        };
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+        panel.Controls.Add(CreateSectionLabel("Hotkeys"), 0, panel.RowCount++);
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var consoleHeader = CreateMutedLabel("Console hotkeys");
+        consoleHeader.Font = new Font(FontFamily.GenericSansSerif, 9F, FontStyle.Bold);
+        consoleHeader.Padding = new Padding(0, 6, 0, 3);
+        panel.Controls.Add(consoleHeader, 0, panel.RowCount++);
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        panel.Controls.Add(CreateShortcutListLabel(ConsoleShortcutLines), 0, panel.RowCount++);
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var editorHeader = CreateMutedLabel("Config Editor shortcuts");
+        editorHeader.Font = new Font(FontFamily.GenericSansSerif, 9F, FontStyle.Bold);
+        editorHeader.Padding = new Padding(0, 14, 0, 3);
+        panel.Controls.Add(editorHeader, 0, panel.RowCount++);
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        panel.Controls.Add(CreateShortcutListLabel(EditorShortcutLines), 0, panel.RowCount++);
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        return panel;
+    }
+
+    private static Label CreateShortcutListLabel(string[] lines) => new()
+    {
+        Text = string.Join(Environment.NewLine, lines),
+        AutoSize = true,
+        MaximumSize = new Size(420, 0),
+        Padding = new Padding(0, 0, 0, 4)
+    };
 
     private void ConfigureStartupOptionInteractions()
     {
@@ -445,8 +522,6 @@ internal sealed class ConfigEditorForm : Form
             {
                 _startWithSteamVrCheckBox.Checked = false;
             }
-
-            RefreshStartupOptionStates();
         };
 
         _startWithSteamVrCheckBox.CheckedChanged += (_, _) =>
@@ -455,29 +530,7 @@ internal sealed class ConfigEditorForm : Form
             {
                 _autoLaunchTaskCheckBox.Checked = false;
             }
-
-            RefreshStartupOptionStates();
         };
-
-        RefreshStartupOptionStates();
-    }
-
-    private void RefreshStartupOptionStates()
-    {
-        if (_startWithSteamVrCheckBox.Checked)
-        {
-            _stopWithSteamVrCheckBox.Checked = true;
-            _stopWithSteamVrCheckBox.Enabled = false;
-        }
-        else if (_autoLaunchTaskCheckBox.Checked)
-        {
-            _stopWithSteamVrCheckBox.Checked = false;
-            _stopWithSteamVrCheckBox.Enabled = false;
-        }
-        else
-        {
-            _stopWithSteamVrCheckBox.Enabled = true;
-        }
     }
 
     private Control BuildBaseStationsTab()
@@ -1080,7 +1133,7 @@ internal sealed class ConfigEditorForm : Form
         _intifaceStartMinimizedCheckBox.Margin = new Padding(0, 2, 0, 2);
         _oscGoesBrrrStartMinimizedCheckBox.Margin = new Padding(0, 2, 0, 2);
         AddFullWidth(layout, _oscGoesBrrrEnabledCheckBox, ToolTipWithConfigKey("Checked means the OscGoesBrrr workflow is available during headset sessions.", "OscGoesBrrrEnabled"));
-        AddFullWidth(layout, _oscGoesBrrrHotkeyCheckBox, ToolTipWithConfigKey("Checked means the supervisor shows Press L to launch OSCGoesBrrr and starts Intiface plus OscGoesBrrr when L is pressed.", "OscGoesBrrrHotkeyEnabled"));
+        AddFullWidth(layout, _oscGoesBrrrHotkeyCheckBox, ToolTipWithConfigKey("Checked keeps the OSCGoesBrrr workflow in manual console launch mode instead of prestarting Intiface and watching Windows Lovense device detection. Console hotkey 2 is available whenever the OSCGoesBrrr feature is enabled.", "OscGoesBrrrHotkeyEnabled"));
         AddFullWidth(layout, _oscGoesBrrrBleScannerCheckBox, ToolTipWithConfigKey("Checked means the supervisor scans nearby BLE advertisements for Lovense names such as LVS- and auto-launches the workflow when one matches.", "OscGoesBrrrBleScannerEnabled"));
 
         AddSectionHeader(layout, "Executables");
@@ -1342,6 +1395,9 @@ internal sealed class ConfigEditorForm : Form
         AddLabeledRow(layout, "Apps that trigger cleanup when closed", _watchedShutdownProcessesTextBox, ToolTipWithConfigKey("When one of these processes has run and then exits, the supervisor closes the managed apps.", "WatchedShutdownProcessNames"));
         AddSectionHeader(layout, "SteamVR process");
         AddLabeledRow(layout, "SteamVR server process name", _steamVrServerProcessesTextBox, ToolTipWithConfigKey("When monitor handling is enabled, the supervisor waits for these processes to exit before restoring monitors.", "SteamVrServerProcessNames"));
+        AddSectionHeader(layout, "Fast reconnect detection");
+        AddFullWidth(layout, _usePimaxLogCheckBox, "Also scan PiService logs for quick HID remove/add reconnects that normal USB polling can miss.");
+        AddFullWidth(layout, _useMouthTrackerPnPCheckBox, "Also scan Windows Kernel-PnP events for quick mouth tracker reconnects that normal USB polling can miss.");
         return BuildTabWithDescription(
             "Watched process names",
             "Configure the process names used to detect VRChat, Broken Eye, VRCFaceTracking, SteamVR, and shutdown conditions.",
@@ -2761,9 +2817,6 @@ internal sealed class ConfigEditorForm : Form
             _autoLaunchTaskCheckBox.CheckState = GetBoolCheckState(node, "AutoLaunchScheduledTask");
             _startWithSteamVrCheckBox.Checked = false;
         }
-
-        _stopWithSteamVrCheckBox.Checked = _startWithSteamVrCheckBox.Checked || GetBool(node, "StopWithSteamVr", defaultValue: false);
-        RefreshStartupOptionStates();
         _usePimaxLogCheckBox.Checked = GetBool(node, "UsePimaxServiceLogReconnectDetector", defaultValue: true);
         _useMouthTrackerPnPCheckBox.Checked = GetBool(node, "UseMouthTrackerPnPReconnectDetector", defaultValue: true);
         _pimaxServiceLogDirectoryTextBox.Text = GetString(node, "PimaxServiceLogDirectory");
@@ -3123,7 +3176,7 @@ internal sealed class ConfigEditorForm : Form
         json = JsonPropertyEditor.Replace(json, "TurnOffSecondaryMonitors", SerializeTriState(_turnOffMonitorsCheckBox.CheckState));
         var startupLaunchMode = GetSelectedStartupLaunchMode();
         json = JsonPropertyEditor.Replace(json, "StartupLaunchMode", Serialize(startupLaunchMode));
-        json = JsonPropertyEditor.Replace(json, "StopWithSteamVr", (_stopWithSteamVrCheckBox.Checked || startupLaunchMode == "SteamVrManifest") ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "StopWithSteamVr", startupLaunchMode == "SteamVrManifest" ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "AutoLaunchScheduledTask", startupLaunchMode == "ScheduledTask" ? "true" : startupLaunchMode == "SteamVrManifest" || startupLaunchMode == "None" ? "false" : SerializeTriState(_autoLaunchTaskCheckBox.CheckState));
         json = JsonPropertyEditor.Replace(json, "PimaxDetectors", Serialize(ParseStringMatrix(_pimaxDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "MouthTrackerDetectors", Serialize(ParseStringMatrix(_mouthTrackerDetectorsTextBox.Text)));
@@ -5091,14 +5144,15 @@ internal sealed class ConfigEditorForm : Form
                 textBox.BackColor = _theme.InputBack;
                 textBox.ForeColor = _theme.Text;
                 textBox.BorderStyle = BorderStyle.FixedSingle;
+                ApplyNativeThemeHint(textBox);
                 break;
             case NumericUpDown input:
                 input.BackColor = _theme.InputBack;
                 input.ForeColor = _theme.Text;
+                ApplyNativeThemeHint(input);
                 break;
             case ComboBox comboBox:
-                comboBox.BackColor = _theme.InputBack;
-                comboBox.ForeColor = _theme.Text;
+                ApplyThemeToComboBox(comboBox);
                 break;
             case DataGridView grid:
                 ApplyThemeToGrid(grid);
@@ -5130,6 +5184,7 @@ internal sealed class ConfigEditorForm : Form
             case Panel or TableLayoutPanel:
                 control.BackColor = _theme.WindowBack;
                 control.ForeColor = _theme.Text;
+                ApplyNativeThemeHint(control);
                 break;
             default:
                 control.BackColor = _theme.WindowBack;
@@ -5166,6 +5221,151 @@ internal sealed class ConfigEditorForm : Form
         grid.RowHeadersDefaultCellStyle.ForeColor = _theme.Text;
         grid.AlternatingRowsDefaultCellStyle.BackColor = _theme.WindowBack;
         grid.AlternatingRowsDefaultCellStyle.ForeColor = _theme.Text;
+        grid.RowTemplate.DefaultCellStyle.BackColor = _theme.InputBack;
+        grid.RowTemplate.DefaultCellStyle.ForeColor = _theme.Text;
+
+        foreach (DataGridViewColumn column in grid.Columns)
+        {
+            column.DefaultCellStyle.BackColor = _theme.InputBack;
+            column.DefaultCellStyle.ForeColor = _theme.Text;
+            column.DefaultCellStyle.SelectionBackColor = _theme.ButtonHover;
+            column.DefaultCellStyle.SelectionForeColor = _theme.Text;
+            if (column is DataGridViewButtonColumn buttonColumn)
+            {
+                buttonColumn.FlatStyle = FlatStyle.Flat;
+                buttonColumn.DefaultCellStyle.BackColor = _theme.ButtonBack;
+                buttonColumn.DefaultCellStyle.ForeColor = _theme.Text;
+                buttonColumn.DefaultCellStyle.SelectionBackColor = _theme.ButtonHover;
+                buttonColumn.DefaultCellStyle.SelectionForeColor = _theme.Text;
+            }
+            else if (column is DataGridViewComboBoxColumn comboColumn)
+            {
+                comboColumn.FlatStyle = FlatStyle.Flat;
+                comboColumn.DefaultCellStyle.BackColor = _theme.InputBack;
+                comboColumn.DefaultCellStyle.ForeColor = _theme.Text;
+                comboColumn.DefaultCellStyle.SelectionBackColor = _theme.ButtonHover;
+                comboColumn.DefaultCellStyle.SelectionForeColor = _theme.Text;
+            }
+        }
+
+        grid.CellPainting -= OnThemedGridCellPainting;
+        grid.CellPainting += OnThemedGridCellPainting;
+        grid.EditingControlShowing -= OnThemedGridEditingControlShowing;
+        grid.EditingControlShowing += OnThemedGridEditingControlShowing;
+        ApplyNativeThemeHint(grid);
+        grid.Invalidate();
+    }
+
+    private void ApplyThemeToComboBox(ComboBox comboBox)
+    {
+        comboBox.BackColor = _theme.InputBack;
+        comboBox.ForeColor = _theme.Text;
+        comboBox.FlatStyle = FlatStyle.Flat;
+        comboBox.DrawMode = DrawMode.OwnerDrawFixed;
+        comboBox.DrawItem -= OnThemedComboBoxDrawItem;
+        comboBox.DrawItem += OnThemedComboBoxDrawItem;
+        ApplyNativeThemeHint(comboBox);
+        comboBox.Invalidate();
+    }
+
+    private void OnThemedComboBoxDrawItem(object? sender, DrawItemEventArgs e)
+    {
+        if (sender is not ComboBox comboBox)
+        {
+            return;
+        }
+
+        var selected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
+        var backColor = selected ? _theme.ButtonHover : _theme.InputBack;
+        var textColor = comboBox.Enabled ? _theme.Text : SystemColors.GrayText;
+        using var background = new SolidBrush(backColor);
+        e.Graphics.FillRectangle(background, e.Bounds);
+
+        var text = e.Index >= 0 && e.Index < comboBox.Items.Count
+            ? Convert.ToString(comboBox.Items[e.Index], CultureInfo.CurrentCulture)
+            : comboBox.Text;
+        TextRenderer.DrawText(
+            e.Graphics,
+            text,
+            comboBox.Font,
+            e.Bounds,
+            textColor,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+        if ((e.State & DrawItemState.Focus) == DrawItemState.Focus)
+        {
+            e.DrawFocusRectangle();
+        }
+    }
+
+    private void OnThemedGridEditingControlShowing(object? sender, DataGridViewEditingControlShowingEventArgs e)
+    {
+        if (e.Control is ComboBox comboBox)
+        {
+            ApplyThemeToComboBox(comboBox);
+        }
+    }
+
+    private void OnThemedGridCellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
+    {
+        if (sender is not DataGridView grid
+            || e.RowIndex < 0
+            || e.ColumnIndex < 0
+            || e.Graphics is null
+            || grid.Columns[e.ColumnIndex] is not DataGridViewButtonColumn)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        var selected = (e.State & DataGridViewElementStates.Selected) == DataGridViewElementStates.Selected;
+        using var cellBack = new SolidBrush(selected ? _theme.ButtonHover : _theme.InputBack);
+        e.Graphics.FillRectangle(cellBack, e.CellBounds);
+
+        var buttonBounds = Rectangle.Inflate(e.CellBounds, -4, -4);
+        if (buttonBounds.Width <= 0 || buttonBounds.Height <= 0)
+        {
+            return;
+        }
+
+        using var buttonBack = new SolidBrush(selected ? _theme.ButtonHover : _theme.ButtonBack);
+        using var border = new Pen(_theme.Border);
+        e.Graphics.FillRectangle(buttonBack, buttonBounds);
+        e.Graphics.DrawRectangle(border, buttonBounds);
+
+        var text = Convert.ToString(e.FormattedValue, CultureInfo.CurrentCulture) ?? "";
+        var font = e.CellStyle?.Font ?? grid.Font;
+        TextRenderer.DrawText(
+            e.Graphics,
+            text,
+            font,
+            buttonBounds,
+            _theme.Text,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+    }
+
+    private void ApplyNativeThemeHint(Control control)
+    {
+        if (control is not (TextBox or NumericUpDown or ComboBox or DataGridView or ScrollableControl { AutoScroll: true }))
+        {
+            return;
+        }
+
+        if (control.IsHandleCreated)
+        {
+            WindowsControlTheme.ApplyTheme(control.Handle, _theme.IsDark);
+        }
+
+        control.HandleCreated -= OnThemedControlHandleCreated;
+        control.HandleCreated += OnThemedControlHandleCreated;
+    }
+
+    private void OnThemedControlHandleCreated(object? sender, EventArgs e)
+    {
+        if (sender is Control control)
+        {
+            WindowsControlTheme.ApplyTheme(control.Handle, _theme.IsDark);
+        }
     }
 
     private static string? FindConfigPath(string? requestedConfigPath, string? lastConfigPath)
@@ -5612,14 +5812,15 @@ internal sealed class ThemedTabHost : UserControl
                 textBox.BackColor = _theme.InputBack;
                 textBox.ForeColor = _theme.Text;
                 textBox.BorderStyle = BorderStyle.FixedSingle;
+                ApplyNativeThemeHint(textBox);
                 break;
             case NumericUpDown input:
                 input.BackColor = _theme.InputBack;
                 input.ForeColor = _theme.Text;
+                ApplyNativeThemeHint(input);
                 break;
             case ComboBox comboBox:
-                comboBox.BackColor = _theme.InputBack;
-                comboBox.ForeColor = _theme.Text;
+                ApplyThemeToComboBox(comboBox);
                 break;
             case DataGridView grid:
                 ApplyThemeToGrid(grid);
@@ -5651,6 +5852,7 @@ internal sealed class ThemedTabHost : UserControl
             default:
                 control.BackColor = _theme.WindowBack;
                 control.ForeColor = _theme.Text;
+                ApplyNativeThemeHint(control);
                 break;
         }
 
@@ -5678,6 +5880,151 @@ internal sealed class ThemedTabHost : UserControl
         grid.RowHeadersDefaultCellStyle.ForeColor = _theme.Text;
         grid.AlternatingRowsDefaultCellStyle.BackColor = _theme.WindowBack;
         grid.AlternatingRowsDefaultCellStyle.ForeColor = _theme.Text;
+        grid.RowTemplate.DefaultCellStyle.BackColor = _theme.InputBack;
+        grid.RowTemplate.DefaultCellStyle.ForeColor = _theme.Text;
+
+        foreach (DataGridViewColumn column in grid.Columns)
+        {
+            column.DefaultCellStyle.BackColor = _theme.InputBack;
+            column.DefaultCellStyle.ForeColor = _theme.Text;
+            column.DefaultCellStyle.SelectionBackColor = _theme.ButtonHover;
+            column.DefaultCellStyle.SelectionForeColor = _theme.Text;
+            if (column is DataGridViewButtonColumn buttonColumn)
+            {
+                buttonColumn.FlatStyle = FlatStyle.Flat;
+                buttonColumn.DefaultCellStyle.BackColor = _theme.ButtonBack;
+                buttonColumn.DefaultCellStyle.ForeColor = _theme.Text;
+                buttonColumn.DefaultCellStyle.SelectionBackColor = _theme.ButtonHover;
+                buttonColumn.DefaultCellStyle.SelectionForeColor = _theme.Text;
+            }
+            else if (column is DataGridViewComboBoxColumn comboColumn)
+            {
+                comboColumn.FlatStyle = FlatStyle.Flat;
+                comboColumn.DefaultCellStyle.BackColor = _theme.InputBack;
+                comboColumn.DefaultCellStyle.ForeColor = _theme.Text;
+                comboColumn.DefaultCellStyle.SelectionBackColor = _theme.ButtonHover;
+                comboColumn.DefaultCellStyle.SelectionForeColor = _theme.Text;
+            }
+        }
+
+        grid.CellPainting -= OnThemedGridCellPainting;
+        grid.CellPainting += OnThemedGridCellPainting;
+        grid.EditingControlShowing -= OnThemedGridEditingControlShowing;
+        grid.EditingControlShowing += OnThemedGridEditingControlShowing;
+        ApplyNativeThemeHint(grid);
+        grid.Invalidate();
+    }
+
+    private void ApplyThemeToComboBox(ComboBox comboBox)
+    {
+        comboBox.BackColor = _theme.InputBack;
+        comboBox.ForeColor = _theme.Text;
+        comboBox.FlatStyle = FlatStyle.Flat;
+        comboBox.DrawMode = DrawMode.OwnerDrawFixed;
+        comboBox.DrawItem -= OnThemedComboBoxDrawItem;
+        comboBox.DrawItem += OnThemedComboBoxDrawItem;
+        ApplyNativeThemeHint(comboBox);
+        comboBox.Invalidate();
+    }
+
+    private void OnThemedComboBoxDrawItem(object? sender, DrawItemEventArgs e)
+    {
+        if (sender is not ComboBox comboBox)
+        {
+            return;
+        }
+
+        var selected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
+        var backColor = selected ? _theme.ButtonHover : _theme.InputBack;
+        var textColor = comboBox.Enabled ? _theme.Text : SystemColors.GrayText;
+        using var background = new SolidBrush(backColor);
+        e.Graphics.FillRectangle(background, e.Bounds);
+
+        var text = e.Index >= 0 && e.Index < comboBox.Items.Count
+            ? Convert.ToString(comboBox.Items[e.Index], CultureInfo.CurrentCulture)
+            : comboBox.Text;
+        TextRenderer.DrawText(
+            e.Graphics,
+            text,
+            comboBox.Font,
+            e.Bounds,
+            textColor,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+        if ((e.State & DrawItemState.Focus) == DrawItemState.Focus)
+        {
+            e.DrawFocusRectangle();
+        }
+    }
+
+    private void OnThemedGridEditingControlShowing(object? sender, DataGridViewEditingControlShowingEventArgs e)
+    {
+        if (e.Control is ComboBox comboBox)
+        {
+            ApplyThemeToComboBox(comboBox);
+        }
+    }
+
+    private void OnThemedGridCellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
+    {
+        if (sender is not DataGridView grid
+            || e.RowIndex < 0
+            || e.ColumnIndex < 0
+            || e.Graphics is null
+            || grid.Columns[e.ColumnIndex] is not DataGridViewButtonColumn)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        var selected = (e.State & DataGridViewElementStates.Selected) == DataGridViewElementStates.Selected;
+        using var cellBack = new SolidBrush(selected ? _theme.ButtonHover : _theme.InputBack);
+        e.Graphics.FillRectangle(cellBack, e.CellBounds);
+
+        var buttonBounds = Rectangle.Inflate(e.CellBounds, -4, -4);
+        if (buttonBounds.Width <= 0 || buttonBounds.Height <= 0)
+        {
+            return;
+        }
+
+        using var buttonBack = new SolidBrush(selected ? _theme.ButtonHover : _theme.ButtonBack);
+        using var border = new Pen(_theme.Border);
+        e.Graphics.FillRectangle(buttonBack, buttonBounds);
+        e.Graphics.DrawRectangle(border, buttonBounds);
+
+        var text = Convert.ToString(e.FormattedValue, CultureInfo.CurrentCulture) ?? "";
+        var font = e.CellStyle?.Font ?? grid.Font;
+        TextRenderer.DrawText(
+            e.Graphics,
+            text,
+            font,
+            buttonBounds,
+            _theme.Text,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+    }
+
+    private void ApplyNativeThemeHint(Control control)
+    {
+        if (control is not (TextBox or NumericUpDown or ComboBox or DataGridView or ScrollableControl { AutoScroll: true }))
+        {
+            return;
+        }
+
+        if (control.IsHandleCreated)
+        {
+            WindowsControlTheme.ApplyTheme(control.Handle, _theme.IsDark);
+        }
+
+        control.HandleCreated -= OnThemedControlHandleCreated;
+        control.HandleCreated += OnThemedControlHandleCreated;
+    }
+
+    private void OnThemedControlHandleCreated(object? sender, EventArgs e)
+    {
+        if (sender is Control control)
+        {
+            WindowsControlTheme.ApplyTheme(control.Handle, _theme.IsDark);
+        }
     }
 }
 
@@ -5690,6 +6037,29 @@ internal static class WindowsThemeDetector
         var value = Registry.GetValue(PersonalizeKey, "AppsUseLightTheme", 1);
         return value is not int intValue || intValue != 0;
     }
+}
+
+internal static class WindowsControlTheme
+{
+    public static void ApplyTheme(IntPtr handle, bool dark)
+    {
+        if (handle == IntPtr.Zero || !OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
+        {
+            return;
+        }
+
+        try
+        {
+            _ = SetWindowTheme(handle, dark ? "DarkMode_Explorer" : null, null);
+        }
+        catch
+        {
+            // Native scrollbar theming support varies across Windows builds.
+        }
+    }
+
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+    private static extern int SetWindowTheme(IntPtr hwnd, string? pszSubAppName, string? pszSubIdList);
 }
 
 internal static class WindowsTitleBar

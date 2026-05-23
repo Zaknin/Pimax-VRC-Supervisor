@@ -44,8 +44,8 @@ If the configured receive port is already in use:
 
 1. The supervisor logs a warning.
 2. Startup continues with routing disabled.
-3. The console shows "Press Space to retry to restart OSC routing."
-4. Pressing `Space` triggers a retry.
+3. The console shows "Press 5 to launch or restart OSC routing."
+4. Pressing `5` in a visible supervisor console retries or restarts routing.
 
 ## OSCQuery Coexistence
 

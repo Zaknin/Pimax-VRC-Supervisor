@@ -54,7 +54,7 @@ If `MouthTrackerUser` is `true`, check for mouth tracker presence and log the st
 
 ### 7. OSC Router Start
 
-If `OscRouterEnabled` is `true`, start the in-process OSC UDP router. If the port is already in use, log a warning and continue (retry later with `Space`).
+If `OscRouterEnabled` is `true`, start the in-process OSC UDP router. If the port is already in use, log a warning and continue. In a visible console, hotkey `5` can launch or restart the OSC router later.
 
 ### 8. Managed App Start
 
@@ -66,7 +66,7 @@ If `OscRouterEnabled` is `true`, start the in-process OSC UDP router. If the por
 ### 9. OscGoesBrrr Workflow Init
 
 - If BLE scanner is enabled, start the background scanner.
-- If hotkey is enabled, show "Press L to launch OSCGoesBrrr."
+- If manual console launch mode is enabled, leave OscGoesBrrr waiting for console hotkey `2`.
 - Otherwise, start Intiface immediately and check for Lovense devices.
 
 ### 10. Final Base Station Power-On
@@ -77,13 +77,13 @@ Send remaining base station wake passes (passes 2 and 3 if needed).
 
 Enter the polling loop:
 
-1. Check console hotkeys (`L`, `Space`, `R`).
+1. Check console hotkeys (`1`-`6`, `F1`) when a visible console has focus.
 2. Check base station power-on progress.
 3. If SteamVR mode: check if `vrserver.exe` is still running.
 4. If VRChat mode: observe watched shutdown processes.
 5. Poll Pimax headset connection.
 6. Poll mouth tracker connection (if enabled).
-7. Poll Lovense connection (if enabled and not using hotkey/BLE).
+7. Poll Lovense connection (if enabled and not using manual console launch mode/BLE).
 8. Handle reconnects.
 9. Sleep for `PollIntervalSeconds`.
 

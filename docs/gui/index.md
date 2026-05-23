@@ -33,7 +33,7 @@ Extra apps to launch with the VR session.
 
 ### OSCGoesBrrr
 
-Intiface, OscGoesBrrr, hotkey, BLE scanner, and Lovense rules.
+Intiface, OscGoesBrrr, manual console launch mode, BLE scanner, and Lovense rules.
 
 ### Processes
 

@@ -7,7 +7,7 @@ The **OSCGoesBrrr** tab configures the optional Lovense/Intiface/OscGoesBrrr wor
 | Checkbox | Config Key | Description |
 | --- | --- | --- |
 | Enabled | `OscGoesBrrrEnabled` | Enables the OscGoesBrrr workflow during headset sessions. |
-| Enable L hotkey launch | `OscGoesBrrrHotkeyEnabled` | Press `L` in the supervisor console to launch Intiface, wait the configured delay, then start OscGoesBrrr. |
+| Use manual console launch mode | `OscGoesBrrrHotkeyEnabled` | Keeps the workflow in manual console launch mode instead of prestarting Intiface and watching Windows Lovense device detection. Console hotkey `2` is available whenever `OscGoesBrrrEnabled` is true. |
 | Enable BLE scanner | `OscGoesBrrrBleScannerEnabled` | Scans nearby BLE advertisements for Lovense names (e.g., `LVS-`) and auto-launches the workflow when one matches. |
 
 ## Executables
@@ -53,7 +53,7 @@ These match against BLE advertisement local names and Windows Bluetooth device n
 
 ## Workflow Lifecycle
 
-1. **Hotkey mode:** Press `L` → start Intiface → wait delay → start OscGoesBrrr.
+1. **Manual console mode:** Press `2` in a visible supervisor console to start Intiface, wait the configured delay, then start OscGoesBrrr.
 2. **BLE scanner mode:** Scanner detects Lovense advertisement → auto-launches workflow.
 3. **Auto-repair:** If Intiface is running but OscGoesBrrr is missing, the BLE scanner repairs the workflow.
 4. Pimax reconnects do **not** restart Intiface/OscGoesBrrr.

@@ -342,9 +342,13 @@ internal enum WatchedProcessState
 
 internal struct ConsoleHotkeys
 {
+    public bool LaunchBrokenEyeVrcFaceTracking { get; set; }
     public bool LaunchOscGoesBrrr { get; set; }
-    public bool RestartCoreApps { get; set; }
-    public bool RetryOscRouter { get; set; }
+    public bool BaseStationsOn { get; set; }
+    public bool BaseStationsOff { get; set; }
+    public bool OscRouterLaunchOrRestart { get; set; }
+    public bool AfterLaunchAppsRoutine { get; set; }
+    public bool ShowHelp { get; set; }
 }
 
 internal sealed class AppSupervisor
@@ -364,6 +368,7 @@ internal sealed class AppSupervisor
     private readonly SemaphoreSlim _oscRouterLaunchLock = new(1, 1);
     private readonly SemaphoreSlim _cleanupLock = new(1, 1);
     private readonly SemaphoreSlim _coreAppRestartLock = new(1, 1);
+    private readonly SemaphoreSlim _autoLaunchAppsRoutineLock = new(1, 1);
     private readonly DateTimeOffset _startedAt = DateTimeOffset.Now;
     private bool? _lastPimaxConnected;
     private bool? _lastMouthTrackerConnected;
@@ -471,6 +476,7 @@ internal sealed class AppSupervisor
             await InitializeOscGoesBrrrWorkflowAsync(cancellationToken);
             await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
             ShowOscRouterRetryPromptIfNeeded();
+            Console.WriteLine("Press F1 for shortcuts.");
 
             Console.WriteLine($"Pimax Crystal initial state: {DescribeConnection(_lastPimaxConnected.Value)}");
             Console.WriteLine(_steamVrStart
@@ -2320,7 +2326,7 @@ internal sealed class AppSupervisor
     {
         if (_oscRouterWaitingForRetry && _config.OscRouterEnabled && _oscRouter is null)
         {
-            Console.WriteLine("Press Space to retry to restart OSC routing.");
+            Console.WriteLine("Press 5 to launch or restart OSC routing.");
         }
     }
 
@@ -2345,7 +2351,6 @@ internal sealed class AppSupervisor
 
         if (_config.OscGoesBrrrHotkeyEnabled)
         {
-            Console.WriteLine("Press L to launch OSCGoesBrrr.");
             return;
         }
 
@@ -2433,7 +2438,7 @@ internal sealed class AppSupervisor
             {
                 if (!_oscGoesBrrrBleScannerWarningShown)
                 {
-                    Console.WriteLine($"Could not scan BLE advertisements for Lovense: {ex.Message}. Press L to launch OSCGoesBrrr manually.");
+                    Console.WriteLine($"Could not scan BLE advertisements for Lovense: {ex.Message}. Use console hotkey 2 to launch OSCGoesBrrr manually.");
                     _oscGoesBrrrBleScannerWarningShown = true;
                 }
 
@@ -2524,31 +2529,47 @@ internal sealed class AppSupervisor
     private async Task HandleConsoleHotkeysAsync(CancellationToken cancellationToken)
     {
         var hotkeys = ConsumeConsoleHotkeys();
-        if (hotkeys.RestartCoreApps)
+        if (hotkeys.ShowHelp)
+        {
+            PrintConsoleShortcutHelp();
+        }
+
+        if (hotkeys.LaunchBrokenEyeVrcFaceTracking)
         {
             await RestartCoreAppsAsync(cancellationToken);
         }
 
-        if (hotkeys.RetryOscRouter)
-        {
-            await RetryOscRouterAsync(cancellationToken);
-        }
-
         if (hotkeys.LaunchOscGoesBrrr)
         {
-            await HandleOscGoesBrrrHotkeyAsync(cancellationToken, hotkeyAlreadyConsumed: true);
+            await HandleOscGoesBrrrConsoleHotkeyAsync(cancellationToken);
+        }
+
+        if (hotkeys.BaseStationsOn)
+        {
+            await ManualPowerOnBaseStationsAsync(cancellationToken);
+        }
+
+        if (hotkeys.BaseStationsOff)
+        {
+            await ManualPowerDownBaseStationsAsync(cancellationToken);
+        }
+
+        if (hotkeys.OscRouterLaunchOrRestart)
+        {
+            await LaunchOrRestartOscRouterFromConsoleAsync(cancellationToken);
+        }
+
+        if (hotkeys.AfterLaunchAppsRoutine)
+        {
+            await RunAfterLaunchAppsRoutineAsync(cancellationToken);
         }
     }
 
-    private async Task HandleOscGoesBrrrHotkeyAsync(CancellationToken cancellationToken, bool hotkeyAlreadyConsumed)
+    private async Task HandleOscGoesBrrrConsoleHotkeyAsync(CancellationToken cancellationToken)
     {
-        if (!_config.OscGoesBrrrEnabled || !_config.OscGoesBrrrHotkeyEnabled)
+        if (!_config.OscGoesBrrrEnabled)
         {
-            return;
-        }
-
-        if (!hotkeyAlreadyConsumed)
-        {
+            Console.WriteLine("OscGoesBrrr workflow is disabled by config.");
             return;
         }
 
@@ -2560,6 +2581,38 @@ internal sealed class AppSupervisor
 
         Console.WriteLine("Launching OSCGoesBrrr workflow...");
         await StartLovenseOscAsync(cancellationToken);
+    }
+
+    private async Task LaunchOrRestartOscRouterFromConsoleAsync(CancellationToken cancellationToken)
+    {
+        if (!_config.OscRouterEnabled)
+        {
+            Console.WriteLine("OSC router is disabled by config.");
+            return;
+        }
+
+        if (_oscRouter is null)
+        {
+            Console.WriteLine("Launching OSC routing startup...");
+            await TryStartOscRouterAsync(cancellationToken);
+            ShowOscRouterRetryPromptIfNeeded();
+            return;
+        }
+
+        Console.WriteLine("Restarting OSC routing...");
+        await RestartOscRouterAsync(cancellationToken);
+    }
+
+    private static void PrintConsoleShortcutHelp()
+    {
+        Console.WriteLine("=== Console Hotkeys ===");
+        Console.WriteLine("1 = Broken Eye + VRCFaceTracking routine");
+        Console.WriteLine("2 = OSCGoesBrrr + Intiface routine");
+        Console.WriteLine("3 = Turn on all controlled base stations");
+        Console.WriteLine("4 = Turn off all controlled base stations");
+        Console.WriteLine("5 = OSC Router launch/restart");
+        Console.WriteLine("6 = After-launch apps routine");
+        Console.WriteLine("F1 = Show console shortcuts");
     }
 
     private void RefreshOscGoesBrrrWorkflowState()
@@ -2600,17 +2653,33 @@ internal sealed class AppSupervisor
             while (Console.KeyAvailable)
             {
                 var key = Console.ReadKey(intercept: true);
-                if (key.Key == ConsoleKey.L)
+                if (key.Key == ConsoleKey.D1)
+                {
+                    hotkeys.LaunchBrokenEyeVrcFaceTracking = true;
+                }
+                else if (key.Key == ConsoleKey.D2)
                 {
                     hotkeys.LaunchOscGoesBrrr = true;
                 }
-                else if (key.Key == ConsoleKey.Spacebar)
+                else if (key.Key == ConsoleKey.D3)
                 {
-                    hotkeys.RetryOscRouter = true;
+                    hotkeys.BaseStationsOn = true;
                 }
-                else if (key.Key == ConsoleKey.R)
+                else if (key.Key == ConsoleKey.D4)
                 {
-                    hotkeys.RestartCoreApps = true;
+                    hotkeys.BaseStationsOff = true;
+                }
+                else if (key.Key == ConsoleKey.D5)
+                {
+                    hotkeys.OscRouterLaunchOrRestart = true;
+                }
+                else if (key.Key == ConsoleKey.D6)
+                {
+                    hotkeys.AfterLaunchAppsRoutine = true;
+                }
+                else if (key.Key == ConsoleKey.F1)
+                {
+                    hotkeys.ShowHelp = true;
                 }
             }
 
@@ -2724,32 +2793,102 @@ internal sealed class AppSupervisor
         Console.WriteLine("Starting configured auto-launch apps...");
         foreach (var app in apps)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!File.Exists(app.Path))
+            await StartAutoLaunchAppAsync(app, cancellationToken);
+        }
+    }
+
+    private async Task RunAfterLaunchAppsRoutineAsync(CancellationToken cancellationToken)
+    {
+        if (!await _autoLaunchAppsRoutineLock.WaitAsync(0, cancellationToken))
+        {
+            Console.WriteLine("After-launch apps routine is already in progress.");
+            return;
+        }
+
+        try
+        {
+            var apps = GetEnabledAutoLaunchApps();
+            if (apps.Length == 0)
             {
-                Console.WriteLine($"Skipping {app.DisplayName}: executable was not found at {app.Path}");
-                continue;
+                Console.WriteLine("No enabled after-launch apps configured.");
+                return;
             }
 
-            try
+            var runningApps = apps
+                .Where(app => IsAnyProcessRunning(app.ProcessNames))
+                .ToArray();
+            var runningCount = runningApps.Length;
+
+            if (runningCount == apps.Length)
             {
-                Console.WriteLine($"Starting {app.DisplayName}...");
-                var appStarted = StartOrAttach(
-                    app.Path,
-                    app.ProcessNames,
-                    suppressOutput: true,
-                    runAsAdmin: app.RunAsAdmin,
-                    startMinimized: app.StartMinimized);
-                await VerifyRunningAsync(app.DisplayName, app.ProcessNames, cancellationToken);
-                if (appStarted && app.StartMinimized)
+                Console.WriteLine("All configured after-launch apps are running. Restarting all after-launch apps...");
+                foreach (var app in apps.Reverse())
                 {
-                    await MinimizeProcessWindowsAsync(app.DisplayName, app.ProcessNames, cancellationToken);
+                    await StopProcessesAsync(app.DisplayName, app.ProcessNames, cancellationToken);
                 }
+
+                foreach (var app in apps)
+                {
+                    await StartAutoLaunchAppAsync(app, cancellationToken);
+                }
+
+                return;
             }
-            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+
+            if (runningCount == 0)
             {
-                Console.WriteLine($"Could not start {app.DisplayName}: {ex.Message}");
+                Console.WriteLine("No configured after-launch apps are running. Starting all after-launch apps...");
             }
+            else
+            {
+                var missingCount = apps.Length - runningCount;
+                Console.WriteLine($"{missingCount} configured after-launch app(s) are not running. Starting missing apps only...");
+            }
+
+            foreach (var app in apps)
+            {
+                if (IsAnyProcessRunning(app.ProcessNames))
+                {
+                    Console.WriteLine($"{app.DisplayName} is already running.");
+                    continue;
+                }
+
+                await StartAutoLaunchAppAsync(app, cancellationToken);
+            }
+        }
+        finally
+        {
+            _autoLaunchAppsRoutineLock.Release();
+        }
+    }
+
+    private async Task StartAutoLaunchAppAsync(ManagedAutoLaunchApp app, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!File.Exists(app.Path))
+        {
+            Console.WriteLine($"Skipping {app.DisplayName}: executable was not found at {app.Path}");
+            return;
+        }
+
+        try
+        {
+            Console.WriteLine($"Starting {app.DisplayName}...");
+            var appStarted = StartOrAttach(
+                app.Path,
+                app.ProcessNames,
+                suppressOutput: true,
+                runAsAdmin: app.RunAsAdmin,
+                startMinimized: app.StartMinimized);
+            await VerifyRunningAsync(app.DisplayName, app.ProcessNames, cancellationToken);
+            if (appStarted && app.StartMinimized)
+            {
+                await MinimizeProcessWindowsAsync(app.DisplayName, app.ProcessNames, cancellationToken);
+            }
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            Console.WriteLine($"Could not start {app.DisplayName}: {ex.Message}");
         }
     }
 
@@ -5813,7 +5952,7 @@ internal sealed class SupervisorConfig
 
         json = ReplaceJsonBooleanOrStringProperty(json, nameof(AutoLaunchScheduledTask), TryGetAutoLaunchScheduledTask(out var value) && value);
         json = ReplaceJsonValueProperty(json, nameof(StartupLaunchMode), JsonSerializer.Serialize(GetEffectiveStartupLaunchMode(), JsonOptions()));
-        json = ReplaceJsonBooleanOrStringProperty(json, nameof(StopWithSteamVr), StopWithSteamVr || GetEffectiveStartupLaunchMode() == StartupLaunchMode.SteamVrManifest);
+        json = ReplaceJsonBooleanOrStringProperty(json, nameof(StopWithSteamVr), GetEffectiveStartupLaunchMode() == StartupLaunchMode.SteamVrManifest);
 
         File.WriteAllText(configPath, json);
         Console.WriteLine($"Saved scheduled task preference to: {configPath}");

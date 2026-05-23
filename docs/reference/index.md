@@ -16,13 +16,13 @@ For the complete configuration schema, see the commented `supervisor.config.json
 | `TurnOffSecondaryMonitors` | bool? | `null` | `true` enables monitor layout handling. Null prompts on first run. |
 | `AutoLaunchScheduledTask` | bool? | `null` | `true` creates/repairs the auto-launch task. Null prompts on first setup. |
 | `StartupLaunchMode` | string | `"Unspecified"` | `None`, `ScheduledTask`, or `SteamVrManifest`. |
-| `StopWithSteamVr` | bool | `false` | Cleanup when SteamVR exits. Forced `true` for SteamVR manifest mode. |
+| `StopWithSteamVr` | bool | `false` | Compatibility field. SteamVR cleanup follows `StartupLaunchMode = SteamVrManifest`. |
 | `AutoLaunchApps` | array | `[]` | Extra apps to launch with the session. |
 | `BaseStationsEnabled` | bool | `false` | Enable base station power automation. |
 | `BaseStationPowerDownMode` | string | `"Sleep"` | `Sleep` or `Standby` for cleanup. |
 | `BaseStations` | array | `[]` | Base station configuration rows. |
 | `OscGoesBrrrEnabled` | bool | `false` | Enable Intiface/OscGoesBrrr workflow. |
-| `OscGoesBrrrHotkeyEnabled` | bool | `true` | Enable `L` hotkey for workflow. |
+| `OscGoesBrrrHotkeyEnabled` | bool | `true` | Legacy name for manual console launch mode. Console hotkey `2` launches the workflow when `OscGoesBrrrEnabled` is true. |
 | `OscGoesBrrrBleScannerEnabled` | bool | `false` | Enable Lovense BLE scanning. |
 | `IntifacePath` | string | `""` | Path to Intiface. |
 | `OscGoesBrrrPath` | string | `""` | Path to OscGoesBrrr. |

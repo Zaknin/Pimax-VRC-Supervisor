@@ -49,7 +49,7 @@ Change `OscRouterReceivePort` to an unused port (e.g., 9002, 9003).
 | `OscGoesBrrrEnabled` | Must be `true`. |
 | Intiface path | Verify `IntifacePath` points to a valid executable. |
 | OscGoesBrrr path | Verify `OscGoesBrrrPath` points to a valid executable. |
-| Hotkey enabled | If using hotkey mode, press `L` in the console. |
+| Manual console launch mode | If using manual mode, press `2` in a visible supervisor console. |
 | BLE scanner | If using BLE mode, ensure Bluetooth is enabled and a Lovense device is nearby. |
 
 ## BLE Scanner Not Detecting Lovense
@@ -66,7 +66,7 @@ Change `OscRouterReceivePort` to an unused port (e.g., 9002, 9003).
 The OSC router is independent from Pimax reconnect handling. If it stops forwarding:
 
 1. Check if the router is still running (console should show "OSC router is running").
-2. Press `Space` to retry if it shows "Press Space to retry to restart OSC routing."
+2. Press `5` in a visible supervisor console to launch or restart OSC routing.
 3. If the router crashed, restart the supervisor.
 
 See also: [Troubleshooting Overview](index.md) · [Config Editor Issues](config-editor-issues.md) · [Base Station Issues](base-station-issues.md)
