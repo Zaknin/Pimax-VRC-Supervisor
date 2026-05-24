@@ -15,7 +15,7 @@
 
 ## Tabs
 
-### Basics
+### General
 
 Main executable paths, Startup choices, and first-run choices.
 

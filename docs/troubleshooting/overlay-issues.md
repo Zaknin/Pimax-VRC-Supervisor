@@ -4,7 +4,7 @@
 
 | Check | Action |
 | --- | --- |
-| SteamVR startup mode | Enable "Start with SteamVR" in the Config Editor Basics tab and save. |
+| SteamVR startup mode | Enable "Start with SteamVR" in the Config Editor General tab and save. |
 | Manifest applied | Run `PimaxVrcSupervisor.exe --apply-startup-integration`. |
 | SteamVR restarted | Restart SteamVR after changing startup settings. |
 | OpenVR DLL | Ensure `openvr_api.dll` exists in the SteamVR runtime directory. |

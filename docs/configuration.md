@@ -88,7 +88,7 @@ Example Base Station 2.0 row:
 
 ## Startup Modes
 
-The **Basics** tab in the Config Editor has a **Startup** section:
+The **General** tab in the Config Editor has a **Startup** section:
 
 - **Create/evaluate VRChat auto-launch Scheduled Task** — a hidden elevated watcher starts the supervisor only after `VRChat.exe` and SteamVR `vrserver.exe` are both running.
 - **Start with SteamVR** — registers `PimaxVrcSupervisorSteamVrHost.exe` as a SteamVR dashboard overlay app and creates a separate on-demand elevated helper task.

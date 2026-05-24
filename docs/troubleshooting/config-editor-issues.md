@@ -20,7 +20,7 @@
 
 ### "Broken Eye executable path is required"
 
-The path is empty or the file doesn't exist. Browse for the correct executable in the **Basics** tab.
+The path is empty or the file doesn't exist. Browse for the correct executable in the **General** tab.
 
 ### "Enabled auto-launch row has no executable path"
 

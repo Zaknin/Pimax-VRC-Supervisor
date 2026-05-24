@@ -1,13 +1,13 @@
 # VR Overlay Configuration
 
-The SteamVR dashboard overlay is configured through the Config Editor's **Basics** tab and the SteamVR manifest system.
+The SteamVR dashboard overlay is configured through the Config Editor's **General** tab and the SteamVR manifest system.
 
 ## Enabling SteamVR Startup
 
 To use the overlay, you must enable SteamVR startup mode:
 
 1. Open the Config Editor.
-2. Go to the **Basics** tab.
+2. Go to the **General** tab.
 3. In the **Startup** section, check **Start with SteamVR**.
 4. Save the config.
 
@@ -69,7 +69,7 @@ The host writes logs to `%TEMP%\PimaxVrcSupervisorSteamVrHost.log`. This file in
 To disable the overlay:
 
 1. Open the Config Editor.
-2. Go to the **Basics** tab.
+2. Go to the **General** tab.
 3. Uncheck **Start with SteamVR** (or set startup mode to `None`).
 4. Save the config.
 

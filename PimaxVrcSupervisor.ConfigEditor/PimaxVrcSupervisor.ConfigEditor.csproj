@@ -9,15 +9,16 @@
     <AssemblyName>PimaxVrcSupervisorConfigEditor</AssemblyName>
     <RootNamespace>PimaxVrcSupervisor.ConfigEditor</RootNamespace>
     <ApplicationIcon>Assets\config-editor.ico</ApplicationIcon>
-    <Version>1.2.0</Version>
-    <AssemblyVersion>1.2.0.0</AssemblyVersion>
-    <FileVersion>1.2.0.0</FileVersion>
-    <InformationalVersion>1.2.0</InformationalVersion>
+    <Version>1.2.1</Version>
+    <AssemblyVersion>1.2.1.0</AssemblyVersion>
+    <FileVersion>1.2.1.0</FileVersion>
+    <InformationalVersion>1.2.1</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Include="..\PimaxVrcSupervisor\BaseStationSupport.cs" Link="BaseStationSupport.cs" />
+    <Compile Include="..\PimaxVrcSupervisor\ScheduledTaskPathValidation.cs" Link="ScheduledTaskPathValidation.cs" />
     <None Include="..\PimaxVrcSupervisor\supervisor.config.json" Link="supervisor.config.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

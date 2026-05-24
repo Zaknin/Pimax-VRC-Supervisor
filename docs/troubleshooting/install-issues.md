@@ -10,7 +10,7 @@ The supervisor uses a mutex (`Local\PimaxVrcSupervisor`) to prevent duplicate in
 
 | Check | Action |
 | --- | --- |
-| Executable path | Open the Config Editor and verify the path in the **Basics** tab. |
+| Executable path | Open the Config Editor and verify the path in the **General** tab. |
 | Process name | Check the **Processes** tab. The process name must match the running process (without `.exe`). |
 | File exists | Ensure the executable exists at the configured path. |
 | Path variables | If using `%APPDATA%` or `%LOCALAPPDATA%`, verify the expanded path is correct. |

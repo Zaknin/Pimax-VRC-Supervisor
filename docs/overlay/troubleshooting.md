@@ -4,7 +4,7 @@
 
 | Check | Action |
 | --- | --- |
-| SteamVR startup mode | Ensure "Start with SteamVR" is enabled in the Config Editor Basics tab. |
+| SteamVR startup mode | Ensure "Start with SteamVR" is enabled in the Config Editor General tab. |
 | Manifest registration | Run `PimaxVrcSupervisor.exe --apply-startup-integration` and check for success. |
 | SteamVR restart | Restart SteamVR after changing startup settings. |
 | App key conflict | Verify no other app uses the `pimax.vrcsupervisor.dashboard` key. |

@@ -12,6 +12,8 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using System.Xml.Linq;
+using System.Drawing;
+using System.Drawing.Drawing2D;
 using Microsoft.Win32;
 using PimaxVrcSupervisor.BaseStations;
 using Windows.Devices.Bluetooth.Advertisement;
@@ -48,7 +50,7 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "--apply-startup-integration",
         await StartupIntegration.ApplyAsync(config, shutdown.Token);
         if (showResult)
         {
-            MessageBox.Show(
+            ThemedPrompt.Show(
                 "Startup integration was applied successfully.",
                 "Pimax VRC Supervisor",
                 MessageBoxButtons.OK,
@@ -59,7 +61,7 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "--apply-startup-integration",
     {
         if (showResult)
         {
-            MessageBox.Show(
+            ThemedPrompt.Show(
                 ex.Message,
                 "Could not apply startup integration",
                 MessageBoxButtons.OK,
@@ -104,6 +106,7 @@ Console.CancelKeyPress += (_, eventArgs) =>
 using var consoleCloseHandler = ConsoleCloseHandler.Register(
     shutdown,
     supervisorStopped.Task,
+    supervisor.IsForcedManualReloadRequested,
     supervisor.RunEmergencyCloseCleanupAsync,
     () => BaseStationEmergencyCleanup.TryLaunchDetached(config, TimeSpan.FromSeconds(6)));
 try
@@ -164,7 +167,7 @@ static async Task InstallAutoLaunchScheduledTaskFromCommandLineAsync(SupervisorC
     }
 
     Console.WriteLine("Installing elevated auto-launch scheduled task...");
-    var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(cancellationToken);
+        var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(startWatcherImmediately: true, cancellationToken);
     config.SetAutoLaunchScheduledTask(true);
     config.SaveAutoLaunchScheduledTaskPreference();
     Console.WriteLine($"Installed scheduled task: {taskDetails.TaskName}");
@@ -203,6 +206,345 @@ internal static class ConsoleWindow
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}
+
+internal sealed record ThemedPromptButton(string Text, DialogResult Result);
+
+internal sealed class ThemedPromptButtonControl : Button
+{
+    private const int Radius = 4;
+    private bool _hovered;
+    private bool _pressed;
+
+    public ThemedPromptButtonControl()
+    {
+        FlatStyle = FlatStyle.Flat;
+        FlatAppearance.BorderSize = 1;
+        UseVisualStyleBackColor = false;
+        Padding = new Padding(8, 2, 8, 2);
+    }
+
+    protected override void OnMouseEnter(EventArgs e)
+    {
+        _hovered = true;
+        Invalidate();
+        base.OnMouseEnter(e);
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        _hovered = false;
+        _pressed = false;
+        Invalidate();
+        base.OnMouseLeave(e);
+    }
+
+    protected override void OnMouseDown(MouseEventArgs mevent)
+    {
+        if (mevent.Button == MouseButtons.Left)
+        {
+            _pressed = true;
+            Invalidate();
+        }
+
+        base.OnMouseDown(mevent);
+    }
+
+    protected override void OnMouseUp(MouseEventArgs mevent)
+    {
+        _pressed = false;
+        Invalidate();
+        base.OnMouseUp(mevent);
+    }
+
+    protected override void OnPaint(PaintEventArgs pevent)
+    {
+        pevent.Graphics.Clear(Parent?.BackColor ?? SystemColors.Control);
+        pevent.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+        var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
+        var backColor = BackColor;
+        if (!Enabled)
+        {
+            backColor = SystemColors.Control;
+        }
+        else if (_pressed)
+        {
+            backColor = ColorOrFallback(FlatAppearance.MouseDownBackColor, BackColor);
+        }
+        else if (_hovered)
+        {
+            backColor = ColorOrFallback(FlatAppearance.MouseOverBackColor, BackColor);
+        }
+
+        using var path = CreateRoundedRectanglePath(bounds, Radius);
+        using var background = new SolidBrush(backColor);
+        using var border = new Pen(Enabled ? ColorOrFallback(FlatAppearance.BorderColor, SystemColors.ControlDark) : SystemColors.ControlDark);
+        pevent.Graphics.FillPath(background, path);
+        pevent.Graphics.DrawPath(border, path);
+
+        TextRenderer.DrawText(
+            pevent.Graphics,
+            Text,
+            Font,
+            bounds,
+            Enabled ? ForeColor : SystemColors.GrayText,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+        if (Focused && ShowFocusCues)
+        {
+            ControlPaint.DrawFocusRectangle(pevent.Graphics, Rectangle.Inflate(bounds, -4, -4), ForeColor, backColor);
+        }
+    }
+
+    private static GraphicsPath CreateRoundedRectanglePath(Rectangle bounds, int radius)
+    {
+        var diameter = radius * 2;
+        var path = new GraphicsPath();
+        path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    private static Color ColorOrFallback(Color color, Color fallback)
+        => color.IsEmpty ? fallback : color;
+}
+
+internal static class ThemedPrompt
+{
+    private const int DwmWindowAttributeUseImmersiveDarkMode = 20;
+    private const int DwmWindowAttributeUseImmersiveDarkModeBefore20H1 = 19;
+
+    public static DialogResult Show(
+        string message,
+        string title,
+        MessageBoxButtons buttons,
+        MessageBoxIcon icon,
+        MessageBoxDefaultButton defaultButton = MessageBoxDefaultButton.Button1)
+    {
+        var promptButtons = buttons switch
+        {
+            MessageBoxButtons.OK => new[] { new ThemedPromptButton("OK", DialogResult.OK) },
+            MessageBoxButtons.YesNo => new[]
+            {
+                new ThemedPromptButton("Yes", DialogResult.Yes),
+                new ThemedPromptButton("No", DialogResult.No)
+            },
+            _ => throw new NotSupportedException($"Unsupported prompt button set: {buttons}")
+        };
+
+        return Show(message, title, promptButtons, icon, defaultButton);
+    }
+
+    public static DialogResult Show(
+        string message,
+        string title,
+        IReadOnlyList<ThemedPromptButton> buttons,
+        MessageBoxIcon icon,
+        MessageBoxDefaultButton defaultButton = MessageBoxDefaultButton.Button1)
+    {
+        if (Thread.CurrentThread.GetApartmentState() == ApartmentState.STA)
+        {
+            return ShowOnCurrentThread(message, title, buttons, icon, defaultButton);
+        }
+
+        var completion = new TaskCompletionSource<DialogResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                Application.EnableVisualStyles();
+                completion.SetResult(ShowOnCurrentThread(message, title, buttons, icon, defaultButton));
+            }
+            catch (Exception ex)
+            {
+                completion.SetException(ex);
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return completion.Task.GetAwaiter().GetResult();
+    }
+
+    private static DialogResult ShowOnCurrentThread(
+        string message,
+        string title,
+        IReadOnlyList<ThemedPromptButton> buttons,
+        MessageBoxIcon icon,
+        MessageBoxDefaultButton defaultButton)
+    {
+        var dark = IsDarkThemeEnabled();
+        var backColor = dark ? Color.FromArgb(31, 31, 31) : SystemColors.Control;
+        var textColor = dark ? Color.FromArgb(245, 245, 245) : SystemColors.ControlText;
+        var mutedTextColor = dark ? Color.FromArgb(218, 218, 218) : SystemColors.ControlText;
+        var buttonBackColor = dark ? Color.FromArgb(55, 55, 55) : SystemColors.Control;
+        var buttonBorderColor = dark ? Color.FromArgb(85, 85, 85) : SystemColors.ControlDark;
+
+        using var form = new Form
+        {
+            Text = string.IsNullOrWhiteSpace(title) ? "Pimax VRC Supervisor" : title,
+            StartPosition = FormStartPosition.CenterScreen,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = true,
+            TopMost = true,
+            BackColor = backColor,
+            ForeColor = textColor,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(22),
+            MinimumSize = new Size(440, 0),
+            Font = SystemFonts.MessageBoxFont
+        };
+
+        form.HandleCreated += (_, _) => ApplyDarkTitleBar(form.Handle, dark);
+        form.Shown += (_, _) =>
+        {
+            form.Activate();
+            form.BringToFront();
+        };
+
+        var root = new TableLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            RowCount = 2,
+            Dock = DockStyle.Fill,
+            BackColor = backColor,
+            Padding = Padding.Empty
+        };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var iconPicture = new PictureBox
+        {
+            Image = GetIconBitmap(icon),
+            SizeMode = PictureBoxSizeMode.CenterImage,
+            Width = 44,
+            Height = 44,
+            Margin = new Padding(0, 4, 18, 0),
+            BackColor = backColor
+        };
+        root.Controls.Add(iconPicture, 0, 0);
+
+        var messageLabel = new Label
+        {
+            AutoSize = true,
+            MaximumSize = new Size(620, 0),
+            Text = message,
+            ForeColor = mutedTextColor,
+            BackColor = backColor,
+            Margin = new Padding(0, 0, 0, 24)
+        };
+        root.Controls.Add(messageLabel, 1, 0);
+
+        var buttonPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.RightToLeft,
+            Dock = DockStyle.Fill,
+            BackColor = backColor,
+            Padding = new Padding(0, 10, 0, 0),
+            Margin = new Padding(0)
+        };
+        root.SetColumnSpan(buttonPanel, 2);
+        root.Controls.Add(buttonPanel, 0, 1);
+
+        Button? defaultControl = null;
+        for (var index = buttons.Count - 1; index >= 0; index--)
+        {
+            var promptButton = buttons[index];
+            var button = new ThemedPromptButtonControl
+            {
+                Text = promptButton.Text,
+                DialogResult = promptButton.Result,
+                AutoSize = false,
+                Width = Math.Max(96, TextRenderer.MeasureText(promptButton.Text, SystemFonts.MessageBoxFont).Width + 28),
+                Height = 32,
+                Margin = new Padding(8, 0, 0, 0),
+                BackColor = buttonBackColor,
+                ForeColor = textColor,
+                FlatStyle = FlatStyle.Flat,
+                UseVisualStyleBackColor = false
+            };
+            button.FlatAppearance.BorderColor = buttonBorderColor;
+            button.FlatAppearance.MouseOverBackColor = dark ? Color.FromArgb(70, 70, 70) : SystemColors.ButtonHighlight;
+            button.FlatAppearance.MouseDownBackColor = dark ? Color.FromArgb(45, 45, 45) : SystemColors.ControlDark;
+            buttonPanel.Controls.Add(button);
+
+            var buttonOrdinal = index + 1;
+            if (MatchesDefaultButton(defaultButton, buttonOrdinal))
+            {
+                defaultControl = button;
+            }
+        }
+
+        form.Controls.Add(root);
+        form.AcceptButton = defaultControl;
+        form.CancelButton = buttons.Any(button => button.Result == DialogResult.No)
+            ? buttonPanel.Controls.OfType<Button>().FirstOrDefault(button => button.DialogResult == DialogResult.No)
+            : buttonPanel.Controls.OfType<Button>().FirstOrDefault(button => button.DialogResult == DialogResult.OK);
+
+        return form.ShowDialog();
+    }
+
+    private static bool MatchesDefaultButton(MessageBoxDefaultButton defaultButton, int ordinal)
+        => defaultButton switch
+        {
+            MessageBoxDefaultButton.Button1 => ordinal == 1,
+            MessageBoxDefaultButton.Button2 => ordinal == 2,
+            MessageBoxDefaultButton.Button3 => ordinal == 3,
+            _ => ordinal == 1
+        };
+
+    private static Bitmap GetIconBitmap(MessageBoxIcon icon)
+        => icon switch
+        {
+            MessageBoxIcon.Error => SystemIcons.Error.ToBitmap(),
+            MessageBoxIcon.Warning => SystemIcons.Warning.ToBitmap(),
+            MessageBoxIcon.Information => SystemIcons.Information.ToBitmap(),
+            MessageBoxIcon.Question => SystemIcons.Question.ToBitmap(),
+            _ => SystemIcons.Information.ToBitmap()
+        };
+
+    private static bool IsDarkThemeEnabled()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+            return key?.GetValue("AppsUseLightTheme") is int value && value == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void ApplyDarkTitleBar(IntPtr handle, bool dark)
+    {
+        if (!dark || !OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var enabled = 1;
+        if (DwmSetWindowAttribute(handle, DwmWindowAttributeUseImmersiveDarkMode, ref enabled, sizeof(int)) != 0)
+        {
+            _ = DwmSetWindowAttribute(handle, DwmWindowAttributeUseImmersiveDarkModeBefore20H1, ref enabled, sizeof(int));
+        }
+    }
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int dwAttribute, ref int pvAttribute, int cbAttribute);
 }
 
 internal static class SupervisorConsoleLog
@@ -354,6 +696,7 @@ internal struct ConsoleHotkeys
 internal sealed class AppSupervisor
 {
     private const int BrokenEyeStartupMaxAttempts = 10;
+    private const string ForcedManualReloadMarkerFileName = "PimaxVrcSupervisorForcedManualReload.marker";
     private static readonly TimeSpan BrokenEyeStartupCheckDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan LovenseBluetoothRegistryRecentWindow = TimeSpan.FromHours(1);
 
@@ -404,6 +747,7 @@ internal sealed class AppSupervisor
     private DateTimeOffset? _lastHandledPimaxReconnectSignalAt;
     private DateTimeOffset? _lastMouthTrackerPnPEventSeenAt;
     private bool _mouthTrackerPnPEventWarningShown;
+    private volatile bool _forcedManualReloadRequested;
 
     public AppSupervisor(SupervisorConfig config, bool steamVrStart = false)
     {
@@ -440,7 +784,9 @@ internal sealed class AppSupervisor
         _mouthTrackerUser = await EnsureMouthTrackerPreferenceAsync(cancellationToken);
         _turnOffSecondaryMonitors = await EnsureTurnOffSecondaryMonitorsPreferenceAsync(cancellationToken);
         await EnsureStartupIntegrationPreferenceAsync(cancellationToken);
+        await EnsureBaseStationPowerPreferenceAsync(cancellationToken);
         _commandServer = SupervisorCommandServer.Start(this, cancellationToken);
+        var restartedFromForcedManualReload = TryConsumeForcedManualReloadMarker();
 
         try
         {
@@ -476,12 +822,16 @@ internal sealed class AppSupervisor
             await InitializeOscGoesBrrrWorkflowAsync(cancellationToken);
             await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
             ShowOscRouterRetryPromptIfNeeded();
-            Console.WriteLine("Press F1 for shortcuts.");
+            if (restartedFromForcedManualReload)
+            {
+                Console.WriteLine("Supervisor restarted successfully from a forced manual reload.");
+            }
 
             Console.WriteLine($"Pimax Crystal initial state: {DescribeConnection(_lastPimaxConnected.Value)}");
             Console.WriteLine(_steamVrStart
                 ? "Waiting for Pimax reconnects or SteamVR shutdown. Press Ctrl+C to stop."
                 : "Waiting for Pimax reconnects or VRChat shutdown. Press Ctrl+C to stop.");
+            Console.WriteLine("Press F1 for shortcuts.");
 
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -856,32 +1206,111 @@ internal sealed class AppSupervisor
             return;
         }
 
-        Console.WriteLine("AutoLaunchScheduledTask is not configured.");
-        var answer = await AskAutoLaunchScheduledTaskPreferenceAsync(cancellationToken);
-        if (!answer)
+        Console.WriteLine("Startup launch mode is not configured.");
+        var selectedStartupMode = await AskStartupIntegrationPreferenceAsync(cancellationToken);
+        if (selectedStartupMode == StartupLaunchMode.None)
         {
             _config.SetAutoLaunchScheduledTask(false);
             _config.StartupLaunchMode = StartupLaunchMode.None;
             _config.SaveAutoLaunchScheduledTaskPreference();
-            Console.WriteLine("Elevated auto-launch scheduled task was not created.");
+            await ScheduledTaskInstaller.DeleteAutoLaunchTaskAsync(cancellationToken);
+            await SteamVrStartupInstaller.DisableAsync(cancellationToken);
+            await ScheduledTaskInstaller.DeleteSteamVrStartHelperAsync(cancellationToken);
+            Console.WriteLine("Automatic supervisor startup disabled.");
             return;
         }
 
+        if (selectedStartupMode == StartupLaunchMode.SteamVrManifest)
+        {
+            _config.SetAutoLaunchScheduledTask(false);
+            _config.StartupLaunchMode = StartupLaunchMode.SteamVrManifest;
+            _config.SaveAutoLaunchScheduledTaskPreference();
+            await ScheduledTaskInstaller.DeleteAutoLaunchTaskAsync(cancellationToken);
+            await EnsureSteamVrStartupInstalledAsync(cancellationToken);
+            Console.WriteLine("Supervisor will start with the VR overlay.");
+            return;
+        }
+
+        if (selectedStartupMode == StartupLaunchMode.ScheduledTask)
+        {
+            try
+            {
+                var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(startWatcherImmediately: true, cancellationToken);
+                _config.SetAutoLaunchScheduledTask(true);
+                _config.StartupLaunchMode = StartupLaunchMode.ScheduledTask;
+                _config.SaveAutoLaunchScheduledTaskPreference();
+                await SteamVrStartupInstaller.DisableAsync(cancellationToken);
+                await ScheduledTaskInstaller.DeleteSteamVrStartHelperAsync(cancellationToken);
+                Console.WriteLine($"Created elevated auto-launch scheduled task: {taskDetails.TaskName}");
+                Console.WriteLine($"Trigger: {taskDetails.TriggerDescription}");
+                Console.WriteLine("Supervisor will start with the console workflow.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Could not create elevated auto-launch scheduled task:");
+                Console.WriteLine(ex.Message);
+                Console.WriteLine("The preference was not saved, so the app can ask again next run.");
+            }
+        }
+    }
+
+    private async Task EnsureBaseStationPowerPreferenceAsync(CancellationToken cancellationToken)
+    {
+        if (_config.TryGetBaseStationsEnabled(out var baseStationsEnabled))
+        {
+            return;
+        }
+
+        Console.WriteLine("BaseStationsEnabled is not configured.");
+        var answer = await AskBaseStationPowerPreferenceAsync(cancellationToken);
+        if (!answer)
+        {
+            _config.SetBaseStationsEnabled(false);
+            _config.SaveBaseStationSettings();
+            Console.WriteLine("Base station power automation disabled.");
+            return;
+        }
+
+        _config.SetBaseStationsEnabled(true);
+        Console.WriteLine("Base station power automation enabled. Scanning for base stations...");
         try
         {
-            var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(cancellationToken);
-            _config.SetAutoLaunchScheduledTask(true);
-            _config.StartupLaunchMode = StartupLaunchMode.ScheduledTask;
-            _config.SaveAutoLaunchScheduledTaskPreference();
-            Console.WriteLine($"Created elevated auto-launch scheduled task: {taskDetails.TaskName}");
-            Console.WriteLine($"Trigger: {taskDetails.TriggerDescription}");
+            var discovered = await BaseStationDiscovery.ScanAsync(TimeSpan.FromSeconds(10), cancellationToken);
+            MergeDiscoveredBaseStations(discovered);
+            Console.WriteLine($"Base station scan complete: {discovered.Count} station(s) found, {GetEnabledBaseStations().Length} enabled.");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
-            Console.WriteLine("Could not create elevated auto-launch scheduled task:");
-            Console.WriteLine(ex.Message);
-            Console.WriteLine("The preference was not saved, so the app can ask again next run.");
+            Console.WriteLine($"Base station scan failed: {ex.Message}");
         }
+
+        _config.SaveBaseStationSettings();
+        await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
+    }
+
+    private void MergeDiscoveredBaseStations(IReadOnlyList<BaseStationDevice> discovered)
+    {
+        if (discovered.Count == 0)
+        {
+            return;
+        }
+
+        var merged = _config.BaseStations.ToList();
+        foreach (var baseStation in discovered.Select(station => station.WithDefaults()))
+        {
+            var existing = merged.FirstOrDefault(candidate => string.Equals(candidate.BluetoothAddress, baseStation.BluetoothAddress, StringComparison.OrdinalIgnoreCase));
+            if (existing is null)
+            {
+                merged.Add(baseStation);
+                continue;
+            }
+
+            existing.Name = string.IsNullOrWhiteSpace(existing.Name) ? baseStation.Name : existing.Name;
+            existing.FriendlyName = string.IsNullOrWhiteSpace(existing.FriendlyName) ? baseStation.FriendlyName : existing.FriendlyName;
+            existing.Version = existing.Version == BaseStationVersion.Unknown ? baseStation.Version : existing.Version;
+        }
+
+        _config.BaseStations = merged.ToArray();
     }
 
     private async Task EnsureSteamVrStartupInstalledAsync(CancellationToken cancellationToken)
@@ -905,7 +1334,7 @@ internal sealed class AppSupervisor
         Console.WriteLine("Ensuring elevated auto-launch scheduled task is installed.");
         try
         {
-            var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(cancellationToken);
+            var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(startWatcherImmediately: true, cancellationToken);
             Console.WriteLine($"Installed elevated auto-launch scheduled task: {taskDetails.TaskName}");
             Console.WriteLine($"Trigger: {taskDetails.TriggerDescription}");
         }
@@ -916,89 +1345,75 @@ internal sealed class AppSupervisor
         }
     }
 
-    private static Task<bool> AskAutoLaunchScheduledTaskPreferenceAsync(CancellationToken cancellationToken)
-    {
-        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        var thread = new Thread(() =>
-        {
-            try
+    private static Task<StartupLaunchMode> AskStartupIntegrationPreferenceAsync(CancellationToken cancellationToken)
+        => AskPromptAsync(
+            () => ThemedPrompt.Show(
+                "How should Pimax VRC Supervisor start automatically?\r\n\r\nStart with Console creates an elevated Windows Scheduled Task that watches for VRChat.exe when vrserver.exe is already running.\r\n\r\nStart with VR Overlay starts through SteamVR with the dashboard overlay.",
+                "Pimax VRC Supervisor",
+                [
+                    new("Start with Console", DialogResult.Yes),
+                    new("Start with VR Overlay", DialogResult.OK),
+                    new("No", DialogResult.No)
+                ],
+                MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button1),
+            result => result switch
             {
-                Application.EnableVisualStyles();
-                var result = MessageBox.Show(
-                    "Create an elevated Windows Scheduled Task that watches for VRChat.exe and starts Pimax VRC Supervisor when vrserver.exe is already running?\n\nThis uses a hidden elevated watcher at Windows sign-in, so it does not depend on Windows Security audit events.",
-                    "Pimax VRC Supervisor",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question,
-                    MessageBoxDefaultButton.Button1);
-
-                completion.TrySetResult(result == DialogResult.Yes);
-            }
-            catch (Exception ex)
-            {
-                completion.TrySetException(new InvalidOperationException("Could not open scheduled task question dialog.", ex));
-            }
-        });
-
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-
-        cancellationToken.Register(() => completion.TrySetCanceled(cancellationToken));
-        return completion.Task;
-    }
+                DialogResult.Yes => StartupLaunchMode.ScheduledTask,
+                DialogResult.OK => StartupLaunchMode.SteamVrManifest,
+                _ => StartupLaunchMode.None
+            },
+            "Could not open scheduled task question dialog.",
+            cancellationToken);
 
     private static Task<bool> AskTurnOffSecondaryMonitorsPreferenceAsync(CancellationToken cancellationToken)
-    {
-        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                Application.EnableVisualStyles();
-                var result = MessageBox.Show(
-                    "Do you want to turn off secondary monitors when using the headset?",
-                    "Pimax VRC Supervisor",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question,
-                    MessageBoxDefaultButton.Button1);
-
-                completion.TrySetResult(result == DialogResult.Yes);
-            }
-            catch (Exception ex)
-            {
-                completion.TrySetException(new InvalidOperationException("Could not open secondary monitor question dialog.", ex));
-            }
-        });
-
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-
-        cancellationToken.Register(() => completion.TrySetCanceled(cancellationToken));
-        return completion.Task;
-    }
+        => AskYesNoPromptAsync(
+            "Do you want to turn off secondary monitors when using the headset?",
+            "Could not open secondary monitor question dialog.",
+            cancellationToken);
 
     private static Task<bool> AskMouthTrackerPreferenceAsync(CancellationToken cancellationToken)
+        => AskYesNoPromptAsync(
+            "Do you use Vive mouth tracker?",
+            "Could not open mouth tracker question dialog.",
+            cancellationToken);
+
+    private static Task<bool> AskBaseStationPowerPreferenceAsync(CancellationToken cancellationToken)
+        => AskYesNoPromptAsync(
+            "Turn on base station power automation?\r\n\r\nYes enables base station power automation, scans for base stations, saves the setting, and starts the normal power-on routine immediately.",
+            "Could not open base station power question dialog.",
+            cancellationToken);
+
+    private static Task<bool> AskYesNoPromptAsync(string message, string errorMessage, CancellationToken cancellationToken)
+        => AskPromptAsync(
+            () => ThemedPrompt.Show(
+                message,
+                "Pimax VRC Supervisor",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button1),
+            result => result == DialogResult.Yes,
+            errorMessage,
+            cancellationToken);
+
+    private static Task<T> AskPromptAsync<T>(
+        Func<DialogResult> showPrompt,
+        Func<DialogResult, T> mapResult,
+        string errorMessage,
+        CancellationToken cancellationToken)
     {
-        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var thread = new Thread(() =>
         {
             try
             {
                 Application.EnableVisualStyles();
-                var result = MessageBox.Show(
-                    "Do you use Vive mouth tracker?",
-                    "Pimax VRC Supervisor",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question,
-                    MessageBoxDefaultButton.Button1);
-
-                completion.TrySetResult(result == DialogResult.Yes);
+                completion.TrySetResult(mapResult(showPrompt()));
             }
             catch (Exception ex)
             {
-                completion.TrySetException(new InvalidOperationException("Could not open mouth tracker question dialog.", ex));
+                completion.TrySetException(new InvalidOperationException(errorMessage, ex));
             }
         });
 
@@ -1624,17 +2039,24 @@ internal sealed class AppSupervisor
                     await RestartCoreAppsAsync(cancellationToken);
                     return "Restarted Broken Eye and VRCFaceTracking.";
                 case "start-osc-goes-brrr":
-                    await StartLovenseOscAsync(cancellationToken);
+                    await StartOscGoesBrrrFromDashboardAsync(cancellationToken);
                     return "OSCGoesBrrr workflow start requested.";
                 case "base-stations-on":
                     await ManualPowerOnBaseStationsAsync(cancellationToken);
-                    return "Base station power-on requested.";
+                    return _config.BaseStationsEnabled
+                        ? "Base station power-on requested."
+                        : "Base stations are not enabled in config; manual startup routine requested.";
                 case "base-stations-off":
                     await ManualPowerDownBaseStationsAsync(cancellationToken);
-                    return "Base station power-off requested.";
+                    return _config.BaseStationsEnabled
+                        ? "Base station power-off requested."
+                        : "Base stations are not enabled in config; manual shutdown routine requested.";
                 case "restart-osc-router":
-                    await RestartOscRouterAsync(cancellationToken);
+                    await RestartOscRouterAsync(cancellationToken, manualOverride: true);
                     return "OSC router restart requested.";
+                case "force-stop-supervisor":
+                    ForceStopSupervisorFromDashboard();
+                    return "Supervisor hard stop requested.";
                 default:
                     return "Unknown command: " + command;
             }
@@ -1659,13 +2081,74 @@ internal sealed class AppSupervisor
         return $"Mode={mode}; SteamVR={steamVrRunning}; CoreApps={coreApps}; BaseStations={baseStations}; OscRouter={oscRouter}";
     }
 
+    internal bool IsForcedManualReloadRequested()
+        => _forcedManualReloadRequested;
+
+    private void ForceStopSupervisorFromDashboard()
+    {
+        _forcedManualReloadRequested = true;
+        Console.WriteLine("Dashboard requested hard supervisor stop. Terminating supervisor immediately without cleanup routines.");
+        WriteForcedManualReloadMarker();
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(1000);
+            using var currentProcess = Process.GetCurrentProcess();
+            currentProcess.Kill(entireProcessTree: false);
+        });
+    }
+
+    internal static string ForcedManualReloadMarkerPath
+        => Path.Combine(Path.GetTempPath(), ForcedManualReloadMarkerFileName);
+
+    internal static void WriteForcedManualReloadMarker()
+    {
+        try
+        {
+            File.WriteAllText(ForcedManualReloadMarkerPath, DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not write forced manual reload marker: {ex.Message}");
+        }
+    }
+
+    private static bool TryConsumeForcedManualReloadMarker()
+    {
+        try
+        {
+            var markerPath = ForcedManualReloadMarkerPath;
+            if (!File.Exists(markerPath))
+            {
+                return false;
+            }
+
+            var text = File.ReadAllText(markerPath).Trim();
+            File.Delete(markerPath);
+            return DateTimeOffset.TryParse(
+                    text,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    out var createdAt)
+                && DateTimeOffset.UtcNow - createdAt < TimeSpan.FromMinutes(10);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private async Task ManualPowerOnBaseStationsAsync(CancellationToken cancellationToken)
     {
         var baseStations = GetEnabledBaseStations();
-        if (!_config.BaseStationsEnabled || baseStations.Length == 0)
+        if (baseStations.Length == 0)
         {
-            Console.WriteLine("No enabled base stations to power on.");
+            Console.WriteLine("No enabled configured base stations to power on.");
             return;
+        }
+
+        if (!_config.BaseStationsEnabled)
+        {
+            Console.WriteLine("Base station automation is not enabled in the configuration. Running manual startup routine anyway.");
         }
 
         _baseStationPowerOnAttempted = false;
@@ -1675,31 +2158,39 @@ internal sealed class AppSupervisor
         _baseStationSecondPowerOnPassCompletedAt = null;
         _baseStationPowerOnCommandSucceeded.Clear();
         _nextBaseStationPowerOnAttemptAt = null;
-        await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
+        await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken, manualOverride: true);
     }
 
     private async Task ManualPowerDownBaseStationsAsync(CancellationToken cancellationToken)
     {
         var baseStations = GetEnabledBaseStations();
-        if (!_config.BaseStationsEnabled || baseStations.Length == 0)
+        if (baseStations.Length == 0)
         {
-            Console.WriteLine("No enabled base stations to power off.");
+            Console.WriteLine("No enabled configured base stations to power off.");
             return;
+        }
+
+        if (!_config.BaseStationsEnabled)
+        {
+            Console.WriteLine("Base station automation is not enabled in the configuration. Running manual shutdown routine anyway.");
         }
 
         _baseStationPowerOnAttempted = true;
         _baseStationsPoweredOn = true;
-        await TryPowerDownBaseStationsForSessionAsync(cancellationToken);
+        await TryPowerDownBaseStationsForSessionAsync(cancellationToken, manualOverride: true);
     }
 
-    private async Task RestartOscRouterAsync(CancellationToken cancellationToken)
+    private async Task RestartOscRouterAsync(CancellationToken cancellationToken, bool manualOverride = false)
     {
         StopOscRouter();
-        await TryStartOscRouterAsync(cancellationToken);
-        ShowOscRouterRetryPromptIfNeeded();
+        await TryStartOscRouterAsync(cancellationToken, manualOverride);
+        if (!manualOverride)
+        {
+            ShowOscRouterRetryPromptIfNeeded();
+        }
     }
 
-    private async Task TryPowerOnBaseStationsForSessionAsync(int targetPowerOnPasses, CancellationToken cancellationToken)
+    private async Task TryPowerOnBaseStationsForSessionAsync(int targetPowerOnPasses, CancellationToken cancellationToken, bool manualOverride = false)
     {
         if (_baseStationPowerOnComplete)
         {
@@ -1707,7 +2198,7 @@ internal sealed class AppSupervisor
         }
 
         var baseStations = GetEnabledBaseStations();
-        if (!_config.BaseStationsEnabled || baseStations.Length == 0)
+        if ((!_config.BaseStationsEnabled && !manualOverride) || baseStations.Length == 0)
         {
             return;
         }
@@ -1738,7 +2229,7 @@ internal sealed class AppSupervisor
             ? BaseStationCommandTiming.OpenVrPowerOnCycles
             : BaseStationCommandTiming.PowerOnPasses;
         targetPowerOnPasses = Math.Clamp(targetPowerOnPasses, 1, maximumPowerOnPasses);
-        var initialStates = await ReadBaseStationPowerStatesAsync(baseStations, cancellationToken);
+        var initialStates = await ReadBaseStationPowerStatesAsync(baseStations, cancellationToken, saveSettings: !manualOverride);
         var alreadyAwake = initialStates.Select(IsAwakeBaseStationState).ToArray();
         if (alreadyAwake.Any(value => value))
         {
@@ -1827,7 +2318,7 @@ internal sealed class AppSupervisor
             return;
         }
 
-        var finalStates = await ReadBaseStationPowerStatesAsync(baseStations, cancellationToken);
+        var finalStates = await ReadBaseStationPowerStatesAsync(baseStations, cancellationToken, saveSettings: !manualOverride);
         if (useSteamVrTrackingConfirmation)
         {
             Console.WriteLine($"SteamVR did not confirm all enabled base stations after {BaseStationCommandTiming.OpenVrPowerOnCycles} startup cycle(s). Stopping startup retries.");
@@ -1901,7 +2392,7 @@ internal sealed class AppSupervisor
         }
     }
 
-    private async Task TryPowerDownBaseStationsForSessionAsync(CancellationToken cancellationToken)
+    private async Task TryPowerDownBaseStationsForSessionAsync(CancellationToken cancellationToken, bool manualOverride = false)
     {
         if (!_baseStationsPoweredOn && !_baseStationPowerOnAttempted)
         {
@@ -1909,7 +2400,7 @@ internal sealed class AppSupervisor
         }
 
         var baseStations = GetEnabledBaseStations();
-        if (!_config.BaseStationsEnabled || baseStations.Length == 0)
+        if ((!_config.BaseStationsEnabled && !manualOverride) || baseStations.Length == 0)
         {
             _baseStationPowerOnAttempted = false;
             _baseStationsPoweredOn = false;
@@ -1927,7 +2418,7 @@ internal sealed class AppSupervisor
             mode,
             _baseStationGattClient,
             Console.WriteLine,
-            _config.SaveBaseStationSettings,
+            manualOverride ? () => { } : _config.SaveBaseStationSettings,
             cancellationToken);
 
         if (result.AllStationsHandled)
@@ -2103,7 +2594,7 @@ internal sealed class AppSupervisor
         return stationSucceeded;
     }
 
-    private async Task<BaseStationPowerState[]> ReadBaseStationPowerStatesAsync(BaseStationDevice[] baseStations, CancellationToken cancellationToken)
+    private async Task<BaseStationPowerState[]> ReadBaseStationPowerStatesAsync(BaseStationDevice[] baseStations, CancellationToken cancellationToken, bool saveSettings = true)
     {
         var states = new BaseStationPowerState[baseStations.Length];
         for (var index = 0; index < baseStations.Length; index++)
@@ -2121,7 +2612,7 @@ internal sealed class AppSupervisor
                 if (states[index] == BaseStationPowerState.Unsupported)
                 {
                     baseStation.PowerStateReadUnsupported = true;
-                    _baseStationSettingsNeedSave = true;
+                    _baseStationSettingsNeedSave = saveSettings;
                 }
 
                 Console.WriteLine($"Base station {baseStation.DisplayName}: reported state {states[index]}.");
@@ -2138,7 +2629,7 @@ internal sealed class AppSupervisor
             }
         }
 
-        if (_baseStationSettingsNeedSave)
+        if (_baseStationSettingsNeedSave && saveSettings)
         {
             _config.SaveBaseStationSettings();
             _baseStationSettingsNeedSave = false;
@@ -2254,12 +2745,17 @@ internal sealed class AppSupervisor
         }
     }
 
-    private async Task TryStartOscRouterAsync(CancellationToken cancellationToken)
+    private async Task TryStartOscRouterAsync(CancellationToken cancellationToken, bool manualOverride = false)
     {
-        if (!_config.OscRouterEnabled)
+        if (!_config.OscRouterEnabled && !manualOverride)
         {
             Console.WriteLine("OSC router is disabled by config.");
             return;
+        }
+
+        if (!_config.OscRouterEnabled && manualOverride)
+        {
+            Console.WriteLine("OSC router is disabled in the configuration. Running manual dashboard start anyway.");
         }
 
         if (_oscRouter is not null)
@@ -2534,73 +3030,112 @@ internal sealed class AppSupervisor
             PrintConsoleShortcutHelp();
         }
 
+        var routineInvoked = false;
         if (hotkeys.LaunchBrokenEyeVrcFaceTracking)
         {
             await RestartCoreAppsAsync(cancellationToken);
+            routineInvoked = true;
         }
 
         if (hotkeys.LaunchOscGoesBrrr)
         {
             await HandleOscGoesBrrrConsoleHotkeyAsync(cancellationToken);
+            routineInvoked = true;
         }
 
         if (hotkeys.BaseStationsOn)
         {
             await ManualPowerOnBaseStationsAsync(cancellationToken);
+            routineInvoked = true;
         }
 
         if (hotkeys.BaseStationsOff)
         {
             await ManualPowerDownBaseStationsAsync(cancellationToken);
+            routineInvoked = true;
         }
 
         if (hotkeys.OscRouterLaunchOrRestart)
         {
             await LaunchOrRestartOscRouterFromConsoleAsync(cancellationToken);
+            routineInvoked = true;
         }
 
         if (hotkeys.AfterLaunchAppsRoutine)
         {
             await RunAfterLaunchAppsRoutineAsync(cancellationToken);
+            routineInvoked = true;
+        }
+
+        if (routineInvoked)
+        {
+            PrintConsoleShortcutHelp();
         }
     }
 
     private async Task HandleOscGoesBrrrConsoleHotkeyAsync(CancellationToken cancellationToken)
     {
-        if (!_config.OscGoesBrrrEnabled)
-        {
-            Console.WriteLine("OscGoesBrrr workflow is disabled by config.");
-            return;
-        }
-
-        if (IsOscGoesBrrrWorkflowRunning())
-        {
-            Console.WriteLine("OSCGoesBrrr workflow is already launched.");
-            return;
-        }
-
-        Console.WriteLine("Launching OSCGoesBrrr workflow...");
-        await StartLovenseOscAsync(cancellationToken);
+        await RunOscGoesBrrrManualRoutineAsync("console hotkey", throwOnFailure: false, cancellationToken);
     }
 
     private async Task LaunchOrRestartOscRouterFromConsoleAsync(CancellationToken cancellationToken)
     {
-        if (!_config.OscRouterEnabled)
+        var manualOverride = !_config.OscRouterEnabled;
+        if (manualOverride)
         {
-            Console.WriteLine("OSC router is disabled by config.");
-            return;
+            Console.WriteLine("OSC router is disabled in the configuration. Running manual console launch/restart anyway.");
         }
 
         if (_oscRouter is null)
         {
             Console.WriteLine("Launching OSC routing startup...");
-            await TryStartOscRouterAsync(cancellationToken);
-            ShowOscRouterRetryPromptIfNeeded();
+            await TryStartOscRouterAsync(cancellationToken, manualOverride);
+            if (!manualOverride)
+            {
+                ShowOscRouterRetryPromptIfNeeded();
+            }
+
             return;
         }
 
         Console.WriteLine("Restarting OSC routing...");
-        await RestartOscRouterAsync(cancellationToken);
+        await RestartOscRouterAsync(cancellationToken, manualOverride);
+    }
+
+    private async Task StartOscGoesBrrrFromDashboardAsync(CancellationToken cancellationToken)
+        => await RunOscGoesBrrrManualRoutineAsync("dashboard command", throwOnFailure: true, cancellationToken);
+
+    private async Task RunOscGoesBrrrManualRoutineAsync(
+        string source,
+        bool throwOnFailure,
+        CancellationToken cancellationToken)
+    {
+        if (!_config.OscGoesBrrrEnabled)
+        {
+            Console.WriteLine("OSCGoesBrrr is not enabled in the configuration.");
+            Console.WriteLine($"Running manual {source} OSCGoesBrrr routine anyway.");
+        }
+
+        var intifaceRunning = IsIntifaceRunning();
+        var oscGoesBrrrRunning = IsOscGoesBrrrRunning();
+        if (intifaceRunning && oscGoesBrrrRunning)
+        {
+            Console.WriteLine($"OSCGoesBrrr and Intiface are running. Restarting both apps from {source}...");
+            await StopLovenseAppsAsync(cancellationToken, manualOverride: true);
+            await StartLovenseOscAsync(cancellationToken, throwOnFailure);
+            return;
+        }
+
+        if (intifaceRunning || oscGoesBrrrRunning)
+        {
+            Console.WriteLine($"OSCGoesBrrr workflow is incomplete. Repairing from {source}...");
+        }
+        else
+        {
+            Console.WriteLine($"Launching OSCGoesBrrr workflow from {source}...");
+        }
+
+        await StartLovenseOscAsync(cancellationToken, throwOnFailure);
     }
 
     private static void PrintConsoleShortcutHelp()
@@ -2611,7 +3146,7 @@ internal sealed class AppSupervisor
         Console.WriteLine("3 = Turn on all controlled base stations");
         Console.WriteLine("4 = Turn off all controlled base stations");
         Console.WriteLine("5 = OSC Router launch/restart");
-        Console.WriteLine("6 = After-launch apps routine");
+        Console.WriteLine("6 = Reload Autostart apps");
         Console.WriteLine("F1 = Show console shortcuts");
     }
 
@@ -2701,10 +3236,11 @@ internal sealed class AppSupervisor
         }
 
         Console.WriteLine("Starting Intiface...");
+        var intifacePath = ResolveLaunchPathOrThrow(_config.IntifacePath, "Intiface");
         var intifaceStarted = StartOrAttach(
-            _config.IntifacePath,
+            intifacePath,
             _config.IntifaceProcessNames,
-            suppressOutput: true,
+            runAsAdmin: false,
             startMinimized: _config.IntifaceStartMinimized);
         await VerifyRunningAsync("Intiface", _config.IntifaceProcessNames, cancellationToken);
         if (intifaceStarted && _config.IntifaceStartMinimized)
@@ -2715,7 +3251,7 @@ internal sealed class AppSupervisor
         _lovenseIntifaceStarted = true;
     }
 
-    private async Task StartLovenseOscAsync(CancellationToken cancellationToken)
+    private async Task StartLovenseOscAsync(CancellationToken cancellationToken, bool throwOnFailure = false)
     {
         await _oscGoesBrrrLaunchLock.WaitAsync(cancellationToken);
         try
@@ -2735,10 +3271,11 @@ internal sealed class AppSupervisor
                 await DelayWithCancellationAsync(TimeSpan.FromSeconds(_config.DelayBeforeOscGoesBrrrSeconds), cancellationToken);
 
                 Console.WriteLine("Starting OscGoesBrrr...");
+                var oscGoesBrrrPath = ResolveLaunchPathOrThrow(_config.OscGoesBrrrPath, "OscGoesBrrr");
                 var oscGoesBrrrStarted = StartOrAttach(
-                    _config.OscGoesBrrrPath,
+                    oscGoesBrrrPath,
                     _config.OscGoesBrrrProcessNames,
-                    suppressOutput: true,
+                    runAsAdmin: false,
                     startMinimized: _config.OscGoesBrrrStartMinimized);
                 await VerifyRunningAsync("OscGoesBrrr", _config.OscGoesBrrrProcessNames, cancellationToken);
                 if (oscGoesBrrrStarted && _config.OscGoesBrrrStartMinimized)
@@ -2750,7 +3287,12 @@ internal sealed class AppSupervisor
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
-                Console.WriteLine($"Could not complete OscGoesBrrr startup: {ex.Message}");
+                var message = $"Could not complete OscGoesBrrr startup: {ex.Message}";
+                Console.WriteLine(message);
+                if (throwOnFailure)
+                {
+                    throw new InvalidOperationException(message, ex);
+                }
             }
         }
         finally
@@ -2759,15 +3301,19 @@ internal sealed class AppSupervisor
         }
     }
 
-    private async Task StopLovenseAppsAsync(CancellationToken cancellationToken)
+    private async Task StopLovenseAppsAsync(CancellationToken cancellationToken, bool manualOverride = false)
     {
-        if (!_config.OscGoesBrrrEnabled && !_lovenseWorkflowTriggered && !_lovenseIntifaceStarted)
+        if (!manualOverride && !_config.OscGoesBrrrEnabled && !_lovenseWorkflowTriggered && !_lovenseIntifaceStarted)
         {
             return;
         }
 
-        var oscGoesBrrrRunning = _config.OscGoesBrrrEnabled && IsOscGoesBrrrRunning();
-        var intifaceRunning = _config.OscGoesBrrrEnabled && IsIntifaceRunning();
+        var oscGoesBrrrRunning = manualOverride
+            ? IsOscGoesBrrrRunning()
+            : _config.OscGoesBrrrEnabled && IsOscGoesBrrrRunning();
+        var intifaceRunning = manualOverride
+            ? IsIntifaceRunning()
+            : _config.OscGoesBrrrEnabled && IsIntifaceRunning();
 
         if (_lovenseWorkflowTriggered || oscGoesBrrrRunning)
         {
@@ -2801,7 +3347,7 @@ internal sealed class AppSupervisor
     {
         if (!await _autoLaunchAppsRoutineLock.WaitAsync(0, cancellationToken))
         {
-            Console.WriteLine("After-launch apps routine is already in progress.");
+            Console.WriteLine("Reload Autostart apps is already in progress.");
             return;
         }
 
@@ -2810,7 +3356,7 @@ internal sealed class AppSupervisor
             var apps = GetEnabledAutoLaunchApps();
             if (apps.Length == 0)
             {
-                Console.WriteLine("No enabled after-launch apps configured.");
+                Console.WriteLine("No enabled Autostart apps configured.");
                 return;
             }
 
@@ -2821,7 +3367,7 @@ internal sealed class AppSupervisor
 
             if (runningCount == apps.Length)
             {
-                Console.WriteLine("All configured after-launch apps are running. Restarting all after-launch apps...");
+                Console.WriteLine("All configured Autostart apps are running. Reloading all Autostart apps...");
                 foreach (var app in apps.Reverse())
                 {
                     await StopProcessesAsync(app.DisplayName, app.ProcessNames, cancellationToken);
@@ -2837,12 +3383,12 @@ internal sealed class AppSupervisor
 
             if (runningCount == 0)
             {
-                Console.WriteLine("No configured after-launch apps are running. Starting all after-launch apps...");
+                Console.WriteLine("No configured Autostart apps are running. Starting all Autostart apps...");
             }
             else
             {
                 var missingCount = apps.Length - runningCount;
-                Console.WriteLine($"{missingCount} configured after-launch app(s) are not running. Starting missing apps only...");
+                Console.WriteLine($"{missingCount} configured Autostart app(s) are not running. Starting missing apps only...");
             }
 
             foreach (var app in apps)
@@ -2974,6 +3520,7 @@ internal sealed class AppSupervisor
 
     private static void StartProcess(string path, bool startMinimized = false)
     {
+        path = Environment.ExpandEnvironmentVariables(path);
         var startInfo = new ProcessStartInfo
         {
             FileName = path,
@@ -2987,6 +3534,7 @@ internal sealed class AppSupervisor
 
     private static void StartProcessUnelevated(string path, bool startMinimized = false)
     {
+        path = Environment.ExpandEnvironmentVariables(path);
         var startInfo = new ProcessStartInfo
         {
             FileName = "explorer.exe",
@@ -3001,6 +3549,7 @@ internal sealed class AppSupervisor
 
     private static void StartProcessSilently(string path, bool startMinimized = false)
     {
+        path = Environment.ExpandEnvironmentVariables(path);
         var startInfo = new ProcessStartInfo
         {
             FileName = path,
@@ -3036,6 +3585,22 @@ internal sealed class AppSupervisor
 
     private static string QuoteCommandLineArgument(string value)
         => "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+
+    private static string ResolveLaunchPathOrThrow(string path, string displayName)
+    {
+        var expandedPath = Environment.ExpandEnvironmentVariables(path);
+        if (string.IsNullOrWhiteSpace(expandedPath))
+        {
+            throw new FileNotFoundException($"{displayName} executable path is not configured.");
+        }
+
+        if (!File.Exists(expandedPath))
+        {
+            throw new FileNotFoundException($"{displayName} executable was not found at {expandedPath}.");
+        }
+
+        return expandedPath;
+    }
 
     private async Task VerifyRunningAsync(
         string displayName,
@@ -4156,6 +4721,7 @@ internal sealed class ConsoleCloseHandler : IDisposable
     private ConsoleCloseHandler(
         CancellationTokenSource shutdown,
         Task supervisorStopped,
+        Func<bool> skipEmergencyCleanup,
         Func<Task> emergencyCleanupAsync,
         Action launchDetachedBaseStationCleanup)
     {
@@ -4168,6 +4734,12 @@ internal sealed class ConsoleCloseHandler : IDisposable
 
             try
             {
+                if (skipEmergencyCleanup())
+                {
+                    Console.WriteLine("Console close requested for forced manual reload. Skipping emergency cleanup.");
+                    return true;
+                }
+
                 Console.WriteLine("Console close requested. Restoring monitors and closing managed apps.");
                 launchDetachedBaseStationCleanup();
                 emergencyCleanupAsync().GetAwaiter().GetResult();
@@ -4188,10 +4760,11 @@ internal sealed class ConsoleCloseHandler : IDisposable
     public static IDisposable Register(
         CancellationTokenSource shutdown,
         Task supervisorStopped,
+        Func<bool> skipEmergencyCleanup,
         Func<Task> emergencyCleanupAsync,
         Action launchDetachedBaseStationCleanup)
         => OperatingSystem.IsWindows()
-            ? new ConsoleCloseHandler(shutdown, supervisorStopped, emergencyCleanupAsync, launchDetachedBaseStationCleanup)
+            ? new ConsoleCloseHandler(shutdown, supervisorStopped, skipEmergencyCleanup, emergencyCleanupAsync, launchDetachedBaseStationCleanup)
             : NoopRegistration;
 
     public void Dispose()
@@ -4306,8 +4879,8 @@ internal sealed record ProcessResult(int ExitCode, string Output, string Error);
 
 internal static class ScheduledTaskInstaller
 {
-    private const string TaskName = "Pimax VRC Supervisor Auto Launch";
-    public const string SteamVrStartTaskName = "Pimax VRC Supervisor SteamVR Start";
+    private const string TaskName = ScheduledTaskPathValidator.AutoLaunchTaskName;
+    public const string SteamVrStartTaskName = ScheduledTaskPathValidator.SteamVrStartTaskName;
     private const string WatcherArgument = "--watch-vrchat-auto-launch";
     private const string SteamVrStartArgument = "--steamvr-start";
 
@@ -4331,10 +4904,14 @@ internal static class ScheduledTaskInstaller
         return result.ExitCode == 0;
     }
 
-    public static async Task<ScheduledTaskDetails> CreateOrUpdateAsync(CancellationToken cancellationToken)
+    public static async Task<ScheduledTaskDetails> CreateOrUpdateAsync(bool startWatcherImmediately, CancellationToken cancellationToken)
     {
         var supervisorPath = GetSupervisorExecutablePath();
         var supervisorWorkingDirectory = Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory;
+        ScheduledTaskPathValidator.ThrowIfInvalidScheduledTaskExecutablePath(
+            TaskName,
+            supervisorPath,
+            ScheduledTaskPathValidator.GetCurrentExecutableDirectory());
         var taskXml = BuildTaskXml(
             supervisorPath,
             supervisorWorkingDirectory,
@@ -4361,10 +4938,13 @@ internal static class ScheduledTaskInstaller
             throw new InvalidOperationException("schtasks.exe reported success, but the task could not be queried afterward.");
         }
 
-        await RunProcessAsync(
-            "schtasks.exe",
-            ["/Run", "/TN", TaskName],
-            cancellationToken);
+        if (startWatcherImmediately)
+        {
+            await RunProcessAsync(
+                "schtasks.exe",
+                ["/Run", "/TN", TaskName],
+                cancellationToken);
+        }
 
         return new ScheduledTaskDetails(TaskName, "Hidden elevated watcher at Windows sign-in; launches supervisor when VRChat.exe and vrserver.exe are running.");
     }
@@ -4373,6 +4953,10 @@ internal static class ScheduledTaskInstaller
     {
         var supervisorPath = GetSupervisorExecutablePath();
         var supervisorWorkingDirectory = Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory;
+        ScheduledTaskPathValidator.ThrowIfInvalidScheduledTaskExecutablePath(
+            SteamVrStartTaskName,
+            supervisorPath,
+            ScheduledTaskPathValidator.GetCurrentExecutableDirectory());
         var taskXml = BuildDirectTaskXml(
             supervisorPath,
             supervisorWorkingDirectory,
@@ -4626,7 +5210,7 @@ internal static class StartupIntegration
         switch (config.GetEffectiveStartupLaunchMode())
         {
             case StartupLaunchMode.ScheduledTask:
-                await ScheduledTaskInstaller.CreateOrUpdateAsync(cancellationToken);
+                await ScheduledTaskInstaller.CreateOrUpdateAsync(startWatcherImmediately: false, cancellationToken);
                 await SteamVrStartupInstaller.DisableAsync(cancellationToken);
                 await ScheduledTaskInstaller.DeleteSteamVrStartHelperAsync(cancellationToken);
                 break;
@@ -5741,9 +6325,9 @@ internal sealed class SupervisorConfig
     public AutoLaunchAppConfig[] AutoLaunchApps { get; init; } = [];
     public string[] WatchedShutdownProcessNames { get; init; } = ["VRChat"];
     public string[] SteamVrServerProcessNames { get; init; } = ["vrserver"];
-    public bool BaseStationsEnabled { get; init; }
+    public bool BaseStationsEnabled { get; set; }
     public BaseStationPowerDownMode BaseStationPowerDownMode { get; init; } = BaseStationPowerDownMode.Sleep;
-    public BaseStationDevice[] BaseStations { get; init; } = [];
+    public BaseStationDevice[] BaseStations { get; set; } = [];
     public bool OscGoesBrrrEnabled { get; set; }
     public bool LovenseAutoLaunchEnabled
     {
@@ -5806,6 +6390,9 @@ internal sealed class SupervisorConfig
     [JsonIgnore]
     public string? LoadedFromPath { get; private set; }
 
+    [JsonIgnore]
+    public bool BaseStationsEnabledConfigured { get; private set; }
+
     public static SupervisorConfig Load(string? explicitPath = null)
     {
         var configPath = FindConfigPath(explicitPath);
@@ -5817,6 +6404,7 @@ internal sealed class SupervisorConfig
         var json = File.ReadAllText(configPath);
         var config = JsonSerializer.Deserialize<SupervisorConfig>(json, JsonOptions()) ?? new SupervisorConfig();
         config.LoadedFromPath = configPath;
+        config.BaseStationsEnabledConfigured = IsJsonBooleanPropertyPresent(json, nameof(BaseStationsEnabled));
         return config;
     }
 
@@ -5958,11 +6546,24 @@ internal sealed class SupervisorConfig
         Console.WriteLine($"Saved scheduled task preference to: {configPath}");
     }
 
+    public bool TryGetBaseStationsEnabled(out bool baseStationsEnabled)
+    {
+        baseStationsEnabled = BaseStationsEnabled;
+        return BaseStationsEnabledConfigured;
+    }
+
+    public void SetBaseStationsEnabled(bool baseStationsEnabled)
+    {
+        BaseStationsEnabled = baseStationsEnabled;
+        BaseStationsEnabledConfigured = true;
+    }
+
     public void SaveBaseStationSettings()
     {
         var configPath = LoadedFromPath ?? Path.Combine(AppContext.BaseDirectory, "supervisor.config.json");
         var json = File.Exists(configPath) ? File.ReadAllText(configPath) : "{\n}";
 
+        json = ReplaceJsonBooleanOrStringProperty(json, nameof(BaseStationsEnabled), BaseStationsEnabled);
         json = ReplaceJsonValueProperty(json, nameof(BaseStations), JsonSerializer.Serialize(BaseStations, JsonOptions()));
 
         File.WriteAllText(configPath, json);
@@ -6011,7 +6612,7 @@ internal sealed class SupervisorConfig
 
     private static string ReplaceJsonValueProperty(string json, string propertyName, string valueJson)
     {
-        var pattern = $"(\"{Regex.Escape(propertyName)}\"\\s*:\\s*)\\[(?:.|\\r|\\n)*?\\]";
+        var pattern = $"(\"{Regex.Escape(propertyName)}\"\\s*:\\s*)(?:\\[(?:.|\\r|\\n)*?\\]|\"(?:\\\\.|[^\"])*\"|true|false|null|-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)";
         if (Regex.IsMatch(json, pattern))
         {
             return Regex.Replace(json, pattern, match => match.Groups[1].Value + valueJson, RegexOptions.Multiline);
@@ -6066,6 +6667,27 @@ internal sealed class SupervisorConfig
         };
 
         return candidates.FirstOrDefault(File.Exists);
+    }
+
+    private static bool IsJsonBooleanPropertyPresent(string json, string propertyName)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(
+                json,
+                new JsonDocumentOptions
+                {
+                    AllowTrailingCommas = true,
+                    CommentHandling = JsonCommentHandling.Skip
+                });
+
+            return document.RootElement.TryGetProperty(propertyName, out var value)
+                && value.ValueKind is JsonValueKind.True or JsonValueKind.False;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static JsonSerializerOptions JsonOptions() => new()

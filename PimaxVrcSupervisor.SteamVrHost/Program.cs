@@ -29,12 +29,14 @@ internal sealed class SteamVrDashboardHost : IDisposable
 {
     private const string HelperTaskName = "Pimax VRC Supervisor SteamVR Start";
     private const string CommandPipeName = "PimaxVrcSupervisor.Command";
+    private const string ForcedManualReloadMarkerFileName = "PimaxVrcSupervisorForcedManualReload.marker";
     private const int CommandTcpPort = 37957;
     private const string OverlayKey = "pimax.vrcsupervisor.dashboard";
     private const string OverlayName = "Pimax VRC Supervisor";
     private const string OverlayIconRelativePath = @"Assets\vr-overlay-icon.png";
     private const int OverlayWidth = 1294;
     private const int OverlayHeight = 820;
+    private static readonly TimeSpan OverlayFrameInterval = TimeSpan.FromMilliseconds(200);
     private const int ButtonTop = 154;
     private const int ButtonLeft = 70;
     private const int ButtonColumnGap = 28;
@@ -55,7 +57,8 @@ internal sealed class SteamVrDashboardHost : IDisposable
         new("Restart OSC router", "restart-osc-router", new Rectangle(ButtonRight, ButtonTop, ButtonWidth, ButtonHeight)),
         new("OSCGoesBrr", "start-osc-goes-brrr", new Rectangle(ButtonThird, ButtonTop, ButtonWidth, ButtonHeight)),
         new("Base stations on", "base-stations-on", new Rectangle(ButtonLeft, ButtonBottom, ButtonWidth, ButtonHeight)),
-        new("Base stations off", "base-stations-off", new Rectangle(ButtonRight, ButtonBottom, ButtonWidth, ButtonHeight))
+        new("Base stations off", "base-stations-off", new Rectangle(ButtonRight, ButtonBottom, ButtonWidth, ButtonHeight)),
+        new("Restart Supervisor", "restart-supervisor", new Rectangle(ButtonThird, ButtonBottom, ButtonWidth, ButtonHeight))
     ];
     private OpenVrOverlaySession? _overlay;
     private GpuOverlayRenderer? _gpuRenderer;
@@ -64,6 +67,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private string? _pressedCommand;
     private string? _runningCommand;
     private DateTimeOffset _lastCommandStartedAt = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastOverlayRefreshAt = DateTimeOffset.MinValue;
     private OpenVrEventType? _lastEventType;
     private uint _overlayEventCount;
     private bool _commandInFlight;
@@ -149,7 +153,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
                 RefreshOverlayTexture();
             }
 
-            await Task.Delay(50, cancellationToken);
+            await Task.Delay(OverlayFrameInterval, cancellationToken);
         }
 
         Log($"Host loop exiting; cancellation={cancellationToken.IsCancellationRequested}; steamvr={IsSteamVrRunning()}");
@@ -171,20 +175,184 @@ internal sealed class SteamVrDashboardHost : IDisposable
         }
     }
 
-    private async Task StartSupervisorAsync()
+    private async Task<bool> StartSupervisorAsync(bool resetTaskState = false)
     {
         try
         {
+            if (resetTaskState)
+            {
+                await TryEndHelperTaskAsync();
+            }
+
+            var taskPathIssue = await global::ScheduledTaskPathValidator.ValidateExistingTaskAsync(
+                HelperTaskName,
+                global::ScheduledTaskPathValidator.GetCurrentExecutableDirectory(),
+                CancellationToken.None);
+            if (taskPathIssue is not null)
+            {
+                throw new InvalidOperationException(global::ScheduledTaskPathValidator.FormatIssue(taskPathIssue));
+            }
+
             Log("Requesting elevated supervisor via scheduled task.");
             await RunProcessAsync("schtasks.exe", ["/Run", "/TN", HelperTaskName], TimeSpan.FromSeconds(15));
             SetStatus("Supervisor start requested.");
-            await Task.Delay(1500);
-            await RefreshStatusAsync();
+            if (await WaitForSupervisorCommandBridgeAsync(TimeSpan.FromSeconds(20)))
+            {
+                return true;
+            }
+
+            Log("Supervisor command bridge did not become ready after scheduled task run; retrying once.");
+            await TryEndHelperTaskAsync();
+            await RunProcessAsync("schtasks.exe", ["/Run", "/TN", HelperTaskName], TimeSpan.FromSeconds(15));
+            SetStatus("Supervisor start requested again.");
+            return await WaitForSupervisorCommandBridgeAsync(TimeSpan.FromSeconds(20));
         }
         catch (Exception ex)
         {
             Log("Could not start elevated supervisor: " + ex);
             SetStatus("Could not start elevated supervisor: " + ex.Message);
+            return false;
+        }
+    }
+
+    private async Task<string> RestartSupervisorAsync()
+    {
+        var supervisorProcesses = GetSupervisorProcesses();
+        if (supervisorProcesses.Length == 0)
+        {
+            Log("Supervisor restart requested; no supervisor process is running.");
+            var started = await StartSupervisorAsync(resetTaskState: true);
+            return started
+                ? "Supervisor was not running. Startup completed."
+                : "Supervisor was not running. Startup requested, but the command bridge is not ready.";
+        }
+
+        WriteForcedManualReloadMarker();
+        var hardStopRequested = false;
+        try
+        {
+            Log("Requesting elevated supervisor hard stop over command bridge.");
+            var response = await SendCommandAsync("force-stop-supervisor", TimeSpan.FromSeconds(2));
+            Log("Supervisor hard stop response: " + response);
+            hardStopRequested = true;
+        }
+        catch (Exception ex)
+        {
+            Log("Supervisor hard stop command failed; falling back to direct process kill: " + ex.Message);
+        }
+
+        if (!hardStopRequested)
+        {
+            foreach (var process in supervisorProcesses)
+            {
+                try
+                {
+                    Log($"Killing supervisor pid={process.Id}.");
+                    process.Kill(entireProcessTree: false);
+                }
+                catch (Exception ex)
+                {
+                    Log($"Could not kill supervisor pid={TryGetProcessId(process)}: {ex.Message}");
+                }
+            }
+        }
+
+        foreach (var process in supervisorProcesses)
+        {
+            try
+            {
+                using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await process.WaitForExitAsync(timeoutSource.Token);
+                Log($"Supervisor pid={process.Id} exited.");
+            }
+            catch (OperationCanceledException)
+            {
+                Log($"Supervisor pid={TryGetProcessId(process)} did not exit within timeout.");
+            }
+            catch (Exception ex)
+            {
+                Log($"Could not wait for supervisor pid={TryGetProcessId(process)}: {ex.Message}");
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        }
+
+        var restartSucceeded = await StartSupervisorAsync(resetTaskState: true);
+        return restartSucceeded
+            ? "Supervisor hard restart completed."
+            : "Supervisor hard restart requested, but the command bridge is not ready.";
+    }
+
+    private async Task TryEndHelperTaskAsync()
+    {
+        try
+        {
+            Log("Ending helper scheduled task state before restart.");
+            await RunProcessAsync("schtasks.exe", ["/End", "/TN", HelperTaskName], TimeSpan.FromSeconds(10));
+        }
+        catch (Exception ex)
+        {
+            Log("Could not end helper scheduled task state: " + ex.Message);
+        }
+    }
+
+    private static string ForcedManualReloadMarkerPath
+        => Path.Combine(Path.GetTempPath(), ForcedManualReloadMarkerFileName);
+
+    private void WriteForcedManualReloadMarker()
+    {
+        try
+        {
+            File.WriteAllText(ForcedManualReloadMarkerPath, DateTimeOffset.UtcNow.ToString("O"));
+        }
+        catch (Exception ex)
+        {
+            Log("Could not write forced manual reload marker: " + ex.Message);
+        }
+    }
+
+    private async Task<bool> WaitForSupervisorCommandBridgeAsync(TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            try
+            {
+                SetStatus(await SendCommandAsync("status", TimeSpan.FromSeconds(1)));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log("Supervisor command bridge is not ready yet: " + ex.Message);
+                SetStatus("Waiting for elevated supervisor command bridge...");
+                await Task.Delay(500);
+            }
+        }
+
+        Log("Timed out waiting for elevated supervisor command bridge.");
+        SetStatus("Waiting for elevated supervisor command bridge...");
+        return false;
+    }
+
+    private static Process[] GetSupervisorProcesses()
+    {
+        var currentProcessId = Environment.ProcessId;
+        return Process.GetProcessesByName("PimaxVrcSupervisor")
+            .Where(process => process.Id != currentProcessId)
+            .ToArray();
+    }
+
+    private static string TryGetProcessId(Process process)
+    {
+        try
+        {
+            return process.Id.ToString();
+        }
+        catch
+        {
+            return "unknown";
         }
     }
 
@@ -392,7 +560,9 @@ internal sealed class SteamVrDashboardHost : IDisposable
         {
             Log("Command starting: " + button.Command);
             SetStatus("Running " + button.Label + "...");
-            var response = await SendCommandAsync(button.Command, TimeSpan.FromSeconds(45));
+            var response = string.Equals(button.Command, "restart-supervisor", StringComparison.Ordinal)
+                ? await RestartSupervisorAsync()
+                : await SendCommandAsync(button.Command, TimeSpan.FromSeconds(45));
             Log("Command response: " + response);
             SetStatus(response);
         }
@@ -468,6 +638,12 @@ internal sealed class SteamVrDashboardHost : IDisposable
             return;
         }
 
+        var now = DateTimeOffset.UtcNow;
+        if (!force && now - _lastOverlayRefreshAt < OverlayFrameInterval)
+        {
+            return;
+        }
+
         if (_gpuRenderer is null && !force)
         {
             return;
@@ -501,6 +677,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
                 }
 
                 _renderDirty = false;
+                _lastOverlayRefreshAt = now;
             }
             catch (Exception ex)
             {

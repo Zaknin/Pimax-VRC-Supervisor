@@ -54,7 +54,7 @@ internal sealed class ConfigEditorForm : Form
         "3 = Turn on all controlled base stations",
         "4 = Turn off all controlled base stations",
         "5 = OSC Router launch/restart",
-        "6 = After-launch apps routine",
+        "6 = Reload Autostart apps",
         "F1 = Show console shortcuts"
     ];
     private static readonly string[] EditorShortcutLines =
@@ -96,7 +96,7 @@ internal sealed class ConfigEditorForm : Form
     private readonly ComboBox _baseStationPowerDownModeComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     private readonly CheckBox _mouthTrackerCheckBox = CreateOptionalConfigCheckBox("Use Vive mouth tracker");
     private readonly CheckBox _turnOffMonitorsCheckBox = CreateOptionalConfigCheckBox("Turn off secondary monitors during headset sessions");
-    private readonly CheckBox _autoLaunchTaskCheckBox = CreateOptionalConfigCheckBox("Create/evaluate VRChat auto-launch Scheduled Task");
+    private readonly CheckBox _autoLaunchTaskCheckBox = new() { Text = "Create/evaluate VRChat auto-launch Scheduled Task", AutoSize = true };
     private readonly CheckBox _startWithSteamVrCheckBox = new() { Text = "Start with SteamVR", AutoSize = true };
     private readonly CheckBox _usePimaxLogCheckBox = new() { Text = "Watch Pimax PiService logs for fast reconnects", AutoSize = true };
     private readonly CheckBox _useMouthTrackerPnPCheckBox = new() { Text = "Watch Windows PnP events for fast mouth tracker reconnects", AutoSize = true };
@@ -175,6 +175,7 @@ internal sealed class ConfigEditorForm : Form
     private bool _rawJsonHasUnappliedChanges;
     private bool _suppressDirtyTracking;
     private bool _suppressConfigSelectorChange;
+    private bool _saveInProgress;
 
     public ConfigEditorForm(string? requestedConfigPath)
     {
@@ -194,7 +195,7 @@ internal sealed class ConfigEditorForm : Form
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
         _statusTimer.Tick += (_, _) => ExpireTemporaryStatus();
 
-        var configPath = FindConfigPath(requestedConfigPath, requestedConfigPath is null ? _editorState.LastConfigPath : null);
+        var configPath = ResolveInitialConfigPath(requestedConfigPath);
         if (configPath is not null)
         {
             _configPathTextBox.Text = configPath;
@@ -207,6 +208,8 @@ internal sealed class ConfigEditorForm : Form
             _configPathTextBox.Text = defaultConfigPath;
             LoadConfig(defaultConfigPath);
         }
+
+        Shown += async (_, _) => await PromptForExistingStartupTaskMigrationAsync();
     }
 
     private void SetWindowIconFromExecutable()
@@ -385,7 +388,7 @@ internal sealed class ConfigEditorForm : Form
     private Control BuildTabs()
     {
         var selectedTab = _editorState.LastSelectedTab;
-        _tabs.AddTab("Basics", BuildBasicsTab());
+        _tabs.AddTab("General", BuildBasicsTab());
         _tabs.AddTab("Auto Launch", BuildAutoLaunchTab());
         _tabs.AddTab("Base Stations", BuildBaseStationsTab());
         _tabs.AddTab("Detectors", BuildDetectorsTab());
@@ -421,10 +424,10 @@ internal sealed class ConfigEditorForm : Form
             "VrcFaceTrackingPath",
             "VRCFaceTracking.exe");
         AddFullWidth(layout, _vrcFaceTrackingStartMinimizedCheckBox, "Checked means the supervisor starts VRCFaceTracking minimized and tries to minimize its main window after launch.");
-        AddFullWidth(layout, _mouthTrackerCheckBox, "Checked means you use a Vive mouth tracker. Unchecked disables mouth-tracker monitoring. Filled square is shown only when the config leaves the first-run question enabled.");
+        AddFullWidth(layout, _mouthTrackerCheckBox, "Checked means you use a Vive mouth tracker. Unchecked disables mouth-tracker monitoring.");
         AddFullWidth(layout, _turnOffMonitorsCheckBox, "Checked saves the current monitor layout and disables secondary monitors during the VR session. The layout is restored after VRChat and SteamVR close.");
         AddSectionHeader(layout, "Startup");
-        AddFullWidth(layout, _autoLaunchTaskCheckBox, "Checked lets the app create or repair the elevated auto-launch Scheduled Task. Filled square is shown only when the config asks on first setup.");
+        AddFullWidth(layout, _autoLaunchTaskCheckBox, "Checked lets the app create or repair the elevated auto-launch Scheduled Task.");
         AddFullWidth(layout, _startWithSteamVrCheckBox, "Checked registers the SteamVR dashboard host manifest and starts the supervisor when SteamVR starts.");
         AddFolderValidationRow(layout, "PiService log folder", _pimaxServiceLogDirectoryTextBox, ToolTipWithConfigKey("Folder containing PiService__*.log files. Environment variables such as %LOCALAPPDATA% are expanded by the supervisor.", "PimaxServiceLogDirectory"));
 
@@ -2794,8 +2797,8 @@ internal sealed class ConfigEditorForm : Form
         _oscGoesBrrrBleScannerCheckBox.Checked = GetBool(node, "OscGoesBrrrBleScannerEnabled", defaultValue: false);
         _oscRouterEnabledCheckBox.Checked = GetBool(node, "OscRouterEnabled", defaultValue: false);
         _oscRouterReceivePortInput.Value = Math.Clamp(GetInt(node, "OscRouterReceivePort", 9001), (int)_oscRouterReceivePortInput.Minimum, (int)_oscRouterReceivePortInput.Maximum);
-        _mouthTrackerCheckBox.CheckState = GetBoolCheckState(node, "MouthTrackerUser");
-        _turnOffMonitorsCheckBox.CheckState = GetBoolCheckState(node, "TurnOffSecondaryMonitors");
+        _mouthTrackerCheckBox.Checked = GetBoolCheckState(node, "MouthTrackerUser") == CheckState.Checked;
+        _turnOffMonitorsCheckBox.Checked = GetBoolCheckState(node, "TurnOffSecondaryMonitors") == CheckState.Checked;
         var startupLaunchMode = GetStartupLaunchMode(node);
         if (startupLaunchMode == "ScheduledTask")
         {
@@ -2814,7 +2817,7 @@ internal sealed class ConfigEditorForm : Form
         }
         else
         {
-            _autoLaunchTaskCheckBox.CheckState = GetBoolCheckState(node, "AutoLaunchScheduledTask");
+            _autoLaunchTaskCheckBox.Checked = GetBoolCheckState(node, "AutoLaunchScheduledTask") == CheckState.Checked;
             _startWithSteamVrCheckBox.Checked = false;
         }
         _usePimaxLogCheckBox.Checked = GetBool(node, "UsePimaxServiceLogReconnectDetector", defaultValue: true);
@@ -2856,15 +2859,17 @@ internal sealed class ConfigEditorForm : Form
         }
     }
 
-    private bool SaveConfig()
+    private bool SaveConfig(bool forceApplyStartupIntegration = false)
     {
+        if (_saveInProgress)
+        {
+            SetStatus("Save is already running.");
+            return false;
+        }
+
         try
         {
-            if (!ValidateForSave())
-            {
-                return false;
-            }
-
+            _saveInProgress = true;
             var path = _configPathTextBox.Text.Trim();
             if (string.IsNullOrWhiteSpace(path))
             {
@@ -2876,7 +2881,7 @@ internal sealed class ConfigEditorForm : Form
             CommitOscRoutesGridEdits();
             var json = BuildCurrentJson();
             ParseJson(json);
-            var shouldApplyStartupIntegration = StartupIntegrationSelectionChanged(_loadedJson, json);
+            var shouldApplyStartupIntegration = forceApplyStartupIntegration || StartupIntegrationSelectionChanged(_loadedJson, json);
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
             var backupPath = CreateConfigBackup(path);
             File.WriteAllText(path, json, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
@@ -2903,6 +2908,10 @@ internal sealed class ConfigEditorForm : Form
             ShowThemedMessageBox(ex.Message, "Could not save config", MessageBoxButtons.OK, MessageBoxIcon.Error);
             SetStatus("Save failed.");
             return false;
+        }
+        finally
+        {
+            _saveInProgress = false;
         }
     }
 
@@ -2978,7 +2987,6 @@ internal sealed class ConfigEditorForm : Form
                 ErrorDialogParentHandle = Handle
             };
             startInfo.ArgumentList.Add("--apply-startup-integration");
-            startInfo.ArgumentList.Add("--show-result");
             startInfo.ArgumentList.Add("--config");
             startInfo.ArgumentList.Add(Path.GetFullPath(configPath));
 
@@ -2994,10 +3002,28 @@ internal sealed class ConfigEditorForm : Form
             }
 
             using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start PimaxVrcSupervisor.exe.");
+            if (!IsAdministrator())
+            {
+                SetStatus(startupLaunchMode switch
+                {
+                    "ScheduledTask" => "Saved config and requested Scheduled Task startup repair.",
+                    "SteamVrManifest" => "Saved config and requested SteamVR startup repair.",
+                    "None" => "Saved config and requested removal of managed startup tasks.",
+                    _ => "Saved config and requested startup integration update."
+                });
+                return;
+            }
+
             process.WaitForExit(30000);
             if (!process.HasExited)
             {
-                SetStatus("Startup integration is still applying.");
+                TryKillProcessTree(process);
+                ShowThemedMessageBox(
+                    "The configuration was saved, but startup integration did not finish within 30 seconds.\r\n\r\nPlease try Save again, or use Validate to check the scheduled task state.",
+                    "Startup integration timed out",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                SetStatus("Startup integration timed out.");
                 return;
             }
 
@@ -3028,6 +3054,238 @@ internal sealed class ConfigEditorForm : Form
             ShowThemedMessageBox(ex.Message, "Could not apply startup integration", MessageBoxButtons.OK, MessageBoxIcon.Error);
             SetStatus("Startup integration apply failed.");
         }
+    }
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task PromptForExistingStartupTaskMigrationAsync()
+    {
+        var currentReleaseFolder = GetCurrentConfigEditorDirectory();
+        if ((_editorState.StartupTaskMigrationPromptedReleaseFolders ?? [])
+            .Any(path => string.Equals(
+                global::ScheduledTaskPathValidator.NormalizeDirectory(path),
+                currentReleaseFolder,
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        IReadOnlyList<ScheduledTaskExecutableValidationResult> staleTasks;
+        try
+        {
+            staleTasks = await Task.Run(() => GetExistingStartupTasksOutsideCurrentRelease(currentReleaseFolder));
+        }
+        catch
+        {
+            return;
+        }
+
+        if (staleTasks.Count == 0)
+        {
+            return;
+        }
+
+        var choice = ShowStartupTaskMigrationDialog(staleTasks, currentReleaseFolder);
+        _editorState.MarkStartupTaskMigrationPrompted(currentReleaseFolder);
+        SaveEditorState();
+
+        switch (choice)
+        {
+            case StartupTaskMigrationChoice.Rebind:
+                SetStartupLaunchMode(SelectStartupLaunchModeForTasks(staleTasks));
+                SaveConfig(forceApplyStartupIntegration: true);
+                break;
+            case StartupTaskMigrationChoice.TurnOffAutostart:
+                SetStartupLaunchMode("None");
+                SaveConfig(forceApplyStartupIntegration: true);
+                break;
+            case StartupTaskMigrationChoice.KeepExisting:
+            default:
+                SetStatus("Kept existing startup task configuration.");
+                break;
+        }
+    }
+
+    private static IReadOnlyList<ScheduledTaskExecutableValidationResult> GetExistingStartupTasksOutsideCurrentRelease(string currentReleaseFolder)
+    {
+        return global::ScheduledTaskPathValidator.ManagedTaskNames
+            .Select(taskName => global::ScheduledTaskPathValidator.ValidateExistingTaskExecutable(taskName, currentReleaseFolder))
+            .Where(result => result.Exists && !result.PointsToCurrentDirectory)
+            .ToArray();
+    }
+
+    private static string SelectStartupLaunchModeForTasks(IReadOnlyList<ScheduledTaskExecutableValidationResult> tasks)
+    {
+        return tasks.Any(task => string.Equals(task.TaskName, global::ScheduledTaskPathValidator.SteamVrStartTaskName, StringComparison.OrdinalIgnoreCase))
+            ? "SteamVrManifest"
+            : "ScheduledTask";
+    }
+
+    private void SetStartupLaunchMode(string startupLaunchMode)
+    {
+        switch (startupLaunchMode)
+        {
+            case "ScheduledTask":
+                _autoLaunchTaskCheckBox.Checked = true;
+                _startWithSteamVrCheckBox.Checked = false;
+                break;
+            case "SteamVrManifest":
+                _autoLaunchTaskCheckBox.Checked = false;
+                _startWithSteamVrCheckBox.Checked = true;
+                break;
+            default:
+                _autoLaunchTaskCheckBox.Checked = false;
+                _startWithSteamVrCheckBox.Checked = false;
+                break;
+        }
+    }
+
+    private StartupTaskMigrationChoice ShowStartupTaskMigrationDialog(
+        IReadOnlyList<ScheduledTaskExecutableValidationResult> staleTasks,
+        string currentReleaseFolder)
+    {
+        var choice = StartupTaskMigrationChoice.KeepExisting;
+        using var dialog = new Form
+        {
+            Text = "Startup option found",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            ClientSize = new Size(720, 390)
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 4,
+            Padding = new Padding(18, 16, 18, 12)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var heading = new Label
+        {
+            Text = "Autostart from another release was found",
+            AutoSize = true,
+            Font = new Font(Font, FontStyle.Bold),
+            Margin = new Padding(0, 0, 0, 10)
+        };
+        var body = new Label
+        {
+            Text = "A PimaxVrcSupervisor startup task points to another release folder.\r\n\r\n" +
+                "Choose whether to rebind autostart to this release, keep the existing task, or turn off autostart and remove the managed startup tasks.",
+            AutoSize = false,
+            Dock = DockStyle.Top,
+            Height = 76,
+            Margin = new Padding(0, 0, 0, 12)
+        };
+        var details = new TextBox
+        {
+            Text = FormatStartupTaskMigrationDetails(staleTasks, currentReleaseFolder),
+            ReadOnly = true,
+            Multiline = true,
+            ScrollBars = ScrollBars.Both,
+            WordWrap = false,
+            Dock = DockStyle.Fill,
+            Font = new Font(FontFamily.GenericMonospace, Font.Size),
+            Margin = new Padding(0, 0, 0, 12)
+        };
+        var buttons = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false
+        };
+        var rebindButton = CreateButton("Yes, rebind", autoSize: false, width: 112, height: 28);
+        var keepButton = CreateButton("No, keep as is", autoSize: false, width: 124, height: 28);
+        var turnOffButton = CreateButton("Turn off autostart", autoSize: false, width: 148, height: 28);
+
+        rebindButton.Click += (_, _) =>
+        {
+            choice = StartupTaskMigrationChoice.Rebind;
+            dialog.DialogResult = DialogResult.Yes;
+            dialog.Close();
+        };
+        keepButton.Click += (_, _) =>
+        {
+            choice = StartupTaskMigrationChoice.KeepExisting;
+            dialog.DialogResult = DialogResult.No;
+            dialog.Close();
+        };
+        turnOffButton.Click += (_, _) =>
+        {
+            choice = StartupTaskMigrationChoice.TurnOffAutostart;
+            dialog.DialogResult = DialogResult.Ignore;
+            dialog.Close();
+        };
+
+        buttons.Controls.Add(rebindButton);
+        buttons.Controls.Add(keepButton);
+        buttons.Controls.Add(turnOffButton);
+        root.Controls.Add(heading, 0, 0);
+        root.Controls.Add(body, 0, 1);
+        root.Controls.Add(details, 0, 2);
+        root.Controls.Add(buttons, 0, 3);
+        dialog.Controls.Add(root);
+        dialog.AcceptButton = rebindButton;
+        dialog.CancelButton = keepButton;
+
+        ApplyThemeTo(dialog);
+        WindowsTitleBar.ApplyTheme(dialog.Handle, _theme.IsDark);
+        dialog.ShowDialog(this);
+        return choice;
+    }
+
+    private static string FormatStartupTaskMigrationDetails(
+        IReadOnlyList<ScheduledTaskExecutableValidationResult> staleTasks,
+        string currentReleaseFolder)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("Current Config Editor folder:");
+        builder.AppendLine(currentReleaseFolder);
+        foreach (var task in staleTasks)
+        {
+            builder.AppendLine();
+            builder.AppendLine("Scheduled task:");
+            builder.AppendLine(task.TaskName);
+            if (task.Issue is not null)
+            {
+                if (!string.IsNullOrWhiteSpace(task.Issue.TaskExecutableDirectory))
+                {
+                    builder.AppendLine("Task executable folder:");
+                    builder.AppendLine(task.Issue.TaskExecutableDirectory);
+                }
+
+                if (!string.IsNullOrWhiteSpace(task.Issue.TaskExecutablePath))
+                {
+                    builder.AppendLine("Task executable:");
+                    builder.AppendLine(task.Issue.TaskExecutablePath);
+                }
+
+                builder.AppendLine("Issue:");
+                builder.AppendLine(task.Issue.Message);
+            }
+        }
+
+        return builder.ToString();
     }
 
     private bool HasUnsavedChanges()
@@ -3172,8 +3430,8 @@ internal sealed class ConfigEditorForm : Form
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrProcessNames", Serialize(ParseStringList(_oscGoesBrrrProcessesTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "WatchedShutdownProcessNames", Serialize(ParseStringList(_watchedShutdownProcessesTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "SteamVrServerProcessNames", Serialize(ParseStringList(_steamVrServerProcessesTextBox.Text)));
-        json = JsonPropertyEditor.Replace(json, "MouthTrackerUser", SerializeTriState(_mouthTrackerCheckBox.CheckState));
-        json = JsonPropertyEditor.Replace(json, "TurnOffSecondaryMonitors", SerializeTriState(_turnOffMonitorsCheckBox.CheckState));
+        json = JsonPropertyEditor.Replace(json, "MouthTrackerUser", _mouthTrackerCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "TurnOffSecondaryMonitors", _turnOffMonitorsCheckBox.Checked ? "true" : "false");
         var startupLaunchMode = GetSelectedStartupLaunchMode();
         json = JsonPropertyEditor.Replace(json, "StartupLaunchMode", Serialize(startupLaunchMode));
         json = JsonPropertyEditor.Replace(json, "StopWithSteamVr", startupLaunchMode == "SteamVrManifest" ? "true" : "false");
@@ -3265,8 +3523,7 @@ internal sealed class ConfigEditorForm : Form
         return _autoLaunchTaskCheckBox.CheckState switch
         {
             CheckState.Checked => "ScheduledTask",
-            CheckState.Unchecked => "None",
-            _ => "Unspecified"
+            _ => "None"
         };
     }
 
@@ -3857,10 +4114,10 @@ internal sealed class ConfigEditorForm : Form
     {
         return new CheckBox
         {
-            Text = text + " (filled square = set by config)",
+            Text = text,
             AutoSize = true,
             ThreeState = false,
-            CheckState = CheckState.Indeterminate
+            Checked = false
         };
     }
 
@@ -4475,20 +4732,20 @@ internal sealed class ConfigEditorForm : Form
            Product names, company names, trademarks, and registered trademarks are property of their respective owners. Their mention here describes compatibility or user-configurable integration points and does not imply endorsement, sponsorship, or affiliation.
            """;
 
-    private void ValidateConfigFromButton()
+    private async void ValidateConfigFromButton()
     {
-        var result = ValidateCurrentConfig(ValidationMode.Save);
-        UpdateGridWarnings();
+        var result = await ValidateCurrentEditorValuesAsync(includeScheduledTaskValidation: true);
+
         if (result.HasErrors)
         {
-            ShowThemedMessageBox(FormatValidationSummary(result, includePrompt: false), "Configuration validation failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ShowValidationResultDialog(result, hasErrors: true);
             SetStatus($"Validation failed with {result.Errors.Count} error(s).");
             return;
         }
 
         if (result.HasWarnings)
         {
-            ShowThemedMessageBox(FormatValidationSummary(result, includePrompt: false), "Configuration validation warnings", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowValidationResultDialog(result, hasErrors: false);
             SetStatus($"Validation completed with {result.Warnings.Count} warning(s).");
             return;
         }
@@ -4496,25 +4753,57 @@ internal sealed class ConfigEditorForm : Form
         SetStatus("Validation passed.");
     }
 
-    private bool ValidateForSave()
+    private async Task<ValidationResult> ValidateCurrentEditorValuesAsync(bool includeScheduledTaskValidation)
     {
+        SetStatus("Validating configuration...");
         var result = ValidateCurrentConfig(ValidationMode.Save);
         UpdateGridWarnings();
+        if (includeScheduledTaskValidation)
+        {
+            await AddScheduledTaskValidationAsync(result);
+        }
+
+        return result;
+    }
+
+    private async Task AddScheduledTaskValidationAsync(ValidationResult result)
+    {
+        SetStatus("Validating scheduled tasks...");
+        try
+        {
+            var currentEditorDirectory = GetCurrentConfigEditorDirectory();
+            var issues = await Task.Run(() => global::ScheduledTaskPathValidator.ValidateExistingManagedTasks(currentEditorDirectory))
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            foreach (var issue in issues)
+            {
+                result.Errors.Add(global::ScheduledTaskPathValidator.FormatIssue(issue));
+            }
+        }
+        catch (TimeoutException)
+        {
+            result.Warnings.Add("Scheduled task validation timed out. Config values were validated, but Windows Task Scheduler did not respond in time.");
+        }
+        catch (Exception ex)
+        {
+            result.Warnings.Add($"Scheduled task validation could not complete: {ex.Message}");
+        }
+    }
+
+    private async Task<bool> ValidateForSaveAsync(bool includeScheduledTaskValidation)
+    {
+        var result = await ValidateCurrentEditorValuesAsync(includeScheduledTaskValidation);
         if (result.HasErrors)
         {
-            ShowThemedMessageBox(FormatValidationSummary(result, includePrompt: false), "Configuration has errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ShowValidationResultDialog(result, hasErrors: true);
             SetStatus($"Validation failed with {result.Errors.Count} error(s).");
             return false;
         }
 
         if (result.HasWarnings)
         {
-            var answer = ShowThemedMessageBox(FormatValidationSummary(result, includePrompt: true), "Configuration warnings", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
-            if (answer != DialogResult.Yes)
-            {
-                SetStatus("Save cancelled after validation warnings.");
-                return false;
-            }
+            ShowValidationResultDialog(result, hasErrors: false);
+            SetStatus($"Save cancelled with {result.Warnings.Count} validation warning(s).");
+            return false;
         }
 
         return true;
@@ -4598,8 +4887,18 @@ internal sealed class ConfigEditorForm : Form
         ValidateOscRoutes(result);
         ValidateBaseStations(result);
         ValidateTimingValues(result);
+        ValidateManagedScheduledTasks(result, mode);
         return result;
     }
+
+    private static void ValidateManagedScheduledTasks(ValidationResult result, ValidationMode mode)
+    {
+        // Existing scheduled tasks are queried asynchronously by the Validate button and are
+        // rewritten/deleted during Save when startup integration is applied.
+    }
+
+    private static string GetCurrentConfigEditorDirectory()
+        => global::ScheduledTaskPathValidator.GetCurrentExecutableDirectory();
 
     private static void ValidatePath(ValidationResult result, string label, string path, bool required)
     {
@@ -4786,6 +5085,167 @@ internal sealed class ConfigEditorForm : Form
         }
 
         return builder.ToString();
+    }
+
+    private void ShowValidationResultDialog(ValidationResult result, bool hasErrors)
+    {
+        var technicalText = FormatValidationSummary(result, includePrompt: false);
+        var friendly = BuildFriendlyValidationSummary(result, hasErrors);
+        using var dialog = new Form
+        {
+            Text = hasErrors ? "Configuration validation failed" : "Configuration validation warnings",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            ClientSize = new Size(620, 250)
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 3,
+            Padding = new Padding(18, 16, 18, 12)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var summaryPanel = new TableLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Top,
+            ColumnCount = 2,
+            RowCount = 1
+        };
+        summaryPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        summaryPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+        var iconBox = new PictureBox
+        {
+            Width = 42,
+            Height = 42,
+            Margin = new Padding(0, 4, 16, 0),
+            SizeMode = PictureBoxSizeMode.CenterImage,
+            Image = IconForMessageBox(hasErrors ? MessageBoxIcon.Error : MessageBoxIcon.Warning).ToBitmap()
+        };
+
+        var textPanel = new TableLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Top,
+            ColumnCount = 1,
+            RowCount = 2
+        };
+        textPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        textPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var headingLabel = new Label
+        {
+            Text = friendly.Heading,
+            AutoSize = true,
+            Font = new Font(Font, FontStyle.Bold),
+            Margin = new Padding(0, 0, 0, 10)
+        };
+        var bodyLabel = new Label
+        {
+            Text = friendly.Body,
+            AutoSize = false,
+            Width = 510,
+            Height = 94,
+            Margin = new Padding(0),
+            TextAlign = ContentAlignment.TopLeft
+        };
+        textPanel.Controls.Add(headingLabel, 0, 0);
+        textPanel.Controls.Add(bodyLabel, 0, 1);
+
+        summaryPanel.Controls.Add(iconBox, 0, 0);
+        summaryPanel.Controls.Add(textPanel, 1, 0);
+
+        var detailsTextBox = new TextBox
+        {
+            Text = technicalText,
+            ReadOnly = true,
+            Multiline = true,
+            ScrollBars = ScrollBars.Both,
+            WordWrap = false,
+            Dock = DockStyle.Fill,
+            Font = new Font(FontFamily.GenericMonospace, Font.Size),
+            Visible = false
+        };
+
+        var buttonPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            Padding = new Padding(0, 12, 0, 0)
+        };
+        var okButton = CreateButton("OK", autoSize: false, width: 88, height: 28, dialogResult: DialogResult.OK);
+        okButton.Margin = new Padding(6, 0, 0, 0);
+        var detailsButton = CreateButton("Show details", autoSize: false, width: 112, height: 28);
+        detailsButton.Margin = new Padding(6, 0, 0, 0);
+        detailsButton.Click += (_, _) =>
+        {
+            var showing = !detailsTextBox.Visible;
+            detailsTextBox.Visible = showing;
+            detailsButton.Text = showing ? "Hide details" : "Show details";
+            dialog.ClientSize = showing ? new Size(720, 520) : new Size(620, 250);
+        };
+        buttonPanel.Controls.Add(okButton);
+        buttonPanel.Controls.Add(detailsButton);
+
+        root.Controls.Add(summaryPanel, 0, 0);
+        root.Controls.Add(detailsTextBox, 0, 1);
+        root.Controls.Add(buttonPanel, 0, 2);
+        dialog.Controls.Add(root);
+        dialog.AcceptButton = okButton;
+        dialog.CancelButton = okButton;
+
+        ApplyThemeTo(dialog);
+        WindowsTitleBar.ApplyTheme(dialog.Handle, _theme.IsDark);
+        dialog.ShowDialog(this);
+    }
+
+    private static FriendlyValidationSummary BuildFriendlyValidationSummary(ValidationResult result, bool hasErrors)
+    {
+        var scheduledTaskIssue = result.Errors.Concat(result.Warnings)
+            .FirstOrDefault(text => text.Contains("Scheduled task:", StringComparison.OrdinalIgnoreCase));
+        if (scheduledTaskIssue is not null)
+        {
+            var taskName = ExtractValidationDetail(scheduledTaskIssue, "Scheduled task");
+            if (string.IsNullOrWhiteSpace(taskName))
+            {
+                taskName = "the scheduled task";
+            }
+
+            return new FriendlyValidationSummary(
+                "Scheduled task needs updating",
+                $"The scheduled task \"{taskName}\" points to an older release of PimaxVrcSupervisor.\r\n\r\nClick OK, then update or recreate the scheduled task so it points to the current release.");
+        }
+
+        var count = hasErrors ? result.Errors.Count : result.Warnings.Count;
+        var kind = hasErrors ? "error" : "warning";
+        return new FriendlyValidationSummary(
+            hasErrors ? "Configuration needs attention" : "Configuration has warnings",
+            $"Validation found {count} {kind}{(count == 1 ? "" : "s")}.\r\n\r\nClick Show details to review the full validation output.");
+    }
+
+    private static string ExtractValidationDetail(string text, string label)
+    {
+        var prefix = label + ":";
+        foreach (var line in text.Split(["\r\n", "\n"], StringSplitOptions.None))
+        {
+            if (line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return line[prefix.Length..].Trim();
+            }
+        }
+
+        return "";
     }
 
     private string? CreateConfigBackup(string path)
@@ -5368,6 +5828,181 @@ internal sealed class ConfigEditorForm : Form
         }
     }
 
+    private string? ResolveInitialConfigPath(string? requestedConfigPath)
+    {
+        if (!string.IsNullOrWhiteSpace(requestedConfigPath))
+        {
+            return FindConfigPath(requestedConfigPath, null);
+        }
+
+        var lastConfigPath = TryGetFullPath(_editorState.LastConfigPath ?? "");
+        if (lastConfigPath is not null && File.Exists(lastConfigPath))
+        {
+            if (!IsPathInCurrentReleaseFolder(lastConfigPath))
+            {
+                return ResolveExternalLastConfigPath(lastConfigPath);
+            }
+
+            return lastConfigPath;
+        }
+
+        return FindConfigPath(null, null);
+    }
+
+    private string? ResolveExternalLastConfigPath(string lastConfigPath)
+    {
+        var choice = ShowExternalLastConfigPathDialog(lastConfigPath);
+        if (choice == ExternalConfigChoice.CopyLastUsedConfig)
+        {
+            try
+            {
+                var copiedPath = CopyExternalConfigToCurrentRelease(lastConfigPath);
+                SetTemporaryStatus(
+                    "Copied and loaded last-used config.",
+                    "Copied from:\r\n" + lastConfigPath + "\r\n\r\nNow using:\r\n" + copiedPath);
+                return copiedPath;
+            }
+            catch (Exception ex)
+            {
+                ShowThemedMessageBox(
+                    "Could not copy the last-used config into the current release folder.\r\n\r\n" + ex.Message,
+                    "Could not copy config",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+        }
+
+        return FindConfigPath(null, null);
+    }
+
+    private static string CopyExternalConfigToCurrentRelease(string lastConfigPath)
+    {
+        var currentReleaseFolder = GetCurrentConfigEditorDirectory();
+        var fileName = Path.GetFileName(lastConfigPath);
+        if (string.Equals(fileName, DefaultConfigFileName, StringComparison.OrdinalIgnoreCase))
+        {
+            fileName = "supervisor_moved.config.json";
+        }
+
+        var destinationPath = Path.Combine(currentReleaseFolder, fileName);
+        if (File.Exists(destinationPath))
+        {
+            destinationPath = Path.Combine(
+                currentReleaseFolder,
+                Path.GetFileNameWithoutExtension(fileName) + "_" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + Path.GetExtension(fileName));
+        }
+
+        File.Copy(lastConfigPath, destinationPath, overwrite: false);
+        return destinationPath;
+    }
+
+    private ExternalConfigChoice ShowExternalLastConfigPathDialog(string lastConfigPath)
+    {
+        var currentReleaseFolder = GetCurrentConfigEditorDirectory();
+        var lastConfigFolder = global::ScheduledTaskPathValidator.NormalizeDirectory(Path.GetDirectoryName(lastConfigPath) ?? "");
+        var choice = ExternalConfigChoice.UseCurrentFolderConfig;
+        using var dialog = new Form
+        {
+            Text = "Config from another release",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            ClientSize = new Size(760, 360)
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 4,
+            Padding = new Padding(18, 16, 18, 12)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var heading = new Label
+        {
+            Text = "Last-used config is from another release",
+            AutoSize = true,
+            Font = new Font(Font, FontStyle.Bold),
+            Margin = new Padding(0, 0, 0, 10)
+        };
+        var body = new Label
+        {
+            Text = "Choose which config this release should use.\r\n\r\n" +
+                "Copying the last-used config creates a local copy in the current release folder and loads that copy.",
+            AutoSize = false,
+            Dock = DockStyle.Top,
+            Height = 72,
+            Margin = new Padding(0, 0, 0, 12)
+        };
+        var details = new TextBox
+        {
+            Text =
+                "Current Config Editor folder:\r\n" +
+                currentReleaseFolder +
+                "\r\n\r\nRemembered config folder:\r\n" +
+                lastConfigFolder +
+                "\r\n\r\nRemembered config file:\r\n" +
+                lastConfigPath,
+            ReadOnly = true,
+            Multiline = true,
+            ScrollBars = ScrollBars.Both,
+            WordWrap = false,
+            Dock = DockStyle.Fill,
+            Font = new Font(FontFamily.GenericMonospace, Font.Size),
+            Margin = new Padding(0, 0, 0, 12)
+        };
+        var buttons = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false
+        };
+        var copyButton = CreateButton("Use last-used config", autoSize: false, width: 156, height: 28);
+        var currentButton = CreateButton("Use current folder config", autoSize: false, width: 176, height: 28);
+
+        copyButton.Click += (_, _) =>
+        {
+            choice = ExternalConfigChoice.CopyLastUsedConfig;
+            dialog.DialogResult = DialogResult.Yes;
+            dialog.Close();
+        };
+        currentButton.Click += (_, _) =>
+        {
+            choice = ExternalConfigChoice.UseCurrentFolderConfig;
+            dialog.DialogResult = DialogResult.No;
+            dialog.Close();
+        };
+
+        buttons.Controls.Add(copyButton);
+        buttons.Controls.Add(currentButton);
+        root.Controls.Add(heading, 0, 0);
+        root.Controls.Add(body, 0, 1);
+        root.Controls.Add(details, 0, 2);
+        root.Controls.Add(buttons, 0, 3);
+        dialog.Controls.Add(root);
+        dialog.AcceptButton = copyButton;
+        dialog.CancelButton = currentButton;
+
+        ApplyThemeTo(dialog);
+        WindowsTitleBar.ApplyTheme(dialog.Handle, _theme.IsDark);
+        dialog.ShowDialog(this);
+        return choice;
+    }
+
+    private static bool IsPathInCurrentReleaseFolder(string path)
+    {
+        var currentReleaseFolder = GetCurrentConfigEditorDirectory();
+        var pathFolder = global::ScheduledTaskPathValidator.NormalizeDirectory(Path.GetDirectoryName(path) ?? "");
+        return string.Equals(pathFolder, currentReleaseFolder, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string? FindConfigPath(string? requestedConfigPath, string? lastConfigPath)
     {
         var candidates = new[]
@@ -5401,6 +6036,7 @@ internal sealed record OscRouteEditorRow(string Name, int AppReceivePort, bool E
 
 internal enum ValidationMode
 {
+    Validate,
     Save,
     Launch
 }
@@ -5410,6 +6046,19 @@ internal enum LaunchUnsavedChoice
     SaveAndLaunch,
     LaunchWithoutSaving,
     Cancel
+}
+
+internal enum StartupTaskMigrationChoice
+{
+    Rebind,
+    KeepExisting,
+    TurnOffAutostart
+}
+
+internal enum ExternalConfigChoice
+{
+    CopyLastUsedConfig,
+    UseCurrentFolderConfig
 }
 
 internal sealed record ConfigProfileItem(string DisplayName, string FileName, string Path)
@@ -5430,6 +6079,8 @@ internal sealed class ValidationResult
     public bool HasWarnings => Warnings.Count > 0;
 }
 
+internal sealed record FriendlyValidationSummary(string Heading, string Body);
+
 internal sealed class EditorState
 {
     private static readonly string StatePath = Path.Combine(Application.UserAppDataPath, "config-editor-state.json");
@@ -5438,6 +6089,7 @@ internal sealed class EditorState
     public Rectangle? WindowBounds { get; set; }
     public FormWindowState WindowState { get; set; } = FormWindowState.Normal;
     public int LastSelectedTab { get; set; }
+    public List<string> StartupTaskMigrationPromptedReleaseFolders { get; set; } = [];
 
     public static EditorState Load()
     {
@@ -5467,6 +6119,19 @@ internal sealed class EditorState
         catch
         {
             // Editor state is only a convenience; ignore persistence failures.
+        }
+    }
+
+    public void MarkStartupTaskMigrationPrompted(string releaseFolder)
+    {
+        var normalized = ScheduledTaskPathValidator.NormalizeDirectory(releaseFolder);
+        StartupTaskMigrationPromptedReleaseFolders ??= [];
+        if (!StartupTaskMigrationPromptedReleaseFolders.Any(path => string.Equals(
+            ScheduledTaskPathValidator.NormalizeDirectory(path),
+            normalized,
+            StringComparison.OrdinalIgnoreCase)))
+        {
+            StartupTaskMigrationPromptedReleaseFolders.Add(normalized);
         }
     }
 }

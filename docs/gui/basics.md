@@ -1,6 +1,6 @@
-# Basics Tab
+# General Tab
 
-The **Basics** tab is the first tab in the Config Editor and contains the core settings that most users need to configure.
+The **General** tab is the first tab in the Config Editor and contains the core settings that most users need to configure.
 
 ## Core Executable Paths
 
@@ -22,8 +22,8 @@ Both paths support environment variables like `%APPDATA%` and `%LOCALAPPDATA%`. 
 
 | Checkbox | Config Key | Description |
 | --- | --- | --- |
-| Use Vive mouth tracker | `MouthTrackerUser` | Enables mouth tracker monitoring. When the mouth tracker reconnects, only VRCFaceTracking is restarted. A filled square means the config leaves the first-run question enabled. |
-| Turn off secondary monitors | `TurnOffSecondaryMonitors` | Saves the current monitor layout and disables secondary monitors during the VR session. Restored after VRChat and SteamVR close. A filled square means the config leaves the first-run question enabled. |
+| Use Vive mouth tracker | `MouthTrackerUser` | Enables mouth tracker monitoring. When the mouth tracker reconnects, only VRCFaceTracking is restarted. |
+| Turn off secondary monitors | `TurnOffSecondaryMonitors` | Saves the current monitor layout and disables secondary monitors during the VR session. Restored after VRChat and SteamVR close. |
 
 ## PiService Log Folder
 
@@ -44,7 +44,7 @@ The Startup section controls how the supervisor is launched:
 
 ## Editor Utilities
 
-The Basics tab includes two utility buttons:
+The General tab includes two utility buttons:
 
 - **Restore Defaults** — Replaces current editor values with default configuration values. The config file is not overwritten until you click Save.
 - **About** — Shows editor version, supervisor executable path, and third-party notices.
