@@ -129,20 +129,32 @@
 
   // Set to true if you use a Vive face/mouth tracker exposed as HTC Multimedia Camera.
   // Set to false to ignore all mouth-tracker detection and VRCFaceTracking-only restart logic.
-  // Leave empty to show a Yes/No dialog on first run; the answer is saved here as true or false.
+  // Leave empty only for first setup. The supervisor asks while RunInitialSetupQuestions is true,
+  // saves the answer here as true/false, and then stops asking after setup is complete.
   "MouthTrackerUser": "",
+
+  // Run first setup questions once after executable paths are selected.
+  // When true, empty first-setup values below trigger setup prompts.
+  // The supervisor sets this to false after setup answers are saved.
+  // Config Editor does not expose this; restore defaults or edit this file manually to ask again.
+  // Existing older configs without this property behave as false and do not re-enter setup automatically.
+  "RunInitialSetupQuestions": true,
 
   // Set to true to disable all secondary monitors while Broken Eye/VRCFaceTracking are running.
   // The full active monitor layout is saved first and restored after VRChat and SteamVR close.
-  // Leave empty to show a Yes/No dialog on first run; the answer is saved here as true or false.
+  // Leave empty only for first setup. The supervisor asks while RunInitialSetupQuestions is true,
+  // saves the answer here as true/false, and then stops asking after setup is complete.
   "TurnOffSecondaryMonitors": "",
 
-  // Leave empty to ask on first setup whether to create an elevated Windows Scheduled Task.
-  // When enabled, the task starts this supervisor when VRChat.exe launches, but only if vrserver.exe is running.
+  // Legacy compatibility field for scheduled-task startup.
+  // Leave empty only for first setup. The supervisor asks while RunInitialSetupQuestions is true.
+  // true maps to StartupLaunchMode=ScheduledTask; false maps to StartupLaunchMode=None.
   "AutoLaunchScheduledTask": "",
 
-  // Startup integration mode. Unspecified preserves the first-run AutoLaunchScheduledTask question.
-  // None disables automatic startup. ScheduledTask uses the existing VRChat/SteamVR watcher task.
+  // Startup integration mode.
+  // Unspecified means first setup should ask while RunInitialSetupQuestions is true.
+  // None disables automatic startup.
+  // ScheduledTask creates an elevated Windows Scheduled Task that watches for VRChat.exe when vrserver.exe is running.
   // SteamVrManifest registers a SteamVR dashboard host manifest and starts the supervisor when SteamVR starts.
   "StartupLaunchMode": "Unspecified",
 

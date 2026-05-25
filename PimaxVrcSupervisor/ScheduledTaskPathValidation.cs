@@ -209,7 +209,7 @@ internal static class ScheduledTaskPathValidator
         var builder = new StringBuilder();
         builder.AppendLine(issue.Message);
         builder.AppendLine($"Scheduled task: {issue.TaskName}");
-        builder.AppendLine($"Current Config Editor folder: {issue.CurrentExecutableDirectory}");
+        builder.AppendLine($"Current release folder: {issue.CurrentExecutableDirectory}");
         if (!string.IsNullOrWhiteSpace(issue.TaskExecutableDirectory))
         {
             builder.AppendLine($"Scheduled task executable folder: {issue.TaskExecutableDirectory}");

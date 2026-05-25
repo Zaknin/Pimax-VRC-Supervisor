@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
@@ -47,7 +48,21 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "--apply-startup-integration",
     var showResult = commandLineArgs.Any(arg => string.Equals(arg, "--show-result", StringComparison.OrdinalIgnoreCase));
     try
     {
+        Console.WriteLine($"Pimax VRC Supervisor {AppVersion.Current}");
+        Console.WriteLine("Applying startup integration.");
+        if (!string.IsNullOrWhiteSpace(config.LoadedFromPath))
+        {
+            Console.WriteLine($"Config path: {config.LoadedFromPath}");
+        }
+
+        Console.WriteLine($"Startup mode: {config.GetEffectiveStartupLaunchMode()}");
+        Console.WriteLine("This helper window closes automatically when the startup update finishes.");
+        Console.WriteLine();
+        Console.Out.Flush();
         await StartupIntegration.ApplyAsync(config, shutdown.Token);
+        Console.WriteLine();
+        Console.WriteLine("Startup integration update finished.");
+        Console.Out.Flush();
         if (showResult)
         {
             ThemedPrompt.Show(
@@ -725,6 +740,7 @@ internal sealed class AppSupervisor
     private bool _baseStationPowerOnComplete;
     private int _baseStationPowerOnPassesCompleted;
     private readonly HashSet<string> _baseStationPowerOnCommandSucceeded = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _baseStationSteamVrConfirmedActive = new(StringComparer.OrdinalIgnoreCase);
     private DateTimeOffset? _lastBaseStationPowerOnSkippedLogAt;
     private DateTimeOffset? _nextBaseStationPowerOnAttemptAt;
     private DateTimeOffset? _baseStationSecondPowerOnPassCompletedAt;
@@ -764,6 +780,10 @@ internal sealed class AppSupervisor
         {
             Console.WriteLine($"Config: {_config.DisplayName}");
         }
+        if (!string.IsNullOrWhiteSpace(_config.LoadedFromPath))
+        {
+            Console.WriteLine($"Config path: {_config.LoadedFromPath}");
+        }
 
         if (!OperatingSystem.IsWindows())
         {
@@ -781,10 +801,15 @@ internal sealed class AppSupervisor
             return;
         }
 
-        _mouthTrackerUser = await EnsureMouthTrackerPreferenceAsync(cancellationToken);
-        _turnOffSecondaryMonitors = await EnsureTurnOffSecondaryMonitorsPreferenceAsync(cancellationToken);
-        await EnsureStartupIntegrationPreferenceAsync(cancellationToken);
-        await EnsureBaseStationPowerPreferenceAsync(cancellationToken);
+        var runInitialSetupQuestions = _config.RunInitialSetupQuestions;
+        _mouthTrackerUser = await EnsureMouthTrackerPreferenceAsync(runInitialSetupQuestions, cancellationToken);
+        _turnOffSecondaryMonitors = await EnsureTurnOffSecondaryMonitorsPreferenceAsync(runInitialSetupQuestions, cancellationToken);
+        await EnsureStartupIntegrationPreferenceAsync(runInitialSetupQuestions, cancellationToken);
+        await EnsureBaseStationPowerPreferenceAsync(runInitialSetupQuestions, cancellationToken);
+        if (runInitialSetupQuestions && _config.AreInitialSetupQuestionsComplete())
+        {
+            _config.SaveInitialSetupQuestionsComplete();
+        }
         _commandServer = SupervisorCommandServer.Start(this, cancellationToken);
         var restartedFromForcedManualReload = TryConsumeForcedManualReloadMarker();
 
@@ -1142,11 +1167,16 @@ internal sealed class AppSupervisor
         return true;
     }
 
-    private async Task<bool> EnsureMouthTrackerPreferenceAsync(CancellationToken cancellationToken)
+    private async Task<bool> EnsureMouthTrackerPreferenceAsync(bool allowInitialSetupQuestion, CancellationToken cancellationToken)
     {
         if (_config.TryGetMouthTrackerUser(out var mouthTrackerUser))
         {
             return mouthTrackerUser;
+        }
+
+        if (!allowInitialSetupQuestion)
+        {
+            return false;
         }
 
         Console.WriteLine("MouthTrackerUser is not configured.");
@@ -1161,11 +1191,16 @@ internal sealed class AppSupervisor
         return answer;
     }
 
-    private async Task<bool> EnsureTurnOffSecondaryMonitorsPreferenceAsync(CancellationToken cancellationToken)
+    private async Task<bool> EnsureTurnOffSecondaryMonitorsPreferenceAsync(bool allowInitialSetupQuestion, CancellationToken cancellationToken)
     {
         if (_config.TryGetTurnOffSecondaryMonitors(out var turnOffSecondaryMonitors))
         {
             return turnOffSecondaryMonitors;
+        }
+
+        if (!allowInitialSetupQuestion)
+        {
+            return false;
         }
 
         Console.WriteLine("TurnOffSecondaryMonitors is not configured.");
@@ -1180,7 +1215,7 @@ internal sealed class AppSupervisor
         return answer;
     }
 
-    private async Task EnsureStartupIntegrationPreferenceAsync(CancellationToken cancellationToken)
+    private async Task EnsureStartupIntegrationPreferenceAsync(bool allowInitialSetupQuestion, CancellationToken cancellationToken)
     {
         var startupMode = _config.GetEffectiveStartupLaunchMode();
         if (startupMode == StartupLaunchMode.ScheduledTask)
@@ -1200,9 +1235,11 @@ internal sealed class AppSupervisor
 
         if (startupMode == StartupLaunchMode.None)
         {
-            await ScheduledTaskInstaller.DeleteAutoLaunchTaskAsync(cancellationToken);
-            await SteamVrStartupInstaller.DisableAsync(cancellationToken);
-            await ScheduledTaskInstaller.DeleteSteamVrStartHelperAsync(cancellationToken);
+            return;
+        }
+
+        if (!allowInitialSetupQuestion)
+        {
             return;
         }
 
@@ -1254,9 +1291,14 @@ internal sealed class AppSupervisor
         }
     }
 
-    private async Task EnsureBaseStationPowerPreferenceAsync(CancellationToken cancellationToken)
+    private async Task EnsureBaseStationPowerPreferenceAsync(bool allowInitialSetupQuestion, CancellationToken cancellationToken)
     {
         if (_config.TryGetBaseStationsEnabled(out var baseStationsEnabled))
+        {
+            return;
+        }
+
+        if (!allowInitialSetupQuestion)
         {
             return;
         }
@@ -2157,6 +2199,7 @@ internal sealed class AppSupervisor
         _baseStationPowerOnPassesCompleted = 0;
         _baseStationSecondPowerOnPassCompletedAt = null;
         _baseStationPowerOnCommandSucceeded.Clear();
+        _baseStationSteamVrConfirmedActive.Clear();
         _nextBaseStationPowerOnAttemptAt = null;
         await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken, manualOverride: true);
     }
@@ -2308,6 +2351,21 @@ internal sealed class AppSupervisor
                         break;
                     }
                 }
+
+                if (_baseStationSteamVrConfirmedActive.Count > 0)
+                {
+                    baseStationsToPowerOn = baseStationsToPowerOn
+                        .Where(baseStation => !_baseStationSteamVrConfirmedActive.Contains(baseStation.BluetoothAddress))
+                        .ToArray();
+                    if (baseStationsToPowerOn.Length == 0)
+                    {
+                        Console.WriteLine("SteamVR confirmed the remaining enabled base station(s) active. Startup complete.");
+                        _baseStationsPoweredOn = true;
+                        _baseStationPowerOnComplete = true;
+                        _nextBaseStationPowerOnAttemptAt = null;
+                        return;
+                    }
+                }
             }
         }
 
@@ -2324,7 +2382,9 @@ internal sealed class AppSupervisor
             Console.WriteLine($"SteamVR did not confirm all enabled base stations after {BaseStationCommandTiming.OpenVrPowerOnCycles} startup cycle(s). Stopping startup retries.");
         }
 
-        _baseStationPowerOnComplete = IsBaseStationPowerOnComplete(baseStations, finalStates, _baseStationPowerOnCommandSucceeded);
+        var confirmedOrCommandSucceeded = new HashSet<string>(_baseStationPowerOnCommandSucceeded, StringComparer.OrdinalIgnoreCase);
+        confirmedOrCommandSucceeded.UnionWith(_baseStationSteamVrConfirmedActive);
+        _baseStationPowerOnComplete = IsBaseStationPowerOnComplete(baseStations, finalStates, confirmedOrCommandSucceeded);
         if (_baseStationPowerOnComplete)
         {
             _nextBaseStationPowerOnAttemptAt = null;
@@ -2334,6 +2394,7 @@ internal sealed class AppSupervisor
         _baseStationPowerOnPassesCompleted = 0;
         _baseStationSecondPowerOnPassCompletedAt = null;
         _baseStationPowerOnCommandSucceeded.Clear();
+        _baseStationSteamVrConfirmedActive.Clear();
         _nextBaseStationPowerOnAttemptAt = DateTimeOffset.UtcNow.AddSeconds(10);
     }
 
@@ -2364,6 +2425,11 @@ internal sealed class AppSupervisor
         {
             var trackingReferences = _steamVrTrackingReferenceReader.ReadActiveTrackingReferences();
             var match = SteamVrBaseStationMatcher.Match(baseStations, trackingReferences);
+            foreach (var address in match.ExactMatchedBluetoothAddresses)
+            {
+                _baseStationSteamVrConfirmedActive.Add(address);
+            }
+
             if (match.AllMatchedExactly)
             {
                 Console.WriteLine($"SteamVR reports all {baseStations.Length} enabled base station(s) active by exact identity match. Startup complete.");
@@ -2376,7 +2442,7 @@ internal sealed class AppSupervisor
                 return true;
             }
 
-            Console.WriteLine($"SteamVR reports {match.ExactMatchCount}/{baseStations.Length} exact base station match(es) and {match.ActiveTrackingReferenceCount} active tracking reference(s). Continuing startup.");
+            Console.WriteLine($"SteamVR reports {match.ExactMatchCount}/{baseStations.Length} exact base station match(es) and {match.ActiveTrackingReferenceCount} active tracking reference(s). Retrying only unconfirmed stations where possible.");
             return false;
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
@@ -2408,6 +2474,7 @@ internal sealed class AppSupervisor
             _baseStationPowerOnPassesCompleted = 0;
             _baseStationSecondPowerOnPassCompletedAt = null;
             _baseStationPowerOnCommandSucceeded.Clear();
+            _baseStationSteamVrConfirmedActive.Clear();
             return;
         }
 
@@ -2429,6 +2496,7 @@ internal sealed class AppSupervisor
             _baseStationPowerOnPassesCompleted = 0;
             _baseStationSecondPowerOnPassCompletedAt = null;
             _baseStationPowerOnCommandSucceeded.Clear();
+            _baseStationSteamVrConfirmedActive.Clear();
         }
     }
 
@@ -3235,7 +3303,7 @@ internal sealed class AppSupervisor
             return;
         }
 
-        Console.WriteLine("Starting Intiface...");
+        Console.WriteLine("Starting Intiface non-elevated...");
         var intifacePath = ResolveLaunchPathOrThrow(_config.IntifacePath, "Intiface");
         var intifaceStarted = StartOrAttach(
             intifacePath,
@@ -3270,7 +3338,7 @@ internal sealed class AppSupervisor
                 Console.WriteLine($"Waiting {_config.DelayBeforeOscGoesBrrrSeconds} seconds before starting OscGoesBrrr...");
                 await DelayWithCancellationAsync(TimeSpan.FromSeconds(_config.DelayBeforeOscGoesBrrrSeconds), cancellationToken);
 
-                Console.WriteLine("Starting OscGoesBrrr...");
+                Console.WriteLine("Starting OscGoesBrrr non-elevated...");
                 var oscGoesBrrrPath = ResolveLaunchPathOrThrow(_config.OscGoesBrrrPath, "OscGoesBrrr");
                 var oscGoesBrrrStarted = StartOrAttach(
                     oscGoesBrrrPath,
@@ -3413,7 +3481,7 @@ internal sealed class AppSupervisor
         cancellationToken.ThrowIfCancellationRequested();
         if (!File.Exists(app.Path))
         {
-            Console.WriteLine($"Skipping {app.DisplayName}: executable was not found at {app.Path}");
+            Console.WriteLine($"Skipping auto-launch app \"{app.DisplayName}\" because the executable does not exist: {app.Path}");
             return;
         }
 
@@ -4169,7 +4237,8 @@ internal sealed record SteamVrBaseStationMatchResult(
     int ExactMatchCount,
     int ActiveTrackingReferenceCount,
     bool AllMatchedExactly,
-    bool CountFallbackMatched);
+    bool CountFallbackMatched,
+    string[] ExactMatchedBluetoothAddresses);
 
 internal static class SteamVrBaseStationMatcher
 {
@@ -4185,6 +4254,7 @@ internal static class SteamVrBaseStationMatcher
                 .ToArray())
             .ToArray();
         var matchedReferenceIndexes = new HashSet<int>();
+        var matchedBluetoothAddresses = new List<string>();
         var exactMatches = 0;
 
         foreach (var baseStation in baseStations)
@@ -4212,6 +4282,11 @@ internal static class SteamVrBaseStationMatcher
                 }
 
                 matchedReferenceIndexes.Add(index);
+                if (!string.IsNullOrWhiteSpace(baseStation.BluetoothAddress))
+                {
+                    matchedBluetoothAddresses.Add(baseStation.BluetoothAddress);
+                }
+
                 exactMatches++;
                 break;
             }
@@ -4219,7 +4294,12 @@ internal static class SteamVrBaseStationMatcher
 
         var allMatchedExactly = baseStations.Length > 0 && exactMatches == baseStations.Length;
         var countFallbackMatched = !allMatchedExactly && trackingReferences.Count >= baseStations.Length;
-        return new SteamVrBaseStationMatchResult(exactMatches, trackingReferences.Count, allMatchedExactly, countFallbackMatched);
+        return new SteamVrBaseStationMatchResult(
+            exactMatches,
+            trackingReferences.Count,
+            allMatchedExactly,
+            countFallbackMatched,
+            matchedBluetoothAddresses.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
     private static IEnumerable<string> BuildBaseStationIdentityCandidates(BaseStationDevice baseStation)
@@ -4883,6 +4963,7 @@ internal static class ScheduledTaskInstaller
     public const string SteamVrStartTaskName = ScheduledTaskPathValidator.SteamVrStartTaskName;
     private const string WatcherArgument = "--watch-vrchat-auto-launch";
     private const string SteamVrStartArgument = "--steamvr-start";
+    private static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(3);
 
     public static async Task<bool> ExistsAsync(CancellationToken cancellationToken)
     {
@@ -4923,10 +5004,17 @@ internal static class ScheduledTaskInstaller
         try
         {
             await File.WriteAllTextAsync(taskXmlPath, taskXml, Encoding.Unicode, cancellationToken);
-            await RunProcessAsync(
-                "schtasks.exe",
-                ["/Create", "/TN", TaskName, "/XML", taskXmlPath, "/F"],
-                cancellationToken);
+            try
+            {
+                await RunProcessAsync(
+                    "schtasks.exe",
+                    ["/Create", "/TN", TaskName, "/XML", taskXmlPath, "/F"],
+                    cancellationToken);
+            }
+            catch (TimeoutException ex)
+            {
+                Console.WriteLine($"{ex.Message} Verifying scheduled task state before continuing.");
+            }
         }
         finally
         {
@@ -4967,10 +5055,17 @@ internal static class ScheduledTaskInstaller
         try
         {
             await File.WriteAllTextAsync(taskXmlPath, taskXml, Encoding.Unicode, cancellationToken);
-            await RunProcessAsync(
-                "schtasks.exe",
-                ["/Create", "/TN", SteamVrStartTaskName, "/XML", taskXmlPath, "/F"],
-                cancellationToken);
+            try
+            {
+                await RunProcessAsync(
+                    "schtasks.exe",
+                    ["/Create", "/TN", SteamVrStartTaskName, "/XML", taskXmlPath, "/F"],
+                    cancellationToken);
+            }
+            catch (TimeoutException ex)
+            {
+                Console.WriteLine($"{ex.Message} Verifying scheduled task state before continuing.");
+            }
         }
         finally
         {
@@ -4998,10 +5093,21 @@ internal static class ScheduledTaskInstaller
             return;
         }
 
-        await RunProcessAsync(
-            "schtasks.exe",
-            ["/Delete", "/TN", taskName, "/F"],
-            cancellationToken);
+        try
+        {
+            await RunProcessAsync(
+                "schtasks.exe",
+                ["/Delete", "/TN", taskName, "/F"],
+                cancellationToken);
+        }
+        catch (TimeoutException ex)
+        {
+            Console.WriteLine($"{ex.Message} Verifying scheduled task removal before continuing.");
+            if (await ExistsAsync(taskName, cancellationToken))
+            {
+                throw;
+            }
+        }
     }
 
     private static string BuildTaskXml(
@@ -5170,11 +5276,22 @@ internal static class ScheduledTaskInstaller
             startInfo.ArgumentList.Add(argument);
         }
 
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(ProcessTimeout);
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start {fileName}.");
         var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
 
-        await process.WaitForExitAsync(cancellationToken);
+        try
+        {
+            await process.WaitForExitAsync(timeoutSource.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutSource.IsCancellationRequested)
+        {
+            TryKillProcessTree(process);
+            throw new TimeoutException($"{fileName} did not finish within {ProcessTimeout.TotalSeconds.ToString("0", CultureInfo.InvariantCulture)} seconds.");
+        }
+
         var output = await outputTask;
         var error = await errorTask;
 
@@ -5196,6 +5313,20 @@ internal static class ScheduledTaskInstaller
         }
     }
 
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+        }
+    }
+
     private static string QuotePowerShellArgument(string value) => "\"" + value.Replace("\"", "\\\"") + "\"";
 
     private static string ToPowerShellSingleQuotedString(string value) => "'" + value.Replace("'", "''") + "'";
@@ -5210,20 +5341,40 @@ internal static class StartupIntegration
         switch (config.GetEffectiveStartupLaunchMode())
         {
             case StartupLaunchMode.ScheduledTask:
+                LogStep("Creating or updating VRChat auto-launch scheduled task...");
                 await ScheduledTaskInstaller.CreateOrUpdateAsync(startWatcherImmediately: false, cancellationToken);
+                LogStep("Disabling SteamVR startup manifest if present...");
                 await SteamVrStartupInstaller.DisableAsync(cancellationToken);
+                LogStep("Deleting SteamVR start helper scheduled task if present...");
                 await ScheduledTaskInstaller.DeleteSteamVrStartHelperAsync(cancellationToken);
+                LogStep("Scheduled Task startup is ready.");
                 break;
             case StartupLaunchMode.SteamVrManifest:
+                LogStep("Deleting VRChat auto-launch scheduled task if present...");
                 await ScheduledTaskInstaller.DeleteAutoLaunchTaskAsync(cancellationToken);
+                LogStep("Creating or updating SteamVR startup manifest...");
                 await SteamVrStartupInstaller.CreateOrUpdateAsync(cancellationToken);
+                LogStep("SteamVR startup manifest is ready.");
                 break;
             case StartupLaunchMode.None:
+                LogStep("Deleting VRChat auto-launch scheduled task if present...");
                 await ScheduledTaskInstaller.DeleteAutoLaunchTaskAsync(cancellationToken);
+                LogStep("Disabling SteamVR startup manifest if present...");
                 await SteamVrStartupInstaller.DisableAsync(cancellationToken);
+                LogStep("Deleting SteamVR start helper scheduled task if present...");
                 await ScheduledTaskInstaller.DeleteSteamVrStartHelperAsync(cancellationToken);
+                LogStep("Automatic startup integrations are disabled.");
+                break;
+            default:
+                LogStep("Startup mode is unspecified; no startup integration changes were applied.");
                 break;
         }
+    }
+
+    private static void LogStep(string message)
+    {
+        Console.WriteLine(message);
+        Console.Out.Flush();
     }
 }
 
@@ -5233,6 +5384,7 @@ internal static class SteamVrStartupInstaller
     private const string ManifestFileName = "PimaxVrcSupervisor.vrmanifest";
     private const string HostExecutableName = "PimaxVrcSupervisorSteamVrHost.exe";
     private const string HostIconRelativePath = @"Assets\vr-overlay-icon.png";
+    private static readonly TimeSpan OpenVrRegistryTimeout = TimeSpan.FromSeconds(3);
 
     public static async Task<SteamVrStartupDetails> CreateOrUpdateAsync(CancellationToken cancellationToken)
     {
@@ -5246,12 +5398,7 @@ internal static class SteamVrStartupInstaller
             throw new FileNotFoundException("SteamVR host executable was not found. Publish/copy PimaxVrcSupervisorSteamVrHost.exe next to PimaxVrcSupervisor.exe.", hostPath);
         }
 
-        using var registry = OpenVrApplicationRegistry.Open();
-        registry.TrySetApplicationAutoLaunch(AppKey, false);
-        foreach (var staleManifestPath in GetKnownPimaxManifestPaths(manifestPath))
-        {
-            registry.TryRemoveApplicationManifest(staleManifestPath);
-        }
+        var staleManifestPaths = GetKnownPimaxManifestPaths(manifestPath).ToArray();
 
         if (File.Exists(manifestPath))
         {
@@ -5259,8 +5406,21 @@ internal static class SteamVrStartupInstaller
         }
 
         await File.WriteAllTextAsync(manifestPath, BuildManifestJson(hostPath, iconPath), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
-        registry.AddApplicationManifest(manifestPath);
-        registry.SetApplicationAutoLaunch(AppKey, true);
+        await RunOpenVrApplicationRegistryOperationAsync(
+            () =>
+            {
+                using var registry = OpenVrApplicationRegistry.Open();
+                registry.TrySetApplicationAutoLaunch(AppKey, false);
+                foreach (var staleManifestPath in staleManifestPaths)
+                {
+                    registry.TryRemoveApplicationManifest(staleManifestPath);
+                }
+
+                registry.AddApplicationManifest(manifestPath);
+                registry.SetApplicationAutoLaunch(AppKey, true);
+            },
+            "SteamVR manifest registration timed out.",
+            cancellationToken);
         return new SteamVrStartupDetails(AppKey, manifestPath);
     }
 
@@ -5269,12 +5429,19 @@ internal static class SteamVrStartupInstaller
         var manifestPath = GetManifestPath();
         try
         {
-            using var registry = OpenVrApplicationRegistry.Open();
-            registry.TrySetApplicationAutoLaunch(AppKey, false);
-            foreach (var staleManifestPath in GetKnownPimaxManifestPaths(manifestPath))
-            {
-                registry.TryRemoveApplicationManifest(staleManifestPath);
-            }
+            var staleManifestPaths = GetKnownPimaxManifestPaths(manifestPath).ToArray();
+            await RunOpenVrApplicationRegistryOperationAsync(
+                () =>
+                {
+                    using var registry = OpenVrApplicationRegistry.Open();
+                    registry.TrySetApplicationAutoLaunch(AppKey, false);
+                    foreach (var staleManifestPath in staleManifestPaths)
+                    {
+                        registry.TryRemoveApplicationManifest(staleManifestPath);
+                    }
+                },
+                "SteamVR manifest disable timed out.",
+                cancellationToken);
         }
         catch (Exception ex)
         {
@@ -5287,6 +5454,24 @@ internal static class SteamVrStartupInstaller
         }
 
         await Task.CompletedTask;
+    }
+
+    private static async Task RunOpenVrApplicationRegistryOperationAsync(
+        Action operation,
+        string timeoutMessage,
+        CancellationToken cancellationToken)
+    {
+        var operationTask = Task.Run(operation);
+        var timeoutTask = Task.Delay(OpenVrRegistryTimeout, cancellationToken);
+        var completedTask = await Task.WhenAny(operationTask, timeoutTask);
+        if (completedTask == operationTask)
+        {
+            await operationTask;
+            return;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        throw new TimeoutException($"{timeoutMessage} OpenVR did not respond within {OpenVrRegistryTimeout.TotalSeconds.ToString("0", CultureInfo.InvariantCulture)} seconds.");
     }
 
     private static string GetManifestPath()
@@ -6279,6 +6464,8 @@ internal enum DisplayConfigPixelFormat : uint
 
 internal sealed class SupervisorConfig
 {
+    private const string ActiveConfigSelectionFileName = "supervisor.active-config.txt";
+
     public string DisplayName { get; init; } = "";
     public string BrokenEyePath { get; set; } = "";
     public string VrcFaceTrackingPath { get; set; } = "";
@@ -6328,6 +6515,7 @@ internal sealed class SupervisorConfig
     public bool BaseStationsEnabled { get; set; }
     public BaseStationPowerDownMode BaseStationPowerDownMode { get; init; } = BaseStationPowerDownMode.Sleep;
     public BaseStationDevice[] BaseStations { get; set; } = [];
+    public bool RunInitialSetupQuestions { get; set; }
     public bool OscGoesBrrrEnabled { get; set; }
     public bool LovenseAutoLaunchEnabled
     {
@@ -6451,13 +6639,10 @@ internal sealed class SupervisorConfig
 
     public void SaveMouthTrackerPreference()
     {
-        var configPath = LoadedFromPath ?? Path.Combine(AppContext.BaseDirectory, "supervisor.config.json");
-        var json = File.Exists(configPath) ? File.ReadAllText(configPath) : "{\n}";
-
-        json = ReplaceJsonBooleanOrStringProperty(json, nameof(MouthTrackerUser), TryGetMouthTrackerUser(out var value) && value);
-
-        File.WriteAllText(configPath, json);
-        Console.WriteLine($"Saved mouth tracker preference to: {configPath}");
+        SaveBooleanPreference(
+            nameof(MouthTrackerUser),
+            TryGetMouthTrackerUser(out var value) && value,
+            "mouth tracker preference");
     }
 
     public bool TryGetTurnOffSecondaryMonitors(out bool turnOffSecondaryMonitors)
@@ -6485,16 +6670,10 @@ internal sealed class SupervisorConfig
 
     public void SaveTurnOffSecondaryMonitorsPreference()
     {
-        var configPath = LoadedFromPath ?? Path.Combine(AppContext.BaseDirectory, "supervisor.config.json");
-        var json = File.Exists(configPath) ? File.ReadAllText(configPath) : "{\n}";
-
-        json = ReplaceJsonBooleanOrStringProperty(
-            json,
+        SaveBooleanPreference(
             nameof(TurnOffSecondaryMonitors),
-            TryGetTurnOffSecondaryMonitors(out var value) && value);
-
-        File.WriteAllText(configPath, json);
-        Console.WriteLine($"Saved secondary monitor preference to: {configPath}");
+            TryGetTurnOffSecondaryMonitors(out var value) && value,
+            "secondary monitor preference");
     }
 
     public bool TryGetAutoLaunchScheduledTask(out bool autoLaunchScheduledTask)
@@ -6568,6 +6747,88 @@ internal sealed class SupervisorConfig
 
         File.WriteAllText(configPath, json);
         Console.WriteLine($"Saved base station settings to: {configPath}");
+    }
+
+    public bool AreInitialSetupQuestionsComplete()
+        => TryGetMouthTrackerUser(out _)
+            && TryGetTurnOffSecondaryMonitors(out _)
+            && GetEffectiveStartupLaunchMode() != StartupLaunchMode.Unspecified
+            && TryGetBaseStationsEnabled(out _);
+
+    public void SaveInitialSetupQuestionsComplete()
+    {
+        RunInitialSetupQuestions = false;
+        var configPath = LoadedFromPath ?? Path.Combine(AppContext.BaseDirectory, "supervisor.config.json");
+        var json = File.Exists(configPath) ? File.ReadAllText(configPath) : "{\n}";
+
+        json = ReplaceJsonValueProperty(json, nameof(RunInitialSetupQuestions), "false");
+
+        File.WriteAllText(configPath, json);
+        Console.WriteLine($"Saved initial setup completion to: {configPath}");
+    }
+
+    private void SaveBooleanPreference(string propertyName, bool value, string description)
+    {
+        var configPath = LoadedFromPath ?? Path.Combine(AppContext.BaseDirectory, "supervisor.config.json");
+        var valueJson = value ? "true" : "false";
+        var json = File.Exists(configPath) ? File.ReadAllText(configPath) : "{\n}";
+
+        json = ReplaceJsonValueProperty(json, propertyName, valueJson);
+        File.WriteAllText(configPath, json);
+
+        if (!JsonBooleanPropertyEquals(configPath, propertyName, value))
+        {
+            json = SetJsonPropertyValue(json, propertyName, JsonValue.Create(value));
+            File.WriteAllText(configPath, json);
+        }
+
+        if (!JsonBooleanPropertyEquals(configPath, propertyName, value))
+        {
+            throw new IOException($"Could not save {description} to {configPath}.");
+        }
+
+        Console.WriteLine($"Saved {description} to: {configPath}");
+    }
+
+    private static bool JsonBooleanPropertyEquals(string configPath, string propertyName, bool expectedValue)
+    {
+        try
+        {
+            if (!File.Exists(configPath))
+            {
+                return false;
+            }
+
+            using var document = JsonDocument.Parse(
+                File.ReadAllText(configPath),
+                new JsonDocumentOptions
+                {
+                    AllowTrailingCommas = true,
+                    CommentHandling = JsonCommentHandling.Skip
+                });
+
+            return document.RootElement.TryGetProperty(propertyName, out var value)
+                && ((expectedValue && value.ValueKind == JsonValueKind.True)
+                    || (!expectedValue && value.ValueKind == JsonValueKind.False));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string SetJsonPropertyValue(string json, string propertyName, JsonNode? value)
+    {
+        var node = JsonNode.Parse(
+            string.IsNullOrWhiteSpace(json) ? "{\n}" : json,
+            nodeOptions: null,
+            documentOptions: new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            }) as JsonObject ?? [];
+        node[propertyName] = value;
+        return node.ToJsonString(JsonOptions()) + Environment.NewLine;
     }
 
     private static string ReplaceJsonStringProperty(string json, string propertyName, string value)
@@ -6662,11 +6923,38 @@ internal sealed class SupervisorConfig
 
         var candidates = new[]
         {
+            TryGetActiveConfigSelectionPath(),
             Path.Combine(AppContext.BaseDirectory, "supervisor.config.json"),
             Path.Combine(Environment.CurrentDirectory, "supervisor.config.json")
         };
 
-        return candidates.FirstOrDefault(File.Exists);
+        return candidates.FirstOrDefault(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path));
+    }
+
+    private static string? TryGetActiveConfigSelectionPath()
+    {
+        try
+        {
+            var selectionPath = Path.Combine(AppContext.BaseDirectory, ActiveConfigSelectionFileName);
+            if (!File.Exists(selectionPath))
+            {
+                return null;
+            }
+
+            var selectedConfig = File.ReadAllText(selectionPath).Trim();
+            if (string.IsNullOrWhiteSpace(selectedConfig))
+            {
+                return null;
+            }
+
+            return Path.IsPathRooted(selectedConfig)
+                ? Path.GetFullPath(selectedConfig)
+                : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, selectedConfig));
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static bool IsJsonBooleanPropertyPresent(string json, string propertyName)

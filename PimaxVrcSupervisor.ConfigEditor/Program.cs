@@ -35,6 +35,7 @@ internal sealed class ConfigEditorForm : Form
     private const int MinimumConfigSelectorWidth = 180;
     private const int MaximumConfigSelectorWidth = 620;
     private const string DefaultConfigFileName = "supervisor.config.json";
+    private const string ActiveConfigSelectionFileName = "supervisor.active-config.txt";
     private const string DefaultConfigResourceName = "PimaxVrcSupervisor.ConfigEditor.Defaults.supervisor.config.json";
     private const string DefaultVrcFaceTrackingDirectory = @"C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking";
     private static readonly string DefaultIntifacePath = Path.Combine(
@@ -176,6 +177,10 @@ internal sealed class ConfigEditorForm : Form
     private bool _suppressDirtyTracking;
     private bool _suppressConfigSelectorChange;
     private bool _saveInProgress;
+    private bool _startupIntegrationApplyInProgress;
+    private bool _mouthTrackerPreferenceTouched;
+    private bool _turnOffMonitorsPreferenceTouched;
+    private bool _startupIntegrationPreferenceTouched;
 
     public ConfigEditorForm(string? requestedConfigPath)
     {
@@ -514,6 +519,22 @@ internal sealed class ConfigEditorForm : Form
 
     private void ConfigureStartupOptionInteractions()
     {
+        _mouthTrackerCheckBox.CheckStateChanged += (_, _) =>
+        {
+            if (!_suppressDirtyTracking)
+            {
+                _mouthTrackerPreferenceTouched = true;
+            }
+        };
+
+        _turnOffMonitorsCheckBox.CheckStateChanged += (_, _) =>
+        {
+            if (!_suppressDirtyTracking)
+            {
+                _turnOffMonitorsPreferenceTouched = true;
+            }
+        };
+
         _autoLaunchTaskCheckBox.CheckStateChanged += (_, _) =>
         {
             if (_suppressDirtyTracking)
@@ -521,7 +542,8 @@ internal sealed class ConfigEditorForm : Form
                 return;
             }
 
-            if (_autoLaunchTaskCheckBox.Checked && _startWithSteamVrCheckBox.Checked)
+            _startupIntegrationPreferenceTouched = true;
+            if (_autoLaunchTaskCheckBox.CheckState == CheckState.Checked && _startWithSteamVrCheckBox.Checked)
             {
                 _startWithSteamVrCheckBox.Checked = false;
             }
@@ -529,9 +551,14 @@ internal sealed class ConfigEditorForm : Form
 
         _startWithSteamVrCheckBox.CheckedChanged += (_, _) =>
         {
-            if (_startWithSteamVrCheckBox.Checked && _autoLaunchTaskCheckBox.Checked)
+            if (!_suppressDirtyTracking)
             {
-                _autoLaunchTaskCheckBox.Checked = false;
+                _startupIntegrationPreferenceTouched = true;
+            }
+
+            if (_startWithSteamVrCheckBox.Checked && _autoLaunchTaskCheckBox.CheckState == CheckState.Checked)
+            {
+                _autoLaunchTaskCheckBox.CheckState = CheckState.Unchecked;
             }
         };
     }
@@ -721,6 +748,7 @@ internal sealed class ConfigEditorForm : Form
             MinimumWidth = 76
         });
         _baseStationsGrid.CellContentClick += OnBaseStationsGridCellContentClick;
+        _baseStationsGrid.CellValueChanged += OnBaseStationsGridCellValueChanged;
         _baseStationsGrid.CellFormatting += OnWarningGridCellFormatting;
         _baseStationsGrid.DefaultValuesNeeded += OnBaseStationsGridDefaultValuesNeeded;
         _baseStationsGrid.KeyDown += OnManagedGridKeyDown;
@@ -731,6 +759,23 @@ internal sealed class ConfigEditorForm : Form
     {
         e.Row.Cells["Enabled"].Value = true;
         e.Row.Cells["Version"].Value = BaseStationVersion.V2.ToString();
+        RefreshBaseStationIdCellState(e.Row, clearInvalidId: true);
+    }
+
+    private void OnBaseStationsGridCellValueChanged(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.RowIndex >= _baseStationsGrid.Rows.Count)
+        {
+            return;
+        }
+
+        var row = _baseStationsGrid.Rows[e.RowIndex];
+        if (_baseStationsGrid.Columns[e.ColumnIndex].Name == "Version")
+        {
+            RefreshBaseStationIdCellState(row, clearInvalidId: true);
+        }
+
+        UpdateBaseStationRowWarnings();
     }
 
     private async Task ScanBaseStationsAsync()
@@ -1942,6 +1987,7 @@ internal sealed class ConfigEditorForm : Form
             if (dialog.ShowDialog() == DialogResult.OK)
             {
                 textBox.Text = dialog.FileName;
+                RefreshPathIndicators();
             }
         };
 
@@ -1996,6 +2042,7 @@ internal sealed class ConfigEditorForm : Form
             if (dialog.ShowDialog(this) == DialogResult.OK)
             {
                 textBox.Text = dialog.SelectedPath;
+                RefreshPathIndicators();
             }
         };
 
@@ -2292,6 +2339,29 @@ internal sealed class ConfigEditorForm : Form
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         File.WriteAllText(path, GetDefaultConfigTemplateJson(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
+    private static void SaveActiveConfigSelection(string path)
+    {
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var appDirectory = Path.GetFullPath(AppContext.BaseDirectory)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var configDirectory = Path.GetDirectoryName(fullPath)?
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var value = string.Equals(appDirectory, configDirectory, StringComparison.OrdinalIgnoreCase)
+                ? Path.GetFileName(fullPath)
+                : fullPath;
+            File.WriteAllText(
+                Path.Combine(AppContext.BaseDirectory, ActiveConfigSelectionFileName),
+                value,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+        catch
+        {
+            // Direct launch falls back to supervisor.config.json if this convenience marker cannot be written.
+        }
     }
 
     private void RefreshConfigSelector()
@@ -2697,6 +2767,7 @@ internal sealed class ConfigEditorForm : Form
 
         try
         {
+            var configPath = Path.GetFullPath(_configPathTextBox.Text.Trim());
             var startInfo = new ProcessStartInfo
             {
                 FileName = supervisorPath,
@@ -2705,13 +2776,15 @@ internal sealed class ConfigEditorForm : Form
                 ErrorDialog = true,
                 ErrorDialogParentHandle = Handle
             };
+            startInfo.ArgumentList.Add("--config");
+            startInfo.ArgumentList.Add(configPath);
             if (!IsAdministrator())
             {
                 startInfo.Verb = "runas";
             }
 
             Process.Start(startInfo);
-            SetStatus("Launched " + supervisorPath);
+            SetStatus("Launched Supervisor using " + Path.GetFileName(configPath) + ".");
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
         {
@@ -2765,6 +2838,7 @@ internal sealed class ConfigEditorForm : Form
             _rawJsonTextBox.Text = _loadedJson;
             _rawJsonHasUnappliedChanges = false;
             _editorState.LastConfigPath = Path.GetFullPath(path);
+            SaveActiveConfigSelection(path);
             SetCleanStatus("Loaded " + path);
         }
         catch (Exception ex)
@@ -2774,6 +2848,7 @@ internal sealed class ConfigEditorForm : Form
         }
         finally
         {
+            ResetFirstRunPreferenceTouchTracking();
             _suppressDirtyTracking = false;
             ValidateRawJsonText(showStatus: false);
             RefreshConfigSelector();
@@ -2885,6 +2960,7 @@ internal sealed class ConfigEditorForm : Form
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
             var backupPath = CreateConfigBackup(path);
             File.WriteAllText(path, json, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            SaveActiveConfigSelection(path);
             _loadedJson = json;
             _appliedRawJson = json;
             _rawJsonHasUnappliedChanges = false;
@@ -2897,6 +2973,7 @@ internal sealed class ConfigEditorForm : Form
                 ? $"Saved config at {DateTime.Now:HH:mm}."
                 : $"Saved config and created backup at {DateTime.Now:HH:mm}.";
             SetCleanStatus(savedStatus, backupPath is null ? null : "Backup path:\r\n" + backupPath);
+            ResetFirstRunPreferenceTouchTracking();
             if (shouldApplyStartupIntegration)
             {
                 ApplyStartupIntegration(path);
@@ -2963,6 +3040,12 @@ internal sealed class ConfigEditorForm : Form
 
     private void ApplyStartupIntegration(string configPath)
     {
+        if (_startupIntegrationApplyInProgress)
+        {
+            SetStatus("Startup integration apply is already running.");
+            return;
+        }
+
         var startupLaunchMode = GetSelectedStartupLaunchMode();
         if (startupLaunchMode == "Unspecified")
         {
@@ -3001,9 +3084,10 @@ internal sealed class ConfigEditorForm : Form
                 startInfo.CreateNoWindow = true;
             }
 
-            using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start PimaxVrcSupervisor.exe.");
+            var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start PimaxVrcSupervisor.exe.");
             if (!IsAdministrator())
             {
+                process.Dispose();
                 SetStatus(startupLaunchMode switch
                 {
                     "ScheduledTask" => "Saved config and requested Scheduled Task startup repair.",
@@ -3014,36 +3098,9 @@ internal sealed class ConfigEditorForm : Form
                 return;
             }
 
-            process.WaitForExit(30000);
-            if (!process.HasExited)
-            {
-                TryKillProcessTree(process);
-                ShowThemedMessageBox(
-                    "The configuration was saved, but startup integration did not finish within 30 seconds.\r\n\r\nPlease try Save again, or use Validate to check the scheduled task state.",
-                    "Startup integration timed out",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
-                SetStatus("Startup integration timed out.");
-                return;
-            }
-
-            if (process.ExitCode != 0)
-            {
-                var output = IsAdministrator()
-                    ? process.StandardError.ReadToEnd() + process.StandardOutput.ReadToEnd()
-                    : "";
-                throw new InvalidOperationException(string.IsNullOrWhiteSpace(output)
-                    ? $"Startup integration exited with code {process.ExitCode}."
-                    : output.Trim());
-            }
-
-            SetStatus(startupLaunchMode switch
-            {
-                "ScheduledTask" => "Saved and applied Scheduled Task startup.",
-                "SteamVrManifest" => "Saved and applied SteamVR startup manifest.",
-                "None" => "Saved and disabled startup integrations.",
-                _ => "Saved startup integration."
-            });
+            _startupIntegrationApplyInProgress = true;
+            SetActiveOperationStatus("Applying startup integration...");
+            _ = MonitorStartupIntegrationApplyAsync(process, startupLaunchMode);
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
         {
@@ -3054,6 +3111,91 @@ internal sealed class ConfigEditorForm : Form
             ShowThemedMessageBox(ex.Message, "Could not apply startup integration", MessageBoxButtons.OK, MessageBoxIcon.Error);
             SetStatus("Startup integration apply failed.");
         }
+    }
+
+    private async Task MonitorStartupIntegrationApplyAsync(Process process, string startupLaunchMode)
+    {
+        try
+        {
+            using (process)
+            {
+                var outputTask = process.StandardOutput.ReadToEndAsync();
+                var errorTask = process.StandardError.ReadToEndAsync();
+                var exited = await Task.Run(() => process.WaitForExit(30000));
+                if (!exited)
+                {
+                    TryKillProcessTree(process);
+                    await TryWaitForProcessOutputAsync(outputTask, errorTask);
+                    RunOnUiThread(() =>
+                    {
+                        ShowThemedMessageBox(
+                            "The configuration was saved, but startup integration did not finish within 30 seconds.\r\n\r\nPlease try Save again, or use Validate to check the scheduled task state.",
+                            "Startup integration timed out",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+                        SetStatus("Startup integration timed out.");
+                    });
+                    return;
+                }
+
+                var output = await outputTask;
+                var error = await errorTask;
+                if (process.ExitCode != 0)
+                {
+                    var message = (error + output).Trim();
+                    throw new InvalidOperationException(string.IsNullOrWhiteSpace(message)
+                        ? $"Startup integration exited with code {process.ExitCode}."
+                        : message);
+                }
+            }
+
+            RunOnUiThread(() => SetStatus(startupLaunchMode switch
+            {
+                "ScheduledTask" => "Saved and applied Scheduled Task startup.",
+                "SteamVrManifest" => "Saved and applied SteamVR startup manifest.",
+                "None" => "Saved and disabled startup integrations.",
+                _ => "Saved startup integration."
+            }));
+        }
+        catch (Exception ex)
+        {
+            RunOnUiThread(() =>
+            {
+                ShowThemedMessageBox(ex.Message, "Could not apply startup integration", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                SetStatus("Startup integration apply failed.");
+            });
+        }
+        finally
+        {
+            RunOnUiThread(() => _startupIntegrationApplyInProgress = false);
+        }
+    }
+
+    private static async Task TryWaitForProcessOutputAsync(params Task<string>[] outputTasks)
+    {
+        try
+        {
+            await Task.WhenAll(outputTasks).WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch
+        {
+        }
+    }
+
+    private void RunOnUiThread(Action action)
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(action);
+            return;
+        }
+
+        action();
     }
 
     private static void TryKillProcessTree(Process process)
@@ -3138,15 +3280,15 @@ internal sealed class ConfigEditorForm : Form
         switch (startupLaunchMode)
         {
             case "ScheduledTask":
-                _autoLaunchTaskCheckBox.Checked = true;
+                _autoLaunchTaskCheckBox.CheckState = CheckState.Checked;
                 _startWithSteamVrCheckBox.Checked = false;
                 break;
             case "SteamVrManifest":
-                _autoLaunchTaskCheckBox.Checked = false;
+                _autoLaunchTaskCheckBox.CheckState = CheckState.Unchecked;
                 _startWithSteamVrCheckBox.Checked = true;
                 break;
             default:
-                _autoLaunchTaskCheckBox.Checked = false;
+                _autoLaunchTaskCheckBox.CheckState = CheckState.Unchecked;
                 _startWithSteamVrCheckBox.Checked = false;
                 break;
         }
@@ -3430,12 +3572,33 @@ internal sealed class ConfigEditorForm : Form
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrProcessNames", Serialize(ParseStringList(_oscGoesBrrrProcessesTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "WatchedShutdownProcessNames", Serialize(ParseStringList(_watchedShutdownProcessesTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "SteamVrServerProcessNames", Serialize(ParseStringList(_steamVrServerProcessesTextBox.Text)));
-        json = JsonPropertyEditor.Replace(json, "MouthTrackerUser", _mouthTrackerCheckBox.Checked ? "true" : "false");
-        json = JsonPropertyEditor.Replace(json, "TurnOffSecondaryMonitors", _turnOffMonitorsCheckBox.Checked ? "true" : "false");
-        var startupLaunchMode = GetSelectedStartupLaunchMode();
+        var baseNode = ParseJson(json);
+        var firstRunBinaryPreferenceTouched = _mouthTrackerPreferenceTouched || _turnOffMonitorsPreferenceTouched;
+        json = JsonPropertyEditor.Replace(
+            json,
+            "MouthTrackerUser",
+            SerializeFirstRunPreferenceBool(
+                baseNode,
+                "MouthTrackerUser",
+                _mouthTrackerCheckBox.Checked,
+                _mouthTrackerPreferenceTouched || firstRunBinaryPreferenceTouched));
+        json = JsonPropertyEditor.Replace(
+            json,
+            "TurnOffSecondaryMonitors",
+            SerializeFirstRunPreferenceBool(
+                baseNode,
+                "TurnOffSecondaryMonitors",
+                _turnOffMonitorsCheckBox.Checked,
+                _turnOffMonitorsPreferenceTouched || firstRunBinaryPreferenceTouched));
+        var startupLaunchMode = GetSelectedStartupLaunchModeForSave(baseNode);
         json = JsonPropertyEditor.Replace(json, "StartupLaunchMode", Serialize(startupLaunchMode));
         json = JsonPropertyEditor.Replace(json, "StopWithSteamVr", startupLaunchMode == "SteamVrManifest" ? "true" : "false");
-        json = JsonPropertyEditor.Replace(json, "AutoLaunchScheduledTask", startupLaunchMode == "ScheduledTask" ? "true" : startupLaunchMode == "SteamVrManifest" || startupLaunchMode == "None" ? "false" : SerializeTriState(_autoLaunchTaskCheckBox.CheckState));
+        json = JsonPropertyEditor.Replace(
+            json,
+            "AutoLaunchScheduledTask",
+            startupLaunchMode == "Unspecified"
+                ? SerializeFirstRunPreferenceBool(baseNode, "AutoLaunchScheduledTask", currentValue: false, _startupIntegrationPreferenceTouched)
+                : startupLaunchMode == "ScheduledTask" ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "PimaxDetectors", Serialize(ParseStringMatrix(_pimaxDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "MouthTrackerDetectors", Serialize(ParseStringMatrix(_mouthTrackerDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "LovenseDetectors", Serialize(ParseStringMatrix(_lovenseDetectorsTextBox.Text)));
@@ -3449,6 +3612,16 @@ internal sealed class ConfigEditorForm : Form
         }
 
         return json;
+    }
+
+    private static string SerializeFirstRunPreferenceBool(JsonNode? baseNode, string propertyName, bool currentValue, bool touched)
+    {
+        if (currentValue || touched || GetBoolCheckState(baseNode, propertyName) != CheckState.Indeterminate)
+        {
+            return currentValue ? "true" : "false";
+        }
+
+        return "\"\"";
     }
 
     private static JsonNode? ParseJson(string json)
@@ -3525,6 +3698,34 @@ internal sealed class ConfigEditorForm : Form
             CheckState.Checked => "ScheduledTask",
             _ => "None"
         };
+    }
+
+    private string GetSelectedStartupLaunchModeForSave(JsonNode? baseNode)
+    {
+        if (_startWithSteamVrCheckBox.Checked)
+        {
+            return "SteamVrManifest";
+        }
+
+        if (_autoLaunchTaskCheckBox.CheckState == CheckState.Checked)
+        {
+            return "ScheduledTask";
+        }
+
+        return _startupIntegrationPreferenceTouched || StartupIntegrationConfigured(baseNode)
+            ? "None"
+            : "Unspecified";
+    }
+
+    private static bool StartupIntegrationConfigured(JsonNode? node)
+        => !string.IsNullOrWhiteSpace(GetStartupLaunchMode(node))
+            || GetBoolCheckState(node, "AutoLaunchScheduledTask") != CheckState.Indeterminate;
+
+    private void ResetFirstRunPreferenceTouchTracking()
+    {
+        _mouthTrackerPreferenceTouched = false;
+        _turnOffMonitorsPreferenceTouched = false;
+        _startupIntegrationPreferenceTouched = false;
     }
 
     private static bool GetBool(JsonNode? node, string propertyName, bool defaultValue)
@@ -3868,7 +4069,7 @@ internal sealed class ConfigEditorForm : Form
 
     private int AddBaseStationGridRow(BaseStationDevice baseStation)
     {
-        return _baseStationsGrid.Rows.Add(
+        var rowIndex = _baseStationsGrid.Rows.Add(
             baseStation.Enabled,
             baseStation.FriendlyName,
             baseStation.Name,
@@ -3881,6 +4082,8 @@ internal sealed class ConfigEditorForm : Form
             "Sleep",
             "Standby",
             "Identify");
+        RefreshBaseStationIdCellState(_baseStationsGrid.Rows[rowIndex], clearInvalidId: true);
+        return rowIndex;
     }
 
     private void UpsertBaseStationGridRow(BaseStationDevice baseStation)
@@ -3899,6 +4102,7 @@ internal sealed class ConfigEditorForm : Form
 
             row.Cells["Name"].Value = baseStation.Name;
             row.Cells["Version"].Value = baseStation.EffectiveVersion.ToString();
+            RefreshBaseStationIdCellState(row, clearInvalidId: true);
             if (string.IsNullOrWhiteSpace(GetGridString(row, "FriendlyName")))
             {
                 row.Cells["FriendlyName"].Value = baseStation.FriendlyName;
@@ -3964,9 +4168,38 @@ internal sealed class ConfigEditorForm : Form
             Name = name,
             BluetoothAddress = address,
             Version = version,
-            Id = GetGridString(row, "Id"),
+            Id = version == BaseStationVersion.V1 ? GetGridString(row, "Id") : "",
             PowerStateReadUnsupported = GetGridBool(row, "PowerStateReadUnsupported", defaultValue: false)
         }.WithDefaults();
+    }
+
+    private void RefreshBaseStationIdCellState(DataGridViewRow row, bool clearInvalidId)
+    {
+        if (row.IsNewRow || !_baseStationsGrid.Columns.Contains("Id"))
+        {
+            return;
+        }
+
+        if (!Enum.TryParse(GetGridString(row, "Version"), ignoreCase: true, out BaseStationVersion version))
+        {
+            version = BaseStationDevice.InferVersion(GetGridString(row, "Name"));
+        }
+
+        var idCell = row.Cells["Id"];
+        var idAllowed = version == BaseStationVersion.V1;
+        idCell.ReadOnly = !idAllowed;
+        if (!idAllowed && clearInvalidId && !string.IsNullOrWhiteSpace(GetGridString(row, "Id")))
+        {
+            idCell.Value = "";
+        }
+
+        idCell.ToolTipText = idAllowed
+            ? "Base Station 1.0 requires the 8-character ID printed on the back label."
+            : "Base Station 2.0 does not use a V1 ID.";
+        idCell.Style.BackColor = idAllowed
+            ? _theme.InputBack
+            : (_theme.IsDark ? Color.FromArgb(45, 45, 45) : SystemColors.Control);
+        idCell.Style.ForeColor = idAllowed ? _theme.Text : SystemColors.GrayText;
     }
 
     private async Task RefreshBaseStationStatesAsync()
@@ -4313,12 +4546,24 @@ internal sealed class ConfigEditorForm : Form
                     }
                 };
                 grid.CellValueChanged += (_, _) => MarkDirty();
+                grid.CellEndEdit += (_, _) => MarkDirty();
                 grid.RowsAdded += (_, _) => MarkDirty();
                 grid.RowsRemoved += (_, _) => MarkDirty();
                 grid.UserDeletedRow += (_, _) => MarkDirty();
+                grid.EditingControlShowing += (_, e) =>
+                {
+                    if (e.Control is TextBox textBox)
+                    {
+                        textBox.TextChanged -= OnGridEditingControlTextChanged;
+                        textBox.TextChanged += OnGridEditingControlTextChanged;
+                    }
+                };
                 break;
         }
     }
+
+    private void OnGridEditingControlTextChanged(object? sender, EventArgs e)
+        => MarkDirty();
 
     private void RefreshRawJsonFromEditor()
     {
@@ -4412,6 +4657,7 @@ internal sealed class ConfigEditorForm : Form
             PopulateControls(node);
             _appliedRawJson = _rawJsonTextBox.Text;
             _rawJsonHasUnappliedChanges = false;
+            ResetFirstRunPreferenceTouchTracking();
             ValidateRawJsonText(showStatus: false);
         }
         catch (Exception ex)
@@ -4502,6 +4748,7 @@ internal sealed class ConfigEditorForm : Form
             _rawJsonTextBox.Text = _appliedRawJson;
             PopulateControls(ParseJson(_appliedRawJson));
             _rawJsonHasUnappliedChanges = false;
+            ResetFirstRunPreferenceTouchTracking();
         }
         finally
         {
@@ -4776,7 +5023,7 @@ internal sealed class ConfigEditorForm : Form
                 .WaitAsync(TimeSpan.FromSeconds(5));
             foreach (var issue in issues)
             {
-                result.Errors.Add(global::ScheduledTaskPathValidator.FormatIssue(issue));
+                result.Warnings.Add(global::ScheduledTaskPathValidator.FormatIssue(issue));
             }
         }
         catch (TimeoutException)
@@ -4787,26 +5034,6 @@ internal sealed class ConfigEditorForm : Form
         {
             result.Warnings.Add($"Scheduled task validation could not complete: {ex.Message}");
         }
-    }
-
-    private async Task<bool> ValidateForSaveAsync(bool includeScheduledTaskValidation)
-    {
-        var result = await ValidateCurrentEditorValuesAsync(includeScheduledTaskValidation);
-        if (result.HasErrors)
-        {
-            ShowValidationResultDialog(result, hasErrors: true);
-            SetStatus($"Validation failed with {result.Errors.Count} error(s).");
-            return false;
-        }
-
-        if (result.HasWarnings)
-        {
-            ShowValidationResultDialog(result, hasErrors: false);
-            SetStatus($"Save cancelled with {result.Warnings.Count} validation warning(s).");
-            return false;
-        }
-
-        return true;
     }
 
     private bool ValidateForLaunch()
@@ -4998,9 +5225,17 @@ internal sealed class ConfigEditorForm : Form
             var name = GetGridString(row, "Name");
             var friendlyName = GetGridString(row, "FriendlyName");
             var address = GetGridString(row, "BluetoothAddress");
+            var version = Enum.TryParse(GetGridString(row, "Version"), ignoreCase: true, out BaseStationVersion parsedVersion)
+                ? parsedVersion
+                : BaseStationDevice.InferVersion(name);
             if (!string.IsNullOrWhiteSpace(address) && !addresses.Add(address))
             {
                 result.Errors.Add($"Duplicate base station Bluetooth address: {address}.");
+            }
+
+            if (version == BaseStationVersion.V2 && !string.IsNullOrWhiteSpace(GetGridString(row, "Id")))
+            {
+                result.Errors.Add("Base Station 2.0 rows cannot have a V1 ID.");
             }
 
             if (enabled && (string.IsNullOrWhiteSpace(address) || string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(friendlyName)))
@@ -5346,6 +5581,7 @@ internal sealed class ConfigEditorForm : Form
 
     private void UpdateOscRouteRowWarnings()
     {
+        var seenPorts = new HashSet<int>();
         foreach (DataGridViewRow row in _oscRoutesGrid.Rows)
         {
             row.ErrorText = "";
@@ -5359,6 +5595,10 @@ internal sealed class ConfigEditorForm : Form
             {
                 row.ErrorText = "Enabled OSC route requires a name and target app receive port.";
             }
+            else if (!seenPorts.Add(port))
+            {
+                row.ErrorText = "Duplicate enabled target app receive port.";
+            }
         }
     }
 
@@ -5368,6 +5608,11 @@ internal sealed class ConfigEditorForm : Form
         foreach (DataGridViewRow row in _baseStationsGrid.Rows)
         {
             row.ErrorText = "";
+            if (_baseStationsGrid.Columns.Contains("Id"))
+            {
+                row.Cells["Id"].ErrorText = "";
+            }
+
             if (row.IsNewRow)
             {
                 continue;
@@ -5375,9 +5620,17 @@ internal sealed class ConfigEditorForm : Form
 
             var address = GetGridString(row, "BluetoothAddress");
             var enabled = GetGridBool(row, "Enabled", defaultValue: true);
+            var version = Enum.TryParse(GetGridString(row, "Version"), ignoreCase: true, out BaseStationVersion parsedVersion)
+                ? parsedVersion
+                : BaseStationDevice.InferVersion(GetGridString(row, "Name"));
             if (!string.IsNullOrWhiteSpace(address) && !seenAddresses.Add(address))
             {
                 row.ErrorText = "Duplicate Bluetooth address.";
+            }
+            else if (version == BaseStationVersion.V2 && !string.IsNullOrWhiteSpace(GetGridString(row, "Id")))
+            {
+                row.ErrorText = "Base Station 2.0 does not use a V1 ID.";
+                row.Cells["Id"].ErrorText = row.ErrorText;
             }
             else if (enabled && string.IsNullOrWhiteSpace(address))
             {

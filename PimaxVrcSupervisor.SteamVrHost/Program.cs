@@ -19,6 +19,17 @@ internal static class Program
     private static async Task Main()
     {
         ApplicationConfiguration.Initialize();
+        using var hostMutex = new Mutex(initiallyOwned: true, @"Local\PimaxVrcSupervisorSteamVrHost", out var ownsHostMutex);
+        if (!ownsHostMutex)
+        {
+            MessageBox.Show(
+                "Pimax VRC Supervisor SteamVR host is already running.",
+                "Pimax VRC Supervisor",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
         using var shutdown = new CancellationTokenSource();
         using var host = new SteamVrDashboardHost();
         await host.RunAsync(shutdown.Token);
@@ -184,13 +195,23 @@ internal sealed class SteamVrDashboardHost : IDisposable
                 await TryEndHelperTaskAsync();
             }
 
-            var taskPathIssue = await global::ScheduledTaskPathValidator.ValidateExistingTaskAsync(
+            var currentReleaseFolder = global::ScheduledTaskPathValidator.GetCurrentExecutableDirectory();
+            var taskValidation = await global::ScheduledTaskPathValidator.ValidateExistingTaskExecutableAsync(
                 HelperTaskName,
-                global::ScheduledTaskPathValidator.GetCurrentExecutableDirectory(),
+                currentReleaseFolder,
                 CancellationToken.None);
-            if (taskPathIssue is not null)
+            if (!taskValidation.Exists)
             {
-                throw new InvalidOperationException(global::ScheduledTaskPathValidator.FormatIssue(taskPathIssue));
+                throw new InvalidOperationException(
+                    "The SteamVR start helper scheduled task is missing.\r\n" +
+                    $"Scheduled task: {HelperTaskName}\r\n" +
+                    $"Current release folder: {currentReleaseFolder}\r\n" +
+                    "Please reapply SteamVR startup integration from the current release.");
+            }
+
+            if (taskValidation.Issue is not null)
+            {
+                throw new InvalidOperationException(global::ScheduledTaskPathValidator.FormatIssue(taskValidation.Issue));
             }
 
             Log("Requesting elevated supervisor via scheduled task.");
@@ -205,7 +226,16 @@ internal sealed class SteamVrDashboardHost : IDisposable
             await TryEndHelperTaskAsync();
             await RunProcessAsync("schtasks.exe", ["/Run", "/TN", HelperTaskName], TimeSpan.FromSeconds(15));
             SetStatus("Supervisor start requested again.");
-            return await WaitForSupervisorCommandBridgeAsync(TimeSpan.FromSeconds(20));
+            if (await WaitForSupervisorCommandBridgeAsync(TimeSpan.FromSeconds(20)))
+            {
+                return true;
+            }
+
+            throw new InvalidOperationException(
+                "The helper task ran, but the elevated Supervisor command bridge did not become available.\r\n" +
+                $"Scheduled task: {HelperTaskName}\r\n" +
+                $"Current release folder: {currentReleaseFolder}\r\n" +
+                "Check the supervisor config and reapply SteamVR startup integration if the task points to an old release.");
         }
         catch (Exception ex)
         {
