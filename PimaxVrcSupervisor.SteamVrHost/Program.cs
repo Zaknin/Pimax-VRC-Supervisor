@@ -183,6 +183,8 @@ internal sealed class HostDiagnosticsSession : IDisposable
     private readonly Process _process = Process.GetCurrentProcess();
     private readonly OperationStats _activeLoop = new();
     private readonly OperationStats _hiddenLoop = new();
+    private readonly OperationStats _dashboardClosedLoop = new();
+    private readonly OperationStats _inactiveDashboardLoop = new();
     private readonly OperationStats _actualLoopInterval = new();
     private readonly OperationStats _statusRefresh = new();
     private readonly OperationStats _consoleRefresh = new();
@@ -237,9 +239,14 @@ internal sealed class HostDiagnosticsSession : IDisposable
 
     public static HostDiagnosticsSession Start(HostDiagnosticsOptions options) => new(options);
 
-    public void RecordLoop(bool active, TimeSpan actualInterval)
+    public void RecordLoop(bool active, bool dashboardVisible, TimeSpan actualInterval)
     {
         (active ? _activeLoop : _hiddenLoop).Record(actualInterval);
+        if (!active)
+        {
+            (dashboardVisible ? _inactiveDashboardLoop : _dashboardClosedLoop).Record(actualInterval);
+        }
+
         _actualLoopInterval.Record(actualInterval);
     }
 
@@ -364,6 +371,8 @@ internal sealed class HostDiagnosticsSession : IDisposable
         _process.Refresh();
         var active = _activeLoop.SnapshotAndReset();
         var hidden = _hiddenLoop.SnapshotAndReset();
+        var dashboardClosed = _dashboardClosedLoop.SnapshotAndReset();
+        var inactiveDashboard = _inactiveDashboardLoop.SnapshotAndReset();
         var actualLoop = _actualLoopInterval.SnapshotAndReset();
         var status = _statusRefresh.SnapshotAndReset();
         var console = _consoleRefresh.SnapshotAndReset();
@@ -396,6 +405,8 @@ internal sealed class HostDiagnosticsSession : IDisposable
             + $"; threads={SafeThreadCount()}; handles={SafeHandleCount()}"
             + $"; activeLoops=count={active.Count},avgMs={active.AverageMilliseconds:0.0},maxMs={active.Max.TotalMilliseconds:0.0}"
             + $"; hiddenLoops=count={hidden.Count},avgMs={hidden.AverageMilliseconds:0.0},maxMs={hidden.Max.TotalMilliseconds:0.0}"
+            + $"; dashboardClosedLoops=count={dashboardClosed.Count},avgMs={dashboardClosed.AverageMilliseconds:0.0},maxMs={dashboardClosed.Max.TotalMilliseconds:0.0}"
+            + $"; inactiveDashboardLoops=count={inactiveDashboard.Count},avgMs={inactiveDashboard.AverageMilliseconds:0.0},maxMs={inactiveDashboard.Max.TotalMilliseconds:0.0}"
             + $"; actualLoop=count={actualLoop.Count},avgMs={actualLoop.AverageMilliseconds:0.0},maxMs={actualLoop.Max.TotalMilliseconds:0.0}"
             + $"; dirtyMarks={Interlocked.Exchange(ref _dirtyMarks, 0)}; renderSkips={Interlocked.Exchange(ref _renderSkips, 0)}; renderSkipReasons=[{renderSkipSummary}]"
             + $"; dashboardVisibleTransitions={Interlocked.Exchange(ref _dashboardVisibleTransitions, 0)}; overlayActiveTransitions={Interlocked.Exchange(ref _overlayActiveTransitions, 0)}; viewedTransitions={Interlocked.Exchange(ref _viewedTransitions, 0)}"
@@ -553,7 +564,8 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private const string OverlayIconRelativePath = @"Assets\vr-overlay-icon.png";
     private const int OverlayWidth = 1500;
     private const int OverlayHeight = 900;
-    private static readonly TimeSpan ActiveOverlayFrameInterval = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan ActiveOverlayFrameInterval = TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan InactiveDashboardPollInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan HiddenOverlayPollInterval = TimeSpan.FromMilliseconds(2000);
     private static readonly TimeSpan RepeatedFailureLogInterval = TimeSpan.FromSeconds(10);
     private const int ButtonTop = 210;
@@ -568,6 +580,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private const int ContentWidth = ButtonThird + ButtonWidth - ButtonLeft;
     private readonly string _logPath = Path.Combine(Path.GetTempPath(), "PimaxVrcSupervisorSteamVrHost.log");
     private readonly object _renderLock = new();
+    private readonly SemaphoreSlim _loopWakeSignal = new(0, 1);
     private readonly HostDiagnosticsSession _diagnostics;
     private readonly DashboardButton[] _buttons =
     [
@@ -596,6 +609,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private int _consoleRefreshInFlight;
     private bool _commandInFlight;
     private bool _renderDirty = true;
+    private bool _renderUrgent;
     private bool _overlayViewed = true;
     private bool _viewedStateKnown;
     private DateTimeOffset _lastBridgeRetryLogAt = DateTimeOffset.MinValue;
@@ -654,7 +668,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
             var viewState = GetOverlayViewState();
             var overlayViewed = viewState.Viewed;
             _diagnostics.RecordOverlayViewState(viewState.DashboardVisible, viewState.OverlayActive, viewState.Viewed);
-            _diagnostics.RecordLoop(overlayViewed, now - lastLoopAt);
+            _diagnostics.RecordLoop(overlayViewed, viewState.DashboardVisible, now - lastLoopAt);
             lastLoopAt = now;
             if (!_viewedStateKnown || overlayViewed != _overlayViewed)
             {
@@ -665,7 +679,8 @@ internal sealed class SteamVrDashboardHost : IDisposable
                 {
                     lastStatusRefresh = now;
                     lastConsoleRefresh = now;
-                    MarkOverlayDirty();
+                    MarkOverlayDirty(urgent: true);
+                    RefreshOverlayTexture(force: true);
                     _ = RefreshStatusAsync();
                     _ = RefreshConsoleAsync();
                 }
@@ -697,7 +712,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
             }
 
             _diagnostics.WriteSummaryIfDue(overlayViewed ? "active-loop" : "hidden-loop");
-            await Task.Delay(overlayViewed ? ActiveOverlayFrameInterval : HiddenOverlayPollInterval, cancellationToken);
+            await WaitForNextLoopAsync(viewState, cancellationToken);
         }
 
         Log($"Host loop exiting; cancellation={cancellationToken.IsCancellationRequested}; steamvr={IsSteamVrRunning()}");
@@ -712,10 +727,39 @@ internal sealed class SteamVrDashboardHost : IDisposable
 
         _disposed = true;
         _diagnostics.WriteSummaryIfDue("dispose");
+        _loopWakeSignal.Dispose();
         _gpuRenderer?.Dispose();
         _overlay?.Dispose();
         _overlayIconImage?.Dispose();
         _steamVrProcess?.Dispose();
+    }
+
+    private async Task WaitForNextLoopAsync(OverlayViewState viewState, CancellationToken cancellationToken)
+    {
+        var delay = viewState.Viewed
+            ? ActiveOverlayFrameInterval
+            : viewState.DashboardVisible
+                ? InactiveDashboardPollInterval
+                : HiddenOverlayPollInterval;
+
+        await _loopWakeSignal.WaitAsync(delay, cancellationToken);
+        while (_loopWakeSignal.Wait(0))
+        {
+        }
+    }
+
+    private void WakeOverlayLoop()
+    {
+        try
+        {
+            _loopWakeSignal.Release();
+        }
+        catch (SemaphoreFullException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
     }
 
     private async Task<bool> StartSupervisorAsync(bool resetTaskState = false)
@@ -929,7 +973,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         var success = false;
         try
         {
-            SetStatus(await SendCommandAsync("status", TimeSpan.FromSeconds(2)));
+            SetStatus(await SendCommandAsync("status", TimeSpan.FromSeconds(2)), markDirty: IsOverlayCurrentlyViewed(), wakeLoop: true);
             success = true;
         }
         catch (Exception ex)
@@ -940,7 +984,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
             }
 
             LogThrottled(ref _lastStatusRefreshFailureLogAt, "Status refresh failed: " + ex.Message);
-            SetStatus("Waiting for elevated supervisor command bridge...");
+            SetStatus("Waiting for elevated supervisor command bridge...", markDirty: IsOverlayCurrentlyViewed(), wakeLoop: true);
         }
         finally
         {
@@ -962,7 +1006,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         {
             var response = await SendCommandPipeFirstAsync("log", TimeSpan.FromMilliseconds(700));
             var lines = JsonSerializer.Deserialize<string[]>(response) ?? [];
-            SetConsoleLines(lines);
+            SetConsoleLines(lines, markDirty: IsOverlayCurrentlyViewed(), wakeLoop: true);
             success = true;
         }
         catch (Exception ex)
@@ -1156,7 +1200,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         if (_commandInFlight || DateTimeOffset.UtcNow - _lastCommandStartedAt < TimeSpan.FromMilliseconds(250))
         {
             Log($"Command ignored for {button.Command}; inFlight={_commandInFlight}");
-            SetStatus("Already running a command...");
+            SetStatus("Already running a command...", urgent: true);
             return;
         }
 
@@ -1164,7 +1208,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         _runningCommand = button.Command;
         _lastCommandStartedAt = DateTimeOffset.UtcNow;
         Log("Command queued: " + button.Command);
-        SetStatus("Clicked: " + button.Label);
+        SetStatus("Clicked: " + button.Label, urgent: true);
         _ = ExecuteButtonAsync(button, cancellationToken);
     }
 
@@ -1175,18 +1219,18 @@ internal sealed class SteamVrDashboardHost : IDisposable
         try
         {
             Log("Command starting: " + button.Command);
-            SetStatus("Running " + button.Label + "...");
+            SetStatus("Running " + button.Label + "...", urgent: true);
             var response = string.Equals(button.Command, "restart-supervisor", StringComparison.Ordinal)
                 ? await RestartSupervisorAsync()
                 : await SendCommandAsync(button.Command, TimeSpan.FromSeconds(45));
             Log("Command response: " + response);
-            SetStatus(response);
+            SetStatus(response, markDirty: IsOverlayCurrentlyViewed(), urgent: true, wakeLoop: true);
             success = !response.StartsWith("Command failed:", StringComparison.OrdinalIgnoreCase);
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
             Log("Command failed: " + ex);
-            SetStatus("Command failed: " + ex.Message);
+            SetStatus("Command failed: " + ex.Message, markDirty: IsOverlayCurrentlyViewed(), urgent: true, wakeLoop: true);
         }
         finally
         {
@@ -1194,7 +1238,12 @@ internal sealed class SteamVrDashboardHost : IDisposable
             Log("Command finished: " + button.Command);
             _runningCommand = null;
             _commandInFlight = false;
-            MarkOverlayDirty();
+            if (IsOverlayCurrentlyViewed())
+            {
+                MarkOverlayDirty(urgent: true, wakeLoop: true);
+                _ = RefreshStatusAsync();
+                _ = RefreshConsoleAsync();
+            }
         }
     }
 
@@ -1207,7 +1256,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
             && point.Y >= bounds.Top
             && point.Y < bounds.Bottom;
 
-    private void SetStatus(string status)
+    private void SetStatus(string status, bool markDirty = true, bool urgent = false, bool wakeLoop = false)
     {
         if (string.Equals(_status, status, StringComparison.Ordinal))
         {
@@ -1220,10 +1269,13 @@ internal sealed class SteamVrDashboardHost : IDisposable
             _dashboardStatus = parsedStatus;
         }
 
-        MarkOverlayDirty();
+        if (markDirty)
+        {
+            MarkOverlayDirty(urgent, wakeLoop);
+        }
     }
 
-    private void SetConsoleLines(string[] lines)
+    private void SetConsoleLines(string[] lines, bool markDirty = true, bool urgent = false, bool wakeLoop = false)
     {
         if (_consoleLines.SequenceEqual(lines, StringComparer.Ordinal))
         {
@@ -1232,14 +1284,29 @@ internal sealed class SteamVrDashboardHost : IDisposable
 
         _consoleLines = lines;
         _consoleDisplayLines = BuildConsoleDisplayLines(lines);
-        MarkOverlayDirty();
+        if (markDirty)
+        {
+            MarkOverlayDirty(urgent, wakeLoop);
+        }
     }
 
-    private void MarkOverlayDirty()
+    private void MarkOverlayDirty(bool urgent = false, bool wakeLoop = false)
     {
         _renderDirty = true;
+        if (urgent)
+        {
+            _renderUrgent = true;
+        }
+
         _diagnostics.RecordDirtyMark();
+        if (wakeLoop)
+        {
+            WakeOverlayLoop();
+        }
     }
+
+    private bool IsOverlayCurrentlyViewed()
+        => Volatile.Read(ref _overlayViewed);
 
     private void TryInitializeGpuRenderer()
     {
@@ -1296,7 +1363,8 @@ internal sealed class SteamVrDashboardHost : IDisposable
         }
 
         var now = DateTimeOffset.UtcNow;
-        if (!force && now - _lastOverlayRefreshAt < ActiveOverlayFrameInterval)
+        var urgent = _renderUrgent;
+        if (!force && !urgent && now - _lastOverlayRefreshAt < ActiveOverlayFrameInterval)
         {
             _diagnostics.RecordRenderSkip("throttled");
             return;
@@ -1323,11 +1391,13 @@ internal sealed class SteamVrDashboardHost : IDisposable
                 _diagnostics.RecordSetOverlayTexture(Stopwatch.GetElapsedTime(setTextureStartedAt));
 
                 _renderDirty = false;
+                _renderUrgent = false;
                 _lastOverlayRefreshAt = now;
             }
             catch (Exception ex)
             {
                 _renderDirty = false;
+                _renderUrgent = false;
                 LogThrottled(ref _lastRenderRefreshFailureLogAt, "Render refresh failed: " + ex);
             }
         }
