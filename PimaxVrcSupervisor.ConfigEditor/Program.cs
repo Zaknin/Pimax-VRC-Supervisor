@@ -104,6 +104,8 @@ internal sealed class ConfigEditorForm : Form
     private readonly TextBox _pimaxServiceLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly CheckBox _diagnosticsLogSupervisorCheckBox = new() { Text = "Log supervisor diagnostics", AutoSize = true };
     private readonly CheckBox _diagnosticsLogSteamVrOverlayCheckBox = new() { Text = "Log SteamVR overlay diagnostics", AutoSize = true };
+    private readonly CheckBox _diagnosticsDebugSupervisorCheckBox = new() { Text = "Write supervisor debug log", AutoSize = true };
+    private readonly CheckBox _diagnosticsDebugSteamVrOverlayCheckBox = new() { Text = "Write SteamVR overlay debug log", AutoSize = true };
     private readonly CheckBox _diagnosticsVerboseCheckBox = new() { Text = "Verbose diagnostic timings", AutoSize = true };
     private readonly TextBox _diagnosticsLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly DataGridView _autoLaunchAppsGrid = new()
@@ -149,6 +151,8 @@ internal sealed class ConfigEditorForm : Form
     private readonly TextBox _mouthTrackerDetectorsTextBox = CreateMultilineTextBox();
     private readonly TextBox _lovenseDetectorsTextBox = CreateMultilineTextBox();
     private readonly TextBox _rawJsonTextBox = CreateMultilineTextBox(readOnly: false);
+    private readonly TextBox _rawJsonSearchTextBox = new() { Width = 220, Anchor = AnchorStyles.Left };
+    private readonly Label _rawJsonSearchStatusLabel = new() { AutoSize = false, Height = 27, TextAlign = ContentAlignment.MiddleLeft, Anchor = AnchorStyles.Left, Tag = "Muted" };
     private readonly Label _rawJsonValidationLabel = new() { AutoSize = true, Padding = new Padding(0, 4, 0, 0) };
     private readonly Label _statusLabel = new() { AutoSize = true };
     private readonly ThemedTabHost _tabs = new() { Dock = DockStyle.Fill };
@@ -434,14 +438,15 @@ internal sealed class ConfigEditorForm : Form
             "VRCFaceTracking.exe");
         AddFullWidth(layout, _vrcFaceTrackingStartMinimizedCheckBox, "Checked means the supervisor starts VRCFaceTracking minimized and tries to minimize its main window after launch.");
         AddFullWidth(layout, _mouthTrackerCheckBox, "Checked means you use a Vive mouth tracker. Unchecked disables mouth-tracker monitoring.");
-        AddFullWidth(layout, _turnOffMonitorsCheckBox, "Checked saves the current monitor layout and disables secondary monitors during the VR session. The layout is restored after VRChat and SteamVR close.");
         AddSectionHeader(layout, "Startup");
         AddFullWidth(layout, _autoLaunchTaskCheckBox, "Checked lets the app create or repair the elevated auto-launch Scheduled Task.");
         AddFullWidth(layout, _startWithSteamVrCheckBox, "Checked registers the SteamVR dashboard host manifest and starts the supervisor when SteamVR starts.");
-        AddFolderValidationRow(layout, "PiService log folder", _pimaxServiceLogDirectoryTextBox, ToolTipWithConfigKey("Folder containing PiService__*.log files. Environment variables such as %LOCALAPPDATA% are expanded by the supervisor.", "PimaxServiceLogDirectory"));
+        AddFullWidth(layout, _turnOffMonitorsCheckBox, "Checked saves the current monitor layout and disables secondary monitors during the VR session. The layout is restored after VRChat and SteamVR close.");
         AddSectionHeader(layout, "Diagnostics");
         AddFullWidth(layout, _diagnosticsLogSupervisorCheckBox, ToolTipWithConfigKey("Write periodic supervisor CPU, memory, loop, process detection, command, app, and base-station timing diagnostics to a text file.", "DiagnosticsLogSupervisor"));
         AddFullWidth(layout, _diagnosticsLogSteamVrOverlayCheckBox, ToolTipWithConfigKey("Write SteamVR dashboard host loop, visibility, refresh, render, D3D upload, and texture submit diagnostics to a text file.", "DiagnosticsLogSteamVrOverlay"));
+        AddFullWidth(layout, _diagnosticsDebugSupervisorCheckBox, ToolTipWithConfigKey("When supervisor diagnostics are enabled, also write supervisor debug events to a separate text file in the diagnostic log folder.", "DiagnosticsDebugSupervisor"));
+        AddFullWidth(layout, _diagnosticsDebugSteamVrOverlayCheckBox, ToolTipWithConfigKey("When SteamVR overlay diagnostics are enabled, also write overlay debug events to a separate text file in the diagnostic log folder.", "DiagnosticsDebugSteamVrOverlay"));
         AddFullWidth(layout, _diagnosticsVerboseCheckBox, ToolTipWithConfigKey("Also log individual slow or per-operation diagnostic timing lines. Leave off unless collecting a short troubleshooting trace.", "DiagnosticsVerbose"));
         AddNumber(layout, "DiagnosticsSummaryIntervalSeconds", "Summary interval", 1, 3600, "Seconds between diagnostic summary lines when diagnostic logging is enabled.", "seconds");
         AddFolderValidationRow(
@@ -449,6 +454,12 @@ internal sealed class ConfigEditorForm : Form
             "Diagnostic log folder",
             _diagnosticsLogDirectoryTextBox,
             ToolTipWithConfigKey("Folder for diagnostic text logs. Default is %TEMP%\\PimaxVrcSupervisorDiagnostics.", "DiagnosticsLogDirectory"),
+            includeOpenButton: true);
+        AddFolderValidationRow(
+            layout,
+            "PiService log folder",
+            _pimaxServiceLogDirectoryTextBox,
+            ToolTipWithConfigKey("Folder containing PiService__*.log files. Environment variables such as %LOCALAPPDATA% are expanded by the supervisor.", "PimaxServiceLogDirectory"),
             includeOpenButton: true);
 
         var buttons = new FlowLayoutPanel
@@ -1815,12 +1826,23 @@ internal sealed class ConfigEditorForm : Form
         var warning = CreateMutedLabel("Advanced: edits here directly change the full configuration used by all tabs.");
         warning.Padding = new Padding(0, 0, 0, 8);
 
+        var toolbar = new TableLayoutPanel
+        {
+            AutoSize = true,
+            ColumnCount = 2,
+            Dock = DockStyle.Fill,
+            Padding = new Padding(0, 0, 0, 8)
+        };
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
         var buttons = new FlowLayoutPanel
         {
             AutoSize = true,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
-            Padding = new Padding(0, 0, 0, 8)
+            Margin = new Padding(0),
+            Anchor = AnchorStyles.Left
         };
         var applyButton = CreateButton("Apply JSON to editor");
         applyButton.Click += (_, _) => ApplyRawJsonToEditor();
@@ -1837,9 +1859,41 @@ internal sealed class ConfigEditorForm : Form
         _toolTips.SetToolTip(formatButton, "Pretty-print the Raw JSON text after validating it.");
         buttons.Controls.Add(formatButton);
 
+        var searchPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0),
+            Anchor = AnchorStyles.Right,
+            Padding = new Padding(0)
+        };
+        var searchLabel = new Label { Text = "Search", AutoSize = false, Width = 48, Height = 27, TextAlign = ContentAlignment.MiddleLeft, Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, 6, 0) };
+        var previousButton = CreateButton("Previous", autoSize: false, width: 78, height: 27);
+        var nextButton = CreateButton("Next", autoSize: false, width: 56, height: 27);
+        previousButton.Click += (_, _) => SearchRawJson(forward: false, focusEditor: true);
+        nextButton.Click += (_, _) => SearchRawJson(forward: true, focusEditor: true);
+        _rawJsonSearchTextBox.Margin = new Padding(0, 2, 6, 0);
+        _rawJsonSearchTextBox.KeyDown += RawJsonSearchTextBox_KeyDown;
+        _rawJsonSearchTextBox.TextChanged += (_, _) => UpdateRawJsonSearchStatus();
+        _rawJsonTextBox.TextChanged += (_, _) => UpdateRawJsonSearchStatus();
+        _toolTips.SetToolTip(searchLabel, "Search in the Raw JSON text.");
+        _toolTips.SetToolTip(_rawJsonSearchTextBox, "Search in Raw JSON. Press Enter for next match, Shift+Enter for previous match, or use Previous and Next.");
+        _toolTips.SetToolTip(previousButton, "Find the previous Raw JSON match.");
+        _toolTips.SetToolTip(nextButton, "Find the next Raw JSON match.");
+        searchPanel.Controls.Add(searchLabel);
+        searchPanel.Controls.Add(_rawJsonSearchTextBox);
+        searchPanel.Controls.Add(previousButton);
+        searchPanel.Controls.Add(nextButton);
+        searchPanel.Controls.Add(_rawJsonSearchStatusLabel);
+
+        toolbar.Controls.Add(buttons, 0, 0);
+        toolbar.Controls.Add(searchPanel, 1, 0);
+
         _rawJsonTextBox.Dock = DockStyle.Fill;
+        _rawJsonTextBox.HideSelection = false;
         layout.Controls.Add(warning, 0, 0);
-        layout.Controls.Add(buttons, 0, 1);
+        layout.Controls.Add(toolbar, 0, 1);
         layout.Controls.Add(_rawJsonTextBox, 0, 2);
         layout.Controls.Add(_rawJsonValidationLabel, 0, 3);
 
@@ -2427,14 +2481,14 @@ internal sealed class ConfigEditorForm : Form
         }
     }
 
-    private void RefreshConfigSelector()
+    private void RefreshConfigSelector(string? currentDisplayNameOverride = null)
     {
         _suppressConfigSelectorChange = true;
         var beganUpdate = false;
         try
         {
             var currentPath = TryGetFullPath(_configPathTextBox.Text.Trim());
-            var items = GetConfigProfileItems().ToArray();
+            var items = GetConfigProfileItems(currentPath, currentDisplayNameOverride).ToArray();
 
             _configSelectorComboBox.BeginUpdate();
             beganUpdate = true;
@@ -2452,6 +2506,7 @@ internal sealed class ConfigEditorForm : Form
             _configSelectorComboBox.Enabled = items.Length > 0;
             _configSelectorComboBox.EndUpdate();
             beganUpdate = false;
+            _configSelectorComboBox.Refresh();
             UpdateConfigSelectorTooltip();
         }
         catch
@@ -2485,7 +2540,7 @@ internal sealed class ConfigEditorForm : Form
         _configSelectorComboBox.DropDownWidth = Math.Max(_configSelectorComboBox.Width, desiredWidth);
     }
 
-    private IEnumerable<ConfigProfileItem> GetConfigProfileItems()
+    private IEnumerable<ConfigProfileItem> GetConfigProfileItems(string? currentPath = null, string? currentDisplayNameOverride = null)
     {
         var directory = AppContext.BaseDirectory;
         if (!Directory.Exists(directory))
@@ -2499,11 +2554,16 @@ internal sealed class ConfigEditorForm : Form
             .Select(path =>
             {
                 var fileName = Path.GetFileName(path);
-                var displayName = ReadConfigDisplayName(path);
+                var fullPath = Path.GetFullPath(path);
+                var displayName = currentPath is not null
+                    && !string.IsNullOrWhiteSpace(currentDisplayNameOverride)
+                    && PathsEqual(fullPath, currentPath)
+                        ? currentDisplayNameOverride.Trim()
+                        : ReadConfigDisplayName(path);
                 return new ConfigProfileItem(
                     string.IsNullOrWhiteSpace(displayName) ? fileName : displayName.Trim(),
                     fileName,
-                    Path.GetFullPath(path));
+                    fullPath);
             })
             .ToArray();
     }
@@ -2914,7 +2974,7 @@ internal sealed class ConfigEditorForm : Form
             ResetFirstRunPreferenceTouchTracking();
             _suppressDirtyTracking = false;
             ValidateRawJsonText(showStatus: false);
-            RefreshConfigSelector();
+            RefreshConfigSelector(_displayNameTextBox.Text.Trim());
             UpdateWindowTitle();
         }
     }
@@ -2963,6 +3023,8 @@ internal sealed class ConfigEditorForm : Form
         _pimaxServiceLogDirectoryTextBox.Text = GetString(node, "PimaxServiceLogDirectory");
         _diagnosticsLogSupervisorCheckBox.Checked = GetBool(node, "DiagnosticsLogSupervisor", defaultValue: false);
         _diagnosticsLogSteamVrOverlayCheckBox.Checked = GetBool(node, "DiagnosticsLogSteamVrOverlay", defaultValue: false);
+        _diagnosticsDebugSupervisorCheckBox.Checked = GetBool(node, "DiagnosticsDebugSupervisor", defaultValue: false);
+        _diagnosticsDebugSteamVrOverlayCheckBox.Checked = GetBool(node, "DiagnosticsDebugSteamVrOverlay", defaultValue: false);
         _diagnosticsVerboseCheckBox.Checked = GetBool(node, "DiagnosticsVerbose", defaultValue: false);
         _diagnosticsLogDirectoryTextBox.Text = GetStringOrDefault(node, "DiagnosticsLogDirectory", "%TEMP%\\PimaxVrcSupervisorDiagnostics");
         _baseStationsEnabledCheckBox.Checked = GetBool(node, "BaseStationsEnabled", defaultValue: false);
@@ -3036,7 +3098,7 @@ internal sealed class ConfigEditorForm : Form
             _rawJsonTextBox.Text = json;
             _suppressDirtyTracking = false;
             _editorState.LastConfigPath = Path.GetFullPath(path);
-            RefreshConfigSelector();
+            RefreshConfigSelector(_displayNameTextBox.Text.Trim());
             var savedStatus = backupPath is null
                 ? $"Saved config at {DateTime.Now:HH:mm}."
                 : $"Saved config and created backup at {DateTime.Now:HH:mm}.";
@@ -3614,7 +3676,7 @@ internal sealed class ConfigEditorForm : Form
     private string ApplyControlValues(string baseJson)
     {
         var json = string.IsNullOrWhiteSpace(baseJson) ? "{\r\n}\r\n" : baseJson;
-        json = JsonPropertyEditor.Replace(json, "DisplayName", Serialize(_displayNameTextBox.Text.Trim()));
+        json = JsonPropertyEditor.ReplaceTopLevel(json, "DisplayName", Serialize(_displayNameTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "BrokenEyePath", Serialize(_brokenEyePathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "VrcFaceTrackingPath", Serialize(_vrcFaceTrackingPathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "IntifacePath", Serialize(_intifacePathTextBox.Text.Trim()));
@@ -3675,6 +3737,8 @@ internal sealed class ConfigEditorForm : Form
         json = JsonPropertyEditor.Replace(json, "PimaxServiceLogDirectory", Serialize(_pimaxServiceLogDirectoryTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "DiagnosticsLogSupervisor", _diagnosticsLogSupervisorCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "DiagnosticsLogSteamVrOverlay", _diagnosticsLogSteamVrOverlayCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsDebugSupervisor", _diagnosticsDebugSupervisorCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsDebugSteamVrOverlay", _diagnosticsDebugSteamVrOverlayCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "DiagnosticsVerbose", _diagnosticsVerboseCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "DiagnosticsLogDirectory", Serialize(_diagnosticsLogDirectoryTextBox.Text.Trim()));
 
@@ -4597,6 +4661,8 @@ internal sealed class ConfigEditorForm : Form
             case TextBox textBox when ReferenceEquals(textBox, _rawJsonTextBox):
                 textBox.TextChanged += (_, _) => OnRawJsonEdited();
                 break;
+            case TextBox textBox when ReferenceEquals(textBox, _rawJsonSearchTextBox):
+                break;
             case TextBox textBox when !ReferenceEquals(textBox, _configPathTextBox):
                 textBox.TextChanged += (_, _) => MarkDirty();
                 break;
@@ -4636,6 +4702,141 @@ internal sealed class ConfigEditorForm : Form
 
     private void OnGridEditingControlTextChanged(object? sender, EventArgs e)
         => MarkDirty();
+
+    private void RawJsonSearchTextBox_KeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.KeyCode != Keys.Enter)
+        {
+            return;
+        }
+
+        SearchRawJson(forward: !e.Shift, focusEditor: false);
+        e.Handled = true;
+        e.SuppressKeyPress = true;
+    }
+
+    private void SearchRawJson(bool forward, bool focusEditor)
+    {
+        var query = _rawJsonSearchTextBox.Text;
+        if (string.IsNullOrEmpty(query))
+        {
+            _rawJsonSearchStatusLabel.Text = "";
+            return;
+        }
+
+        var text = _rawJsonTextBox.Text;
+        if (text.Length == 0)
+        {
+            _rawJsonSearchStatusLabel.Text = "No matches";
+            return;
+        }
+
+        var index = forward
+            ? FindNextRawJsonMatch(text, query)
+            : FindPreviousRawJsonMatch(text, query);
+        if (index < 0)
+        {
+            _rawJsonSearchStatusLabel.Text = "No matches";
+            return;
+        }
+
+        SelectRawJsonSearchMatch(index, query.Length, focusEditor);
+    }
+
+    private void UpdateRawJsonSearchStatus()
+    {
+        var query = _rawJsonSearchTextBox.Text;
+        if (string.IsNullOrEmpty(query))
+        {
+            _rawJsonSearchStatusLabel.Text = "";
+            return;
+        }
+
+        var text = _rawJsonTextBox.Text;
+        var firstIndex = text.IndexOf(query, StringComparison.OrdinalIgnoreCase);
+        if (firstIndex < 0)
+        {
+            _rawJsonSearchStatusLabel.Text = "No matches";
+            return;
+        }
+
+        var currentIndex = _rawJsonTextBox.SelectionStart;
+        if (currentIndex >= 0
+            && currentIndex + query.Length <= text.Length
+            && string.Equals(text.Substring(currentIndex, query.Length), query, StringComparison.OrdinalIgnoreCase))
+        {
+            UpdateRawJsonSearchMatchStatus(currentIndex, query);
+            return;
+        }
+
+        _rawJsonSearchStatusLabel.Text = CountRawJsonMatches(text, query) + " matches";
+    }
+
+    private int FindNextRawJsonMatch(string text, string query)
+    {
+        var startIndex = Math.Min(text.Length, _rawJsonTextBox.SelectionStart + Math.Max(1, _rawJsonTextBox.SelectionLength));
+        var index = text.IndexOf(query, startIndex, StringComparison.OrdinalIgnoreCase);
+        return index >= 0 || startIndex == 0
+            ? index
+            : text.IndexOf(query, 0, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private int FindPreviousRawJsonMatch(string text, string query)
+    {
+        var startIndex = Math.Min(text.Length - 1, _rawJsonTextBox.SelectionStart - 1);
+        var index = startIndex >= 0
+            ? text.LastIndexOf(query, startIndex, startIndex + 1, StringComparison.OrdinalIgnoreCase)
+            : -1;
+        return index >= 0 || text.Length == 0
+            ? index
+            : text.LastIndexOf(query, text.Length - 1, text.Length, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void SelectRawJsonSearchMatch(int index, int length, bool focusEditor)
+    {
+        if (focusEditor)
+        {
+            _rawJsonTextBox.Focus();
+        }
+
+        _rawJsonTextBox.Select(index, length);
+        _rawJsonTextBox.ScrollToCaret();
+        UpdateRawJsonSearchMatchStatus(index, _rawJsonSearchTextBox.Text);
+    }
+
+    private void UpdateRawJsonSearchMatchStatus(int selectedIndex, string query)
+    {
+        var text = _rawJsonTextBox.Text;
+        var total = CountRawJsonMatches(text, query);
+        if (total == 0)
+        {
+            _rawJsonSearchStatusLabel.Text = "No matches";
+            return;
+        }
+
+        var current = 1;
+        var index = text.IndexOf(query, 0, StringComparison.OrdinalIgnoreCase);
+        while (index >= 0 && index < selectedIndex)
+        {
+            current++;
+            index = text.IndexOf(query, index + Math.Max(1, query.Length), StringComparison.OrdinalIgnoreCase);
+        }
+
+        _rawJsonSearchStatusLabel.Text = $"Match {current} of {total}";
+    }
+
+    private static int CountRawJsonMatches(string text, string query)
+    {
+        var count = 0;
+        var index = text.IndexOf(query, 0, StringComparison.OrdinalIgnoreCase);
+        while (index >= 0)
+        {
+            count++;
+            index = text.IndexOf(query, index + Math.Max(1, query.Length), StringComparison.OrdinalIgnoreCase);
+        }
+
+        return count;
+    }
 
     private void RefreshRawJsonFromEditor()
     {
@@ -7073,6 +7274,17 @@ internal static class WindowsTitleBar
 
 internal static class JsonPropertyEditor
 {
+    public static string ReplaceTopLevel(string json, string propertyName, string serializedValue)
+    {
+        if (!TryFindTopLevelProperty(json, propertyName, out _, out var valueStart))
+        {
+            return InsertProperty(json, propertyName, serializedValue);
+        }
+
+        var valueEnd = FindValueEnd(json, valueStart);
+        return json[..valueStart] + serializedValue + json[valueEnd..];
+    }
+
     public static string Replace(string json, string propertyName, string serializedValue)
     {
         var propertyMatch = Regex.Match(json, $"\"{Regex.Escape(propertyName)}\"\\s*:");
@@ -7146,6 +7358,76 @@ internal static class JsonPropertyEditor
         }
 
         return json[..removeStart] + json[removeEnd..];
+    }
+
+    private static bool TryFindTopLevelProperty(string json, string propertyName, out int propertyStart, out int valueStart)
+    {
+        propertyStart = -1;
+        valueStart = -1;
+        var propertyToken = JsonSerializer.Serialize(propertyName);
+        var depth = 0;
+        var inString = false;
+        var escaped = false;
+
+        for (var index = 0; index < json.Length; index++)
+        {
+            var ch = json[index];
+            if (inString)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                }
+                else if (ch == '\\')
+                {
+                    escaped = true;
+                }
+                else if (ch == '"')
+                {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                if (depth == 1
+                    && index + propertyToken.Length <= json.Length
+                    && string.CompareOrdinal(json, index, propertyToken, 0, propertyToken.Length) == 0)
+                {
+                    var colonIndex = index + propertyToken.Length;
+                    while (colonIndex < json.Length && char.IsWhiteSpace(json[colonIndex]))
+                    {
+                        colonIndex++;
+                    }
+
+                    if (colonIndex < json.Length && json[colonIndex] == ':')
+                    {
+                        propertyStart = index;
+                        valueStart = colonIndex + 1;
+                        while (valueStart < json.Length && char.IsWhiteSpace(json[valueStart]))
+                        {
+                            valueStart++;
+                        }
+
+                        return true;
+                    }
+                }
+
+                inString = true;
+            }
+            else if (ch is '{' or '[')
+            {
+                depth++;
+            }
+            else if (ch is '}' or ']')
+            {
+                depth = Math.Max(0, depth - 1);
+            }
+        }
+
+        return false;
     }
 
     private static string InsertProperty(string json, string propertyName, string serializedValue)

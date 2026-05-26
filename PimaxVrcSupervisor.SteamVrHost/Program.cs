@@ -3,7 +3,7 @@ using System.Collections.Concurrent;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Net.Sockets;
-using System.IO.Pipes;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -38,9 +38,18 @@ internal static class Program
     }
 }
 
+internal static class AppVersion
+{
+    public static string Current =>
+        typeof(AppVersion).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        ?? typeof(AppVersion).Assembly.GetName().Version?.ToString()
+        ?? "unknown";
+}
+
 internal sealed record HostDiagnosticsOptions(
     bool Enabled,
     bool Verbose,
+    bool DebugEnabled,
     TimeSpan SummaryInterval,
     string LogDirectory)
 {
@@ -51,6 +60,7 @@ internal sealed record HostDiagnosticsOptions(
         var configPath = FindConfigPath();
         var enabled = false;
         var verbose = false;
+        var debugEnabled = false;
         var intervalSeconds = 10;
         var logDirectory = @"%TEMP%\PimaxVrcSupervisorDiagnostics";
         if (configPath is not null)
@@ -67,6 +77,7 @@ internal sealed record HostDiagnosticsOptions(
                 var root = document.RootElement;
                 enabled = GetBool(root, "DiagnosticsLogSteamVrOverlay", defaultValue: false);
                 verbose = GetBool(root, "DiagnosticsVerbose", defaultValue: false);
+                debugEnabled = GetBool(root, "DiagnosticsDebugSteamVrOverlay", defaultValue: false);
                 intervalSeconds = GetInt(root, "DiagnosticsSummaryIntervalSeconds", defaultValue: 10);
                 logDirectory = GetString(root, "DiagnosticsLogDirectory");
             }
@@ -78,6 +89,7 @@ internal sealed record HostDiagnosticsOptions(
 
         enabled = enabled || HasFlag(args, "--diagnostics");
         verbose = verbose || HasFlag(args, "--diagnostics-verbose");
+        debugEnabled = enabled && debugEnabled;
         if (TryGetCommandOption(args, "--diagnostics-log-dir", out var requestedDirectory) && !string.IsNullOrWhiteSpace(requestedDirectory))
         {
             logDirectory = requestedDirectory;
@@ -86,6 +98,7 @@ internal sealed record HostDiagnosticsOptions(
         return new HostDiagnosticsOptions(
             enabled,
             verbose,
+            debugEnabled,
             TimeSpan.FromSeconds(Math.Max(1, intervalSeconds)),
             logDirectory);
     }
@@ -176,10 +189,79 @@ internal sealed record HostDiagnosticsOptions(
     }
 }
 
+internal sealed class DebugLogSession : IDisposable
+{
+    private readonly object _lock = new();
+    private readonly StreamWriter? _writer;
+    private bool _disposed;
+
+    private DebugLogSession(HostDiagnosticsOptions options)
+    {
+        Enabled = options.Enabled && options.DebugEnabled;
+        if (!Enabled)
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(options.ResolveLogDirectory());
+        Path = System.IO.Path.Combine(
+            options.ResolveLogDirectory(),
+            $"steamvr-host-debug-{DateTime.Now:yyyyMMdd-HHmmss}-pid{Environment.ProcessId}.log");
+        _writer = new StreamWriter(new FileStream(Path, FileMode.CreateNew, FileAccess.Write, FileShare.Read), new UTF8Encoding(false))
+        {
+            AutoFlush = true
+        };
+        Write("debug started; role=steamvr-host; diagnosticsVerbose=" + options.Verbose);
+    }
+
+    public bool Enabled { get; }
+    public string? Path { get; }
+
+    public static DebugLogSession Create(HostDiagnosticsOptions options) => new(options);
+
+    public void Write(string message)
+    {
+        if (!Enabled || _writer is null)
+        {
+            return;
+        }
+
+        lock (_lock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _writer.WriteLine($"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz} {message}");
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (_lock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            if (_writer is not null)
+            {
+                _writer.WriteLine($"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz} debug stopped");
+                _writer.Dispose();
+            }
+
+            _disposed = true;
+        }
+    }
+}
+
 internal sealed class HostDiagnosticsSession : IDisposable
 {
     private readonly object _lock = new();
     private readonly StreamWriter? _writer;
+    private readonly DebugLogSession _debugLog;
     private readonly Process _process = Process.GetCurrentProcess();
     private readonly OperationStats _activeLoop = new();
     private readonly OperationStats _hiddenLoop = new();
@@ -212,6 +294,7 @@ internal sealed class HostDiagnosticsSession : IDisposable
 
     private HostDiagnosticsSession(HostDiagnosticsOptions options)
     {
+        _debugLog = DebugLogSession.Create(options);
         Enabled = options.Enabled;
         Verbose = options.Verbose;
         SummaryInterval = options.SummaryInterval;
@@ -230,12 +313,20 @@ internal sealed class HostDiagnosticsSession : IDisposable
             AutoFlush = true
         };
         Write("diagnostics started; role=steamvr-host; verbose=" + Verbose);
+        if (_debugLog.Enabled)
+        {
+            Write("steamvr host debug file=" + _debugLog.Path);
+            _debugLog.Write("steamvr host diagnostics file=" + Path);
+            _debugLog.Write("steamvr host debug file=" + _debugLog.Path);
+        }
     }
 
     public bool Enabled { get; }
     public bool Verbose { get; }
+    public bool DebugEnabled => _debugLog.Enabled;
     public TimeSpan SummaryInterval { get; }
     public string? Path { get; }
+    public string? DebugPath => _debugLog.Path;
 
     public static HostDiagnosticsSession Start(HostDiagnosticsOptions options) => new(options);
 
@@ -427,6 +518,12 @@ internal sealed class HostDiagnosticsSession : IDisposable
         }
     }
 
+    public bool ShouldWriteCommandDebug(string command)
+        => DebugEnabled && (Verbose || !IsRoutineDashboardPollCommand(command));
+
+    public void WriteDebug(string message)
+        => _debugLog.Write(message);
+
     public void Dispose()
     {
         lock (_lock)
@@ -442,6 +539,7 @@ internal sealed class HostDiagnosticsSession : IDisposable
                 _writer.Dispose();
             }
 
+            _debugLog.Dispose();
             _process.Dispose();
             _disposed = true;
         }
@@ -509,6 +607,10 @@ internal sealed class HostDiagnosticsSession : IDisposable
 
     private static double BytesToMegabytes(long bytes)
         => bytes / 1024.0 / 1024.0;
+
+    private static bool IsRoutineDashboardPollCommand(string command)
+        => string.Equals(command, "status", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(command, "log", StringComparison.OrdinalIgnoreCase);
 }
 
 internal sealed class OperationStats
@@ -556,7 +658,6 @@ internal readonly record struct OperationStatsSnapshot(long Count, long Failures
 internal sealed class SteamVrDashboardHost : IDisposable
 {
     private const string HelperTaskName = "Pimax VRC Supervisor SteamVR Start";
-    private const string CommandPipeName = "PimaxVrcSupervisor.Command";
     private const string ForcedManualReloadMarkerFileName = "PimaxVrcSupervisorForcedManualReload.marker";
     private const int CommandTcpPort = 37957;
     private const string OverlayKey = "pimax.vrcsupervisor.dashboard";
@@ -630,6 +731,12 @@ internal sealed class SteamVrDashboardHost : IDisposable
     {
         Log("Host starting from " + AppContext.BaseDirectory);
         Log("Dashboard renderer: Ver2 only.");
+        WriteDebug(
+            "host starting"
+            + $"; version={AppVersion.Current}"
+            + $"; baseDirectory={AppContext.BaseDirectory}"
+            + $"; diagnosticsFile={(_diagnostics.Path ?? "none")}"
+            + $"; debugFile={(_diagnostics.DebugPath ?? "none")}");
         AppDomain.CurrentDomain.ProcessExit += (_, _) => Log("Host process exiting.");
         await StartSupervisorAsync();
 
@@ -651,10 +758,12 @@ internal sealed class SteamVrDashboardHost : IDisposable
 
             Log("Dashboard overlay created.");
             Log($"OpenVR event layout: size={Marshal.SizeOf<OpenVrEvent>()}; mouse=16,20; button=24; cursor=28.");
+            WriteDebug($"dashboard overlay created; eventLayoutSize={Marshal.SizeOf<OpenVrEvent>()}");
         }
         catch (Exception ex)
         {
             Log("Could not create overlay: " + ex);
+            WriteDebug("could not create overlay: " + ex);
             MessageBox.Show(ex.Message, "Could not create SteamVR dashboard overlay", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
@@ -675,6 +784,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
                 _viewedStateKnown = true;
                 _overlayViewed = overlayViewed;
                 Log($"Dashboard view state changed: dashboardVisible={viewState.DashboardVisible}; overlayActive={viewState.OverlayActive}; viewed={overlayViewed}");
+                WriteDebug($"view state changed; dashboardVisible={viewState.DashboardVisible}; overlayActive={viewState.OverlayActive}; viewed={overlayViewed}");
                 if (overlayViewed)
                 {
                     lastStatusRefresh = now;
@@ -716,6 +826,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         }
 
         Log($"Host loop exiting; cancellation={cancellationToken.IsCancellationRequested}; steamvr={IsSteamVrRunning()}");
+        WriteDebug($"host loop exiting; cancellation={cancellationToken.IsCancellationRequested}; steamvr={IsSteamVrRunning()}");
     }
 
     public void Dispose()
@@ -791,19 +902,23 @@ internal sealed class SteamVrDashboardHost : IDisposable
             }
 
             Log("Requesting elevated supervisor via scheduled task.");
+            WriteDebug("requesting elevated supervisor via scheduled task");
             await RunProcessAsync("schtasks.exe", ["/Run", "/TN", HelperTaskName], TimeSpan.FromSeconds(15));
             SetStatus("Supervisor start requested.");
             if (await WaitForSupervisorCommandBridgeAsync(TimeSpan.FromSeconds(20)))
             {
+                WriteDebug("supervisor command bridge ready after scheduled task run");
                 return true;
             }
 
             Log("Supervisor command bridge did not become ready after scheduled task run; retrying once.");
+            WriteDebug("supervisor command bridge not ready; retrying scheduled task run");
             await TryEndHelperTaskAsync();
             await RunProcessAsync("schtasks.exe", ["/Run", "/TN", HelperTaskName], TimeSpan.FromSeconds(15));
             SetStatus("Supervisor start requested again.");
             if (await WaitForSupervisorCommandBridgeAsync(TimeSpan.FromSeconds(20)))
             {
+                WriteDebug("supervisor command bridge ready after scheduled task retry");
                 return true;
             }
 
@@ -816,6 +931,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         catch (Exception ex)
         {
             Log("Could not start elevated supervisor: " + ex);
+            WriteDebug("could not start elevated supervisor: " + ex);
             SetStatus("Could not start elevated supervisor: " + ex.Message);
             return false;
         }
@@ -827,6 +943,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         if (supervisorProcesses.Length == 0)
         {
             Log("Supervisor restart requested; no supervisor process is running.");
+            WriteDebug("supervisor restart requested; no supervisor process is running");
             var started = await StartSupervisorAsync(resetTaskState: true);
             return started
                 ? "Supervisor was not running. Startup completed."
@@ -838,13 +955,16 @@ internal sealed class SteamVrDashboardHost : IDisposable
         try
         {
             Log("Requesting elevated supervisor hard stop over command bridge.");
+            WriteDebug("requesting elevated supervisor hard stop over command bridge");
             var response = await SendCommandAsync("force-stop-supervisor", TimeSpan.FromSeconds(2));
             Log("Supervisor hard stop response: " + response);
+            WriteDebug("supervisor hard stop response: " + response);
             hardStopRequested = true;
         }
         catch (Exception ex)
         {
             Log("Supervisor hard stop command failed; falling back to direct process kill: " + ex.Message);
+            WriteDebug("supervisor hard stop command failed; fallback=direct-kill; error=" + ex.Message);
         }
 
         if (!hardStopRequested)
@@ -938,6 +1058,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         }
 
         Log("Timed out waiting for elevated supervisor command bridge.");
+        WriteDebug("timed out waiting for elevated supervisor command bridge");
         SetStatus("Waiting for elevated supervisor command bridge...");
         return false;
     }
@@ -1004,7 +1125,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         var success = false;
         try
         {
-            var response = await SendCommandPipeFirstAsync("log", TimeSpan.FromMilliseconds(700));
+            var response = await SendCommandAsync("log", TimeSpan.FromMilliseconds(700));
             var lines = JsonSerializer.Deserialize<string[]>(response) ?? [];
             SetConsoleLines(lines, markDirty: IsOverlayCurrentlyViewed(), wakeLoop: true);
             success = true;
@@ -1075,6 +1196,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
             else if (vrEvent.EventType == OpenVrEventType.OverlayClosed)
             {
                 Log("OverlayClosed event received.");
+                WriteDebug("overlay closed event received");
                 Environment.ExitCode = 0;
                 return;
             }
@@ -1200,6 +1322,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         if (_commandInFlight || DateTimeOffset.UtcNow - _lastCommandStartedAt < TimeSpan.FromMilliseconds(250))
         {
             Log($"Command ignored for {button.Command}; inFlight={_commandInFlight}");
+            WriteDebug($"command ignored; name={button.Command}; inFlight={_commandInFlight}");
             SetStatus("Already running a command...", urgent: true);
             return;
         }
@@ -1208,6 +1331,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         _runningCommand = button.Command;
         _lastCommandStartedAt = DateTimeOffset.UtcNow;
         Log("Command queued: " + button.Command);
+        WriteDebug("command queued; name=" + button.Command);
         SetStatus("Clicked: " + button.Label, urgent: true);
         _ = ExecuteButtonAsync(button, cancellationToken);
     }
@@ -1219,23 +1343,28 @@ internal sealed class SteamVrDashboardHost : IDisposable
         try
         {
             Log("Command starting: " + button.Command);
+            WriteDebug("command starting; name=" + button.Command);
             SetStatus("Running " + button.Label + "...", urgent: true);
             var response = string.Equals(button.Command, "restart-supervisor", StringComparison.Ordinal)
                 ? await RestartSupervisorAsync()
                 : await SendCommandAsync(button.Command, TimeSpan.FromSeconds(45));
             Log("Command response: " + response);
+            WriteDebug("command response; name=" + button.Command + "; response=" + TruncateDebugValue(response));
             SetStatus(response, markDirty: IsOverlayCurrentlyViewed(), urgent: true, wakeLoop: true);
             success = !response.StartsWith("Command failed:", StringComparison.OrdinalIgnoreCase);
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
             Log("Command failed: " + ex);
+            WriteDebug("command failed; name=" + button.Command + "; error=" + ex);
             SetStatus("Command failed: " + ex.Message, markDirty: IsOverlayCurrentlyViewed(), urgent: true, wakeLoop: true);
         }
         finally
         {
-            _diagnostics.RecordCommand(button.Command, Stopwatch.GetElapsedTime(startedAt), success);
+            var elapsed = Stopwatch.GetElapsedTime(startedAt);
+            _diagnostics.RecordCommand(button.Command, elapsed, success);
             Log("Command finished: " + button.Command);
+            WriteDebug($"command finished; name={button.Command}; success={success}; elapsedMs={elapsed.TotalMilliseconds:0.0}");
             _runningCommand = null;
             _commandInFlight = false;
             if (IsOverlayCurrentlyViewed())
@@ -1314,12 +1443,14 @@ internal sealed class SteamVrDashboardHost : IDisposable
         {
             _gpuRenderer = new GpuOverlayRenderer(OverlayWidth, OverlayHeight);
             Log($"D3D11 overlay renderer ready; featureLevel={_gpuRenderer.FeatureLevel}.");
+            WriteDebug($"D3D11 overlay renderer ready; featureLevel={_gpuRenderer.FeatureLevel}");
         }
         catch (Exception ex)
         {
             _gpuRenderer?.Dispose();
             _gpuRenderer = null;
             Log("D3D11 overlay renderer unavailable; Ver2 dashboard requires D3D11 texture rendering: " + ex);
+            WriteDebug("D3D11 overlay renderer unavailable: " + ex);
             throw new InvalidOperationException("D3D11 overlay renderer unavailable; Ver2 dashboard requires D3D11 texture rendering.", ex);
         }
     }
@@ -1339,6 +1470,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         catch (Exception ex)
         {
             Log("Could not load overlay icon image: " + ex.Message);
+            WriteDebug("could not load overlay icon image: " + ex.Message);
         }
     }
 
@@ -1748,32 +1880,21 @@ internal sealed class SteamVrDashboardHost : IDisposable
 
     private async Task<string> SendCommandAsync(string command, TimeSpan timeout)
     {
-        try
+        var debugCommand = _diagnostics.ShouldWriteCommandDebug(command);
+        Log("Sending TCP command: " + command);
+        if (debugCommand)
         {
-            Log("Sending TCP command: " + command);
-            var response = await SendTcpCommandAsync(command, timeout);
-            Log("TCP command completed: " + command);
-            return response;
+            WriteDebug("IPC TCP command sending; name=" + command);
         }
-        catch (Exception tcpEx)
-        {
-            Log("TCP command failed, trying pipe: " + tcpEx.Message);
-            var response = await SendPipeCommandAsync(command, timeout);
-            Log("Pipe command completed: " + command);
-            return response;
-        }
-    }
 
-    private async Task<string> SendCommandPipeFirstAsync(string command, TimeSpan timeout)
-    {
-        try
+        var response = await SendTcpCommandAsync(command, timeout);
+        Log("TCP command completed: " + command);
+        if (debugCommand)
         {
-            return await SendPipeCommandAsync(command, timeout);
+            WriteDebug("IPC TCP command completed; name=" + command + "; response=" + TruncateDebugValue(response));
         }
-        catch
-        {
-            return await SendTcpCommandAsync(command, timeout);
-        }
+
+        return response;
     }
 
     private static async Task<string> SendTcpCommandAsync(string command, TimeSpan timeout)
@@ -1787,20 +1908,6 @@ internal sealed class SteamVrDashboardHost : IDisposable
             AutoFlush = true
         };
         using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
-        await writer.WriteLineAsync(command.AsMemory(), timeoutSource.Token);
-        return await reader.ReadLineAsync(timeoutSource.Token) ?? "No response.";
-    }
-
-    private static async Task<string> SendPipeCommandAsync(string command, TimeSpan timeout)
-    {
-        using var timeoutSource = new CancellationTokenSource(timeout);
-        await using var pipe = new NamedPipeClientStream(".", CommandPipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        await pipe.ConnectAsync(timeoutSource.Token);
-        await using var writer = new StreamWriter(pipe, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true)
-        {
-            AutoFlush = true
-        };
-        using var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
         await writer.WriteLineAsync(command.AsMemory(), timeoutSource.Token);
         return await reader.ReadLineAsync(timeoutSource.Token) ?? "No response.";
     }
@@ -1829,7 +1936,14 @@ internal sealed class SteamVrDashboardHost : IDisposable
 
         lastLogAt = now;
         Log(message);
+        WriteDebug("throttled failure: " + message);
     }
+
+    private void WriteDebug(string message)
+        => _diagnostics.WriteDebug(message);
+
+    private static string TruncateDebugValue(string value)
+        => value.Length <= 300 ? value : value[..300] + "...";
 
     private static async Task RunProcessAsync(string fileName, string[] arguments, TimeSpan timeout)
     {

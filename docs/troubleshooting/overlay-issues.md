@@ -14,7 +14,7 @@
 | Check | Action |
 | --- | --- |
 | Supervisor running | Verify `PimaxVrcSupervisor.exe` is running (elevated). |
-| Command bridge | The supervisor's command pipe or TCP port must be accessible. |
+| Command bridge | The supervisor's TCP command endpoint (`127.0.0.1:37957`) must be accessible. |
 | UAC prompt | If the UAC prompt was dismissed, the supervisor won't be elevated and the command bridge won't start. |
 | Log file | Check `%TEMP%\PimaxVrcSupervisorSteamVrHost.log` for errors. |
 
@@ -40,8 +40,8 @@ This means the overlay host cannot connect to the supervisor.
 The console refreshes every 2 seconds via the `log` command.
 
 1. Check if the supervisor is running.
-2. The named pipe connection may be failing — check the host log.
-3. Try pressing a button. If status updates but console doesn't, the pipe is working but the `log` command may be timing out.
+2. Check the host log for TCP command bridge errors.
+3. Try pressing a button. If status updates but console doesn't, the `log` command may be timing out.
 
 ## Overlay Closes Immediately
 

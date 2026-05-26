@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
-using System.IO.Pipes;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
@@ -204,6 +203,7 @@ internal sealed record DiagnosticsOptions(
     string Role,
     bool Enabled,
     bool Verbose,
+    bool DebugEnabled,
     TimeSpan SummaryInterval,
     string LogDirectory)
 {
@@ -211,6 +211,7 @@ internal sealed record DiagnosticsOptions(
     {
         var enabled = config.DiagnosticsLogSupervisor || HasFlag(args, "--diagnostics");
         var verbose = config.DiagnosticsVerbose || HasFlag(args, "--diagnostics-verbose");
+        var debugEnabled = enabled && config.DiagnosticsDebugSupervisor;
         var logDirectory = TryGetCommandOption(args, "--diagnostics-log-dir", out var requestedDirectory)
             && !string.IsNullOrWhiteSpace(requestedDirectory)
             ? requestedDirectory
@@ -219,6 +220,7 @@ internal sealed record DiagnosticsOptions(
             "supervisor",
             enabled,
             verbose,
+            debugEnabled,
             TimeSpan.FromSeconds(Math.Max(1, config.DiagnosticsSummaryIntervalSeconds)),
             logDirectory);
     }
@@ -336,6 +338,74 @@ internal sealed class DiagnosticTextLog : IDisposable
     }
 }
 
+internal sealed class DebugLogSession : IDisposable
+{
+    private readonly object _lock = new();
+    private readonly StreamWriter? _writer;
+    private bool _disposed;
+
+    private DebugLogSession(DiagnosticsOptions options)
+    {
+        Enabled = options.Enabled && options.DebugEnabled;
+        if (!Enabled)
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(options.ResolveLogDirectory());
+        Path = System.IO.Path.Combine(
+            options.ResolveLogDirectory(),
+            $"{options.Role}-debug-{DateTime.Now:yyyyMMdd-HHmmss}-pid{Environment.ProcessId}.log");
+        _writer = new StreamWriter(new FileStream(Path, FileMode.CreateNew, FileAccess.Write, FileShare.Read), new UTF8Encoding(false))
+        {
+            AutoFlush = true
+        };
+        Write("debug started; role=" + options.Role + "; diagnosticsVerbose=" + options.Verbose);
+    }
+
+    public bool Enabled { get; }
+    public string? Path { get; }
+
+    public static DebugLogSession Create(DiagnosticsOptions options) => new(options);
+
+    public void Write(string message)
+    {
+        if (!Enabled || _writer is null)
+        {
+            return;
+        }
+
+        lock (_lock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _writer.WriteLine($"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz} {message}");
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (_lock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            if (_writer is not null)
+            {
+                _writer.WriteLine($"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz} debug stopped");
+                _writer.Dispose();
+            }
+
+            _disposed = true;
+        }
+    }
+}
+
 internal sealed class OperationStats
 {
     private long _count;
@@ -382,6 +452,7 @@ internal sealed class SupervisorDiagnosticsSession : IDisposable
 {
     private static SupervisorDiagnosticsSession? s_current;
     private readonly DiagnosticTextLog _log;
+    private readonly DebugLogSession _debugLog;
     private readonly Process _process = Process.GetCurrentProcess();
     private readonly OperationStats _mainLoop = new();
     private readonly OperationStats _processDetection = new();
@@ -397,22 +468,36 @@ internal sealed class SupervisorDiagnosticsSession : IDisposable
     private long _reconnectEvents;
     private bool _disposed;
 
-    private SupervisorDiagnosticsSession(DiagnosticTextLog log)
+    private SupervisorDiagnosticsSession(DiagnosticTextLog log, DebugLogSession debugLog)
     {
         _log = log;
+        _debugLog = debugLog;
         _lastCpuTime = _process.TotalProcessorTime;
         if (_log.Enabled)
         {
             s_current = this;
             _log.Write("supervisor diagnostics file=" + _log.Path);
+            if (_debugLog.Enabled)
+            {
+                _log.Write("supervisor debug file=" + _debugLog.Path);
+            }
+        }
+
+        if (_debugLog.Enabled)
+        {
+            _debugLog.Write("supervisor diagnostics file=" + (_log.Path ?? "none"));
+            _debugLog.Write("supervisor debug file=" + _debugLog.Path);
         }
     }
 
     public bool Enabled => _log.Enabled;
     public bool Verbose => _log.Verbose;
+    public bool DebugEnabled => _debugLog.Enabled;
+    public string? DiagnosticsPath => _log.Path;
+    public string? DebugPath => _debugLog.Path;
 
     public static SupervisorDiagnosticsSession Start(DiagnosticsOptions options)
-        => new(DiagnosticTextLog.Create(options));
+        => new(DiagnosticTextLog.Create(options), DebugLogSession.Create(options));
 
     public static void RecordProcessDetectionStatic(TimeSpan elapsed, int returnedProcessCount, string[] processNames)
     {
@@ -469,6 +554,12 @@ internal sealed class SupervisorDiagnosticsSession : IDisposable
 
     public void WriteVerbose(string message)
         => _log.WriteVerbose(message);
+
+    public bool ShouldWriteCommandDebug(string command)
+        => DebugEnabled && (Verbose || !IsRoutineDashboardPollCommand(command));
+
+    public void WriteDebug(string message)
+        => _debugLog.Write(message);
 
     public void WriteSummaryIfDue(string context)
     {
@@ -539,6 +630,7 @@ internal sealed class SupervisorDiagnosticsSession : IDisposable
         }
 
         _log.Dispose();
+        _debugLog.Dispose();
         _process.Dispose();
     }
 
@@ -583,6 +675,10 @@ internal sealed class SupervisorDiagnosticsSession : IDisposable
 
     private static double BytesToMegabytes(long bytes)
         => bytes / 1024.0 / 1024.0;
+
+    private static bool IsRoutineDashboardPollCommand(string command)
+        => string.Equals(command, "status", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(command, "log", StringComparison.OrdinalIgnoreCase);
 }
 
 internal static class ConsoleWindow
@@ -1174,10 +1270,19 @@ internal sealed class AppSupervisor
         {
             Console.WriteLine($"Config path: {_config.LoadedFromPath}");
         }
+        WriteDebug(
+            "supervisor starting"
+            + $"; version={AppVersion.Current}"
+            + $"; config={(string.IsNullOrWhiteSpace(_config.DisplayName) ? "default" : _config.DisplayName)}"
+            + $"; configPath={(_config.LoadedFromPath ?? "none")}"
+            + $"; steamVrStart={_steamVrStart}"
+            + $"; diagnosticsFile={(_diagnostics.DiagnosticsPath ?? "none")}"
+            + $"; debugFile={(_diagnostics.DebugPath ?? "none")}");
 
         if (!OperatingSystem.IsWindows())
         {
             Console.WriteLine("This supervisor is Windows-only.");
+            WriteDebug("supervisor exiting; reason=non-windows");
             return;
         }
 
@@ -1188,6 +1293,7 @@ internal sealed class AppSupervisor
 
         if (!await EnsureExecutablePathsAsync(cancellationToken))
         {
+            WriteDebug("supervisor exiting; reason=missing executable path");
             return;
         }
 
@@ -2490,9 +2596,15 @@ internal sealed class AppSupervisor
         command = command.Trim().ToLowerInvariant();
         var startedAt = Stopwatch.GetTimestamp();
         var success = false;
+        var response = "";
+        if (_diagnostics.ShouldWriteCommandDebug(command))
+        {
+            WriteDebug("command received; name=" + (command.Length == 0 ? "empty" : command));
+        }
+
         try
         {
-            var response = command switch
+            response = command switch
             {
                 "status" => BuildSupervisorStatus(),
                 "log" => JsonSerializer.Serialize(SupervisorConsoleLog.GetRecentLines(14)),
@@ -2549,13 +2661,27 @@ internal sealed class AppSupervisor
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
-            return "Command failed: " + ex.Message;
+            response = "Command failed: " + ex.Message;
+            return response;
         }
         finally
         {
-            _diagnostics.RecordCommand(command, Stopwatch.GetElapsedTime(startedAt), success);
+            var elapsed = Stopwatch.GetElapsedTime(startedAt);
+            _diagnostics.RecordCommand(command, elapsed, success);
+            if (_diagnostics.ShouldWriteCommandDebug(command))
+            {
+                WriteDebug(
+                    "command completed"
+                    + $"; name={(command.Length == 0 ? "empty" : command)}"
+                    + $"; success={success}"
+                    + $"; elapsedMs={elapsed.TotalMilliseconds:0.0}"
+                    + $"; response={TruncateDebugValue(response)}");
+            }
         }
     }
+
+    private static string TruncateDebugValue(string value)
+        => value.Length <= 300 ? value : value[..300] + "...";
 
     private string BuildSupervisorStatus()
     {
@@ -2571,6 +2697,9 @@ internal sealed class AppSupervisor
         var oscGoesBrrr = GetOscGoesBrrrStatus();
         return $"Mode={mode}; SteamVR={steamVrRunning}; CoreApps={coreApps}; BaseStations={baseStations}; OscRouter={oscRouter}; OscGoesBrrr={oscGoesBrrr}";
     }
+
+    internal void WriteDebug(string message)
+        => _diagnostics.WriteDebug(message);
 
     internal bool IsForcedManualReloadRequested()
         => _forcedManualReloadRequested;
@@ -4597,22 +4726,21 @@ internal sealed class AppSupervisor
 
 internal sealed class SupervisorCommandServer : IDisposable
 {
-    public const string PipeName = "PimaxVrcSupervisor.Command";
     public const int TcpPort = 37957;
+    private readonly AppSupervisor _supervisor;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task _serverTask;
 
     private SupervisorCommandServer(AppSupervisor supervisor)
     {
-        _serverTask = Task.WhenAll(
-            Task.Run(() => RunPipeAsync(supervisor, _shutdown.Token), CancellationToken.None),
-            Task.Run(() => RunTcpAsync(supervisor, _shutdown.Token), CancellationToken.None));
+        _supervisor = supervisor;
+        _serverTask = Task.Run(() => RunTcpAsync(supervisor, _shutdown.Token), CancellationToken.None);
     }
 
     public static SupervisorCommandServer Start(AppSupervisor supervisor, CancellationToken cancellationToken)
     {
         var server = new SupervisorCommandServer(supervisor);
-        Console.WriteLine($"Dashboard command pipe ready: {PipeName}");
+        supervisor.WriteDebug($"command bridge starting; tcp=127.0.0.1:{TcpPort}");
         return server;
     }
 
@@ -4624,6 +4752,7 @@ internal sealed class SupervisorCommandServer : IDisposable
         }
 
         _shutdown.Cancel();
+        _supervisor.WriteDebug("command bridge stopping");
         try
         {
             _serverTask.Wait(TimeSpan.FromSeconds(2));
@@ -4636,66 +4765,6 @@ internal sealed class SupervisorCommandServer : IDisposable
         _shutdown.Dispose();
     }
 
-    private static async Task RunPipeAsync(AppSupervisor supervisor, CancellationToken cancellationToken)
-    {
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            try
-            {
-                var pipe = new NamedPipeServerStream(
-                    PipeName,
-                    PipeDirection.InOut,
-                    maxNumberOfServerInstances: 4,
-                    PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous);
-
-                await pipe.WaitForConnectionAsync(cancellationToken);
-                var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
-                var writer = new StreamWriter(pipe, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true)
-                {
-                    AutoFlush = true
-                };
-
-                _ = Task.Run(
-                    () => HandleCommandPipeAsync(supervisor, pipe, reader, writer, cancellationToken),
-                    CancellationToken.None);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Dashboard command pipe error: {ex.Message}");
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    return;
-                }
-            }
-        }
-    }
-
-    private static async Task HandleCommandPipeAsync(
-        AppSupervisor supervisor,
-        NamedPipeServerStream pipe,
-        StreamReader reader,
-        StreamWriter writer,
-        CancellationToken cancellationToken)
-    {
-        await using (pipe)
-        using (reader)
-        await using (writer)
-        {
-            var command = await reader.ReadLineAsync(cancellationToken) ?? "";
-            var response = await supervisor.ExecuteSupervisorCommandAsync(command, cancellationToken);
-            await writer.WriteLineAsync(response.AsMemory(), cancellationToken);
-        }
-    }
-
     private static async Task RunTcpAsync(AppSupervisor supervisor, CancellationToken cancellationToken)
     {
         var listener = new TcpListener(IPAddress.Loopback, TcpPort);
@@ -4703,6 +4772,7 @@ internal sealed class SupervisorCommandServer : IDisposable
         {
             listener.Start();
             Console.WriteLine($"Dashboard command TCP endpoint ready: 127.0.0.1:{TcpPort}");
+            supervisor.WriteDebug($"command bridge TCP endpoint ready; endpoint=127.0.0.1:{TcpPort}");
             while (!cancellationToken.IsCancellationRequested)
             {
                 var client = await listener.AcceptTcpClientAsync(cancellationToken);
@@ -4717,6 +4787,7 @@ internal sealed class SupervisorCommandServer : IDisposable
         catch (Exception ex)
         {
             Console.WriteLine($"Dashboard command TCP endpoint error: {ex.Message}");
+            supervisor.WriteDebug("command bridge TCP endpoint error: " + ex.Message);
         }
         finally
         {
@@ -7086,6 +7157,8 @@ internal sealed class SupervisorConfig
     public int DeviceProbeTimeoutSeconds { get; init; } = 10;
     public bool DiagnosticsLogSupervisor { get; init; }
     public bool DiagnosticsLogSteamVrOverlay { get; init; }
+    public bool DiagnosticsDebugSupervisor { get; init; }
+    public bool DiagnosticsDebugSteamVrOverlay { get; init; }
     public bool DiagnosticsVerbose { get; init; }
     public int DiagnosticsSummaryIntervalSeconds { get; init; } = 10;
     public string DiagnosticsLogDirectory { get; init; } = @"%TEMP%\PimaxVrcSupervisorDiagnostics";

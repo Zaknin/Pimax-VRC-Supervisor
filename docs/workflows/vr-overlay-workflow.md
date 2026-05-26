@@ -22,7 +22,7 @@ This page describes the SteamVR dashboard overlay workflow and how it interacts 
 
 1. User clicks a button in the VR overlay.
 2. The host resolves the click to a command (e.g., `restart-core-apps`).
-3. The host sends the command to the supervisor via TCP (`127.0.0.1:37957`) or named pipe (`PimaxVrcSupervisor.Command`).
+3. The host sends the command to the supervisor via TCP (`127.0.0.1:37957`).
 4. The supervisor executes the command and returns a response.
 5. The host displays the response in the status line.
 
@@ -33,9 +33,9 @@ The host and supervisor communicate using a simple text protocol:
 - **Request:** Single line text command (e.g., `status`, `restart-core-apps`).
 - **Response:** Single line text response (e.g., `Mode=SteamVR; SteamVR=running; CoreApps=running; ...`).
 
-### Fallback
+### Command Bridge
 
-The host tries TCP first for commands. If TCP fails, it falls back to the named pipe. For console refresh (`log` command), it tries the pipe first.
+The host uses TCP for overlay commands, status refreshes, and console refresh (`log`) requests.
 
 ## Dashboard Buttons
 

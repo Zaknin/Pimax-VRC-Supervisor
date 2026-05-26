@@ -51,7 +51,7 @@ Below the status, a console panel shows the last lines of supervisor output, ref
 ## Command Flow
 
 1. You click a button in the VR overlay.
-2. The host sends the command to the supervisor via TCP (port 37957) or named pipe (`PimaxVrcSupervisor.Command`).
+2. The host sends the command to the supervisor via TCP (`127.0.0.1:37957`).
 3. The supervisor executes the command and returns a response.
 4. The host displays the response in the status line.
 

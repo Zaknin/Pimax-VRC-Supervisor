@@ -47,14 +47,13 @@ The manifest registers:
 
 ## Command Communication
 
-The overlay host communicates with the supervisor through two channels:
+The overlay host communicates with the supervisor through a loopback TCP command bridge:
 
 | Channel | Endpoint | Priority |
 | --- | --- | --- |
-| TCP | `127.0.0.1:37957` | Primary for commands |
-| Named Pipe | `PimaxVrcSupervisor.Command` | Fallback for commands, primary for console refresh |
+| TCP | `127.0.0.1:37957` | Commands, status, and console refresh |
 
-The host tries TCP first for commands. If TCP fails, it falls back to the named pipe. For console refresh (`log` command), it tries the pipe first.
+The host sends all overlay commands, status refreshes, and console refresh (`log`) requests over TCP.
 
 ## Logging
 

@@ -78,14 +78,13 @@ The main supervisor class that orchestrates the entire session lifecycle.
 
 ## SupervisorCommandServer
 
-Named pipe and TCP command server for VR overlay communication.
+TCP command server for VR overlay communication.
 
 | Member | Description |
 | --- | --- |
-| `PipeName` | `"PimaxVrcSupervisor.Command"` |
 | `TcpPort` | `37957` |
-| `Start()` | Starts both pipe and TCP listeners. |
-| `Dispose()` | Stops both listeners. |
+| `Start()` | Starts the TCP listener. |
+| `Dispose()` | Stops the listener. |
 
 ## BaseStationEmergencyCleanup
 

@@ -248,6 +248,12 @@
   // Write passive SteamVR dashboard host diagnostics to a text file. Leave off unless measuring performance.
   "DiagnosticsLogSteamVrOverlay": false,
 
+  // When supervisor diagnostics are enabled, also write supervisor debug events to a separate text file.
+  "DiagnosticsDebugSupervisor": false,
+
+  // When SteamVR dashboard host diagnostics are enabled, also write overlay debug events to a separate text file.
+  "DiagnosticsDebugSteamVrOverlay": false,
+
   // Also write per-operation timing lines. Use only for short troubleshooting captures.
   "DiagnosticsVerbose": false,
 

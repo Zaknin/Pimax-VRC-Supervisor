@@ -1276,7 +1276,7 @@ Expected result:
 - [x] Host requests helper scheduled task.
 - [x] `PimaxVrcSupervisor.exe` starts with `--steamvr-start`.
 - [x] Supervisor console is hidden.
-- [x] Command bridge becomes available on TCP `37957` or named pipe.
+- [x] Command bridge becomes available on TCP `37957`.
 
 Actual result:
 - [x] Pass

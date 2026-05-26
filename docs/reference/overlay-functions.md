@@ -29,10 +29,8 @@ The main overlay host class.
 
 | Method | Description |
 | --- | --- |
-| `SendCommandAsync(string, TimeSpan)` | Sends a command via TCP (primary) or pipe (fallback). |
-| `SendCommandPipeFirstAsync(string, TimeSpan)` | Sends a command via pipe (primary) or TCP (fallback). |
+| `SendCommandAsync(string, TimeSpan)` | Sends a command via TCP. |
 | `SendTcpCommandAsync(string, TimeSpan)` | Sends a command via TCP. |
-| `SendPipeCommandAsync(string, TimeSpan)` | Sends a command via named pipe. |
 
 ### Event Processing
 
