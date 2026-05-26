@@ -30,7 +30,7 @@ This means the overlay host cannot connect to the supervisor. Possible causes:
 
 | Check | Action |
 | --- | --- |
-| GPU renderer | The overlay uses D3D11 by default. If D3D11 is unavailable, it falls back to static PNG. Check the log for "D3D11 overlay renderer unavailable". |
+| GPU renderer | The overlay uses D3D11 texture rendering. If D3D11 is unavailable, the host reports "D3D11 overlay renderer unavailable" and the dashboard will not fall back to the old PNG renderer. |
 | Overlay dimensions | The overlay is 1500×900 pixels. Very high or very low GPU memory can cause rendering issues. |
 
 ## Base Station Buttons Don't Work

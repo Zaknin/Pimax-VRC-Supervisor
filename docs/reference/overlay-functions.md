@@ -24,7 +24,6 @@ The main overlay host class.
 | `RenderOverlay()` | Renders the dashboard panel to a Bitmap. |
 | `RefreshOverlayTexture(bool)` | Updates the OpenVR overlay texture. |
 | `TryInitializeGpuRenderer()` | Attempts to create a D3D11 GPU renderer. |
-| `SaveOverlaySurface(Bitmap)` | Saves a Bitmap to a temp PNG file for fallback rendering. |
 
 ### Command Communication
 
@@ -56,9 +55,7 @@ Manages the OpenVR overlay lifecycle.
 | `SetOverlayMouseScale(float, float)` | Sets the mouse scale for the overlay. |
 | `SetOverlayInputMethodMouse()` | Enables mouse input. |
 | `SetInteractiveDashboardFlags()` | Sets flags for interactive dashboard behavior. |
-| `SetOverlayFromFile(string)` | Sets the overlay texture from a file. |
 | `SetOverlayTexture(IntPtr)` | Sets the overlay texture from a GPU handle. |
-| `SetOverlayRaw(Bitmap)` | Sets the overlay texture from a Bitmap. |
 | `SetThumbnailFromFile(string)` | Sets the dashboard thumbnail icon. |
 | `PollNextOverlayEvent(out OpenVrEvent)` | Polls for the next overlay event. |
 | `IsActiveDashboardOverlay()` | Checks if the overlay is currently active. |

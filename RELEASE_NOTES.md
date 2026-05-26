@@ -22,7 +22,7 @@ This is the release-facing companion note for `PimaxVrcSupervisor-v1.2.3.zip`.
 ## Highlights
 
 - Makes the Ver2 SteamVR dashboard the default dashboard renderer.
-- Keeps the optimized v1.2.2 dashboard available as a manual fallback with `--legacy-dashboard`.
+- Removes the older v1.2.2 dashboard renderer from the active SteamVR host.
 - Adds a top status strip for supervisor, SteamVR, core apps, OSC router, and base stations.
 - Adds a clearer action grid, supervisor output panel, and footer/debug state line.
 - Keeps hidden/inactive polling at 2000 ms and active visible polling at 100 ms.
@@ -77,7 +77,7 @@ cosign verify-blob .\PimaxVrcSupervisor-v1.2.3.zip `
 ```markdown
 Pimax VRC Supervisor v1.2.3 makes the Ver2 SteamVR dashboard the standard dashboard renderer.
 
-The SteamVR dashboard host now defaults to a clearer Ver2 control surface with a top status strip, action grid, supervisor output panel, and footer state line. The optimized v1.2.2 dashboard remains available as a manual fallback with `--legacy-dashboard`.
+The SteamVR dashboard host now uses the clearer Ver2 control surface with a top status strip, action grid, supervisor output panel, and footer state line. The older v1.2.2 dashboard renderer is no longer part of the active host path.
 
 Supervisor commands, config behavior, SteamVR startup integration, base-station controls, OSC routing, and existing dashboard button behavior remain unchanged.
 

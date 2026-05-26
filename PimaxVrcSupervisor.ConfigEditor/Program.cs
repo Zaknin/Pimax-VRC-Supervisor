@@ -31,7 +31,7 @@ internal sealed class ConfigEditorForm : Form
     private const int TemporaryStatusMilliseconds = 15000;
     private const int MinimumGridVisibleRows = 10;
     private const int CompactNumberInputWidth = 104;
-    private const int PathStatusColumnWidth = 230;
+    private const int PathStatusColumnWidth = 320;
     private const int MinimumConfigSelectorWidth = 180;
     private const int MaximumConfigSelectorWidth = 620;
     private const string DefaultConfigFileName = "supervisor.config.json";
@@ -444,7 +444,12 @@ internal sealed class ConfigEditorForm : Form
         AddFullWidth(layout, _diagnosticsLogSteamVrOverlayCheckBox, ToolTipWithConfigKey("Write SteamVR dashboard host loop, visibility, refresh, render, D3D upload, and texture submit diagnostics to a text file.", "DiagnosticsLogSteamVrOverlay"));
         AddFullWidth(layout, _diagnosticsVerboseCheckBox, ToolTipWithConfigKey("Also log individual slow or per-operation diagnostic timing lines. Leave off unless collecting a short troubleshooting trace.", "DiagnosticsVerbose"));
         AddNumber(layout, "DiagnosticsSummaryIntervalSeconds", "Summary interval", 1, 3600, "Seconds between diagnostic summary lines when diagnostic logging is enabled.", "seconds");
-        AddFolderValidationRow(layout, "Diagnostic log folder", _diagnosticsLogDirectoryTextBox, ToolTipWithConfigKey("Folder for diagnostic text logs. Default is %TEMP%\\PimaxVrcSupervisorDiagnostics.", "DiagnosticsLogDirectory"));
+        AddFolderValidationRow(
+            layout,
+            "Diagnostic log folder",
+            _diagnosticsLogDirectoryTextBox,
+            ToolTipWithConfigKey("Folder for diagnostic text logs. Default is %TEMP%\\PimaxVrcSupervisorDiagnostics.", "DiagnosticsLogDirectory"),
+            includeOpenButton: true);
 
         var buttons = new FlowLayoutPanel
         {
@@ -2032,7 +2037,7 @@ internal sealed class ConfigEditorForm : Form
         UpdatePathStatus();
     }
 
-    private void AddFolderValidationRow(TableLayoutPanel layout, string label, TextBox textBox, string tooltip)
+    private void AddFolderValidationRow(TableLayoutPanel layout, string label, TextBox textBox, string tooltip, bool includeOpenButton = false)
     {
         var browseButton = CreateButton("Browse...", autoSize: false, width: 104, height: 27);
         browseButton.Click += (_, _) =>
@@ -2056,6 +2061,14 @@ internal sealed class ConfigEditorForm : Form
             }
         };
 
+        var openButton = includeOpenButton
+            ? CreateButton("Open", autoSize: false, width: 72, height: 27)
+            : null;
+        if (openButton is not null)
+        {
+            openButton.Click += (_, _) => OpenFolderInExplorer(textBox.Text, label);
+        }
+
         var labelControl = new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left };
         var statusLabel = CreatePathStatusLabel();
         var extraPanel = new FlowLayoutPanel
@@ -2067,6 +2080,10 @@ internal sealed class ConfigEditorForm : Form
         };
         extraPanel.Controls.Add(browseButton);
         extraPanel.Controls.Add(statusLabel);
+        if (openButton is not null)
+        {
+            extraPanel.Controls.Add(openButton);
+        }
 
         void UpdatePathStatus()
         {
@@ -2075,6 +2092,10 @@ internal sealed class ConfigEditorForm : Form
             _toolTips.SetToolTip(textBox, currentTooltip);
             _toolTips.SetToolTip(browseButton, currentTooltip);
             _toolTips.SetToolTip(statusLabel, currentTooltip);
+            if (openButton is not null)
+            {
+                _toolTips.SetToolTip(openButton, currentTooltip);
+            }
             UpdatePathIndicator(statusLabel, textBox.Text, Directory.Exists);
         }
 
@@ -2082,6 +2103,38 @@ internal sealed class ConfigEditorForm : Form
         textBox.TextChanged += (_, _) => UpdatePathStatus();
         _pathIndicatorRefreshers.Add(UpdatePathStatus);
         UpdatePathStatus();
+    }
+
+    private void OpenFolderInExplorer(string pathText, string label)
+    {
+        var path = ExpandPath(pathText);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            ShowThemedMessageBox($"Set a {label.ToLowerInvariant()} before opening it.", "Folder path is empty", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(path);
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                UseShellExecute = true
+            };
+            startInfo.ArgumentList.Add(path);
+            Process.Start(startInfo);
+            SetTemporaryStatus("Opened diagnostic log folder.", path);
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessageBox(
+                $"Could not open {label.ToLowerInvariant()}.\r\n\r\nPath:\r\n{path}\r\n\r\n{ex.Message}",
+                "Could not open folder",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            SetStatus("Open folder failed.");
+        }
     }
 
     private static Label CreatePathStatusLabel() => new()

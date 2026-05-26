@@ -2568,9 +2568,7 @@ internal sealed class AppSupervisor
             ? $"{GetEnabledBaseStations().Length} enabled, powered={_baseStationsPoweredOn}"
             : "disabled";
         var oscRouter = _oscRouter is null ? "stopped" : "running";
-        var oscGoesBrrr = _config.OscGoesBrrrEnabled
-            ? IsOscGoesBrrrWorkflowRunning() ? "running" : "incomplete"
-            : "disabled";
+        var oscGoesBrrr = GetOscGoesBrrrStatus();
         return $"Mode={mode}; SteamVR={steamVrRunning}; CoreApps={coreApps}; BaseStations={baseStations}; OscRouter={oscRouter}; OscGoesBrrr={oscGoesBrrr}";
     }
 
@@ -3719,6 +3717,30 @@ internal sealed class AppSupervisor
 
     private bool IsOscGoesBrrrWorkflowRunning()
         => IsIntifaceRunning() && IsOscGoesBrrrRunning();
+
+    private string GetOscGoesBrrrStatus()
+    {
+        if (!_config.OscGoesBrrrEnabled)
+        {
+            return "disabled";
+        }
+
+        var intifaceRunning = IsIntifaceRunning();
+        var oscGoesBrrrRunning = IsOscGoesBrrrRunning();
+        if (intifaceRunning && oscGoesBrrrRunning)
+        {
+            return "running";
+        }
+
+        if (_config.OscGoesBrrrHotkeyEnabled && !_config.OscGoesBrrrBleScannerEnabled)
+        {
+            return intifaceRunning || oscGoesBrrrRunning
+                ? "partial"
+                : "manual";
+        }
+
+        return "incomplete";
+    }
 
     private static ConsoleHotkeys ConsumeConsoleHotkeys()
     {
