@@ -54,6 +54,11 @@ Complete reference for all fields in `supervisor.config.json`.
 | `WatchedProcessCrashRelaunchGraceSeconds` | int | `300` | Crash relaunch grace period. |
 | `ShutdownGraceSeconds` | int | `8` | Graceful shutdown timeout. |
 | `DeviceProbeTimeoutSeconds` | int | `10` | Device query timeout. |
+| `DiagnosticsLogSupervisor` | bool | `false` | Write passive supervisor performance diagnostics to a text file. |
+| `DiagnosticsLogSteamVrOverlay` | bool | `false` | Write passive SteamVR dashboard host diagnostics to a text file. |
+| `DiagnosticsVerbose` | bool | `false` | Include per-operation timing lines for short troubleshooting captures. |
+| `DiagnosticsSummaryIntervalSeconds` | int | `10` | Seconds between diagnostic summary lines. |
+| `DiagnosticsLogDirectory` | string | `"%TEMP%\\PimaxVrcSupervisorDiagnostics"` | Diagnostic log folder. Environment variables are expanded. |
 
 ## AutoLaunchApp Object
 

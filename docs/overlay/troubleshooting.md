@@ -31,7 +31,7 @@ This means the overlay host cannot connect to the supervisor. Possible causes:
 | Check | Action |
 | --- | --- |
 | GPU renderer | The overlay uses D3D11 by default. If D3D11 is unavailable, it falls back to static PNG. Check the log for "D3D11 overlay renderer unavailable". |
-| Overlay dimensions | The overlay is 1294×820 pixels. Very high or very low GPU memory can cause rendering issues. |
+| Overlay dimensions | The overlay is 1500×900 pixels. Very high or very low GPU memory can cause rendering issues. |
 
 ## Base Station Buttons Don't Work
 

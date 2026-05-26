@@ -102,6 +102,10 @@ internal sealed class ConfigEditorForm : Form
     private readonly CheckBox _usePimaxLogCheckBox = new() { Text = "Watch Pimax PiService logs for fast reconnects", AutoSize = true };
     private readonly CheckBox _useMouthTrackerPnPCheckBox = new() { Text = "Watch Windows PnP events for fast mouth tracker reconnects", AutoSize = true };
     private readonly TextBox _pimaxServiceLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
+    private readonly CheckBox _diagnosticsLogSupervisorCheckBox = new() { Text = "Log supervisor diagnostics", AutoSize = true };
+    private readonly CheckBox _diagnosticsLogSteamVrOverlayCheckBox = new() { Text = "Log SteamVR overlay diagnostics", AutoSize = true };
+    private readonly CheckBox _diagnosticsVerboseCheckBox = new() { Text = "Verbose diagnostic timings", AutoSize = true };
+    private readonly TextBox _diagnosticsLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly DataGridView _autoLaunchAppsGrid = new()
     {
         Dock = DockStyle.Fill,
@@ -186,8 +190,8 @@ internal sealed class ConfigEditorForm : Form
     {
         Text = BaseWindowTitle;
         SetWindowIconFromExecutable();
-        MinimumSize = new Size(1040, 720);
-        Size = new Size(1260, 820);
+        MinimumSize = new Size(1180, 860);
+        Size = new Size(1420, 980);
         StartPosition = FormStartPosition.CenterScreen;
         KeyPreview = true;
         RestoreWindowState();
@@ -435,6 +439,12 @@ internal sealed class ConfigEditorForm : Form
         AddFullWidth(layout, _autoLaunchTaskCheckBox, "Checked lets the app create or repair the elevated auto-launch Scheduled Task.");
         AddFullWidth(layout, _startWithSteamVrCheckBox, "Checked registers the SteamVR dashboard host manifest and starts the supervisor when SteamVR starts.");
         AddFolderValidationRow(layout, "PiService log folder", _pimaxServiceLogDirectoryTextBox, ToolTipWithConfigKey("Folder containing PiService__*.log files. Environment variables such as %LOCALAPPDATA% are expanded by the supervisor.", "PimaxServiceLogDirectory"));
+        AddSectionHeader(layout, "Diagnostics");
+        AddFullWidth(layout, _diagnosticsLogSupervisorCheckBox, ToolTipWithConfigKey("Write periodic supervisor CPU, memory, loop, process detection, command, app, and base-station timing diagnostics to a text file.", "DiagnosticsLogSupervisor"));
+        AddFullWidth(layout, _diagnosticsLogSteamVrOverlayCheckBox, ToolTipWithConfigKey("Write SteamVR dashboard host loop, visibility, refresh, render, D3D upload, and texture submit diagnostics to a text file.", "DiagnosticsLogSteamVrOverlay"));
+        AddFullWidth(layout, _diagnosticsVerboseCheckBox, ToolTipWithConfigKey("Also log individual slow or per-operation diagnostic timing lines. Leave off unless collecting a short troubleshooting trace.", "DiagnosticsVerbose"));
+        AddNumber(layout, "DiagnosticsSummaryIntervalSeconds", "Summary interval", 1, 3600, "Seconds between diagnostic summary lines when diagnostic logging is enabled.", "seconds");
+        AddFolderValidationRow(layout, "Diagnostic log folder", _diagnosticsLogDirectoryTextBox, ToolTipWithConfigKey("Folder for diagnostic text logs. Default is %TEMP%\\PimaxVrcSupervisorDiagnostics.", "DiagnosticsLogDirectory"));
 
         var buttons = new FlowLayoutPanel
         {
@@ -1138,13 +1148,6 @@ internal sealed class ConfigEditorForm : Form
             return;
         }
 
-        _oscRoutesGrid.Columns.Add(new DataGridViewCheckBoxColumn
-        {
-            Name = "Enabled",
-            HeaderText = "Enabled",
-            FillWeight = 8,
-            MinimumWidth = 76
-        });
         _oscRoutesGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
             Name = "Name",
@@ -1158,6 +1161,13 @@ internal sealed class ConfigEditorForm : Form
             HeaderText = "Target app receive port",
             FillWeight = 14,
             MinimumWidth = 140
+        });
+        _oscRoutesGrid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "Enabled",
+            HeaderText = "Enabled",
+            FillWeight = 8,
+            MinimumWidth = 76
         });
         _oscRoutesGrid.DefaultValuesNeeded += OnOscRoutesGridDefaultValuesNeeded;
         _oscRoutesGrid.CellFormatting += OnWarningGridCellFormatting;
@@ -2898,6 +2908,10 @@ internal sealed class ConfigEditorForm : Form
         _usePimaxLogCheckBox.Checked = GetBool(node, "UsePimaxServiceLogReconnectDetector", defaultValue: true);
         _useMouthTrackerPnPCheckBox.Checked = GetBool(node, "UseMouthTrackerPnPReconnectDetector", defaultValue: true);
         _pimaxServiceLogDirectoryTextBox.Text = GetString(node, "PimaxServiceLogDirectory");
+        _diagnosticsLogSupervisorCheckBox.Checked = GetBool(node, "DiagnosticsLogSupervisor", defaultValue: false);
+        _diagnosticsLogSteamVrOverlayCheckBox.Checked = GetBool(node, "DiagnosticsLogSteamVrOverlay", defaultValue: false);
+        _diagnosticsVerboseCheckBox.Checked = GetBool(node, "DiagnosticsVerbose", defaultValue: false);
+        _diagnosticsLogDirectoryTextBox.Text = GetStringOrDefault(node, "DiagnosticsLogDirectory", "%TEMP%\\PimaxVrcSupervisorDiagnostics");
         _baseStationsEnabledCheckBox.Checked = GetBool(node, "BaseStationsEnabled", defaultValue: false);
         _baseStationPowerDownModeComboBox.SelectedItem = GetStringOrDefault(node, "BaseStationPowerDownMode", BaseStationPowerDownMode.Sleep.ToString());
         if (_baseStationPowerDownModeComboBox.SelectedIndex < 0)
@@ -2925,6 +2939,7 @@ internal sealed class ConfigEditorForm : Form
                 "DelayBeforeOscGoesBrrrSeconds" => 5,
                 "OscGoesBrrrBleScanSeconds" => 30,
                 "OscGoesBrrrBleScanIntervalSeconds" => 60,
+                "DiagnosticsSummaryIntervalSeconds" => 10,
                 _ => decimal.ToInt32(input.Minimum)
             };
             var value = propertyName == "DelayBeforeOscGoesBrrrSeconds"
@@ -3605,6 +3620,10 @@ internal sealed class ConfigEditorForm : Form
         json = JsonPropertyEditor.Replace(json, "UsePimaxServiceLogReconnectDetector", _usePimaxLogCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "UseMouthTrackerPnPReconnectDetector", _useMouthTrackerPnPCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "PimaxServiceLogDirectory", Serialize(_pimaxServiceLogDirectoryTextBox.Text.Trim()));
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsLogSupervisor", _diagnosticsLogSupervisorCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsLogSteamVrOverlay", _diagnosticsLogSteamVrOverlayCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsVerbose", _diagnosticsVerboseCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsLogDirectory", Serialize(_diagnosticsLogDirectoryTextBox.Text.Trim()));
 
         foreach (var (propertyName, input) in _numberInputs)
         {
@@ -4017,7 +4036,7 @@ internal sealed class ConfigEditorForm : Form
 
     private int AddOscRouteGridRow(string name, object appReceivePort, bool enabled)
     {
-        return _oscRoutesGrid.Rows.Add(enabled, name, appReceivePort);
+        return _oscRoutesGrid.Rows.Add(name, appReceivePort, enabled);
     }
 
     private void CommitOscRoutesGridEdits()

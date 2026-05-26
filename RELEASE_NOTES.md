@@ -1,12 +1,12 @@
-# Pimax VRC Supervisor v1.2.2 Release Notes
+# Pimax VRC Supervisor v1.2.3 Release Notes
 
-This is the release-facing companion note for `PimaxVrcSupervisor-v1.2.2.zip`.
+This is the release-facing companion note for `PimaxVrcSupervisor-v1.2.3.zip`.
 
 ## Current Version
 
-- Release tag: `v1.2.2`
-- App version: `1.2.2`
-- Assembly/file version: `1.2.2.0`
+- Release tag: `v1.2.3`
+- App version: `1.2.3`
+- Assembly/file version: `1.2.3.0`
 - Platform: Windows
 - Runtime: self-contained .NET 9
 
@@ -21,27 +21,26 @@ This is the release-facing companion note for `PimaxVrcSupervisor-v1.2.2.zip`.
 
 ## Highlights
 
-- Reduces SteamVR dashboard idle wakeups by using a slower hidden/inactive poll interval.
-- Uses a faster active loop only when the SteamVR dashboard is visible and this overlay is active.
-- Avoids repeated `vrserver.exe` process enumeration by caching the SteamVR process handle.
-- Caches the dashboard icon instead of loading and decoding it on each dirty render.
-- Prevents overlapping status and console refresh requests from the dashboard host.
-- Reuses the D3D11 pixel upload buffer to reduce active-dashboard GC pressure.
-- Throttles repeated bridge/status/log failure messages while keeping useful diagnostics.
+- Makes the Ver2 SteamVR dashboard the default dashboard renderer.
+- Keeps the optimized v1.2.2 dashboard available as a manual fallback with `--legacy-dashboard`.
+- Adds a top status strip for supervisor, SteamVR, core apps, OSC router, and base stations.
+- Adds a clearer action grid, supervisor output panel, and footer/debug state line.
+- Keeps hidden/inactive polling at 2000 ms and active visible polling at 100 ms.
+- Preserves the existing command bridge, app key, overlay name, scheduled-task startup flow, and six dashboard commands.
 - Keeps the existing dashboard commands, supervisor behavior, config schema, and SteamVR startup flow intact.
 
 ## Install
 
 1. Download the right zip:
-   - If you already have the .NET 9 Windows Desktop Runtime installed, download `PimaxVrcSupervisor-v1.2.2_noNET9.zip`.
-   - If you do not have .NET 9 installed, download `PimaxVrcSupervisor-v1.2.2.zip`.
+   - If you already have the .NET 9 Windows Desktop Runtime installed, download `PimaxVrcSupervisor-v1.2.3_noNET9.zip`.
+   - If you do not have .NET 9 installed, download `PimaxVrcSupervisor-v1.2.3.zip`.
 2. Extract it to a writable folder.
 3. Choose one initial setup path:
    - 3a. Run `PimaxVrcSupervisor.exe` and answer the first-run prompts.
    - 3b. Use `PimaxVrcSupervisorConfigEditor.exe` for the initial config.
 4. Use `PimaxVrcSupervisorConfigEditor.exe` for later configuration changes, including the **Basics**, **Startup**, **Auto Launch**, **Base Stations**, **OSC Router**, and **Raw JSON** tabs.
 
-No separate .NET install is required for `PimaxVrcSupervisor-v1.2.2.zip`; the `_noNET9` zip requires .NET 9 to already be installed.
+No separate .NET install is required for `PimaxVrcSupervisor-v1.2.3.zip`; the `_noNET9` zip requires .NET 9 to already be installed.
 
 ## Upgrade
 
@@ -54,21 +53,21 @@ No separate .NET install is required for `PimaxVrcSupervisor-v1.2.2.zip`; the `_
 
 Expected companion assets:
 
-- `PimaxVrcSupervisor-v1.2.2.zip.sha256`
-- `PimaxVrcSupervisor-v1.2.2.zip.sigstore.json`
+- `PimaxVrcSupervisor-v1.2.3.zip.sha256`
+- `PimaxVrcSupervisor-v1.2.3.zip.sigstore.json`
 
 Checksum:
 
 ```powershell
-Get-FileHash .\PimaxVrcSupervisor-v1.2.2.zip -Algorithm SHA256
-Get-Content .\PimaxVrcSupervisor-v1.2.2.zip.sha256
+Get-FileHash .\PimaxVrcSupervisor-v1.2.3.zip -Algorithm SHA256
+Get-Content .\PimaxVrcSupervisor-v1.2.3.zip.sha256
 ```
 
 Sigstore:
 
 ```powershell
-cosign verify-blob .\PimaxVrcSupervisor-v1.2.2.zip `
-  --bundle .\PimaxVrcSupervisor-v1.2.2.zip.sigstore.json `
+cosign verify-blob .\PimaxVrcSupervisor-v1.2.3.zip `
+  --bundle .\PimaxVrcSupervisor-v1.2.3.zip.sigstore.json `
   --certificate-identity-regexp "^https://github.com/.+/.+/.github/workflows/release.yml@refs/(heads|tags)/.+$" `
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 ```
@@ -76,13 +75,13 @@ cosign verify-blob .\PimaxVrcSupervisor-v1.2.2.zip `
 ## Suggested GitHub Release Body
 
 ```markdown
-Pimax VRC Supervisor v1.2.2 focuses on SteamVR dashboard idle/active efficiency and release version consistency.
+Pimax VRC Supervisor v1.2.3 makes the Ver2 SteamVR dashboard the standard dashboard renderer.
 
-The SteamVR dashboard host now uses a slower hidden/inactive poll interval and a faster loop only when the dashboard is visible and this overlay is active. It also caches SteamVR process detection, caches the overlay icon, prevents overlapping dashboard refreshes, reuses the D3D11 upload buffer, and throttles repeated failure logs.
+The SteamVR dashboard host now defaults to a clearer Ver2 control surface with a top status strip, action grid, supervisor output panel, and footer state line. The optimized v1.2.2 dashboard remains available as a manual fallback with `--legacy-dashboard`.
 
 Supervisor commands, config behavior, SteamVR startup integration, base-station controls, OSC routing, and existing dashboard button behavior remain unchanged.
 
-Download `PimaxVrcSupervisor-v1.2.2.zip`, extract it, and run `PimaxVrcSupervisor.exe`. Use `PimaxVrcSupervisorConfigEditor.exe` to edit paths, detectors, startup mode, auto-launch apps, timings, OscGoesBrrr settings, OSC routes, and base-station settings.
+Download `PimaxVrcSupervisor-v1.2.3.zip`, extract it, and run `PimaxVrcSupervisor.exe`. Use `PimaxVrcSupervisorConfigEditor.exe` to edit paths, detectors, startup mode, auto-launch apps, timings, OscGoesBrrr settings, OSC routes, and base-station settings.
 
 SteamVR startup mode registers `PimaxVrcSupervisorSteamVrHost.exe` through a SteamVR app manifest and uses a separate on-demand elevated helper task to start the supervisor when SteamVR starts.
 

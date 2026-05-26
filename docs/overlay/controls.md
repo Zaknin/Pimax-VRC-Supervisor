@@ -4,7 +4,7 @@ The SteamVR dashboard overlay provides in-VR controls for the supervisor through
 
 ## What the Overlay Is
 
-The overlay is a SteamVR dashboard application registered by `PimaxVrcSupervisorSteamVrHost.exe`. It renders a 1294×820 pixel panel with buttons for common supervisor actions and a live view of the supervisor console output.
+The overlay is a SteamVR dashboard application registered by `PimaxVrcSupervisorSteamVrHost.exe`. It renders a 1500×900 pixel panel with buttons for common supervisor actions and a live view of the supervisor console output.
 
 ## Dashboard Buttons
 

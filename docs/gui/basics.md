@@ -42,6 +42,18 @@ The Startup section controls how the supervisor is launched:
 
 > **Note:** "Create/evaluate VRChat auto-launch Scheduled Task" and "Start with SteamVR" are mutually exclusive. Selecting one clears the other. SteamVR manifest startup exits automatically when `vrserver.exe` closes.
 
+## Diagnostics Section
+
+Diagnostics are off by default and are intended for short performance captures.
+
+| Control | Config Key | Description |
+| --- | --- | --- |
+| Log supervisor diagnostics | `DiagnosticsLogSupervisor` | Writes supervisor CPU, memory, loop, command, process detection, app, and base-station timing summaries. |
+| Log SteamVR overlay diagnostics | `DiagnosticsLogSteamVrOverlay` | Writes dashboard host visibility, loop, refresh, render, D3D upload, and texture submit timing summaries. |
+| Verbose diagnostic timings | `DiagnosticsVerbose` | Adds individual timing lines for slow operations and command/render paths. |
+| Summary interval | `DiagnosticsSummaryIntervalSeconds` | Seconds between summary lines. |
+| Diagnostic log folder | `DiagnosticsLogDirectory` | Output folder for diagnostic text logs. Default is `%TEMP%\PimaxVrcSupervisorDiagnostics`. |
+
 ## Editor Utilities
 
 The General tab includes two utility buttons:

@@ -240,5 +240,20 @@
   "ShutdownGraceSeconds": 8,
 
   // Maximum seconds to wait for the Windows device query command to return.
-  "DeviceProbeTimeoutSeconds": 10
+  "DeviceProbeTimeoutSeconds": 10,
+
+  // Write passive supervisor diagnostics to a text file. Leave off unless measuring performance.
+  "DiagnosticsLogSupervisor": false,
+
+  // Write passive SteamVR dashboard host diagnostics to a text file. Leave off unless measuring performance.
+  "DiagnosticsLogSteamVrOverlay": false,
+
+  // Also write per-operation timing lines. Use only for short troubleshooting captures.
+  "DiagnosticsVerbose": false,
+
+  // Seconds between diagnostic summary lines.
+  "DiagnosticsSummaryIntervalSeconds": 10,
+
+  // Diagnostic log folder. Environment variables like %TEMP% are expanded.
+  "DiagnosticsLogDirectory": "%TEMP%\\PimaxVrcSupervisorDiagnostics"
 }

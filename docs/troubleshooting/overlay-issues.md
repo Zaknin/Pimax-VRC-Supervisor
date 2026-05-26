@@ -33,7 +33,7 @@ This means the overlay host cannot connect to the supervisor.
 | --- | --- |
 | Blank overlay | The D3D11 renderer may have failed. The host falls back to static PNG. Check the log for "D11 overlay refresh failed". |
 | Corrupted texture | Restart SteamVR. The overlay texture is recreated on each SteamVR session. |
-| Wrong size | The overlay is 1294×820 pixels at 2.5m wide. This is fixed and not configurable. |
+| Wrong size | The overlay is 1500×900 pixels at 2.5m wide. This is fixed and not configurable. |
 
 ## Console Output Not Updating in VR
 

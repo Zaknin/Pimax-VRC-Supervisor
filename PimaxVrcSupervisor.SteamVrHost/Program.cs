@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Net.Sockets;
@@ -16,7 +17,7 @@ namespace PimaxVrcSupervisor.SteamVrHost;
 internal static class Program
 {
     [STAThread]
-    private static async Task Main()
+    private static async Task Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
         using var hostMutex = new Mutex(initiallyOwned: true, @"Local\PimaxVrcSupervisorSteamVrHost", out var ownsHostMutex);
@@ -31,9 +32,424 @@ internal static class Program
         }
 
         using var shutdown = new CancellationTokenSource();
-        using var host = new SteamVrDashboardHost();
+        var useLegacyDashboard = args.Any(arg => string.Equals(arg, "--legacy-dashboard", StringComparison.OrdinalIgnoreCase));
+        using var diagnostics = HostDiagnosticsSession.Start(HostDiagnosticsOptions.Load(args));
+        using var host = new SteamVrDashboardHost(useLegacyDashboard, diagnostics);
         await host.RunAsync(shutdown.Token);
     }
+}
+
+internal sealed record HostDiagnosticsOptions(
+    bool Enabled,
+    bool Verbose,
+    TimeSpan SummaryInterval,
+    string LogDirectory)
+{
+    public static HostDiagnosticsOptions Load(string[] args)
+    {
+        var configPath = Path.Combine(AppContext.BaseDirectory, "supervisor.config.json");
+        var enabled = false;
+        var verbose = false;
+        var intervalSeconds = 10;
+        var logDirectory = @"%TEMP%\PimaxVrcSupervisorDiagnostics";
+        if (File.Exists(configPath))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(configPath));
+                var root = document.RootElement;
+                enabled = GetBool(root, "DiagnosticsLogSteamVrOverlay", defaultValue: false);
+                verbose = GetBool(root, "DiagnosticsVerbose", defaultValue: false);
+                intervalSeconds = GetInt(root, "DiagnosticsSummaryIntervalSeconds", defaultValue: 10);
+                logDirectory = GetString(root, "DiagnosticsLogDirectory");
+            }
+            catch
+            {
+                // Diagnostics must never block overlay startup.
+            }
+        }
+
+        enabled = enabled || HasFlag(args, "--diagnostics");
+        verbose = verbose || HasFlag(args, "--diagnostics-verbose");
+        if (TryGetCommandOption(args, "--diagnostics-log-dir", out var requestedDirectory) && !string.IsNullOrWhiteSpace(requestedDirectory))
+        {
+            logDirectory = requestedDirectory;
+        }
+
+        return new HostDiagnosticsOptions(
+            enabled,
+            verbose,
+            TimeSpan.FromSeconds(Math.Max(1, intervalSeconds)),
+            logDirectory);
+    }
+
+    public string ResolveLogDirectory()
+    {
+        var directory = string.IsNullOrWhiteSpace(LogDirectory)
+            ? Path.Combine(Path.GetTempPath(), "PimaxVrcSupervisorDiagnostics")
+            : Environment.ExpandEnvironmentVariables(LogDirectory.Trim());
+        return Path.GetFullPath(directory);
+    }
+
+    private static bool HasFlag(string[] args, string name)
+        => args.Any(arg => string.Equals(arg, name, StringComparison.OrdinalIgnoreCase));
+
+    private static bool TryGetCommandOption(string[] args, string name, out string? value)
+    {
+        value = null;
+        for (var index = 0; index < args.Length; index++)
+        {
+            if (!string.Equals(args[index], name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                value = args[index + 1];
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool GetBool(JsonElement root, string name, bool defaultValue)
+        => root.TryGetProperty(name, out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? value.GetBoolean()
+            : defaultValue;
+
+    private static int GetInt(JsonElement root, string name, int defaultValue)
+        => root.TryGetProperty(name, out var value) && value.TryGetInt32(out var result)
+            ? result
+            : defaultValue;
+
+    private static string GetString(JsonElement root, string name)
+        => root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? ""
+            : "";
+}
+
+internal sealed class HostDiagnosticsSession : IDisposable
+{
+    private readonly object _lock = new();
+    private readonly StreamWriter? _writer;
+    private readonly Process _process = Process.GetCurrentProcess();
+    private readonly OperationStats _activeLoop = new();
+    private readonly OperationStats _hiddenLoop = new();
+    private readonly OperationStats _actualLoopInterval = new();
+    private readonly OperationStats _statusRefresh = new();
+    private readonly OperationStats _consoleRefresh = new();
+    private readonly OperationStats _render = new();
+    private readonly OperationStats _gpuUpload = new();
+    private readonly OperationStats _gpuFlush = new();
+    private readonly OperationStats _setOverlayTexture = new();
+    private readonly OperationStats _pngFallback = new();
+    private readonly ConcurrentDictionary<string, OperationStats> _commands = new(StringComparer.OrdinalIgnoreCase);
+    private DateTimeOffset _lastSummaryAt = DateTimeOffset.UtcNow;
+    private DateTimeOffset _lastCpuSampleAt = DateTimeOffset.UtcNow;
+    private TimeSpan _lastCpuTime;
+    private long _dirtyMarks;
+    private long _renderSkips;
+    private long _overlayTransitions;
+    private long _statusFailures;
+    private long _consoleFailures;
+    private bool _disposed;
+
+    private HostDiagnosticsSession(HostDiagnosticsOptions options)
+    {
+        Enabled = options.Enabled;
+        Verbose = options.Verbose;
+        SummaryInterval = options.SummaryInterval;
+        _lastCpuTime = _process.TotalProcessorTime;
+        if (!Enabled)
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(options.ResolveLogDirectory());
+        Path = System.IO.Path.Combine(
+            options.ResolveLogDirectory(),
+            $"steamvr-host-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}-pid{Environment.ProcessId}.log");
+        _writer = new StreamWriter(new FileStream(Path, FileMode.CreateNew, FileAccess.Write, FileShare.Read), new UTF8Encoding(false))
+        {
+            AutoFlush = true
+        };
+        Write("diagnostics started; role=steamvr-host; verbose=" + Verbose);
+    }
+
+    public bool Enabled { get; }
+    public bool Verbose { get; }
+    public TimeSpan SummaryInterval { get; }
+    public string? Path { get; }
+
+    public static HostDiagnosticsSession Start(HostDiagnosticsOptions options) => new(options);
+
+    public void RecordLoop(bool active, TimeSpan actualInterval)
+    {
+        (active ? _activeLoop : _hiddenLoop).Record(actualInterval);
+        _actualLoopInterval.Record(actualInterval);
+    }
+
+    public void RecordOverlayTransition(bool active)
+    {
+        Interlocked.Increment(ref _overlayTransitions);
+        WriteVerbose("overlay transition; active=" + active);
+    }
+
+    public void RecordDirtyMark()
+        => Interlocked.Increment(ref _dirtyMarks);
+
+    public void RecordRenderSkip()
+        => Interlocked.Increment(ref _renderSkips);
+
+    public void RecordStatusRefresh(TimeSpan elapsed, bool success)
+    {
+        _statusRefresh.Record(elapsed, success);
+        if (!success)
+        {
+            Interlocked.Increment(ref _statusFailures);
+        }
+
+        WriteSlowOrVerbose("status refresh", elapsed, success);
+    }
+
+    public void RecordConsoleRefresh(TimeSpan elapsed, bool success)
+    {
+        _consoleRefresh.Record(elapsed, success);
+        if (!success)
+        {
+            Interlocked.Increment(ref _consoleFailures);
+        }
+
+        WriteSlowOrVerbose("console refresh", elapsed, success);
+    }
+
+    public void RecordRender(TimeSpan elapsed)
+    {
+        _render.Record(elapsed);
+        WriteSlowOrVerbose("render overlay", elapsed, success: true);
+    }
+
+    public void RecordGpuUpload(GpuUploadTiming timing)
+    {
+        _gpuUpload.Record(timing.Total);
+        _gpuFlush.Record(timing.Flush);
+        if (Verbose || timing.Total > TimeSpan.FromMilliseconds(25))
+        {
+            Write($"gpu upload; totalMs={timing.Total.TotalMilliseconds:0.0}; copyMs={timing.Copy.TotalMilliseconds:0.0}; updateMs={timing.UpdateSubresource.TotalMilliseconds:0.0}; flushMs={timing.Flush.TotalMilliseconds:0.0}");
+        }
+    }
+
+    public void RecordSetOverlayTexture(TimeSpan elapsed)
+    {
+        _setOverlayTexture.Record(elapsed);
+        WriteSlowOrVerbose("set overlay texture", elapsed, success: true);
+    }
+
+    public void RecordPngFallback(TimeSpan elapsed)
+    {
+        _pngFallback.Record(elapsed);
+        WriteSlowOrVerbose("png fallback", elapsed, success: true);
+    }
+
+    public void RecordCommand(string command, TimeSpan elapsed, bool success)
+    {
+        _commands.GetOrAdd(command, _ => new OperationStats()).Record(elapsed, success);
+        if (Verbose || elapsed > TimeSpan.FromMilliseconds(250))
+        {
+            Write($"command; name={command}; elapsedMs={elapsed.TotalMilliseconds:0.0}; success={success}");
+        }
+    }
+
+    public void WriteSummaryIfDue(string context)
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (now - _lastSummaryAt < SummaryInterval)
+        {
+            return;
+        }
+
+        _lastSummaryAt = now;
+        _process.Refresh();
+        var active = _activeLoop.SnapshotAndReset();
+        var hidden = _hiddenLoop.SnapshotAndReset();
+        var actualLoop = _actualLoopInterval.SnapshotAndReset();
+        var status = _statusRefresh.SnapshotAndReset();
+        var console = _consoleRefresh.SnapshotAndReset();
+        var render = _render.SnapshotAndReset();
+        var gpuUpload = _gpuUpload.SnapshotAndReset();
+        var gpuFlush = _gpuFlush.SnapshotAndReset();
+        var setTexture = _setOverlayTexture.SnapshotAndReset();
+        var png = _pngFallback.SnapshotAndReset();
+        var commandSummary = string.Join(
+            "; ",
+            _commands.OrderBy(pair => pair.Key).Select(pair =>
+            {
+                var snapshot = pair.Value.SnapshotAndReset();
+                return $"{pair.Key}:count={snapshot.Count},fail={snapshot.Failures},avgMs={snapshot.AverageMilliseconds:0.0},maxMs={snapshot.Max.TotalMilliseconds:0.0}";
+            }));
+        Write(
+            "summary"
+            + $"; context={context}"
+            + $"; cpuPct={CalculateCpuPercent(now):0.0}"
+            + $"; workingSetMb={BytesToMegabytes(_process.WorkingSet64):0.0}"
+            + $"; privateMb={BytesToMegabytes(_process.PrivateMemorySize64):0.0}"
+            + $"; gcHeapMb={BytesToMegabytes(GC.GetTotalMemory(false)):0.0}"
+            + $"; gc0={GC.CollectionCount(0)}; gc1={GC.CollectionCount(1)}; gc2={GC.CollectionCount(2)}"
+            + $"; threads={SafeThreadCount()}; handles={SafeHandleCount()}"
+            + $"; activeLoops=count={active.Count},avgMs={active.AverageMilliseconds:0.0},maxMs={active.Max.TotalMilliseconds:0.0}"
+            + $"; hiddenLoops=count={hidden.Count},avgMs={hidden.AverageMilliseconds:0.0},maxMs={hidden.Max.TotalMilliseconds:0.0}"
+            + $"; actualLoop=count={actualLoop.Count},avgMs={actualLoop.AverageMilliseconds:0.0},maxMs={actualLoop.Max.TotalMilliseconds:0.0}"
+            + $"; dirtyMarks={Interlocked.Exchange(ref _dirtyMarks, 0)}; renderSkips={Interlocked.Exchange(ref _renderSkips, 0)}; overlayTransitions={Interlocked.Exchange(ref _overlayTransitions, 0)}"
+            + $"; status=count={status.Count},fail={status.Failures},avgMs={status.AverageMilliseconds:0.0},maxMs={status.Max.TotalMilliseconds:0.0},failureEvents={Interlocked.Exchange(ref _statusFailures, 0)}"
+            + $"; console=count={console.Count},fail={console.Failures},avgMs={console.AverageMilliseconds:0.0},maxMs={console.Max.TotalMilliseconds:0.0},failureEvents={Interlocked.Exchange(ref _consoleFailures, 0)}"
+            + $"; render=count={render.Count},avgMs={render.AverageMilliseconds:0.0},maxMs={render.Max.TotalMilliseconds:0.0}"
+            + $"; gpuUpload=count={gpuUpload.Count},avgMs={gpuUpload.AverageMilliseconds:0.0},maxMs={gpuUpload.Max.TotalMilliseconds:0.0}"
+            + $"; gpuFlush=count={gpuFlush.Count},avgMs={gpuFlush.AverageMilliseconds:0.0},maxMs={gpuFlush.Max.TotalMilliseconds:0.0}"
+            + $"; setOverlayTexture=count={setTexture.Count},avgMs={setTexture.AverageMilliseconds:0.0},maxMs={setTexture.Max.TotalMilliseconds:0.0}"
+            + $"; pngFallback=count={png.Count},avgMs={png.AverageMilliseconds:0.0},maxMs={png.Max.TotalMilliseconds:0.0}"
+            + $"; commands=[{commandSummary}]");
+    }
+
+    public void WriteVerbose(string message)
+    {
+        if (Verbose)
+        {
+            Write(message);
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (_lock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            if (_writer is not null)
+            {
+                _writer.WriteLine($"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz} diagnostics stopped");
+                _writer.Dispose();
+            }
+
+            _process.Dispose();
+            _disposed = true;
+        }
+    }
+
+    private void WriteSlowOrVerbose(string name, TimeSpan elapsed, bool success)
+    {
+        if (Verbose || elapsed > TimeSpan.FromMilliseconds(25))
+        {
+            Write($"{name}; elapsedMs={elapsed.TotalMilliseconds:0.0}; success={success}");
+        }
+    }
+
+    private void Write(string message)
+    {
+        if (!Enabled || _writer is null)
+        {
+            return;
+        }
+
+        lock (_lock)
+        {
+            if (!_disposed)
+            {
+                _writer.WriteLine($"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz} {message}");
+            }
+        }
+    }
+
+    private double CalculateCpuPercent(DateTimeOffset now)
+    {
+        var totalCpu = _process.TotalProcessorTime;
+        var cpuDelta = totalCpu - _lastCpuTime;
+        var wallDelta = now - _lastCpuSampleAt;
+        _lastCpuTime = totalCpu;
+        _lastCpuSampleAt = now;
+        return wallDelta.TotalMilliseconds <= 0
+            ? 0
+            : cpuDelta.TotalMilliseconds / wallDelta.TotalMilliseconds / Environment.ProcessorCount * 100.0;
+    }
+
+    private int SafeThreadCount()
+    {
+        try
+        {
+            return _process.Threads.Count;
+        }
+        catch
+        {
+            return -1;
+        }
+    }
+
+    private int SafeHandleCount()
+    {
+        try
+        {
+            return _process.HandleCount;
+        }
+        catch
+        {
+            return -1;
+        }
+    }
+
+    private static double BytesToMegabytes(long bytes)
+        => bytes / 1024.0 / 1024.0;
+}
+
+internal sealed class OperationStats
+{
+    private long _count;
+    private long _failures;
+    private long _totalTicks;
+    private long _maxTicks;
+
+    public void Record(TimeSpan elapsed, bool success = true)
+    {
+        Interlocked.Increment(ref _count);
+        if (!success)
+        {
+            Interlocked.Increment(ref _failures);
+        }
+
+        Interlocked.Add(ref _totalTicks, elapsed.Ticks);
+        var ticks = elapsed.Ticks;
+        while (true)
+        {
+            var current = Volatile.Read(ref _maxTicks);
+            if (ticks <= current || Interlocked.CompareExchange(ref _maxTicks, ticks, current) == current)
+            {
+                break;
+            }
+        }
+    }
+
+    public OperationStatsSnapshot SnapshotAndReset()
+    {
+        var count = Interlocked.Exchange(ref _count, 0);
+        var failures = Interlocked.Exchange(ref _failures, 0);
+        var totalTicks = Interlocked.Exchange(ref _totalTicks, 0);
+        var maxTicks = Interlocked.Exchange(ref _maxTicks, 0);
+        return new OperationStatsSnapshot(count, failures, TimeSpan.FromTicks(totalTicks), TimeSpan.FromTicks(maxTicks));
+    }
+}
+
+internal readonly record struct OperationStatsSnapshot(long Count, long Failures, TimeSpan Total, TimeSpan Max)
+{
+    public double AverageMilliseconds => Count == 0 ? 0 : Total.TotalMilliseconds / Count;
 }
 
 internal sealed class SteamVrDashboardHost : IDisposable
@@ -45,17 +461,17 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private const string OverlayKey = "pimax.vrcsupervisor.dashboard";
     private const string OverlayName = "Pimax VRC Supervisor";
     private const string OverlayIconRelativePath = @"Assets\vr-overlay-icon.png";
-    private const int OverlayWidth = 1294;
-    private const int OverlayHeight = 820;
+    private const int OverlayWidth = 1500;
+    private const int OverlayHeight = 900;
     private static readonly TimeSpan ActiveOverlayFrameInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan HiddenOverlayPollInterval = TimeSpan.FromMilliseconds(2000);
     private static readonly TimeSpan RepeatedFailureLogInterval = TimeSpan.FromSeconds(10);
-    private const int ButtonTop = 154;
-    private const int ButtonLeft = 70;
-    private const int ButtonColumnGap = 28;
-    private const int ButtonRowGap = 26;
-    private const int ButtonWidth = 366;
-    private const int ButtonHeight = 126;
+    private const int ButtonTop = 210;
+    private const int ButtonLeft = 78;
+    private const int ButtonColumnGap = 32;
+    private const int ButtonRowGap = 30;
+    private const int ButtonWidth = 425;
+    private const int ButtonHeight = 130;
     private const int ButtonRight = ButtonLeft + ButtonWidth + ButtonColumnGap;
     private const int ButtonThird = ButtonRight + ButtonWidth + ButtonColumnGap;
     private const int ButtonBottom = ButtonTop + ButtonHeight + ButtonRowGap;
@@ -63,6 +479,8 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private readonly string _logPath = Path.Combine(Path.GetTempPath(), "PimaxVrcSupervisorSteamVrHost.log");
     private readonly object _renderLock = new();
     private readonly Queue<string> _surfacePaths = new();
+    private readonly bool _useLegacyDashboard;
+    private readonly HostDiagnosticsSession _diagnostics;
     private int _surfaceGeneration;
     private readonly DashboardButton[] _buttons =
     [
@@ -78,6 +496,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private Image? _overlayIconImage;
     private Process? _steamVrProcess;
     private string _status = "Starting supervisor...";
+    private DashboardStatus _dashboardStatus = DashboardStatus.Pending;
     private string[] _consoleLines = [];
     private string? _pressedCommand;
     private string? _runningCommand;
@@ -96,11 +515,21 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private DateTimeOffset _lastConsoleRefreshFailureLogAt = DateTimeOffset.MinValue;
     private DateTimeOffset _lastDashboardVisibleQueryFailureLogAt = DateTimeOffset.MinValue;
     private DateTimeOffset _lastOverlayActiveQueryFailureLogAt = DateTimeOffset.MinValue;
+    private bool _ver2RendererFailed;
     private bool _disposed;
+
+    public SteamVrDashboardHost(bool useLegacyDashboard, HostDiagnosticsSession diagnostics)
+    {
+        _useLegacyDashboard = useLegacyDashboard;
+        _diagnostics = diagnostics;
+    }
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         Log("Host starting from " + AppContext.BaseDirectory);
+        Log(_useLegacyDashboard
+            ? "Dashboard renderer: legacy v1.2.2 fallback."
+            : "Dashboard renderer: Ver2 default.");
         AppDomain.CurrentDomain.ProcessExit += (_, _) => Log("Host process exiting.");
         await StartSupervisorAsync();
 
@@ -132,15 +561,19 @@ internal sealed class SteamVrDashboardHost : IDisposable
 
         var lastStatusRefresh = DateTimeOffset.MinValue;
         var lastConsoleRefresh = DateTimeOffset.MinValue;
+        var lastLoopAt = DateTimeOffset.UtcNow;
         while (!cancellationToken.IsCancellationRequested && IsSteamVrRunning())
         {
             var now = DateTimeOffset.UtcNow;
             var overlayViewed = IsOverlayViewed();
+            _diagnostics.RecordLoop(overlayViewed, now - lastLoopAt);
+            lastLoopAt = now;
             if (!_viewedStateKnown || overlayViewed != _overlayViewed)
             {
                 _viewedStateKnown = true;
                 _overlayViewed = overlayViewed;
                 Log("Dashboard overlay viewed=" + overlayViewed);
+                _diagnostics.RecordOverlayTransition(overlayViewed);
                 if (overlayViewed)
                 {
                     lastStatusRefresh = now;
@@ -176,6 +609,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
                 RefreshOverlayTexture();
             }
 
+            _diagnostics.WriteSummaryIfDue(overlayViewed ? "active-loop" : "hidden-loop");
             await Task.Delay(overlayViewed ? ActiveOverlayFrameInterval : HiddenOverlayPollInterval, cancellationToken);
         }
 
@@ -190,6 +624,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         }
 
         _disposed = true;
+        _diagnostics.WriteSummaryIfDue("dispose");
         _gpuRenderer?.Dispose();
         _overlay?.Dispose();
         _overlayIconImage?.Dispose();
@@ -407,9 +842,12 @@ internal sealed class SteamVrDashboardHost : IDisposable
             return;
         }
 
+        var startedAt = Stopwatch.GetTimestamp();
+        var success = false;
         try
         {
             SetStatus(await SendCommandAsync("status", TimeSpan.FromSeconds(2)));
+            success = true;
         }
         catch (Exception ex)
         {
@@ -423,6 +861,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         }
         finally
         {
+            _diagnostics.RecordStatusRefresh(Stopwatch.GetElapsedTime(startedAt), success);
             Volatile.Write(ref _statusRefreshInFlight, 0);
         }
     }
@@ -434,11 +873,14 @@ internal sealed class SteamVrDashboardHost : IDisposable
             return;
         }
 
+        var startedAt = Stopwatch.GetTimestamp();
+        var success = false;
         try
         {
             var response = await SendCommandPipeFirstAsync("log", TimeSpan.FromMilliseconds(700));
             var lines = JsonSerializer.Deserialize<string[]>(response) ?? [];
             SetConsoleLines(lines);
+            success = true;
         }
         catch (Exception ex)
         {
@@ -446,6 +888,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         }
         finally
         {
+            _diagnostics.RecordConsoleRefresh(Stopwatch.GetElapsedTime(startedAt), success);
             Volatile.Write(ref _consoleRefreshInFlight, 0);
         }
     }
@@ -642,6 +1085,8 @@ internal sealed class SteamVrDashboardHost : IDisposable
 
     private async Task ExecuteButtonAsync(DashboardButton button, CancellationToken cancellationToken)
     {
+        var startedAt = Stopwatch.GetTimestamp();
+        var success = false;
         try
         {
             Log("Command starting: " + button.Command);
@@ -651,6 +1096,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
                 : await SendCommandAsync(button.Command, TimeSpan.FromSeconds(45));
             Log("Command response: " + response);
             SetStatus(response);
+            success = !response.StartsWith("Command failed:", StringComparison.OrdinalIgnoreCase);
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
@@ -659,6 +1105,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         }
         finally
         {
+            _diagnostics.RecordCommand(button.Command, Stopwatch.GetElapsedTime(startedAt), success);
             Log("Command finished: " + button.Command);
             _runningCommand = null;
             _commandInFlight = false;
@@ -683,6 +1130,11 @@ internal sealed class SteamVrDashboardHost : IDisposable
         }
 
         _status = status;
+        if (DashboardStatus.TryParse(status, out var parsedStatus))
+        {
+            _dashboardStatus = parsedStatus;
+        }
+
         MarkOverlayDirty();
     }
 
@@ -700,6 +1152,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private void MarkOverlayDirty()
     {
         _renderDirty = true;
+        _diagnostics.RecordDirtyMark();
     }
 
     private void TryInitializeGpuRenderer()
@@ -739,17 +1192,20 @@ internal sealed class SteamVrDashboardHost : IDisposable
     {
         if (_overlay is null || (!force && (!_overlayViewed || !_renderDirty)))
         {
+            _diagnostics.RecordRenderSkip();
             return;
         }
 
         var now = DateTimeOffset.UtcNow;
         if (!force && now - _lastOverlayRefreshAt < ActiveOverlayFrameInterval)
         {
+            _diagnostics.RecordRenderSkip();
             return;
         }
 
         if (_gpuRenderer is null && !force)
         {
+            _diagnostics.RecordRenderSkip();
             return;
         }
 
@@ -757,27 +1213,36 @@ internal sealed class SteamVrDashboardHost : IDisposable
         {
             try
             {
+                var renderStartedAt = Stopwatch.GetTimestamp();
                 using var bitmap = RenderOverlay();
+                _diagnostics.RecordRender(Stopwatch.GetElapsedTime(renderStartedAt));
                 if (_gpuRenderer is not null)
                 {
                     try
                     {
-                        _gpuRenderer.Update(bitmap);
+                        var uploadTiming = _gpuRenderer.Update(bitmap);
+                        _diagnostics.RecordGpuUpload(uploadTiming);
+                        var setTextureStartedAt = Stopwatch.GetTimestamp();
                         _overlay.SetOverlayTexture(_gpuRenderer.TexturePointer);
+                        _diagnostics.RecordSetOverlayTexture(Stopwatch.GetElapsedTime(setTextureStartedAt));
                     }
                     catch (Exception ex)
                     {
                         Log("D3D11 overlay refresh failed; switching to static PNG fallback: " + ex);
                         _gpuRenderer.Dispose();
                         _gpuRenderer = null;
+                        var fallbackStartedAt = Stopwatch.GetTimestamp();
                         var surfacePath = SaveOverlaySurface(bitmap);
                         _overlay.SetOverlayFromFile(surfacePath);
+                        _diagnostics.RecordPngFallback(Stopwatch.GetElapsedTime(fallbackStartedAt));
                     }
                 }
                 else
                 {
+                    var fallbackStartedAt = Stopwatch.GetTimestamp();
                     var surfacePath = SaveOverlaySurface(bitmap);
                     _overlay.SetOverlayFromFile(surfacePath);
+                    _diagnostics.RecordPngFallback(Stopwatch.GetElapsedTime(fallbackStartedAt));
                 }
 
                 _renderDirty = false;
@@ -791,6 +1256,25 @@ internal sealed class SteamVrDashboardHost : IDisposable
     }
 
     private Bitmap RenderOverlay()
+    {
+        if (_useLegacyDashboard || _ver2RendererFailed)
+        {
+            return RenderLegacyOverlay();
+        }
+
+        try
+        {
+            return RenderVer2Overlay();
+        }
+        catch (Exception ex)
+        {
+            _ver2RendererFailed = true;
+            Log("Ver2 dashboard renderer failed; falling back to legacy renderer: " + ex);
+            return RenderLegacyOverlay();
+        }
+    }
+
+    private Bitmap RenderLegacyOverlay()
     {
         var bitmap = new Bitmap(OverlayWidth, OverlayHeight, PixelFormat.Format32bppArgb);
         using var graphics = Graphics.FromImage(bitmap);
@@ -828,7 +1312,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
             DrawCenteredText(graphics, running ? "Running..." : button.Label, buttonFont, titleBrush, button.Bounds);
         }
 
-        var statusBounds = new Rectangle(ButtonLeft, 458, ContentWidth, 42);
+        var statusBounds = new Rectangle(ButtonLeft, 505, ContentWidth, 42);
         using var statusFormat = new StringFormat
         {
             Alignment = StringAlignment.Near,
@@ -840,6 +1324,137 @@ internal sealed class SteamVrDashboardHost : IDisposable
         return bitmap;
     }
 
+    private Bitmap RenderVer2Overlay()
+    {
+        var bitmap = new Bitmap(OverlayWidth, OverlayHeight, PixelFormat.Format32bppArgb);
+        using var graphics = Graphics.FromImage(bitmap);
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        graphics.Clear(Ver2Palette.Background);
+
+        using var titleFont = new Font(FontFamily.GenericSansSerif, 31, FontStyle.Bold);
+        using var subtitleFont = new Font(FontFamily.GenericSansSerif, 13, FontStyle.Regular);
+        using var sectionFont = new Font(FontFamily.GenericSansSerif, 14, FontStyle.Bold);
+        using var statusFont = new Font(FontFamily.GenericSansSerif, 12, FontStyle.Bold);
+        using var statusValueFont = new Font(FontFamily.GenericSansSerif, 12, FontStyle.Regular);
+        using var buttonFont = new Font(FontFamily.GenericSansSerif, 19, FontStyle.Bold);
+        using var buttonSubFont = new Font(FontFamily.GenericSansSerif, 11, FontStyle.Regular);
+        using var consoleFont = new Font(FontFamily.GenericMonospace, 12, FontStyle.Regular);
+        using var footerFont = new Font(FontFamily.GenericSansSerif, 11, FontStyle.Regular);
+        using var textBrush = new SolidBrush(Ver2Palette.Text);
+        using var mutedBrush = new SolidBrush(Ver2Palette.Muted);
+
+        DrawVer2Header(graphics, titleFont, subtitleFont, textBrush, mutedBrush);
+        DrawVer2StatusStrip(graphics, _dashboardStatus, statusFont, statusValueFont);
+        DrawVer2Buttons(graphics, buttonFont, buttonSubFont);
+        DrawVer2ConsolePanel(graphics, sectionFont, consoleFont, textBrush, mutedBrush);
+        DrawVer2Footer(graphics, footerFont, mutedBrush);
+        return bitmap;
+    }
+
+    private void DrawVer2Header(
+        Graphics graphics,
+        Font titleFont,
+        Font subtitleFont,
+        Brush textBrush,
+        Brush mutedBrush)
+    {
+        using var topLine = new LinearGradientBrush(
+            new Rectangle(0, 0, OverlayWidth, 10),
+            Ver2Palette.Accent,
+            Ver2Palette.AccentAlt,
+            LinearGradientMode.Horizontal);
+        graphics.FillRectangle(topLine, 0, 0, OverlayWidth, 10);
+        DrawOverlayIcon(graphics, new Rectangle(78, 38, 72, 72));
+        graphics.DrawString("Pimax VRC Supervisor", titleFont, textBrush, 166, 43);
+        graphics.DrawString("SteamVR dashboard control surface", subtitleFont, mutedBrush, 170, 92);
+    }
+
+    private void DrawVer2StatusStrip(Graphics graphics, DashboardStatus status, Font labelFont, Font valueFont)
+    {
+        var top = 126;
+        var left = ButtonLeft;
+        var gap = 18;
+        var width = (ContentWidth - gap * 2) / 3;
+        DrawStatusPill(graphics, new Rectangle(left, top, width, 58), "Supervisor", GetSupervisorStateText(), GetSupervisorStateColor(), labelFont, valueFont);
+        DrawStatusPill(graphics, new Rectangle(left + (width + gap), top, width, 58), "OSCGoesBrrr", FormatStatusValue(status.OscGoesBrrr), GetStatusColor(status.OscGoesBrrr), labelFont, valueFont);
+        DrawStatusPill(graphics, new Rectangle(left + (width + gap) * 2, top, width, 58), "Base Stations Control", FormatStatusValue(status.BaseStations), GetBaseStationColor(status.BaseStations), labelFont, valueFont);
+    }
+
+    private void DrawStatusPill(Graphics graphics, Rectangle bounds, string label, string value, Color indicator, Font labelFont, Font valueFont)
+    {
+        FillRoundedRectangle(graphics, bounds, 7, Ver2Palette.Panel);
+        DrawRoundedRectangle(graphics, bounds, 7, Ver2Palette.Border, 1);
+        using var indicatorBrush = new SolidBrush(indicator);
+        graphics.FillEllipse(indicatorBrush, bounds.Left + 12, bounds.Top + 24, 10, 10);
+        using var labelBrush = new SolidBrush(Ver2Palette.Muted);
+        using var valueBrush = new SolidBrush(Ver2Palette.Text);
+        graphics.DrawString(label, labelFont, labelBrush, bounds.Left + 30, bounds.Top + 10);
+        using var valueFormat = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
+        graphics.DrawString(value, valueFont, valueBrush, new Rectangle(bounds.Left + 30, bounds.Top + 32, bounds.Width - 40, 20), valueFormat);
+    }
+
+    private void DrawVer2Buttons(Graphics graphics, Font buttonFont, Font subFont)
+    {
+        foreach (var button in _buttons)
+        {
+            var running = string.Equals(_runningCommand, button.Command, StringComparison.Ordinal);
+            var bounds = button.Bounds;
+            FillRoundedRectangle(graphics, bounds, 10, running ? Ver2Palette.RunningPanel : Ver2Palette.Button);
+            DrawRoundedRectangle(graphics, bounds, 10, running ? Ver2Palette.Accent : Ver2Palette.BorderStrong, running ? 3 : 1);
+
+            using var textBrush = new SolidBrush(Ver2Palette.Text);
+            using var mutedBrush = new SolidBrush(Ver2Palette.Muted);
+            var title = running ? "Running..." : button.Label;
+            DrawText(graphics, title, buttonFont, textBrush, new Rectangle(bounds.Left + 28, bounds.Top + 27, bounds.Width - 56, 36), StringAlignment.Center, StringAlignment.Center);
+            DrawText(graphics, GetButtonHint(button.Command), subFont, mutedBrush, new Rectangle(bounds.Left + 28, bounds.Top + 76, bounds.Width - 56, 24), StringAlignment.Center, StringAlignment.Center);
+        }
+    }
+
+    private void DrawVer2ConsolePanel(Graphics graphics, Font titleFont, Font consoleFont, Brush textBrush, Brush mutedBrush)
+    {
+        var bounds = new Rectangle(ButtonLeft, 550, ContentWidth, 295);
+        FillRoundedRectangle(graphics, bounds, 10, Ver2Palette.PanelDark);
+        DrawRoundedRectangle(graphics, bounds, 10, Ver2Palette.Border, 1);
+        graphics.DrawString("Supervisor output", titleFont, textBrush, bounds.Left + 18, bounds.Top + 14);
+
+        var lines = BuildConsoleDisplayLines(_consoleLines);
+        if (lines.Length == 0)
+        {
+            lines = ["Waiting for supervisor output..."];
+        }
+
+        var y = bounds.Top + 48;
+        var lineHeight = 18;
+        var textBounds = new Rectangle(bounds.Left + 18, y, bounds.Width - 36, bounds.Height - 62);
+        using var format = new StringFormat
+        {
+            Alignment = StringAlignment.Near,
+            LineAlignment = StringAlignment.Near,
+            Trimming = StringTrimming.EllipsisCharacter,
+            FormatFlags = StringFormatFlags.NoWrap
+        };
+
+        foreach (var line in lines.Take(textBounds.Height / lineHeight))
+        {
+            var brush = line.StartsWith("...", StringComparison.Ordinal) ? mutedBrush : textBrush;
+            graphics.DrawString(line, consoleFont, brush, new Rectangle(textBounds.Left, y, textBounds.Width, lineHeight + 4), format);
+            y += lineHeight;
+        }
+    }
+
+    private void DrawVer2Footer(Graphics graphics, Font footerFont, Brush mutedBrush)
+    {
+        var state = _commandInFlight
+            ? $"Command running: {_runningCommand ?? "unknown"}"
+            : "Ready for dashboard input";
+        var refresh = _lastOverlayRefreshAt == DateTimeOffset.MinValue
+            ? "not rendered"
+            : _lastOverlayRefreshAt.ToLocalTime().ToString("HH:mm:ss");
+        var text = $"{state}   |   Overlay active={_overlayViewed}   |   Last render={refresh}";
+        graphics.DrawString(text, footerFont, mutedBrush, ButtonLeft, 858);
+    }
+
     private void DrawConsolePanel(
         Graphics graphics,
         Font titleFont,
@@ -849,7 +1464,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         Brush mutedBrush,
         Brush panelBrush)
     {
-        var bounds = new Rectangle(ButtonLeft, 505, ContentWidth, 260);
+        var bounds = new Rectangle(ButtonLeft, 550, ContentWidth, 295);
         using var path = RoundedRect(bounds, 10);
         graphics.FillPath(panelBrush, path);
         using var borderPen = new Pen(Color.FromArgb(82, 96, 118), 2);
@@ -950,6 +1565,119 @@ internal sealed class SteamVrDashboardHost : IDisposable
         var oscRouter = values.TryGetValue("OscRouter", out var oscRouterValue) ? oscRouterValue : "unknown";
         var baseStations = values.TryGetValue("BaseStations", out var baseStationsValue) ? baseStationsValue : "unknown";
         return $"Ready. Core apps: {coreApps}. OSC router: {oscRouter}. Base stations: {baseStations}.";
+    }
+
+    private string GetSupervisorStateText()
+    {
+        if (_status.StartsWith("Could not start", StringComparison.OrdinalIgnoreCase))
+        {
+            return "startup failed";
+        }
+
+        if (_status.StartsWith("Waiting", StringComparison.OrdinalIgnoreCase))
+        {
+            return "connecting";
+        }
+
+        return _commandInFlight ? "busy" : "connected";
+    }
+
+    private Color GetSupervisorStateColor()
+        => GetSupervisorStateText() switch
+        {
+            "connected" => Ver2Palette.Good,
+            "busy" => Ver2Palette.Warn,
+            "connecting" => Ver2Palette.Warn,
+            _ => Ver2Palette.Bad
+        };
+
+    private static Color GetStatusColor(string value)
+    {
+        if (value.Contains("running", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("powered=True", StringComparison.OrdinalIgnoreCase))
+        {
+            return Ver2Palette.Good;
+        }
+
+        if (value.Contains("disabled", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("stopped", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("not running", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("incomplete", StringComparison.OrdinalIgnoreCase))
+        {
+            return Ver2Palette.Warn;
+        }
+
+        return Ver2Palette.Neutral;
+    }
+
+    private static string FormatStatusValue(string value)
+    {
+        if (value.Contains("powered=True", StringComparison.OrdinalIgnoreCase))
+        {
+            return value.Replace("powered=True", "on", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (value.Contains("powered=False", StringComparison.OrdinalIgnoreCase))
+        {
+            return value.Replace("powered=False", "off", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return value;
+    }
+
+    private static Color GetBaseStationColor(string value)
+    {
+        if (value.Contains("disabled", StringComparison.OrdinalIgnoreCase))
+        {
+            return Ver2Palette.Neutral;
+        }
+
+        return GetStatusColor(value);
+    }
+
+    private static string GetButtonHint(string command)
+        => command switch
+        {
+            "restart-core-apps" => "Broken Eye + VRCFaceTracking",
+            "restart-osc-router" => "Restart OSC route bridge",
+            "start-osc-goes-brrr" => "Launch or repair workflow",
+            "base-stations-on" => "Wake configured stations",
+            "base-stations-off" => "Power down configured stations",
+            "restart-supervisor" => "Hard restart supervisor",
+            _ => command
+        };
+
+    private static void FillRoundedRectangle(Graphics graphics, Rectangle bounds, int radius, Color color)
+    {
+        using var path = RoundedRect(bounds, radius);
+        using var brush = new SolidBrush(color);
+        graphics.FillPath(brush, path);
+    }
+
+    private static void DrawRoundedRectangle(Graphics graphics, Rectangle bounds, int radius, Color color, int width)
+    {
+        using var path = RoundedRect(bounds, radius);
+        using var pen = new Pen(color, width);
+        graphics.DrawPath(pen, path);
+    }
+
+    private static void DrawText(
+        Graphics graphics,
+        string text,
+        Font font,
+        Brush brush,
+        Rectangle bounds,
+        StringAlignment horizontal,
+        StringAlignment vertical)
+    {
+        using var format = new StringFormat
+        {
+            Alignment = horizontal,
+            LineAlignment = vertical,
+            Trimming = StringTrimming.EllipsisCharacter,
+            FormatFlags = StringFormatFlags.NoWrap
+        };
+        graphics.DrawString(text, font, brush, bounds, format);
     }
 
     private void DrawOverlayIcon(Graphics graphics, Rectangle bounds)
@@ -1170,6 +1898,70 @@ internal readonly record struct OverlayPointer(uint CursorIndex, PointF Raw, Poi
 
 internal readonly record struct ClickResolution(DashboardButton? Button, OverlayPointer Pointer, string Source, string MissReason);
 
+internal sealed record DashboardStatus(
+    string Mode,
+    string SteamVr,
+    string CoreApps,
+    string BaseStations,
+    string OscRouter,
+    string OscGoesBrrr)
+{
+    public static DashboardStatus Pending { get; } = new("checking", "checking", "checking", "checking", "checking", "checking");
+
+    public static DashboardStatus Parse(string status)
+        => TryParse(status, out var parsedStatus) ? parsedStatus : Pending;
+
+    public static bool TryParse(string status, out DashboardStatus parsedStatus)
+    {
+        if (!status.StartsWith("Mode=", StringComparison.OrdinalIgnoreCase))
+        {
+            parsedStatus = Pending;
+            return false;
+        }
+
+        var values = status
+            .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(part => part.Split('=', 2, StringSplitOptions.TrimEntries))
+            .Where(parts => parts.Length == 2)
+            .ToDictionary(parts => parts[0], parts => parts[1], StringComparer.OrdinalIgnoreCase);
+
+        parsedStatus = new DashboardStatus(
+            Get(values, "Mode"),
+            Get(values, "SteamVR"),
+            Get(values, "CoreApps"),
+            Get(values, "BaseStations"),
+            Get(values, "OscRouter"),
+            Get(values, "OscGoesBrrr"));
+        return true;
+    }
+
+    private static string Get(IReadOnlyDictionary<string, string> values, string key)
+        => values.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value
+            : "checking";
+}
+
+internal static class Ver2Palette
+{
+    public static readonly Color Background = Color.FromArgb(12, 14, 18);
+    public static readonly Color Panel = Color.FromArgb(28, 32, 40);
+    public static readonly Color PanelDark = Color.FromArgb(18, 21, 27);
+    public static readonly Color Button = Color.FromArgb(38, 44, 55);
+    public static readonly Color RunningPanel = Color.FromArgb(50, 58, 72);
+    public static readonly Color Border = Color.FromArgb(72, 82, 98);
+    public static readonly Color BorderStrong = Color.FromArgb(106, 120, 144);
+    public static readonly Color Text = Color.FromArgb(242, 246, 252);
+    public static readonly Color Muted = Color.FromArgb(156, 168, 186);
+    public static readonly Color Accent = Color.FromArgb(68, 142, 255);
+    public static readonly Color AccentAlt = Color.FromArgb(56, 210, 173);
+    public static readonly Color Good = Color.FromArgb(84, 214, 119);
+    public static readonly Color Warn = Color.FromArgb(255, 190, 92);
+    public static readonly Color Bad = Color.FromArgb(255, 112, 112);
+    public static readonly Color Neutral = Color.FromArgb(142, 155, 176);
+}
+
+internal readonly record struct GpuUploadTiming(TimeSpan Copy, TimeSpan UpdateSubresource, TimeSpan Flush, TimeSpan Total);
+
 internal sealed class GpuOverlayRenderer : IDisposable
 {
     private readonly int _width;
@@ -1217,17 +2009,23 @@ internal sealed class GpuOverlayRenderer : IDisposable
 
     public IntPtr TexturePointer => _texture.NativePointer;
 
-    public void Update(Bitmap bitmap)
+    public GpuUploadTiming Update(Bitmap bitmap)
     {
         if (bitmap.Width != _width || bitmap.Height != _height)
         {
             throw new ArgumentException("Bitmap size does not match the overlay texture.", nameof(bitmap));
         }
 
+        var totalStartedAt = Stopwatch.GetTimestamp();
+        var copyStartedAt = Stopwatch.GetTimestamp();
         CopyBitmapPixels(bitmap);
+        var copyElapsed = Stopwatch.GetElapsedTime(copyStartedAt);
         var handle = GCHandle.Alloc(_pixels, GCHandleType.Pinned);
+        TimeSpan updateElapsed;
+        TimeSpan flushElapsed;
         try
         {
+            var updateStartedAt = Stopwatch.GetTimestamp();
             _context.UpdateSubresource(
                 _texture,
                 0,
@@ -1235,12 +2033,17 @@ internal sealed class GpuOverlayRenderer : IDisposable
                 handle.AddrOfPinnedObject(),
                 (uint)_rowPitch,
                 (uint)(_pixels.Length));
+            updateElapsed = Stopwatch.GetElapsedTime(updateStartedAt);
+            var flushStartedAt = Stopwatch.GetTimestamp();
             _context.Flush();
+            flushElapsed = Stopwatch.GetElapsedTime(flushStartedAt);
         }
         finally
         {
             handle.Free();
         }
+
+        return new GpuUploadTiming(copyElapsed, updateElapsed, flushElapsed, Stopwatch.GetElapsedTime(totalStartedAt));
     }
 
     public void Dispose()

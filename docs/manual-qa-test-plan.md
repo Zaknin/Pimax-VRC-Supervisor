@@ -13,8 +13,8 @@ Codex pre-check summary:
 - `dotnet publish -c Release -r win-x64 --self-contained true` succeeded for all three projects into `publish-manual-qa-codex`.
 - Published executables found: `PimaxVrcSupervisor.exe`, `PimaxVrcSupervisorConfigEditor.exe`, `PimaxVrcSupervisorSteamVrHost.exe`.
 - Published config/docs/assets found: `supervisor.config.json`, `README.md`, `RELEASE_NOTES.md`, `Assets/vr-overlay-icon.png`.
-- Published executable versions expected: file version `1.2.2.0`, product version `1.2.2` for all three executables.
-- Source documentation should reference `1.2.2` consistently across `README.md`, `RELEASE_NOTES.md`, and project files.
+- Published executable versions expected: file version `1.2.3.0`, product version `1.2.3` for all three executables.
+- Source documentation should reference `1.2.3` consistently across `README.md`, `RELEASE_NOTES.md`, and project files.
 
 ## 0. Scope discovered from code
 
@@ -139,8 +139,8 @@ Steps:
 
 Expected result:
 - [x] `Assets\vr-overlay-icon.png` is copied to publish output.
-- [ ] All three executables report file version `1.2.2.0`.
-- [ ] All three executables report product version `1.2.2`.
+- [ ] All three executables report file version `1.2.3.0`.
+- [ ] All three executables report product version `1.2.3`.
 - [x] Supervisor source manifest requests `requireAdministrator`.
 - [ ] Human QA: Explorer shows expected executable icons.
 - [ ] Human QA: launching `PimaxVrcSupervisor.exe` from Explorer requests UAC elevation.
@@ -171,13 +171,13 @@ Expected result:
 - [x] Any mismatch is recorded.
 
 Codex pre-check:
-- [ ] Verify version consistency for `1.2.2` across project files, README, release notes, and published executables.
+- [ ] Verify version consistency for `1.2.3` across project files, README, release notes, and published executables.
 
 Actual result:
 - [ ] Pass
 - [x] Fail
 Notes:
-- Codex should find `1.2.2` in project/executable versions and release-facing documentation.
+- Codex should find `1.2.3` in project/executable versions and release-facing documentation.
 
 ### BUILD-005 — Launch behavior from publish folder
 Purpose:
@@ -828,7 +828,7 @@ Steps:
 2. Inspect path bar, status bar, and tabs.
 
 Expected result:
-- [ ] Window title includes version `1.2.2`.
+- [ ] Window title includes version `1.2.3`.
 - [ ] Config selector/path are populated.
 - [ ] Tabs are visible: General, Auto Launch, Base Stations, Detectors, Processes, OSC Router, OSCGoesBrrr, Timing, Raw JSON.
 - [ ] Status is Ready or a clear loaded message.

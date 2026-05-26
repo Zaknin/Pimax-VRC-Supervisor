@@ -31,14 +31,14 @@ The SteamVR manifest is created/updated when:
 The manifest registers:
 - **App key:** `pimax.vrcsupervisor.dashboard`
 - **Overlay name:** "Pimax VRC Supervisor"
-- **Overlay dimensions:** 1294 × 820 pixels, 2.5 meters wide
+- **Overlay dimensions:** 1500 × 900 pixels, 2.5 meters wide
 
 ## Overlay Settings
 
 | Setting | Value | Description |
 | --- | --- | --- |
-| Overlay width | 1294 px | Panel width in pixels. |
-| Overlay height | 820 px | Panel height in pixels. |
+| Overlay width | 1500 px | Panel width in pixels. |
+| Overlay height | 900 px | Panel height in pixels. |
 | Physical width | 2.5 m | Width in VR space. |
 | Button size | 366 × 126 px | Each dashboard button. |
 | Button gap | 28 px horizontal, 26 px vertical | Spacing between buttons. |
