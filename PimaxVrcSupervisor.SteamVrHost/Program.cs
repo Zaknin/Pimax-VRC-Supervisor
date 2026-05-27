@@ -50,6 +50,7 @@ internal sealed record HostDiagnosticsOptions(
     bool Enabled,
     bool Verbose,
     bool DebugEnabled,
+    bool DebugPointerEnabled,
     TimeSpan SummaryInterval,
     string LogDirectory)
 {
@@ -61,6 +62,7 @@ internal sealed record HostDiagnosticsOptions(
         var enabled = false;
         var verbose = false;
         var debugEnabled = false;
+        var debugPointerEnabled = false;
         var intervalSeconds = 10;
         var logDirectory = @"%TEMP%\PimaxVrcSupervisorDiagnostics";
         if (configPath is not null)
@@ -78,6 +80,7 @@ internal sealed record HostDiagnosticsOptions(
                 enabled = GetBool(root, "DiagnosticsLogSteamVrOverlay", defaultValue: false);
                 verbose = GetBool(root, "DiagnosticsVerbose", defaultValue: false);
                 debugEnabled = GetBool(root, "DiagnosticsDebugSteamVrOverlay", defaultValue: false);
+                debugPointerEnabled = GetBool(root, "DiagnosticsDebugSteamVrPointer", defaultValue: false);
                 intervalSeconds = GetInt(root, "DiagnosticsSummaryIntervalSeconds", defaultValue: 10);
                 logDirectory = GetString(root, "DiagnosticsLogDirectory");
             }
@@ -90,6 +93,7 @@ internal sealed record HostDiagnosticsOptions(
         enabled = enabled || HasFlag(args, "--diagnostics");
         verbose = verbose || HasFlag(args, "--diagnostics-verbose");
         debugEnabled = enabled && debugEnabled;
+        debugPointerEnabled = debugEnabled && (debugPointerEnabled || HasFlag(args, "--diagnostics-debug-pointer"));
         if (TryGetCommandOption(args, "--diagnostics-log-dir", out var requestedDirectory) && !string.IsNullOrWhiteSpace(requestedDirectory))
         {
             logDirectory = requestedDirectory;
@@ -99,6 +103,7 @@ internal sealed record HostDiagnosticsOptions(
             enabled,
             verbose,
             debugEnabled,
+            debugPointerEnabled,
             TimeSpan.FromSeconds(Math.Max(1, intervalSeconds)),
             logDirectory);
     }
@@ -297,6 +302,7 @@ internal sealed class HostDiagnosticsSession : IDisposable
         _debugLog = DebugLogSession.Create(options);
         Enabled = options.Enabled;
         Verbose = options.Verbose;
+        DebugPointerEnabled = options.DebugPointerEnabled;
         SummaryInterval = options.SummaryInterval;
         _lastCpuTime = _process.TotalProcessorTime;
         if (!Enabled)
@@ -323,6 +329,7 @@ internal sealed class HostDiagnosticsSession : IDisposable
 
     public bool Enabled { get; }
     public bool Verbose { get; }
+    public bool DebugPointerEnabled { get; }
     public bool DebugEnabled => _debugLog.Enabled;
     public TimeSpan SummaryInterval { get; }
     public string? Path { get; }
@@ -666,6 +673,12 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private const int OverlayWidth = 1500;
     private const int OverlayHeight = 900;
     private static readonly TimeSpan ActiveOverlayFrameInterval = TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan HoverVisualRefreshInterval = TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan HoverTransitionRefreshDuration = TimeSpan.FromMilliseconds(300);
+    private static readonly TimeSpan IdleStatusRefreshInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan IdleConsoleRefreshInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ActiveCommandStatusRefreshInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan ActiveCommandConsoleRefreshInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan InactiveDashboardPollInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan HiddenOverlayPollInterval = TimeSpan.FromMilliseconds(2000);
     private static readonly TimeSpan RepeatedFailureLogInterval = TimeSpan.FromSeconds(10);
@@ -675,6 +688,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private const int ButtonRowGap = 30;
     private const int ButtonWidth = 425;
     private const int ButtonHeight = 130;
+    private const int ButtonCornerRadius = 10;
     private const int ButtonRight = ButtonLeft + ButtonWidth + ButtonColumnGap;
     private const int ButtonThird = ButtonRight + ButtonWidth + ButtonColumnGap;
     private const int ButtonBottom = ButtonTop + ButtonHeight + ButtonRowGap;
@@ -700,10 +714,14 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private DashboardStatus _dashboardStatus = DashboardStatus.Pending;
     private string[] _consoleLines = [];
     private string[] _consoleDisplayLines = [];
+    private string? _hoveredCommand;
     private string? _pressedCommand;
     private string? _runningCommand;
+    private OverlayPointer? _debugPointer;
     private DateTimeOffset _lastCommandStartedAt = DateTimeOffset.MinValue;
     private DateTimeOffset _lastOverlayRefreshAt = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastHoverVisualRefreshAt = DateTimeOffset.MinValue;
+    private DateTimeOffset _hoverVisualRefreshUntil = DateTimeOffset.MinValue;
     private OpenVrEventType? _lastEventType;
     private uint _overlayEventCount;
     private int _statusRefreshInFlight;
@@ -720,6 +738,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private DateTimeOffset _lastOverlayActiveQueryFailureLogAt = DateTimeOffset.MinValue;
     private DateTimeOffset _lastRenderRefreshFailureLogAt = DateTimeOffset.MinValue;
     private DateTimeOffset _lastGpuRendererUnavailableLogAt = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastHoverMoveDebugAt = DateTimeOffset.MinValue;
     private bool _disposed;
 
     public SteamVrDashboardHost(HostDiagnosticsSession diagnostics)
@@ -796,6 +815,8 @@ internal sealed class SteamVrDashboardHost : IDisposable
                 }
                 else
                 {
+                    SetHoveredButton(null);
+                    ClearDebugPointer();
                     MarkOverlayDirty();
                 }
             }
@@ -803,16 +824,20 @@ internal sealed class SteamVrDashboardHost : IDisposable
             if (overlayViewed)
             {
                 ProcessOverlayEvents(cancellationToken);
-                if (now - lastStatusRefresh > TimeSpan.FromSeconds(5))
+                RefreshHoverTransitionVisual();
+                var statusRefreshInterval = _commandInFlight
+                    ? ActiveCommandStatusRefreshInterval
+                    : IdleStatusRefreshInterval;
+                if (now - lastStatusRefresh > statusRefreshInterval)
                 {
                     lastStatusRefresh = now;
-                    if (!_commandInFlight)
-                    {
-                        _ = RefreshStatusAsync();
-                    }
+                    _ = RefreshStatusAsync();
                 }
 
-                if (now - lastConsoleRefresh > TimeSpan.FromSeconds(2))
+                var consoleRefreshInterval = _commandInFlight
+                    ? ActiveCommandConsoleRefreshInterval
+                    : IdleConsoleRefreshInterval;
+                if (now - lastConsoleRefresh > consoleRefreshInterval)
                 {
                     lastConsoleRefresh = now;
                     _ = RefreshConsoleAsync();
@@ -1155,11 +1180,15 @@ internal sealed class SteamVrDashboardHost : IDisposable
             var pointer = GetMousePointer(vrEvent, DateTimeOffset.UtcNow);
             if (vrEvent.EventType == OpenVrEventType.MouseMove)
             {
-                // Hover highlighting is intentionally disabled; clicks are handled by MouseButtonDown.
+                UpdateHoveredButton(pointer, vrEvent.EventType);
+            }
+            else if (vrEvent.EventType == OpenVrEventType.MouseFocusEnter)
+            {
+                UpdateHoveredButton(pointer, vrEvent.EventType);
             }
             else if (vrEvent.EventType == OpenVrEventType.TouchPadMove)
             {
-                // TouchPadMove uses a different event payload and is not needed without hover highlighting.
+                WriteHoverMoveDebug(pointer, vrEvent.EventType, HitTestLayout(pointer.Layout));
             }
             else if (vrEvent.EventType == OpenVrEventType.ButtonPress)
             {
@@ -1173,6 +1202,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
             else if (vrEvent.EventType == OpenVrEventType.MouseButtonDown)
             {
                 var resolution = ResolveClickButton(pointer);
+                SetHoveredButton(resolution.Button, pointer, vrEvent.EventType);
                 LogPointerEvent("MouseButtonDown", pointer, resolution);
                 _pressedCommand = resolution.Button?.Command;
                 if (resolution.Button is not null)
@@ -1186,12 +1216,15 @@ internal sealed class SteamVrDashboardHost : IDisposable
             }
             else if (vrEvent.EventType == OpenVrEventType.MouseButtonUp)
             {
+                UpdateHoveredButton(pointer, vrEvent.EventType);
                 LogPointerEvent("MouseButtonUp", pointer, new ClickResolution(null, pointer, "event", "button-up"));
                 _pressedCommand = null;
             }
             else if (vrEvent.EventType == OpenVrEventType.MouseFocusLeave)
             {
                 _pressedCommand = null;
+                SetHoveredButton(null, pointer, vrEvent.EventType);
+                ClearDebugPointer();
             }
             else if (vrEvent.EventType == OpenVrEventType.OverlayClosed)
             {
@@ -1379,6 +1412,127 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private DashboardButton? HitTestLayout(PointF layoutPosition)
         => _buttons.FirstOrDefault(button => Contains(button.Bounds, layoutPosition));
 
+    private void UpdateHoveredButton(OverlayPointer pointer, OpenVrEventType eventType)
+    {
+        var button = IsTrackablePointer(pointer) ? HitTestLayout(pointer.Layout) : null;
+        UpdateDebugPointer(pointer);
+        WriteHoverMoveDebug(pointer, eventType, button);
+        SetHoveredButton(button, pointer, eventType);
+        RefreshHoveredButtonVisual(button);
+    }
+
+    private void SetHoveredButton(DashboardButton? button)
+        => SetHoveredButton(button, null, null);
+
+    private void SetHoveredButton(DashboardButton? button, OverlayPointer? pointer, OpenVrEventType? eventType)
+    {
+        var command = button?.Command;
+        if (string.Equals(_hoveredCommand, command, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        WriteHoverTransitionDebug(_hoveredCommand, command, pointer, eventType);
+        _hoveredCommand = command;
+        _hoverVisualRefreshUntil = DateTimeOffset.UtcNow + HoverTransitionRefreshDuration;
+        MarkOverlayDirty(urgent: true, wakeLoop: true);
+    }
+
+    private void ClearDebugPointer()
+    {
+        if (_debugPointer is null)
+        {
+            return;
+        }
+
+        _debugPointer = null;
+        MarkOverlayDirty(urgent: true, wakeLoop: true);
+    }
+
+    private void UpdateDebugPointer(OverlayPointer pointer)
+    {
+        if (!_diagnostics.DebugPointerEnabled || !IsTrackablePointer(pointer))
+        {
+            return;
+        }
+
+        var previous = _debugPointer;
+        _debugPointer = pointer;
+        if (previous is null
+            || Math.Abs(previous.Value.Layout.X - pointer.Layout.X) >= 2
+            || Math.Abs(previous.Value.Layout.Y - pointer.Layout.Y) >= 2
+            || pointer.Timestamp - previous.Value.Timestamp >= TimeSpan.FromMilliseconds(100))
+        {
+            MarkOverlayDirty(urgent: true, wakeLoop: true);
+        }
+    }
+
+    private void RefreshHoveredButtonVisual(DashboardButton? button)
+    {
+        if (button is null)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (now - _lastHoverVisualRefreshAt < HoverVisualRefreshInterval)
+        {
+            return;
+        }
+
+        _lastHoverVisualRefreshAt = now;
+        MarkOverlayDirty(urgent: true, wakeLoop: true);
+    }
+
+    private void RefreshHoverTransitionVisual()
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (now > _hoverVisualRefreshUntil || now - _lastHoverVisualRefreshAt < HoverVisualRefreshInterval)
+        {
+            return;
+        }
+
+        _lastHoverVisualRefreshAt = now;
+        MarkOverlayDirty(urgent: true, wakeLoop: true);
+    }
+
+    private void WriteHoverMoveDebug(OverlayPointer pointer, OpenVrEventType eventType, DashboardButton? button)
+    {
+        if (!_diagnostics.DebugEnabled)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (now - _lastHoverMoveDebugAt < TimeSpan.FromMilliseconds(250))
+        {
+            return;
+        }
+
+        _lastHoverMoveDebugAt = now;
+        WriteDebug(
+            "hover sample"
+            + $"; event={eventType}"
+            + $"; cursor={pointer.CursorIndex}"
+            + $"; raw={pointer.Raw.X:0.0},{pointer.Raw.Y:0.0}"
+            + $"; layout={pointer.Layout.X:0.0},{pointer.Layout.Y:0.0}"
+            + $"; hit={button?.Command ?? "none"}"
+            + $"; hover={_hoveredCommand ?? "none"}");
+    }
+
+    private void WriteHoverTransitionDebug(string? previousCommand, string? nextCommand, OverlayPointer? pointer, OpenVrEventType? eventType)
+    {
+        if (!_diagnostics.DebugEnabled)
+        {
+            return;
+        }
+
+        var pointerDetails = pointer is { } value
+            ? $"; event={eventType}; cursor={value.CursorIndex}; raw={value.Raw.X:0.0},{value.Raw.Y:0.0}; layout={value.Layout.X:0.0},{value.Layout.Y:0.0}"
+            : "; event=none";
+        WriteDebug($"hover transition; from={previousCommand ?? "none"}; to={nextCommand ?? "none"}{pointerDetails}");
+    }
+
     private static bool Contains(Rectangle bounds, PointF point)
         => point.X >= bounds.Left
             && point.X < bounds.Right
@@ -1563,6 +1717,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         DrawVer2Buttons(graphics, buttonFont, buttonSubFont);
         DrawVer2ConsolePanel(graphics, sectionFont, consoleFont, textBrush, mutedBrush);
         DrawVer2Footer(graphics, footerFont, mutedBrush);
+        DrawDebugPointer(graphics);
         return bitmap;
     }
 
@@ -1610,9 +1765,19 @@ internal sealed class SteamVrDashboardHost : IDisposable
         foreach (var button in _buttons)
         {
             var running = string.Equals(_runningCommand, button.Command, StringComparison.Ordinal);
+            var hovered = !running && string.Equals(_hoveredCommand, button.Command, StringComparison.Ordinal);
             var bounds = button.Bounds;
-            FillRoundedRectangle(graphics, bounds, 10, running ? Ver2Palette.RunningPanel : Ver2Palette.Button);
-            DrawRoundedRectangle(graphics, bounds, 10, running ? Ver2Palette.Accent : Ver2Palette.BorderStrong, running ? 3 : 1);
+            var fill = running
+                ? Ver2Palette.RunningPanel
+                : hovered
+                    ? Ver2Palette.ButtonHover
+                    : Ver2Palette.Button;
+            var border = running || hovered
+                ? Ver2Palette.Accent
+                : Ver2Palette.BorderStrong;
+            var borderWidth = running || hovered ? 3 : 1;
+            FillRoundedRectangle(graphics, bounds, ButtonCornerRadius, fill);
+            DrawRoundedRectangle(graphics, bounds, ButtonCornerRadius, border, borderWidth);
 
             using var textBrush = new SolidBrush(Ver2Palette.Text);
             using var mutedBrush = new SolidBrush(Ver2Palette.Muted);
@@ -1664,6 +1829,39 @@ internal sealed class SteamVrDashboardHost : IDisposable
             : _lastOverlayRefreshAt.ToLocalTime().ToString("HH:mm:ss");
         var text = $"{state}   |   Last render={refresh}";
         graphics.DrawString(text, footerFont, mutedBrush, ButtonLeft, 858);
+    }
+
+    private void DrawDebugPointer(Graphics graphics)
+    {
+        if (!_diagnostics.DebugPointerEnabled || _debugPointer is not { } pointer || !IsTrackablePointer(pointer))
+        {
+            return;
+        }
+
+        var x = pointer.Layout.X;
+        var y = pointer.Layout.Y;
+        using var outerPen = new Pen(Color.Black, 5);
+        using var innerPen = new Pen(Color.FromArgb(255, 255, 72, 72), 3);
+        using var fillBrush = new SolidBrush(Color.FromArgb(230, 255, 72, 72));
+        graphics.DrawLine(outerPen, x - 18, y, x + 18, y);
+        graphics.DrawLine(outerPen, x, y - 18, x, y + 18);
+        graphics.DrawEllipse(outerPen, x - 9, y - 9, 18, 18);
+        graphics.DrawLine(innerPen, x - 18, y, x + 18, y);
+        graphics.DrawLine(innerPen, x, y - 18, x, y + 18);
+        graphics.FillEllipse(fillBrush, x - 5, y - 5, 10, 10);
+
+        var hit = HitTestLayout(pointer.Layout)?.Command ?? "none";
+        var label = $"debug pointer layout={x:0},{y:0} raw={pointer.Raw.X:0},{pointer.Raw.Y:0} hit={hit}";
+        using var font = new Font(FontFamily.GenericSansSerif, 10, FontStyle.Bold);
+        using var background = new SolidBrush(Color.FromArgb(210, 8, 10, 14));
+        using var textBrush = new SolidBrush(Color.White);
+        var labelBounds = new RectangleF(
+            Math.Clamp(x + 16, 8, OverlayWidth - 430),
+            Math.Clamp(y - 30, 8, OverlayHeight - 32),
+            420,
+            24);
+        graphics.FillRectangle(background, labelBounds);
+        graphics.DrawString(label, font, textBrush, labelBounds);
     }
 
     private static string[] BuildConsoleDisplayLines(string[] sourceLines)
@@ -2032,6 +2230,7 @@ internal static class Ver2Palette
     public static readonly Color Panel = Color.FromArgb(28, 32, 40);
     public static readonly Color PanelDark = Color.FromArgb(18, 21, 27);
     public static readonly Color Button = Color.FromArgb(38, 44, 55);
+    public static readonly Color ButtonHover = Color.FromArgb(82, 102, 132);
     public static readonly Color RunningPanel = Color.FromArgb(50, 58, 72);
     public static readonly Color Border = Color.FromArgb(72, 82, 98);
     public static readonly Color BorderStrong = Color.FromArgb(106, 120, 144);

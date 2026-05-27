@@ -254,6 +254,9 @@
   // When SteamVR dashboard host diagnostics are enabled, also write overlay debug events to a separate text file.
   "DiagnosticsDebugSteamVrOverlay": false,
 
+  // When SteamVR overlay debug events are enabled, draw the reported pointer position on the dashboard.
+  "DiagnosticsDebugSteamVrPointer": false,
+
   // Also write per-operation timing lines. Use only for short troubleshooting captures.
   "DiagnosticsVerbose": false,
 
