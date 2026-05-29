@@ -1,11 +1,11 @@
-# Base Station Issues
+﻿# Base Station Issues
 
 ## Base Stations Don't Scan
 
 | Check | Action |
 | --- | --- |
 | Bluetooth LE | Ensure Windows Bluetooth LE is enabled. |
-| BLE adapter | The Config Editor requires a Bluetooth LE adapter. Check Device Manager. |
+| BLE adapter | The Configurator requires a Bluetooth LE adapter. Check Device Manager. |
 | Scan duration | The default scan is 10 seconds. Try scanning multiple times. |
 | Manual add | If Windows discovery doesn't expose the station, add it manually with the **Add Manual** button. |
 
@@ -31,7 +31,7 @@ This flag is set when:
 - A Base Station 2.0 firmware doesn't support power state reads.
 - The state read returns `Unsupported`.
 
-To manually retry detection, click **Refresh State** in the Config Editor's **Base Stations** tab.
+To manually retry detection, click **Refresh State** in the Configurator's **Base Stations** tab.
 
 ## Base Station Commands Fail
 
@@ -44,7 +44,7 @@ To manually retry detection, click **Refresh State** in the Config Editor's **Ba
 
 ## Duplicate Bluetooth Addresses
 
-The Config Editor validates that no two base station rows share the same Bluetooth address. If you see this error, remove or correct the duplicate row.
+The Configurator validates that no two base station rows share the same Bluetooth address. If you see this error, remove or correct the duplicate row.
 
 ## Base Station Version Detection
 
@@ -65,4 +65,4 @@ If the log shows "SteamVR base-station tracking confirmation unavailable":
 2. The `openvr_api.dll` may not be found in the SteamVR runtime.
 3. The supervisor falls back to BLE state reads automatically.
 
-See also: [Troubleshooting Overview](index.md) · [OSC Issues](osc-issues.md) · [Overlay Issues](overlay-issues.md)
+See also: [Troubleshooting Overview](index.md) Â· [OSC Issues](osc-issues.md) Â· [Overlay Issues](overlay-issues.md)

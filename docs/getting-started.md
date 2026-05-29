@@ -1,4 +1,4 @@
-# Getting Started
+﻿# Getting Started
 
 ## Overview
 
@@ -43,7 +43,7 @@ The supervisor keeps that session flow predictable by watching devices and proce
 | Mode | How it starts | How it stops |
 | --- | --- | --- |
 | **Manual** | You run `PimaxVrcSupervisor.exe` | VRChat exits |
-| **Scheduled Task** | An elevated watcher starts the supervisor when VRChat and SteamVR are both running | VRChat exits |
+| **Scheduled Task** | An elevated watcher starts the supervisor when SteamVR is running; the supervisor waits for VRChat before starting managed apps | SteamVR `vrserver.exe` exits |
 | **SteamVR Manifest** | SteamVR launches a dashboard overlay host, which starts the supervisor elevated | SteamVR `vrserver.exe` exits |
 
 ## Requirements

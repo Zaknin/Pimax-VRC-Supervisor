@@ -1,4 +1,4 @@
-# Configuration
+﻿# Configuration
 
 The release includes a commented `supervisor.config.json`. This page covers the most important settings.
 
@@ -7,9 +7,13 @@ The release includes a commented `supervisor.config.json`. This page covers the 
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `BrokenEyePath` | empty | Prompts for Broken Eye on first run. |
+| `UseBrokenEye` | `true` | Includes Broken Eye in face-tracking startup, cleanup, and restart routines, including manual dashboard restarts. |
 | `VrcFaceTrackingPath` | empty | Prompts for VRCFaceTracking on first run. |
 | `BrokenEyeStartMinimized` | `false` | Requests/minimizes Broken Eye after launch. |
 | `VrcFaceTrackingStartMinimized` | `false` | Requests/minimizes VRCFaceTracking after launch. |
+| `FaceTrackerAutomationEnabled` | `true` | Automatically starts configured face-tracking applications during headset sessions. |
+| `FaceTrackerRestartOnReconnectEnabled` | `true` | Restarts configured face-tracking apps after a Pimax headset reconnect. |
+| `MouthTrackerRestartOnReconnectEnabled` | `true` | Restarts VRCFaceTracking after a mouth tracker reconnect while the headset stays connected. |
 | `MouthTrackerUser` | empty | Empty means ask on first run; `true` enables mouth tracker monitoring. |
 | `TurnOffSecondaryMonitors` | empty | Empty means ask on first run; `true` enables monitor layout handling. |
 | `AutoLaunchScheduledTask` | empty | Empty means ask on first setup; `true` creates/repairs the task. |
@@ -69,7 +73,7 @@ Example Base Station 2.0 row:
 ]
 ```
 
-`PowerStateReadUnsupported` is set automatically when a station or firmware does not support reading power state. The supervisor skips future state reads for that station; Config Editor **Refresh State** can retry detection manually.
+`PowerStateReadUnsupported` is set automatically when a station or firmware does not support reading power state. The supervisor skips future state reads for that station; Configurator **Refresh State** can retry detection manually.
 
 ## OscGoesBrrr Workflow
 
@@ -79,7 +83,7 @@ Example Base Station 2.0 row:
 "OscGoesBrrrBleScannerEnabled": false,
 "IntifacePath": "%APPDATA%\\IntifaceCentral\\intiface_central.exe",
 "OscGoesBrrrPath": "%LOCALAPPDATA%\\Programs\\OscGoesBrrr\\OscGoesBrrr.exe",
-"DelayBeforeOscGoesBrrrSeconds": 5,
+"DelayBeforeOscGoesBrrrSeconds": 3,
 "LovenseDetectors": [
   [ "Lovense" ],
   [ "LVS-" ]
@@ -88,8 +92,8 @@ Example Base Station 2.0 row:
 
 ## Startup Modes
 
-The **General** tab in the Config Editor has a **Startup** section:
+The **General** tab in the Configurator has a **Startup** section:
 
-- **Create/evaluate VRChat auto-launch Scheduled Task** — a hidden elevated watcher starts the supervisor only after `VRChat.exe` and SteamVR `vrserver.exe` are both running.
-- **Start with SteamVR** — registers `PimaxVrcSupervisorSteamVrHost.exe` as a SteamVR dashboard overlay app and creates a separate on-demand elevated helper task.
+- **Start in CLI mode when SteamVR is running** - a hidden elevated watcher starts the supervisor after SteamVR `vrserver.exe` is running. The supervisor waits for VRChat before starting managed apps.
+- **SteamVR Overlay** - registers `PimaxVrcSupervisorSteamVrHost.exe` as a SteamVR dashboard overlay app and creates a separate on-demand elevated helper task. The supervisor waits for VRChat before starting managed apps.
 - SteamVR manifest startup exits with SteamVR. When `vrserver.exe` exits, the supervisor powers down base stations, restores monitors, closes managed apps, and exits.

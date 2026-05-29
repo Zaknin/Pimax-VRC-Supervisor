@@ -81,7 +81,7 @@ internal sealed record HostDiagnosticsOptions(
                 verbose = GetBool(root, "DiagnosticsVerbose", defaultValue: false);
                 debugEnabled = GetBool(root, "DiagnosticsDebugSteamVrOverlay", defaultValue: false);
                 debugPointerEnabled = GetBool(root, "DiagnosticsDebugSteamVrPointer", defaultValue: false);
-                intervalSeconds = GetInt(root, "DiagnosticsSummaryIntervalSeconds", defaultValue: 10);
+                intervalSeconds = GetInt(root, "DiagnosticsSummaryIntervalSeconds", defaultValue: 20);
                 logDirectory = GetString(root, "DiagnosticsLogDirectory");
             }
             catch
@@ -92,7 +92,6 @@ internal sealed record HostDiagnosticsOptions(
 
         enabled = enabled || HasFlag(args, "--diagnostics");
         verbose = verbose || HasFlag(args, "--diagnostics-verbose");
-        debugEnabled = enabled && debugEnabled;
         debugPointerEnabled = debugEnabled && (debugPointerEnabled || HasFlag(args, "--diagnostics-debug-pointer"));
         if (TryGetCommandOption(args, "--diagnostics-log-dir", out var requestedDirectory) && !string.IsNullOrWhiteSpace(requestedDirectory))
         {
@@ -202,7 +201,7 @@ internal sealed class DebugLogSession : IDisposable
 
     private DebugLogSession(HostDiagnosticsOptions options)
     {
-        Enabled = options.Enabled && options.DebugEnabled;
+        Enabled = options.DebugEnabled;
         if (!Enabled)
         {
             return;
@@ -682,6 +681,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private static readonly TimeSpan InactiveDashboardPollInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan HiddenOverlayPollInterval = TimeSpan.FromMilliseconds(2000);
     private static readonly TimeSpan RepeatedFailureLogInterval = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan RuntimeDiagnosticsOptionRefreshInterval = TimeSpan.FromSeconds(1);
     private const int ButtonTop = 210;
     private const int ButtonLeft = 78;
     private const int ButtonColumnGap = 32;
@@ -718,6 +718,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private string? _pressedCommand;
     private string? _runningCommand;
     private OverlayPointer? _debugPointer;
+    private bool _debugPointerEnabled;
     private DateTimeOffset _lastCommandStartedAt = DateTimeOffset.MinValue;
     private DateTimeOffset _lastOverlayRefreshAt = DateTimeOffset.MinValue;
     private DateTimeOffset _lastHoverVisualRefreshAt = DateTimeOffset.MinValue;
@@ -739,11 +740,13 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private DateTimeOffset _lastRenderRefreshFailureLogAt = DateTimeOffset.MinValue;
     private DateTimeOffset _lastGpuRendererUnavailableLogAt = DateTimeOffset.MinValue;
     private DateTimeOffset _lastHoverMoveDebugAt = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastRuntimeDiagnosticsOptionRefreshAt = DateTimeOffset.MinValue;
     private bool _disposed;
 
     public SteamVrDashboardHost(HostDiagnosticsSession diagnostics)
     {
         _diagnostics = diagnostics;
+        _debugPointerEnabled = diagnostics.DebugPointerEnabled;
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -793,6 +796,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         while (!cancellationToken.IsCancellationRequested && IsSteamVrRunning())
         {
             var now = DateTimeOffset.UtcNow;
+            RefreshRuntimeDiagnosticsOptions(now);
             var viewState = GetOverlayViewState();
             var overlayViewed = viewState.Viewed;
             _diagnostics.RecordOverlayViewState(viewState.DashboardVisible, viewState.OverlayActive, viewState.Viewed);
@@ -895,6 +899,41 @@ internal sealed class SteamVrDashboardHost : IDisposable
         }
         catch (ObjectDisposedException)
         {
+        }
+    }
+
+    private void RefreshRuntimeDiagnosticsOptions(DateTimeOffset now)
+    {
+        if (now - _lastRuntimeDiagnosticsOptionRefreshAt < RuntimeDiagnosticsOptionRefreshInterval)
+        {
+            return;
+        }
+
+        _lastRuntimeDiagnosticsOptionRefreshAt = now;
+        try
+        {
+            var options = HostDiagnosticsOptions.Load([]);
+            if (_debugPointerEnabled == options.DebugPointerEnabled)
+            {
+                return;
+            }
+
+            _debugPointerEnabled = options.DebugPointerEnabled;
+            if (!_debugPointerEnabled)
+            {
+                ClearDebugPointer();
+            }
+            else
+            {
+                MarkOverlayDirty(urgent: true, wakeLoop: true);
+            }
+
+            Log("Runtime diagnostics option changed: debugPointerEnabled=" + _debugPointerEnabled);
+            WriteDebug("runtime diagnostics option changed; debugPointerEnabled=" + _debugPointerEnabled);
+        }
+        catch (Exception ex)
+        {
+            LogThrottled(ref _lastRenderRefreshFailureLogAt, "Could not refresh runtime diagnostics options: " + ex.Message);
         }
     }
 
@@ -1451,7 +1490,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
 
     private void UpdateDebugPointer(OverlayPointer pointer)
     {
-        if (!_diagnostics.DebugPointerEnabled || !IsTrackablePointer(pointer))
+        if (!_debugPointerEnabled || !IsTrackablePointer(pointer))
         {
             return;
         }
@@ -1833,7 +1872,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
 
     private void DrawDebugPointer(Graphics graphics)
     {
-        if (!_diagnostics.DebugPointerEnabled || _debugPointer is not { } pointer || !IsTrackablePointer(pointer))
+        if (!_debugPointerEnabled || _debugPointer is not { } pointer || !IsTrackablePointer(pointer))
         {
             return;
         }

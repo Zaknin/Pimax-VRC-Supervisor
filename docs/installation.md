@@ -1,4 +1,4 @@
-# Installation
+﻿# Installation
 
 ## Download
 
@@ -18,7 +18,7 @@ C:\Tools\PimaxVrcSupervisor
 The folder will contain:
 
 - `PimaxVrcSupervisor.exe`
-- `PimaxVrcSupervisorConfigEditor.exe`
+- `PimaxVrcSupervisorConfigurator.exe`
 - `supervisor.config.json`
 - `README.md`
 
@@ -26,7 +26,7 @@ The folder will contain:
 
 Choose one of the following paths:
 
-### Option A — Run the Supervisor
+### Option A â€” Run the Supervisor
 
 ```powershell
 .\PimaxVrcSupervisor.exe
@@ -43,10 +43,10 @@ On first launch, the supervisor prompts for:
 
 Answers are saved to `supervisor.config.json`.
 
-### Option B — Use the Config Editor
+### Option B â€” Use the Configurator
 
 ```powershell
-.\PimaxVrcSupervisorConfigEditor.exe
+.\PimaxVrcSupervisorConfigurator.exe
 ```
 
 The editor provides a GUI for setting all configuration values without editing JSON by hand.

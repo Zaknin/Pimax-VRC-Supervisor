@@ -1,8 +1,8 @@
-# GUI Manual
+﻿# GUI Manual
 
-## Config Editor Overview
+## Configurator Overview
 
-`PimaxVrcSupervisorConfigEditor.exe` is a compact Windows GUI for editing `supervisor.config.json` without changing the config schema.
+`PimaxVrcSupervisorConfigurator.exe` is a compact Windows GUI for editing `supervisor.config.json` without changing the config schema.
 
 ## Features
 
@@ -11,13 +11,17 @@
 - Shows clearer `Found` / `Not found` indicators.
 - Keeps status messages from going stale across tabs.
 - Keeps `Save` visually primary.
-- Resizes Auto Launch, Base Stations, and OSC Router tables to use available tab space while preserving the bottom status/action bar.
+- Resizes Auto Startup, Base Stations, and OSC Router tables to use available tab space while preserving the bottom status/action bar.
 
 ## Tabs
 
 ### General
 
-Main executable paths, Startup choices, and first-run choices.
+Startup choices, diagnostics, and editor utilities.
+
+### Face Tracking
+
+Broken Eye, VRCFaceTracking, mouth-tracker, and fast reconnect settings.
 
 ### Base Stations
 
@@ -27,7 +31,7 @@ Scan, rename, enable, test, identify, and power SteamVR base stations.
 
 Receive endpoint and output routes for local OSC routing.
 
-### Auto Launch
+### Auto Startup
 
 Extra apps to launch with the VR session.
 
@@ -54,7 +58,7 @@ Direct config editing when you need it.
 ## Usage
 
 ```powershell
-.\PimaxVrcSupervisorConfigEditor.exe
+.\PimaxVrcSupervisorConfigurator.exe
 ```
 
 After making changes, press **Save** to write the updated `supervisor.config.json`.

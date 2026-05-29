@@ -1,11 +1,11 @@
-# Troubleshooting
+﻿# Troubleshooting
 
 ## Common Issues
 
 | Symptom | Try |
 | --- | --- |
 | The supervisor exits immediately | Check whether another normal supervisor instance is already running. |
-| Broken Eye or VRCFaceTracking does not launch | Open the config editor and verify the executable path and process name. |
+| Broken Eye or VRCFaceTracking does not launch | Open the configurator and verify the executable path and process name. |
 | Reconnects are not detected | Confirm `PimaxDetectors`, `UsePimaxServiceLogReconnectDetector`, and the PiService log directory. |
 | Mouth tracker reconnects do nothing | Set `MouthTrackerUser` to `true` and verify `MouthTrackerDetectors`. |
 | Monitors are not restored | Let SteamVR fully exit; the supervisor waits for `vrserver.exe` before restoring when monitor handling is enabled. |
@@ -20,11 +20,11 @@ The supervisor prevents duplicate normal instances from racing each other. If th
 
 ## Path Validation
 
-The Config Editor validates expanded executable and folder paths, including paths that use `%APPDATA%` or `%LOCALAPPDATA%`. Press **Validate** to recheck paths after external changes.
+The Configurator validates expanded executable and folder paths, including paths that use `%APPDATA%` or `%LOCALAPPDATA%`. Press **Validate** to recheck paths after external changes.
 
 ## Base Station Power States
 
-`PowerStateReadUnsupported` is set automatically when a station or firmware does not support reading power state. The supervisor skips future state reads for that station. Use Config Editor **Refresh State** to manually retry detection.
+`PowerStateReadUnsupported` is set automatically when a station or firmware does not support reading power state. The supervisor skips future state reads for that station. Use Configurator **Refresh State** to manually retry detection.
 
 ## OSC Router Port Conflicts
 

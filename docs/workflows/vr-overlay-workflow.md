@@ -1,4 +1,4 @@
-# VR Overlay Workflow
+﻿# VR Overlay Workflow
 
 This page describes the SteamVR dashboard overlay workflow and how it interacts with the supervisor.
 
@@ -15,8 +15,9 @@ This page describes the SteamVR dashboard overlay workflow and how it interacts 
 1. SteamVR starts and launches the dashboard host (registered via SteamVR manifest).
 2. The host requests the elevated supervisor via `schtasks.exe /Run /TN "Pimax VRC Supervisor SteamVR Start"`.
 3. The supervisor starts with `--steamvr-start` and hides its console window.
-4. The host creates the OpenVR dashboard overlay (1500×900 pixels, 2.5m wide).
-5. The host begins polling supervisor status (every 5 seconds) and console output (every 2 seconds).
+4. The supervisor verifies `vrserver.exe`, waits for the Pimax headset, powers on base stations if enabled, then waits for VRChat before starting managed apps.
+5. The host creates the OpenVR dashboard overlay (1500Ã—900 pixels, 2.5m wide).
+6. The host begins polling supervisor status (every 5 seconds) and console output (every 2 seconds).
 
 ## Command Flow
 
@@ -72,4 +73,4 @@ When `DiagnosticsLogSteamVrOverlay` is enabled, the host also writes passive per
 
 The overlay displays the last lines of supervisor console output, refreshed every 2 seconds. Lines are fetched via the `log` command, which returns the last 14 lines from the supervisor's internal console buffer (max 80 lines).
 
-See also: [Workflows Overview](index.md) · [Auto Launch](auto-launch.md) · [VR Overlay Controls](../overlay/controls.md)
+See also: [Workflows Overview](index.md) Â· [Auto Launch](auto-launch.md) Â· [VR Overlay Controls](../overlay/controls.md)

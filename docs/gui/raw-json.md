@@ -1,4 +1,4 @@
-# Raw JSON Tab
+﻿# Raw JSON Tab
 
 The **Raw JSON** tab provides direct editing of the full `supervisor.config.json` file.
 
@@ -17,9 +17,9 @@ The **Raw JSON** tab provides direct editing of the full `supervisor.config.json
 
 Below the editor, a validation label shows the current state:
 
-- **"Raw JSON is valid."** — The JSON is syntactically correct and matches the current editor state.
-- **"Raw JSON is valid but has not been applied to the editor."** — The JSON is valid but differs from what the other tabs show. Click **Apply JSON to editor** to sync.
-- **"Invalid JSON: ..."** — The JSON has syntax errors. Fix the errors before saving.
+- **"Raw JSON is valid."** â€” The JSON is syntactically correct and matches the current editor state.
+- **"Raw JSON is valid but has not been applied to the editor."** â€” The JSON is valid but differs from what the other tabs show. Click **Apply JSON to editor** to sync.
+- **"Invalid JSON: ..."** â€” The JSON has syntax errors. Fix the errors before saving.
 
 ## JSON Format
 
@@ -42,4 +42,4 @@ The config file is typically `supervisor.config.json` next to the supervisor exe
 | Ctrl+Z | Undo (in text box) |
 | Ctrl+Y | Redo (in text box) |
 
-See also: [GUI Manual Overview](index.md) · [Timing](timing.md) · [Reference](../reference/index.md)
+See also: [GUI Manual Overview](index.md) Â· [Timing](timing.md) Â· [Reference](../reference/index.md)

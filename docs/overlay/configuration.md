@@ -1,14 +1,14 @@
-# VR Overlay Configuration
+﻿# VR Overlay Configuration
 
-The SteamVR dashboard overlay is configured through the Config Editor's **General** tab and the SteamVR manifest system.
+The SteamVR dashboard overlay is configured through the Configurator's **General** tab and the SteamVR manifest system.
 
 ## Enabling SteamVR Startup
 
 To use the overlay, you must enable SteamVR startup mode:
 
-1. Open the Config Editor.
+1. Open the Configurator.
 2. Go to the **General** tab.
-3. In the **Startup** section, check **Start with SteamVR**.
+3. In the **Startup** section, check **SteamVR Overlay**.
 4. Save the config.
 
 This registers `PimaxVrcSupervisorSteamVrHost.exe` as a SteamVR dashboard overlay app and creates an on-demand elevated helper Scheduled Task named "Pimax VRC Supervisor SteamVR Start".
@@ -25,13 +25,13 @@ This registers `PimaxVrcSupervisorSteamVrHost.exe` as a SteamVR dashboard overla
 
 The SteamVR manifest is created/updated when:
 
-- You save the config with "Start with SteamVR" enabled.
+- You save the config with "SteamVR Overlay" enabled.
 - You run `PimaxVrcSupervisor.exe --apply-startup-integration`.
 
 The manifest registers:
 - **App key:** `pimax.vrcsupervisor.dashboard`
 - **Overlay name:** "Pimax VRC Supervisor"
-- **Overlay dimensions:** 1500 × 900 pixels, 2.5 meters wide
+- **Overlay dimensions:** 1500 Ã— 900 pixels, 2.5 meters wide
 
 ## Overlay Settings
 
@@ -40,7 +40,7 @@ The manifest registers:
 | Overlay width | 1500 px | Panel width in pixels. |
 | Overlay height | 900 px | Panel height in pixels. |
 | Physical width | 2.5 m | Width in VR space. |
-| Button size | 366 × 126 px | Each dashboard button. |
+| Button size | 366 Ã— 126 px | Each dashboard button. |
 | Button gap | 28 px horizontal, 26 px vertical | Spacing between buttons. |
 | Console refresh | 2 seconds | How often console output is fetched. |
 | Status refresh | 5 seconds | How often status is polled. |
@@ -67,11 +67,11 @@ The host writes logs to `%TEMP%\PimaxVrcSupervisorSteamVrHost.log`. This file in
 
 To disable the overlay:
 
-1. Open the Config Editor.
+1. Open the Configurator.
 2. Go to the **General** tab.
-3. Uncheck **Start with SteamVR** (or set startup mode to `None`).
+3. Uncheck **SteamVR Overlay** (or set startup mode to `None`).
 4. Save the config.
 
 This removes the SteamVR manifest and deletes the helper Scheduled Task.
 
-See also: [VR Overlay Overview](index.md) · [VR Overlay Controls](controls.md) · [VR Overlay Troubleshooting](troubleshooting.md)
+See also: [VR Overlay Overview](index.md) Â· [VR Overlay Controls](controls.md) Â· [VR Overlay Troubleshooting](troubleshooting.md)

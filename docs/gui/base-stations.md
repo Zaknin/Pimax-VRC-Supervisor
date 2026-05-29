@@ -1,4 +1,4 @@
-# Base Stations Tab
+﻿# Base Stations Tab
 
 The **Base Stations** tab manages SteamVR base station power control through native Bluetooth LE.
 
@@ -6,7 +6,7 @@ The **Base Stations** tab manages SteamVR base station power control through nat
 
 | Field | Config Key | Description |
 | --- | --- | --- |
-| Enable base station power automation | `BaseStationsEnabled` | When enabled, the supervisor powers on enabled base stations after SteamVR and the Pimax headset are present, then powers them down after VRChat and SteamVR close. |
+| Enable base station power automation | `BaseStationsEnabled` | When enabled, the supervisor powers on enabled base stations after SteamVR and the Pimax headset are present, then powers them down when SteamVR exits in SteamVR-bound modes. |
 | Power-down mode | `BaseStationPowerDownMode` | `Sleep` works for Base Station 1.0 and 2.0. `Standby` applies to Base Station 2.0; Base Station 1.0 falls back to sleep. |
 
 ## Actions
@@ -28,9 +28,9 @@ The grid has the following columns:
 | --- | --- |
 | Enabled | Whether the station is active. |
 | Friendly name | User-facing alias. |
-| BLE name | SteamVR identifier (e.g., `LHB-00000000`). |
+| Bluetooth name | SteamVR identifier (e.g., `LHB-00000000`). |
 | Bluetooth address | BLE address (e.g., `AA:BB:CC:DD:EE:FF`). |
-| Version | `V1` or `V2`. Inferred from BLE name prefix (`HTC BS` = V1, `LHB-` = V2). |
+| Version | `V1` or `V2`. Inferred from Bluetooth name prefix (`HTC BS` = V1, `LHB-` = V2). |
 | V1 ID | The 8-character ID printed on the back label. Required for Base Station 1.0. |
 | State | Read-only. Shows live power state when refreshed. |
 | Power On | Sends a power-on command to this station. |
@@ -64,9 +64,9 @@ When the session ends:
 
 ## Base Station Version Detection
 
-| BLE Name Prefix | Version |
+| Bluetooth Name Prefix | Version |
 | --- | --- |
 | `HTC BS` | V1 |
 | `LHB-` | V2 |
 
-See also: [GUI Manual Overview](index.md) · [Basics](basics.md) · [Detectors](detectors.md)
+See also: [GUI Manual Overview](index.md) Â· [Basics](basics.md) Â· [Detectors](detectors.md)

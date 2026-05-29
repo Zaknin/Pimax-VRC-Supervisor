@@ -1,10 +1,10 @@
-# Overlay Issues
+﻿# Overlay Issues
 
 ## Overlay Doesn't Appear in SteamVR
 
 | Check | Action |
 | --- | --- |
-| SteamVR startup mode | Enable "Start with SteamVR" in the Config Editor General tab and save. |
+| SteamVR startup mode | Enable "SteamVR Overlay" in the Configurator General tab and save. |
 | Manifest applied | Run `PimaxVrcSupervisor.exe --apply-startup-integration`. |
 | SteamVR restarted | Restart SteamVR after changing startup settings. |
 | OpenVR DLL | Ensure `openvr_api.dll` exists in the SteamVR runtime directory. |
@@ -22,9 +22,9 @@
 
 This means the overlay host cannot connect to the supervisor.
 
-1. Wait a few seconds — the supervisor may still be starting.
+1. Wait a few seconds â€” the supervisor may still be starting.
 2. Check if the supervisor is running in Task Manager.
-3. Re-save the config with "Start with SteamVR" enabled to re-register the helper task.
+3. Re-save the config with "SteamVR Overlay" enabled to re-register the helper task.
 4. Check the host log for connection errors.
 
 ## Overlay Rendering Issues
@@ -33,7 +33,7 @@ This means the overlay host cannot connect to the supervisor.
 | --- | --- |
 | Blank overlay | The D3D11 renderer may have failed. The Ver2 dashboard requires D3D11 texture rendering; check the log for "D3D11 overlay renderer unavailable" or "Render refresh failed". |
 | Corrupted texture | Restart SteamVR. The overlay texture is recreated on each SteamVR session. |
-| Wrong size | The overlay is 1500×900 pixels at 2.5m wide. This is fixed and not configurable. |
+| Wrong size | The overlay is 1500Ã—900 pixels at 2.5m wide. This is fixed and not configurable. |
 
 ## Console Output Not Updating in VR
 
@@ -69,8 +69,8 @@ The overlay host logs to:
 ```
 
 Each entry includes a timestamp and message. Look for:
-- "Could not create overlay" — OpenVR initialization failed.
-- "Command failed" — The supervisor didn't respond.
-- "D3D11 overlay renderer unavailable" — GPU rendering could not start, and the old PNG renderer is not used.
+- "Could not create overlay" â€” OpenVR initialization failed.
+- "Command failed" â€” The supervisor didn't respond.
+- "D3D11 overlay renderer unavailable" â€” GPU rendering could not start, and the old PNG renderer is not used.
 
-See also: [Troubleshooting Overview](index.md) · [Base Station Issues](base-station-issues.md) · [Install Issues](install-issues.md)
+See also: [Troubleshooting Overview](index.md) Â· [Base Station Issues](base-station-issues.md) Â· [Install Issues](install-issues.md)

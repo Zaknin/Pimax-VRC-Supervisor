@@ -1,4 +1,4 @@
-# Auto-Launch Workflow
+﻿# Auto-Launch Workflow
 
 This page describes how the supervisor manages auto-launch applications during the session lifecycle.
 
@@ -62,4 +62,4 @@ The supervisor infers the process name from the executable path (filename withou
 
 This starts LIV after core apps, leaves it running during Pimax reconnects, and closes it when the session ends.
 
-See also: [Workflows Overview](index.md) · [OSC Routing](osc-routing.md) · [VR Overlay Workflow](vr-overlay-workflow.md)
+See also: [Workflows Overview](index.md) Â· [OSC Routing](osc-routing.md) Â· [VR Overlay Workflow](vr-overlay-workflow.md)

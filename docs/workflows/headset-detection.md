@@ -1,4 +1,4 @@
-# Headset Detection
+﻿# Headset Detection
 
 The supervisor uses multiple methods to detect the Pimax Crystal headset and handle reconnects.
 
@@ -73,4 +73,4 @@ VIVE, Camera
 
 The `DeviceProbeTimeoutSeconds` setting (default 10) controls how long the supervisor waits for `pnputil.exe` to return. If the command times out, the previous device state is kept.
 
-See also: [Workflows Overview](index.md) · [Startup Flow](startup-flow.md) · [Base Station Power](base-station-power.md)
+See also: [Workflows Overview](index.md) Â· [Startup Flow](startup-flow.md) Â· [Base Station Power](base-station-power.md)

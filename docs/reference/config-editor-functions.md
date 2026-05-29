@@ -1,6 +1,6 @@
-# Config Editor Functions Reference
+﻿# Configurator Functions Reference
 
-Major behavior-defining functions and classes in `PimaxVrcSupervisorConfigEditor.exe`.
+Major behavior-defining functions and classes in `PimaxVrcSupervisorConfigurator.exe`.
 
 ## ConfigEditorForm
 
@@ -97,4 +97,4 @@ Utility for editing JSON properties by key.
 | `Replace(string, string, string)` | Replaces a property value in JSON. |
 | `Remove(string, string)` | Removes a property from JSON. |
 
-See also: [Reference Overview](index.md) · [Configuration Fields](configuration-fields.md) · [Supervisor Functions](supervisor-functions.md)
+See also: [Reference Overview](index.md) Â· [Configuration Fields](configuration-fields.md) Â· [Supervisor Functions](supervisor-functions.md)

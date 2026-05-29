@@ -1,4 +1,4 @@
-# Processes Tab
+﻿# Processes Tab
 
 The **Processes** tab configures the process names the supervisor uses to detect, monitor, and close applications.
 
@@ -21,13 +21,6 @@ The **Processes** tab configures the process names the supervisor uses to detect
 | --- | --- | --- | --- |
 | SteamVR server process name | `SteamVrServerProcessNames` | `vrserver` | After VRChat exits, monitors are restored only after these processes are gone. |
 
-## Fast Reconnect Detection
-
-| Checkbox | Config Key | Default | Description |
-| --- | --- | --- | --- |
-| Watch Pimax PiService logs for fast reconnects | `UsePimaxServiceLogReconnectDetector` | `true` | Scans PiService logs for quick HID remove/add sequences that normal USB polling can miss. |
-| Watch Windows PnP events for fast mouth tracker reconnects | `UseMouthTrackerPnPReconnectDetector` | `true` | Scans Windows Kernel-PnP events for quick mouth tracker reconnects that normal USB polling can miss. |
-
 ## OscGoesBrrr Processes
 
 | Field | Config Key | Default | Description |
@@ -44,4 +37,4 @@ The **Processes** tab configures the process names the supervisor uses to detect
   - Attach to running processes for exit-code monitoring.
   - Gracefully close apps during cleanup (via `CloseMainWindow`), then force-close if needed.
 
-See also: [GUI Manual Overview](index.md) · [Auto Launch](auto-launch.md) · [OSCGoesBrrr](oscgoesbrrr.md)
+See also: [GUI Manual Overview](index.md) Â· [Auto Startup](auto-launch.md) Â· [OSCGoesBrrr](oscgoesbrrr.md)

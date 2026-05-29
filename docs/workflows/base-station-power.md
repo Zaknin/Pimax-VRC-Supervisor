@@ -1,4 +1,4 @@
-# Base Station Power Workflow
+﻿# Base Station Power Workflow
 
 This page describes how the supervisor manages SteamVR base station power during the session lifecycle.
 
@@ -17,8 +17,8 @@ The supervisor sends up to 3 wake passes:
 
 | Pass | Timing | Target Stations |
 | --- | --- | --- |
-| 1 | After headset connected, before managed apps | All enabled stations that report not-awake. |
-| 2 | After managed apps started | Same as pass 1. |
+| 1 | After headset connected, before VRChat wait and managed apps | All enabled stations that report not-awake. |
+| 2 | Before VRChat wait and managed apps | Same as pass 1. |
 | 3 | 30 seconds after pass 2 | Only V1 stations and stations with `PowerStateReadUnsupported`. |
 
 ### OpenVR Tracking Confirmation
@@ -46,15 +46,16 @@ Stations that report `Awake` or `Waking` are skipped in all wake passes.
 ### Trigger
 
 Power-down runs when:
-- VRChat exits (normal session end).
+- VRChat exits in non-SteamVR-bound manual mode.
 - SteamVR `vrserver.exe` exits (SteamVR mode).
+- SteamVR `vrserver.exe` exits after a Scheduled Task CLI session.
 - Console window is closed (emergency cleanup helper).
 
 ### Command
 
 The configured `BaseStationPowerDownMode` is sent:
-- `Sleep` — Works for Base Station 1.0 and 2.0.
-- `Standby` — Base Station 2.0 only. Base Station 1.0 falls back to sleep.
+- `Sleep` â€” Works for Base Station 1.0 and 2.0.
+- `Standby` â€” Base Station 2.0 only. Base Station 1.0 falls back to sleep.
 
 ### Confirmation
 
@@ -86,4 +87,4 @@ When the console window is closed:
 
 Version is inferred from BLE name prefix: `HTC BS` = V1, `LHB-` = V2.
 
-See also: [Workflows Overview](index.md) · [Startup Flow](startup-flow.md) · [OSC Routing](osc-routing.md)
+See also: [Workflows Overview](index.md) Â· [Startup Flow](startup-flow.md) Â· [OSC Routing](osc-routing.md)

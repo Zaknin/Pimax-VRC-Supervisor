@@ -1,11 +1,11 @@
-# Config Editor Issues
+﻿# Configurator Issues
 
 ## Editor Won't Open
 
 | Check | Action |
 | --- | --- |
-| .NET runtime | The config editor requires .NET 9. Use the self-contained release or install the runtime. |
-| Corrupt config | If the editor crashes on load, delete the state file at `%APPDATA%\Pimax VRC Supervisor\Config Editor\config-editor-state.json`. |
+| .NET runtime | The configurator requires .NET 9. Use the self-contained release or install the runtime. |
+| Corrupt config | If the editor crashes on load, delete the state file at `%APPDATA%\Pimax VRC Supervisor\Configurator\configurator-state.json`. |
 | Window off-screen | Delete the state file to reset window position. |
 
 ## "Could not load config" Error
@@ -32,7 +32,7 @@ Two base station rows have the same Bluetooth address. Remove or correct the dup
 
 ### "Enabled OSC route requires a name and target app receive port"
 
-An OSC route is enabled but missing a name or valid port (1–65535).
+An OSC route is enabled but missing a name or valid port (1â€“65535).
 
 ## Grid Rows Not Saving
 
@@ -61,11 +61,11 @@ Click **Format JSON** to auto-format after fixing syntax errors.
 
 The editor auto-detects Windows dark/light mode. If the theme looks wrong:
 
-1. Check Windows Settings → Personalization → Colors → "Choose your mode".
+1. Check Windows Settings â†’ Personalization â†’ Colors â†’ "Choose your mode".
 2. Restart the editor after changing the theme.
 
 ## Keyboard Shortcuts Not Working
 
 Ensure the editor window has focus. Some shortcuts (like Ctrl+S) only work when a control within the form is focused, not when the text box is in edit mode.
 
-See also: [Troubleshooting Overview](index.md) · [Install Issues](install-issues.md) · [Base Station Issues](base-station-issues.md)
+See also: [Troubleshooting Overview](index.md) Â· [Install Issues](install-issues.md) Â· [Base Station Issues](base-station-issues.md)

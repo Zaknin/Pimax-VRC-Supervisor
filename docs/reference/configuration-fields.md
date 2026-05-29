@@ -1,4 +1,4 @@
-# Configuration Fields Reference
+﻿# Configuration Fields Reference
 
 Complete reference for all fields in `supervisor.config.json`.
 
@@ -8,6 +8,7 @@ Complete reference for all fields in `supervisor.config.json`.
 | --- | --- | --- | --- |
 | `DisplayName` | string | `"Default"` | Friendly name shown in the editor and console startup banner. |
 | `BrokenEyePath` | string | `""` | Full path to Broken Eye executable. Prompts on first run if empty. |
+| `UseBrokenEye` | bool | `true` | Include Broken Eye in face-tracking startup, cleanup, and restart routines, including manual dashboard restarts. |
 | `BrokenEyeStartMinimized` | bool | `false` | Start Broken Eye minimized. |
 | `VrcFaceTrackingPath` | string | `""` | Full path to VRCFaceTracking executable. Prompts on first run if empty. |
 | `VrcFaceTrackingStartMinimized` | bool | `false` | Start VRCFaceTracking minimized. |
@@ -36,6 +37,9 @@ Complete reference for all fields in `supervisor.config.json`.
 | `AutoLaunchScheduledTask` | bool \| string | `""` | `true`/`false` or `""` to ask on first setup. |
 | `StartupLaunchMode` | string | `"Unspecified"` | `None`, `ScheduledTask`, `SteamVrManifest`, or `Unspecified`. |
 | `StopWithSteamVr` | bool | `false` | Compatibility field. SteamVR cleanup follows `StartupLaunchMode = SteamVrManifest`. |
+| `FaceTrackerAutomationEnabled` | bool | `true` | Automatically start configured face-tracking applications during headset sessions. |
+| `FaceTrackerRestartOnReconnectEnabled` | bool | `true` | Restart configured face-tracking apps after a Pimax headset reconnect. |
+| `MouthTrackerRestartOnReconnectEnabled` | bool | `true` | Restart VRCFaceTracking after a mouth tracker reconnect while the headset stays connected. |
 | `PimaxDetectors` | string[][] | See below | Pimax headset detection rules. |
 | `MouthTrackerDetectors` | string[][] | See below | Mouth tracker detection rules. |
 | `LovenseDetectors` | string[][] | See below | Lovense detection rules. |
@@ -46,8 +50,8 @@ Complete reference for all fields in `supervisor.config.json`.
 | `PollIntervalSeconds` | int | `2` | Polling interval in seconds. |
 | `StartupTimeoutSeconds` | int | `30` | Max seconds to wait for apps to appear. |
 | `StartupStableSeconds` | int | `5` | Seconds app must stay running for startup verification. |
-| `DelayBeforeVrcFaceTrackingSeconds` | int | `5` | Delay between Broken Eye and VRCFaceTracking. |
-| `DelayBeforeOscGoesBrrrSeconds` | int | `5` | Delay between Intiface and OscGoesBrrr. |
+| `DelayBeforeVrcFaceTrackingSeconds` | int | `3` | Delay between Broken Eye and VRCFaceTracking. |
+| `DelayBeforeOscGoesBrrrSeconds` | int | `3` | Delay between Intiface and OscGoesBrrr. |
 | `OscGoesBrrrBleScanSeconds` | int | `30` | BLE scan duration. |
 | `OscGoesBrrrBleScanIntervalSeconds` | int | `60` | BLE scan interval. |
 | `RestartDelayAfterReconnectSeconds` | int | `10` | Wait before restarting apps after reconnect. |
@@ -56,8 +60,11 @@ Complete reference for all fields in `supervisor.config.json`.
 | `DeviceProbeTimeoutSeconds` | int | `10` | Device query timeout. |
 | `DiagnosticsLogSupervisor` | bool | `false` | Write passive supervisor performance diagnostics to a text file. |
 | `DiagnosticsLogSteamVrOverlay` | bool | `false` | Write passive SteamVR dashboard host diagnostics to a text file. |
+| `DiagnosticsDebugSupervisor` | bool | `false` | Write supervisor debug-event logs. |
+| `DiagnosticsDebugSteamVrOverlay` | bool | `false` | Write SteamVR overlay debug-event logs. |
+| `DiagnosticsDebugSteamVrPointer` | bool | `false` | Draw the visible SteamVR overlay pointer marker for hover hit-test troubleshooting when overlay debug logging is enabled. |
 | `DiagnosticsVerbose` | bool | `false` | Include per-operation timing lines for short troubleshooting captures. |
-| `DiagnosticsSummaryIntervalSeconds` | int | `10` | Seconds between diagnostic summary lines. |
+| `DiagnosticsSummaryIntervalSeconds` | int | `20` | Seconds between diagnostic summary lines. |
 | `DiagnosticsLogDirectory` | string | `"%TEMP%\\PimaxVrcSupervisorDiagnostics"` | Diagnostic log folder. Environment variables are expanded. |
 
 ## AutoLaunchApp Object
@@ -89,7 +96,7 @@ Complete reference for all fields in `supervisor.config.json`.
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `Name` | string | `""` | Display name. |
-| `AppReceivePort` | int | `0` | Target app UDP port (1–65535). |
+| `AppReceivePort` | int | `0` | Target app UDP port (1â€“65535). |
 | `Enabled` | bool | `true` | Whether the route is active. |
 
-See also: [Reference Overview](index.md) · [Supervisor Functions](supervisor-functions.md) · [Config Editor Functions](config-editor-functions.md)
+See also: [Reference Overview](index.md) Â· [Supervisor Functions](supervisor-functions.md) Â· [Configurator Functions](config-editor-functions.md)

@@ -1,4 +1,4 @@
-# Pimax VRC Supervisor Manual
+﻿# Pimax VRC Supervisor Manual
 
 ![Version](https://img.shields.io/badge/version-1.2.0-2563eb)
 ![Platform](https://img.shields.io/badge/platform-Windows-0f766e)
@@ -15,7 +15,7 @@ Pimax + VRChat setups can be fragile when USB devices blink, the runtime reconne
 - Restart the right apps after headset or mouth tracker reconnects
 - Optionally manage secondary monitors during VR
 - Optionally manage SteamVR base-station power through native Bluetooth LE
-- Optionally auto-launch when VRChat starts while SteamVR is running
+- Optionally auto-launch when SteamVR starts, then wait for VRChat before starting managed apps
 - Optionally start from SteamVR through a VR app manifest with a small SteamVR-launched control dashboard
 - Optionally start Intiface and OscGoesBrrr for Lovense workflows
 - Optionally route local OSC packets to multiple OSC apps
@@ -25,16 +25,16 @@ Pimax + VRChat setups can be fragile when USB devices blink, the runtime reconne
 | App | Purpose |
 | --- | --- |
 | `PimaxVrcSupervisor.exe` | Console supervisor that watches the VR session and manages apps/devices. |
-| `PimaxVrcSupervisorConfigEditor.exe` | GUI editor for `supervisor.config.json`. |
+| `PimaxVrcSupervisorConfigurator.exe` | GUI editor for `supervisor.config.json`. |
 | `supervisor.config.json` | Documented configuration file copied next to the executables. |
 
 ## Quick Links
 
-- [Getting Started](getting-started.md) — overview of features and concepts
-- [Installation](installation.md) — download, extract, and first-run setup
-- [Configuration](configuration.md) — key settings and examples
-- [GUI Manual](gui/index.md) — using the Config Editor
-- [VR Overlay](overlay/index.md) — SteamVR dashboard host
-- [Workflows](workflows/index.md) — OscGoesBrrr, OSC Router, and more
-- [Reference](reference/index.md) — full configuration reference
-- [Troubleshooting](troubleshooting/index.md) — common issues and fixes
+- [Getting Started](getting-started.md) â€” overview of features and concepts
+- [Installation](installation.md) â€” download, extract, and first-run setup
+- [Configuration](configuration.md) â€” key settings and examples
+- [GUI Manual](gui/index.md) â€” using the Configurator
+- [VR Overlay](overlay/index.md) â€” SteamVR dashboard host
+- [Workflows](workflows/index.md) â€” OscGoesBrrr, OSC Router, and more
+- [Reference](reference/index.md) â€” full configuration reference
+- [Troubleshooting](troubleshooting/index.md) â€” common issues and fixes

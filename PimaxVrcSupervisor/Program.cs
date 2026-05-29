@@ -46,6 +46,12 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "--install-auto-launch-task", 
 if (commandLineArgs.Any(arg => string.Equals(arg, "--apply-startup-integration", StringComparison.OrdinalIgnoreCase)))
 {
     var showResult = commandLineArgs.Any(arg => string.Equals(arg, "--show-result", StringComparison.OrdinalIgnoreCase));
+    var hideHelperWindow = commandLineArgs.Any(arg => string.Equals(arg, "--hide-startup-helper", StringComparison.OrdinalIgnoreCase));
+    if (hideHelperWindow && !showResult)
+    {
+        ConsoleWindow.HideIfPresent();
+    }
+
     try
     {
         Console.WriteLine($"Pimax VRC Supervisor {AppVersion.Current}");
@@ -94,7 +100,9 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "--apply-startup-integration",
 }
 if (commandLineArgs.Any(arg => string.Equals(arg, "--watch-vrchat-auto-launch", StringComparison.OrdinalIgnoreCase)))
 {
-    await AutoLaunchWatcher.RunAsync(shutdown.Token);
+    ConsoleWindow.HideIfPresent();
+    var skipCurrentSteamVrSession = commandLineArgs.Any(arg => string.Equals(arg, "--skip-current-vrserver-session", StringComparison.OrdinalIgnoreCase));
+    await AutoLaunchWatcher.RunAsync(skipCurrentSteamVrSession, shutdown.Token);
     return;
 }
 
@@ -184,7 +192,7 @@ static async Task InstallAutoLaunchScheduledTaskFromCommandLineAsync(SupervisorC
     }
 
     Console.WriteLine("Installing elevated auto-launch scheduled task...");
-        var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(startWatcherImmediately: true, cancellationToken);
+        var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(startWatcherImmediately: true, skipCurrentSteamVrSession: true, cancellationToken);
     config.SetAutoLaunchScheduledTask(true);
     config.SaveAutoLaunchScheduledTaskPreference();
     Console.WriteLine($"Installed scheduled task: {taskDetails.TaskName}");
@@ -211,7 +219,7 @@ internal sealed record DiagnosticsOptions(
     {
         var enabled = config.DiagnosticsLogSupervisor || HasFlag(args, "--diagnostics");
         var verbose = config.DiagnosticsVerbose || HasFlag(args, "--diagnostics-verbose");
-        var debugEnabled = enabled && config.DiagnosticsDebugSupervisor;
+        var debugEnabled = config.DiagnosticsDebugSupervisor;
         var logDirectory = TryGetCommandOption(args, "--diagnostics-log-dir", out var requestedDirectory)
             && !string.IsNullOrWhiteSpace(requestedDirectory)
             ? requestedDirectory
@@ -346,7 +354,7 @@ internal sealed class DebugLogSession : IDisposable
 
     private DebugLogSession(DiagnosticsOptions options)
     {
-        Enabled = options.Enabled && options.DebugEnabled;
+        Enabled = options.DebugEnabled;
         if (!Enabled)
         {
             return;
@@ -1197,6 +1205,7 @@ internal sealed class AppSupervisor
     private const int BrokenEyeStartupMaxAttempts = 10;
     private const string ForcedManualReloadMarkerFileName = "PimaxVrcSupervisorForcedManualReload.marker";
     private static readonly TimeSpan BrokenEyeStartupCheckDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan SteamVrBaseStationStartupDelay = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan LovenseBluetoothRegistryRecentWindow = TimeSpan.FromHours(1);
 
     private readonly SupervisorConfig _config;
@@ -1291,15 +1300,17 @@ internal sealed class AppSupervisor
             Console.WriteLine("Warning: this process is not elevated. Build/run the exe directly so the manifest can request administrator permission.");
         }
 
-        if (!await EnsureExecutablePathsAsync(cancellationToken))
+        if (_config.FaceTrackerAutomationEnabled && !await EnsureExecutablePathsAsync(cancellationToken))
         {
             WriteDebug("supervisor exiting; reason=missing executable path");
             return;
         }
 
         var runInitialSetupQuestions = _config.RunInitialSetupQuestions;
-        _mouthTrackerUser = await EnsureMouthTrackerPreferenceAsync(runInitialSetupQuestions, cancellationToken);
-        _turnOffSecondaryMonitors = await EnsureTurnOffSecondaryMonitorsPreferenceAsync(runInitialSetupQuestions, cancellationToken);
+        _mouthTrackerUser = _config.FaceTrackerAutomationEnabled
+            && await EnsureMouthTrackerPreferenceAsync(runInitialSetupQuestions, cancellationToken);
+        _turnOffSecondaryMonitors = _config.FaceTrackerAutomationEnabled
+            && await EnsureTurnOffSecondaryMonitorsPreferenceAsync(runInitialSetupQuestions, cancellationToken);
         await EnsureStartupIntegrationPreferenceAsync(runInitialSetupQuestions, cancellationToken);
         await EnsureBaseStationPowerPreferenceAsync(runInitialSetupQuestions, cancellationToken);
         if (runInitialSetupQuestions && _config.AreInitialSetupQuestionsComplete())
@@ -1311,15 +1322,27 @@ internal sealed class AppSupervisor
 
         try
         {
-            if (_steamVrStart && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+            if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
             {
-                Console.WriteLine($"SteamVR startup mode requested, but no SteamVR server process is running: {string.Join(", ", _config.SteamVrServerProcessNames)}");
+                Console.WriteLine($"SteamVR startup requested, but no SteamVR server process is running: {string.Join(", ", _config.SteamVrServerProcessNames)}");
                 return;
             }
 
             _lastPimaxConnected = await WaitForPimaxOnStartupAsync(cancellationToken);
 
-            await TryPowerOnBaseStationsForSessionAsync(1, cancellationToken);
+            await WaitForSteamVrBaseStationStartupWindowAsync(cancellationToken);
+            await TryPowerOnBaseStationsBeforeWatchedProcessAsync(cancellationToken);
+            if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+            {
+                Console.WriteLine("SteamVR shut down before VRChat started. Powering down base stations and exiting.");
+                await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
+                return;
+            }
+
+            if (!await WaitForWatchedProcessOnStartupAsync(cancellationToken))
+            {
+                return;
+            }
 
             if (_mouthTrackerUser)
             {
@@ -1341,7 +1364,6 @@ internal sealed class AppSupervisor
             await TryStartOscRouterAsync(cancellationToken);
             await StartManagedAppsAsync(cancellationToken);
             await InitializeOscGoesBrrrWorkflowAsync(cancellationToken);
-            await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
             ShowOscRouterRetryPromptIfNeeded();
             if (restartedFromForcedManualReload)
             {
@@ -1349,8 +1371,8 @@ internal sealed class AppSupervisor
             }
 
             Console.WriteLine($"Pimax Crystal initial state: {DescribeConnection(_lastPimaxConnected.Value)}");
-            Console.WriteLine(_steamVrStart
-                ? "Waiting for Pimax reconnects or SteamVR shutdown. Press Ctrl+C to stop."
+            Console.WriteLine(ShouldExitWithSteamVr()
+                ? "Waiting for Pimax reconnects, VRChat shutdown, or SteamVR shutdown. Press Ctrl+C to stop."
                 : "Waiting for Pimax reconnects or VRChat shutdown. Press Ctrl+C to stop.");
             Console.WriteLine("Press F1 for shortcuts.");
 
@@ -1367,34 +1389,29 @@ internal sealed class AppSupervisor
                         await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
                     }
 
-                    if (_steamVrStart && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+                    if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
                     {
                         Console.WriteLine("SteamVR has shut down. Restoring monitors, closing managed apps, and exiting.");
                         await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
                         return;
                     }
 
-                    if (!_steamVrStart)
+                    var watchedProcessState = ObserveWatchedShutdownProcesses();
+                    if (watchedProcessState == WatchedProcessState.NormalExit)
                     {
-                        var watchedProcessState = ObserveWatchedShutdownProcesses();
-                        if (watchedProcessState == WatchedProcessState.NormalExit)
-                        {
-                            var waitForSteamVrServerExit = ShouldWaitForSteamVrServerExitBeforeCleanup();
-                            Console.WriteLine(waitForSteamVrServerExit
-                                ? "VRChat has shut down. Waiting for SteamVR if needed, restoring monitors, then closing managed apps."
-                                : "VRChat has shut down. Closing managed apps and exiting.");
-                            await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit, cancellationToken);
-                            return;
-                        }
-                        if (watchedProcessState == WatchedProcessState.CrashGraceExpired)
-                        {
-                            var waitForSteamVrServerExit = ShouldWaitForSteamVrServerExitBeforeCleanup();
-                            Console.WriteLine(waitForSteamVrServerExit
-                                ? "VRChat did not relaunch after a likely crash. Waiting for SteamVR if needed, restoring monitors, then closing managed apps."
-                                : "VRChat did not relaunch after a likely crash. Closing managed apps and exiting.");
-                            await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit, cancellationToken);
-                            return;
-                        }
+                        Console.WriteLine(ShouldExitWithSteamVr()
+                            ? "VRChat has shut down. Closing managed apps, then waiting for SteamVR shutdown before powering down base stations."
+                            : "VRChat has shut down. Closing managed apps and exiting.");
+                        await StopManagedAppsAfterWatchedProcessExitAsync(waitForSteamVrServerExitBeforeBaseStationPowerDown: ShouldExitWithSteamVr(), cancellationToken);
+                        return;
+                    }
+                    if (watchedProcessState == WatchedProcessState.CrashGraceExpired)
+                    {
+                        Console.WriteLine(ShouldExitWithSteamVr()
+                            ? "VRChat did not relaunch after a likely crash. Closing managed apps, then waiting for SteamVR shutdown before powering down base stations."
+                            : "VRChat did not relaunch after a likely crash. Closing managed apps and exiting.");
+                        await StopManagedAppsAfterWatchedProcessExitAsync(waitForSteamVrServerExitBeforeBaseStationPowerDown: ShouldExitWithSteamVr(), cancellationToken);
+                        return;
                     }
 
                     var pimaxConnected = await ReadDeviceConnectedOrPreviousAsync(
@@ -1419,15 +1436,20 @@ internal sealed class AppSupervisor
                             _lastLovenseConnected,
                             cancellationToken)
                         : _lastLovenseConnected;
-                    var pimaxServiceReconnect = pimaxConnected
+                    var faceTrackerReconnectAutomationEnabled = _config.FaceTrackerAutomationEnabled
+                        && _config.FaceTrackerRestartOnReconnectEnabled;
+                    var pimaxServiceReconnect = pimaxConnected && faceTrackerReconnectAutomationEnabled
                         ? DetectPimaxServiceLogReconnect()
                         : null;
                     var pimaxRuntimeReconnected = pimaxServiceReconnect is not null;
                     var pimaxReconnected = _lastPimaxConnected == false && pimaxConnected;
+                    var mouthTrackerReconnectAutomationEnabled = _config.FaceTrackerAutomationEnabled
+                        && _config.MouthTrackerRestartOnReconnectEnabled;
                     var mouthTrackerReconnected = _mouthTrackerUser
                         && _lastMouthTrackerConnected == false
                         && mouthTrackerConnected == true;
                     var mouthTrackerPnPReconnected = _mouthTrackerUser
+                        && mouthTrackerReconnectAutomationEnabled
                         && mouthTrackerConnected == true
                         && await DetectMouthTrackerPnPReconnectAsync(cancellationToken);
 
@@ -1458,41 +1480,47 @@ internal sealed class AppSupervisor
                                 Console.WriteLine("Pimax runtime HID reconnect detected from PiService logs.");
                             }
 
-                            var reconnectDelay = TimeSpan.FromSeconds(_config.RestartDelayAfterReconnectSeconds);
-                            Console.WriteLine($"Pimax Crystal reconnected. Waiting {reconnectDelay.TotalSeconds:0} seconds for a stable connection before restarting managed apps.");
-                            var stableReconnect = await WaitForPimaxStableConnectedAsync(reconnectDelay, cancellationToken);
-                            if (!stableReconnect)
+                            if (!faceTrackerReconnectAutomationEnabled)
                             {
-                                Console.WriteLine("Pimax Crystal did not stay connected during the reconnect wait. Waiting for the next reconnect.");
-                                _lastPimaxConnected = false;
-                                continue;
+                                Console.WriteLine("Pimax Crystal reconnected. Face tracker reconnect restart automation is disabled; leaving managed apps unchanged.");
                             }
-
-                            if (!_steamVrStart && _watchedProcessHasBeenSeen && !IsAnyProcessRunning(_config.WatchedShutdownProcessNames))
+                            else
                             {
-                                var waitForSteamVrServerExit = ShouldWaitForSteamVrServerExitBeforeCleanup();
-                                Console.WriteLine(waitForSteamVrServerExit
-                                    ? "VRChat shut down during reconnect delay. Waiting for SteamVR if needed, restoring monitors, then closing managed apps."
-                                    : "VRChat shut down during reconnect delay. Closing managed apps and exiting.");
-                                await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit, cancellationToken);
-                                return;
-                            }
+                                var reconnectDelay = TimeSpan.FromSeconds(_config.RestartDelayAfterReconnectSeconds);
+                                Console.WriteLine($"Pimax Crystal reconnected. Waiting {reconnectDelay.TotalSeconds:0} seconds for a stable connection before restarting managed apps.");
+                                var stableReconnect = await WaitForPimaxStableConnectedAsync(reconnectDelay, cancellationToken);
+                                if (!stableReconnect)
+                                {
+                                    Console.WriteLine("Pimax Crystal did not stay connected during the reconnect wait. Waiting for the next reconnect.");
+                                    _lastPimaxConnected = false;
+                                    continue;
+                                }
 
-                            await StopManagedAppsAsync(ManagedAppStopReason.PimaxReconnect, cancellationToken);
-                            await StartManagedAppsAsync(cancellationToken);
-                            pimaxConnected = await ReadDeviceConnectedOrPreviousAsync(
-                                "Pimax Crystal",
-                                IsPimaxConnectedAsync,
-                                true,
-                                cancellationToken);
-                            mouthTrackerConnected = _mouthTrackerUser
-                                ? await ReadDeviceConnectedOrPreviousAsync(
-                                    "mouth tracker",
-                                    IsMouthTrackerConnectedAsync,
-                                    _lastMouthTrackerConnected,
-                                    cancellationToken)
-                                : (bool?)null;
-                            Console.WriteLine($"Pimax Crystal state after restart: {DescribeConnection(pimaxConnected)}");
+                                if (_watchedProcessHasBeenSeen && !IsAnyProcessRunning(_config.WatchedShutdownProcessNames))
+                                {
+                                    Console.WriteLine(ShouldExitWithSteamVr()
+                                        ? "VRChat shut down during reconnect delay. Closing managed apps, then waiting for SteamVR shutdown before powering down base stations."
+                                        : "VRChat shut down during reconnect delay. Closing managed apps and exiting.");
+                                    await StopManagedAppsAfterWatchedProcessExitAsync(waitForSteamVrServerExitBeforeBaseStationPowerDown: ShouldExitWithSteamVr(), cancellationToken);
+                                    return;
+                                }
+
+                                await StopManagedAppsAsync(ManagedAppStopReason.PimaxReconnect, cancellationToken);
+                                await StartManagedAppsAsync(cancellationToken);
+                                pimaxConnected = await ReadDeviceConnectedOrPreviousAsync(
+                                    "Pimax Crystal",
+                                    IsPimaxConnectedAsync,
+                                    true,
+                                    cancellationToken);
+                                mouthTrackerConnected = _mouthTrackerUser
+                                    ? await ReadDeviceConnectedOrPreviousAsync(
+                                        "mouth tracker",
+                                        IsMouthTrackerConnectedAsync,
+                                        _lastMouthTrackerConnected,
+                                        cancellationToken)
+                                    : (bool?)null;
+                                Console.WriteLine($"Pimax Crystal state after restart: {DescribeConnection(pimaxConnected)}");
+                            }
                         }
                     }
                     else if (_lastPimaxConnected != pimaxConnected)
@@ -1502,10 +1530,19 @@ internal sealed class AppSupervisor
 
                     if (_mouthTrackerUser && (mouthTrackerReconnected || mouthTrackerPnPReconnected) && !pimaxReconnected && !pimaxRuntimeReconnected && pimaxConnected)
                     {
-                        Console.WriteLine(mouthTrackerPnPReconnected && !mouthTrackerReconnected
-                            ? "Mouth tracker device event detected while Pimax Crystal stayed connected. Restarting VRCFaceTracking."
-                            : "Mouth tracker reconnected while Pimax Crystal stayed connected. Restarting VRCFaceTracking.");
-                        await RestartVrcFaceTrackingAsync(cancellationToken);
+                        if (!mouthTrackerReconnectAutomationEnabled)
+                        {
+                            Console.WriteLine(mouthTrackerPnPReconnected && !mouthTrackerReconnected
+                                ? "Mouth tracker device event detected while Pimax Crystal stayed connected. Mouth tracker restart automation is disabled; leaving VRCFaceTracking unchanged."
+                                : "Mouth tracker reconnected while Pimax Crystal stayed connected. Mouth tracker restart automation is disabled; leaving VRCFaceTracking unchanged.");
+                        }
+                        else
+                        {
+                            Console.WriteLine(mouthTrackerPnPReconnected && !mouthTrackerReconnected
+                                ? "Mouth tracker device event detected while Pimax Crystal stayed connected. Restarting VRCFaceTracking."
+                                : "Mouth tracker reconnected while Pimax Crystal stayed connected. Restarting VRCFaceTracking.");
+                            await RestartVrcFaceTrackingAsync(cancellationToken);
+                        }
                     }
                     else if (_mouthTrackerUser && _lastMouthTrackerConnected == true && mouthTrackerConnected == false)
                     {
@@ -1568,22 +1605,31 @@ internal sealed class AppSupervisor
 
     private async Task<bool> EnsureExecutablePathsAsync(CancellationToken cancellationToken)
     {
-        var brokenEyePath = await ResolveExecutablePathAsync(
-            _config.BrokenEyePath,
-            "Broken Eye",
-            "Broken Eye.exe",
-            suggestedPath: null,
-            cancellationToken);
-        if (brokenEyePath is null)
+        ResolvedExecutablePath? brokenEyePath = null;
+        if (_config.UseBrokenEye)
         {
-            return false;
+            brokenEyePath = await ResolveExecutablePathAsync(
+                _config.BrokenEyePath,
+                "Broken Eye",
+                "Broken Eye.exe",
+                suggestedPath: null,
+                cancellationToken);
+            if (brokenEyePath is null)
+            {
+                return false;
+            }
+
+            UpdateProcessNamesFromSelectedExecutable(
+                "Broken Eye",
+                brokenEyePath.Path,
+                brokenEyePath.WasSelected,
+                processNames => _config.BrokenEyeProcessNames = processNames,
+                _config.BrokenEyeProcessNames);
         }
-        UpdateProcessNamesFromSelectedExecutable(
-            "Broken Eye",
-            brokenEyePath.Path,
-            brokenEyePath.WasSelected,
-            processNames => _config.BrokenEyeProcessNames = processNames,
-            _config.BrokenEyeProcessNames);
+        else
+        {
+            Console.WriteLine("Broken Eye is disabled. Skipping Broken Eye executable validation.");
+        }
 
         var vrcFaceTrackingPath = await ResolveExecutablePathAsync(
             _config.VrcFaceTrackingPath,
@@ -1602,15 +1648,19 @@ internal sealed class AppSupervisor
             processNames => _config.VrcFaceTrackingProcessNames = processNames,
             _config.VrcFaceTrackingProcessNames);
 
-        var pathsChanged = !StringComparer.OrdinalIgnoreCase.Equals(_config.BrokenEyePath, brokenEyePath.Path)
-            || !StringComparer.OrdinalIgnoreCase.Equals(_config.VrcFaceTrackingPath, vrcFaceTrackingPath.Path)
-            || brokenEyePath.WasSelected
+        var pathsChanged = !StringComparer.OrdinalIgnoreCase.Equals(_config.VrcFaceTrackingPath, vrcFaceTrackingPath.Path)
             || vrcFaceTrackingPath.WasSelected;
+        if (brokenEyePath is not null)
+        {
+            pathsChanged = pathsChanged
+                || !StringComparer.OrdinalIgnoreCase.Equals(_config.BrokenEyePath, brokenEyePath.Path)
+                || brokenEyePath.WasSelected;
+            _config.BrokenEyePath = brokenEyePath.Path;
+            ValidateExecutable(_config.BrokenEyePath, "Broken Eye");
+        }
 
-        _config.BrokenEyePath = brokenEyePath.Path;
         _config.VrcFaceTrackingPath = vrcFaceTrackingPath.Path;
 
-        ValidateExecutable(_config.BrokenEyePath, "Broken Eye");
         ValidateExecutable(_config.VrcFaceTrackingPath, "VRCFaceTracking");
 
         if (_config.OscGoesBrrrEnabled)
@@ -1777,7 +1827,7 @@ internal sealed class AppSupervisor
         {
             try
             {
-                var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(startWatcherImmediately: true, cancellationToken);
+                var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(startWatcherImmediately: true, skipCurrentSteamVrSession: true, cancellationToken);
                 _config.SetAutoLaunchScheduledTask(true);
                 _config.StartupLaunchMode = StartupLaunchMode.ScheduledTask;
                 _config.SaveAutoLaunchScheduledTaskPreference();
@@ -1881,7 +1931,7 @@ internal sealed class AppSupervisor
         Console.WriteLine("Ensuring elevated auto-launch scheduled task is installed.");
         try
         {
-            var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(startWatcherImmediately: true, cancellationToken);
+            var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(startWatcherImmediately: true, skipCurrentSteamVrSession: true, cancellationToken);
             Console.WriteLine($"Installed elevated auto-launch scheduled task: {taskDetails.TaskName}");
             Console.WriteLine($"Trigger: {taskDetails.TriggerDescription}");
         }
@@ -1895,11 +1945,11 @@ internal sealed class AppSupervisor
     private static Task<StartupLaunchMode> AskStartupIntegrationPreferenceAsync(CancellationToken cancellationToken)
         => AskPromptAsync(
             () => ThemedPrompt.Show(
-                "How should Pimax VRC Supervisor start automatically?\r\n\r\nStart with Console creates an elevated Windows Scheduled Task that watches for VRChat.exe when vrserver.exe is already running.\r\n\r\nStart with VR Overlay starts through SteamVR with the dashboard overlay.",
+                "How should Pimax VRC Supervisor start automatically?\r\n\r\nStart in CLI mode when SteamVR is running creates an elevated Windows Scheduled Task that starts the supervisor when vrserver.exe is running. The supervisor waits for VRChat before starting managed apps.\r\n\r\nSteamVR Overlay starts through SteamVR with the dashboard overlay.",
                 "Pimax VRC Supervisor",
                 [
-                    new("Start with Console", DialogResult.Yes),
-                    new("Start with VR Overlay", DialogResult.OK),
+                    new("Start in CLI mode when SteamVR is running", DialogResult.Yes),
+                    new("SteamVR Overlay", DialogResult.OK),
                     new("No", DialogResult.No)
                 ],
                 MessageBoxIcon.Question,
@@ -2102,6 +2152,37 @@ internal sealed class AppSupervisor
             if (await ReadDeviceConnectedOrPreviousAsync("Pimax Crystal", IsPimaxConnectedAsync, previousConnected: false, cancellationToken))
             {
                 Console.WriteLine("Pimax Crystal connected.");
+                return true;
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return false;
+    }
+
+    private async Task<bool> WaitForWatchedProcessOnStartupAsync(CancellationToken cancellationToken)
+    {
+        if (ObserveWatchedShutdownProcesses() == WatchedProcessState.Running)
+        {
+            Console.WriteLine($"Watched process is running: {string.Join(", ", _config.WatchedShutdownProcessNames)}");
+            return true;
+        }
+
+        Console.WriteLine($"Waiting for watched process before starting managed apps: {string.Join(", ", _config.WatchedShutdownProcessNames)}");
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await Task.Delay(_pollInterval, cancellationToken);
+            if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+            {
+                Console.WriteLine("SteamVR shut down while waiting for VRChat.");
+                await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                return false;
+            }
+
+            if (ObserveWatchedShutdownProcesses() == WatchedProcessState.Running)
+            {
+                Console.WriteLine("Watched process detected. Starting managed apps.");
                 return true;
             }
         }
@@ -2453,6 +2534,12 @@ internal sealed class AppSupervisor
 
     private async Task StartManagedAppsAsync(CancellationToken cancellationToken)
     {
+        if (!_config.FaceTrackerAutomationEnabled)
+        {
+            Console.WriteLine("Face tracker automation is disabled. Skipping automatic face-tracking startup.");
+            return;
+        }
+
         _managedAppsStarted = true;
         PrepareMonitorLayoutForVrSession();
         await StartCoreAppsAsync(cancellationToken);
@@ -2464,10 +2551,17 @@ internal sealed class AppSupervisor
         var startedAt = Stopwatch.GetTimestamp();
         try
         {
-            await StartBrokenEyeWithRetriesAsync(cancellationToken);
-            Console.WriteLine($"Waiting {_config.DelayBeforeVrcFaceTrackingSeconds} seconds before starting VRCFaceTracking...");
-            await DelayWithCancellationAsync(TimeSpan.FromSeconds(_config.DelayBeforeVrcFaceTrackingSeconds), cancellationToken);
-            await VerifyRunningAsync("Broken Eye", _config.BrokenEyeProcessNames, cancellationToken, requiredStableSeconds: 0);
+            if (_config.UseBrokenEye)
+            {
+                await StartBrokenEyeWithRetriesAsync(cancellationToken);
+                Console.WriteLine($"Waiting {_config.DelayBeforeVrcFaceTrackingSeconds} seconds before starting VRCFaceTracking...");
+                await DelayWithCancellationAsync(TimeSpan.FromSeconds(_config.DelayBeforeVrcFaceTrackingSeconds), cancellationToken);
+                await VerifyRunningAsync("Broken Eye", _config.BrokenEyeProcessNames, cancellationToken, requiredStableSeconds: 0);
+            }
+            else
+            {
+                Console.WriteLine("Broken Eye is disabled. Starting VRCFaceTracking without Broken Eye.");
+            }
 
             Console.WriteLine("Starting VRCFaceTracking...");
             var vrcFaceTrackingStarted = StartOrAttach(
@@ -2552,6 +2646,11 @@ internal sealed class AppSupervisor
 
     private async Task StopManagedAppsAsync(ManagedAppStopReason reason, CancellationToken cancellationToken)
     {
+        if (!_config.FaceTrackerAutomationEnabled)
+        {
+            return;
+        }
+
         foreach (var app in GetEnabledAutoLaunchApps().Reverse())
         {
             if (reason == ManagedAppStopReason.PimaxReconnect && !app.RestartOnPimaxReconnect)
@@ -2564,7 +2663,12 @@ internal sealed class AppSupervisor
         }
 
         await StopProcessesAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
-        await StopProcessesAsync("Broken Eye", _config.BrokenEyeProcessNames, cancellationToken);
+        if (_config.UseBrokenEye)
+        {
+            await StopProcessesAsync("Broken Eye", _config.BrokenEyeProcessNames, cancellationToken);
+        }
+
+        _managedAppsStarted = false;
     }
 
     private async Task RestartCoreAppsAsync(CancellationToken cancellationToken)
@@ -2578,9 +2682,14 @@ internal sealed class AppSupervisor
 
         try
         {
-            Console.WriteLine("Restarting VRCFaceTracking and Broken Eye...");
+            Console.WriteLine(_config.UseBrokenEye
+                ? "Restarting VRCFaceTracking and Broken Eye..."
+                : "Restarting VRCFaceTracking...");
             await StopProcessesAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
-            await StopProcessesAsync("Broken Eye", _config.BrokenEyeProcessNames, cancellationToken);
+            if (_config.UseBrokenEye)
+            {
+                await StopProcessesAsync("Broken Eye", _config.BrokenEyeProcessNames, cancellationToken);
+            }
             await StartCoreAppsAsync(cancellationToken);
             Console.WriteLine("Core app restart complete.");
         }
@@ -2622,7 +2731,9 @@ internal sealed class AppSupervisor
             async Task<string> RestartCoreAppsAndReturnAsync(CancellationToken token)
             {
                 await RestartCoreAppsAsync(token);
-                return "Restarted Broken Eye and VRCFaceTracking.";
+                return _config.UseBrokenEye
+                    ? "Restarted Broken Eye and VRCFaceTracking."
+                    : "Restarted VRCFaceTracking.";
             }
 
             async Task<string> StartOscGoesBrrrAndReturnAsync(CancellationToken token)
@@ -2687,9 +2798,11 @@ internal sealed class AppSupervisor
     {
         var mode = _steamVrStart ? "SteamVR" : "VRChat";
         var steamVrRunning = IsAnyProcessRunning(_config.SteamVrServerProcessNames) ? "running" : "not running";
-        var coreApps = IsAnyProcessRunning(_config.BrokenEyeProcessNames) && IsAnyProcessRunning(_config.VrcFaceTrackingProcessNames)
-            ? "running"
-            : "incomplete";
+        var coreApps = !_config.FaceTrackerAutomationEnabled
+            ? "automation disabled"
+            : IsFaceTrackingAppSetRunning()
+                ? "running"
+                : "incomplete";
         var baseStations = _config.BaseStationsEnabled
             ? $"{GetEnabledBaseStations().Length} enabled, powered={_baseStationsPoweredOn}"
             : "disabled";
@@ -2697,6 +2810,10 @@ internal sealed class AppSupervisor
         var oscGoesBrrr = GetOscGoesBrrrStatus();
         return $"Mode={mode}; SteamVR={steamVrRunning}; CoreApps={coreApps}; BaseStations={baseStations}; OscRouter={oscRouter}; OscGoesBrrr={oscGoesBrrr}";
     }
+
+    private bool IsFaceTrackingAppSetRunning()
+        => (!_config.UseBrokenEye || IsAnyProcessRunning(_config.BrokenEyeProcessNames))
+            && IsAnyProcessRunning(_config.VrcFaceTrackingProcessNames);
 
     internal void WriteDebug(string message)
         => _diagnostics.WriteDebug(message);
@@ -2821,6 +2938,91 @@ internal sealed class AppSupervisor
         finally
         {
             _diagnostics.RecordBaseStationPowerOn(Stopwatch.GetElapsedTime(startedAt));
+        }
+    }
+
+    private async Task WaitForSteamVrBaseStationStartupWindowAsync(CancellationToken cancellationToken)
+    {
+        if (!_config.BaseStationsEnabled || GetEnabledBaseStations().Length == 0)
+        {
+            return;
+        }
+
+        var latestSteamVrStart = TryGetLatestProcessStartTime(_config.SteamVrServerProcessNames);
+        if (latestSteamVrStart is null)
+        {
+            return;
+        }
+
+        var elapsed = DateTimeOffset.Now - latestSteamVrStart.Value;
+        var remaining = SteamVrBaseStationStartupDelay - elapsed;
+        if (remaining <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        Console.WriteLine($"Waiting {remaining.TotalSeconds:0} seconds for SteamVR base-station startup before power-on...");
+        await Task.Delay(remaining, cancellationToken);
+    }
+
+    private static DateTimeOffset? TryGetLatestProcessStartTime(IEnumerable<string> processNames)
+    {
+        DateTimeOffset? latestStartTime = null;
+        foreach (var processName in processNames)
+        {
+            Process[] processes;
+            try
+            {
+                processes = Process.GetProcessesByName(processName);
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (var process in processes)
+            {
+                using (process)
+                {
+                    try
+                    {
+                        var startTime = new DateTimeOffset(process.StartTime);
+                        if (latestStartTime is null || startTime > latestStartTime.Value)
+                        {
+                            latestStartTime = startTime;
+                        }
+                    }
+                    catch
+                    {
+                        // Process may exit or deny StartTime access while we are checking.
+                    }
+                }
+            }
+        }
+
+        return latestStartTime;
+    }
+
+    private async Task TryPowerOnBaseStationsBeforeWatchedProcessAsync(CancellationToken cancellationToken)
+    {
+        await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
+        while (!_baseStationPowerOnComplete
+            && _baseStationPowerOnPassesCompleted > 0
+            && _nextBaseStationPowerOnAttemptAt is { } nextAttemptAt)
+        {
+            var delay = nextAttemptAt - DateTimeOffset.UtcNow;
+            if (delay > TimeSpan.Zero)
+            {
+                Console.WriteLine($"Waiting {delay.TotalSeconds:0} seconds before continuing base-station startup.");
+                await Task.Delay(delay, cancellationToken);
+            }
+
+            if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+            {
+                return;
+            }
+
+            await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
         }
     }
 
@@ -3346,6 +3548,37 @@ internal sealed class AppSupervisor
     private async Task RestoreMonitorsAndStopManagedAppsAsync(bool waitForSteamVrServerExit, CancellationToken cancellationToken)
         => await RunCleanupOnceAsync(waitForSteamVrServerExit, emergencyClose: false, cancellationToken);
 
+    private async Task StopManagedAppsAfterWatchedProcessExitAsync(bool waitForSteamVrServerExitBeforeBaseStationPowerDown, CancellationToken cancellationToken)
+    {
+        if (!await _cleanupLock.WaitAsync(0, cancellationToken))
+        {
+            return;
+        }
+
+        try
+        {
+            if (_cleanupStarted)
+            {
+                return;
+            }
+
+            RestoreMonitorLayout();
+            await StopLovenseAppsAsync(cancellationToken);
+            await StopManagedAppsAsync(ManagedAppStopReason.SessionEnding, cancellationToken);
+            if (waitForSteamVrServerExitBeforeBaseStationPowerDown)
+            {
+                await WaitForSteamVrServerExitAsync(cancellationToken);
+            }
+
+            await TryPowerDownBaseStationsForSessionAsync(cancellationToken);
+            _cleanupStarted = true;
+        }
+        finally
+        {
+            _cleanupLock.Release();
+        }
+    }
+
     private async Task RestoreMonitorsAndStopManagedAppsCoreAsync(bool waitForSteamVrServerExit, CancellationToken cancellationToken)
     {
         if (waitForSteamVrServerExit)
@@ -3359,8 +3592,8 @@ internal sealed class AppSupervisor
         await StopManagedAppsAsync(ManagedAppStopReason.SessionEnding, cancellationToken);
     }
 
-    private bool ShouldWaitForSteamVrServerExitBeforeCleanup()
-        => (_turnOffSecondaryMonitors && _monitorLayout.HasSavedLayout) || _baseStationsPoweredOn || _baseStationPowerOnAttempted;
+    private bool ShouldExitWithSteamVr()
+        => _steamVrStart || _config.GetEffectiveStartupLaunchMode() == StartupLaunchMode.ScheduledTask;
 
     private async Task TryRestoreMonitorsAndStopManagedAppsAsync(bool waitForSteamVrServerExit, CancellationToken cancellationToken)
     {
@@ -5448,12 +5681,13 @@ internal sealed class ConsoleCloseHandler : IDisposable
 
 internal static class AutoLaunchWatcher
 {
-    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
     private const string WatcherMutexName = @"Local\PimaxVrcSupervisorAutoLaunchWatcher";
     private const string VrServerProcessName = "vrserver";
-    private const string VrChatProcessName = "VRChat";
+    private static readonly string SkipCurrentSteamVrSessionMarkerPath =
+        Path.Combine(Path.GetTempPath(), "PimaxVrcSupervisorSkipCurrentSteamVrSession.marker");
 
-    public static async Task RunAsync(CancellationToken cancellationToken)
+    public static async Task RunAsync(bool skipCurrentSteamVrSession, CancellationToken cancellationToken)
     {
         using var mutex = new Mutex(initiallyOwned: true, WatcherMutexName, out var ownsMutex);
         if (!ownsMutex)
@@ -5463,21 +5697,21 @@ internal static class AutoLaunchWatcher
 
         var supervisorPath = ScheduledTaskInstaller.GetSupervisorExecutablePath();
         var supervisorProcessName = Path.GetFileNameWithoutExtension(supervisorPath);
-        var launchedForCurrentVrChatSession = false;
+        var launchedForCurrentSteamVrSession = (skipCurrentSteamVrSession || TryConsumeSkipCurrentSteamVrSessionMarker())
+            && IsProcessRunning(VrServerProcessName);
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            var vrChatRunning = IsProcessRunning(VrChatProcessName);
             var vrServerRunning = IsProcessRunning(VrServerProcessName);
 
-            if (!vrChatRunning)
+            if (!vrServerRunning)
             {
-                launchedForCurrentVrChatSession = false;
+                launchedForCurrentSteamVrSession = false;
             }
-            else if (vrServerRunning && !launchedForCurrentVrChatSession && !IsAnotherSupervisorRunning(supervisorProcessName))
+            else if (!launchedForCurrentSteamVrSession && !IsAnotherSupervisorRunning(supervisorProcessName))
             {
                 StartSupervisor(supervisorPath);
-                launchedForCurrentVrChatSession = true;
+                launchedForCurrentSteamVrSession = true;
             }
 
             await Task.Delay(PollInterval, cancellationToken);
@@ -5525,10 +5759,41 @@ internal static class AutoLaunchWatcher
         {
             FileName = supervisorPath,
             WorkingDirectory = Path.GetDirectoryName(supervisorPath) ?? Environment.CurrentDirectory,
-            UseShellExecute = true
+            UseShellExecute = true,
+            WindowStyle = ProcessWindowStyle.Normal
         };
 
         Process.Start(startInfo);
+    }
+
+    public static void RequestSkipCurrentSteamVrSession()
+    {
+        try
+        {
+            File.WriteAllText(SkipCurrentSteamVrSessionMarkerPath, DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture));
+        }
+        catch
+        {
+            // If the marker cannot be written, the watcher still works normally.
+        }
+    }
+
+    private static bool TryConsumeSkipCurrentSteamVrSessionMarker()
+    {
+        try
+        {
+            if (!File.Exists(SkipCurrentSteamVrSessionMarkerPath))
+            {
+                return false;
+            }
+
+            File.Delete(SkipCurrentSteamVrSessionMarkerPath);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
 
@@ -5542,9 +5807,11 @@ internal static class ScheduledTaskInstaller
 {
     private const string TaskName = ScheduledTaskPathValidator.AutoLaunchTaskName;
     public const string SteamVrStartTaskName = ScheduledTaskPathValidator.SteamVrStartTaskName;
+    private const string SupervisorExecutableName = "PimaxVrcSupervisor.exe";
+    private const string WatcherExecutableName = "PimaxVrcSupervisorWatcher.exe";
     private const string WatcherArgument = "--watch-vrchat-auto-launch";
     private const string SteamVrStartArgument = "--steamvr-start";
-    private static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(10);
 
     public static async Task<bool> ExistsAsync(CancellationToken cancellationToken)
     {
@@ -5566,7 +5833,7 @@ internal static class ScheduledTaskInstaller
         return result.ExitCode == 0;
     }
 
-    public static async Task<ScheduledTaskDetails> CreateOrUpdateAsync(bool startWatcherImmediately, CancellationToken cancellationToken)
+    public static async Task<ScheduledTaskDetails> CreateOrUpdateAsync(bool startWatcherImmediately, bool skipCurrentSteamVrSession, CancellationToken cancellationToken)
     {
         var supervisorPath = GetSupervisorExecutablePath();
         var supervisorWorkingDirectory = Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory;
@@ -5574,11 +5841,19 @@ internal static class ScheduledTaskInstaller
             TaskName,
             supervisorPath,
             ScheduledTaskPathValidator.GetCurrentExecutableDirectory());
+        await StopAutoLaunchWatcherAsync(cancellationToken);
+        var watcherPath = CreateOrUpdateWatcherExecutable(supervisorPath);
+        ScheduledTaskPathValidator.ThrowIfInvalidScheduledTaskExecutablePath(
+            TaskName,
+            watcherPath,
+            ScheduledTaskPathValidator.GetCurrentExecutableDirectory());
         var taskXml = BuildTaskXml(
-            supervisorPath,
+            watcherPath,
             supervisorWorkingDirectory,
-            "Runs an elevated hidden watcher that starts Pimax VRC Supervisor when VRChat starts while vrserver.exe is running.",
-            WatcherArgument,
+            "Runs an elevated hidden watcher that starts Pimax VRC Supervisor when vrserver.exe is running.",
+            skipCurrentSteamVrSession
+                ? $"{WatcherArgument} --skip-current-vrserver-session"
+                : WatcherArgument,
             includeLogonTrigger: true);
         var taskXmlPath = Path.Combine(Path.GetTempPath(), $"PimaxVrcSupervisorAutoLaunch-{Guid.NewGuid():N}.xml");
 
@@ -5609,13 +5884,18 @@ internal static class ScheduledTaskInstaller
 
         if (startWatcherImmediately)
         {
+            if (skipCurrentSteamVrSession)
+            {
+                AutoLaunchWatcher.RequestSkipCurrentSteamVrSession();
+            }
+
             await RunProcessAsync(
                 "schtasks.exe",
                 ["/Run", "/TN", TaskName],
                 cancellationToken);
         }
 
-        return new ScheduledTaskDetails(TaskName, "Hidden elevated watcher at Windows sign-in; launches supervisor when VRChat.exe and vrserver.exe are running.");
+        return new ScheduledTaskDetails(TaskName, "Hidden elevated watcher at Windows sign-in; launches supervisor when vrserver.exe is running.");
     }
 
     public static async Task<ScheduledTaskDetails> CreateOrUpdateSteamVrStartHelperAsync(CancellationToken cancellationToken)
@@ -5662,7 +5942,10 @@ internal static class ScheduledTaskInstaller
     }
 
     public static async Task DeleteAutoLaunchTaskAsync(CancellationToken cancellationToken)
-        => await DeleteTaskAsync(TaskName, cancellationToken);
+    {
+        await StopAutoLaunchWatcherAsync(cancellationToken);
+        await DeleteTaskAsync(TaskName, cancellationToken);
+    }
 
     public static async Task DeleteSteamVrStartHelperAsync(CancellationToken cancellationToken)
         => await DeleteTaskAsync(SteamVrStartTaskName, cancellationToken);
@@ -5691,6 +5974,75 @@ internal static class ScheduledTaskInstaller
         }
     }
 
+    private static async Task StopAutoLaunchWatcherAsync(CancellationToken cancellationToken)
+    {
+        await TryEndTaskAsync(TaskName, cancellationToken);
+        await TryStopWatcherProcessesAsync(cancellationToken);
+    }
+
+    private static async Task TryEndTaskAsync(string taskName, CancellationToken cancellationToken)
+    {
+        if (!await ExistsAsync(taskName, cancellationToken))
+        {
+            return;
+        }
+
+        try
+        {
+            var result = await RunProcessCaptureAsync(
+                "schtasks.exe",
+                ["/End", "/TN", taskName],
+                cancellationToken);
+            if (result.ExitCode != 0
+                && !result.Error.Contains("not currently running", StringComparison.OrdinalIgnoreCase)
+                && !result.Output.Contains("not currently running", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"Could not stop scheduled task {taskName}: {result.Error}{result.Output}".Trim());
+            }
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            Console.WriteLine($"Could not stop scheduled task {taskName}: {ex.Message}");
+        }
+    }
+
+    private static async Task TryStopWatcherProcessesAsync(CancellationToken cancellationToken)
+    {
+        var script = """
+            $needle = '--watch-vrchat-auto-launch'
+            $deadline = (Get-Date).AddSeconds(3)
+            do {
+                $watchers = @(Get-CimInstance Win32_Process |
+                    Where-Object { $_.CommandLine -like "*$needle*" })
+                foreach ($watcher in $watchers) {
+                    Stop-Process -Id $watcher.ProcessId -Force -ErrorAction SilentlyContinue
+                }
+                if ($watchers.Count -eq 0) {
+                    exit 0
+                }
+                Start-Sleep -Milliseconds 200
+            } while ((Get-Date) -lt $deadline)
+            exit 1
+            """;
+
+        try
+        {
+            var encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+            var result = await RunProcessCaptureAsync(
+                "powershell.exe",
+                ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedCommand],
+                cancellationToken);
+            if (result.ExitCode != 0)
+            {
+                Console.WriteLine($"Could not stop stale CLI watcher process(es): {result.Error}{result.Output}".Trim());
+            }
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            Console.WriteLine($"Could not stop stale CLI watcher process(es): {ex.Message}");
+        }
+    }
+
     private static string BuildTaskXml(
         string supervisorPath,
         string supervisorWorkingDirectory,
@@ -5700,7 +6052,6 @@ internal static class ScheduledTaskInstaller
     {
         XNamespace ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
         var identity = WindowsIdentity.GetCurrent();
-        var command = BuildPowerShellCommand(supervisorPath, supervisorWorkingDirectory, argument);
         var triggerElement = includeLogonTrigger
             ? new XElement(ns + "Triggers",
                 new XElement(ns + "LogonTrigger",
@@ -5736,12 +6087,16 @@ internal static class ScheduledTaskInstaller
                     new XElement(ns + "RunOnlyIfIdle", "false"),
                     new XElement(ns + "WakeToRun", "false"),
                     new XElement(ns + "ExecutionTimeLimit", "PT0S"),
+                    new XElement(ns + "RestartOnFailure",
+                        new XElement(ns + "Interval", "PT1M"),
+                        new XElement(ns + "Count", "3")),
                     new XElement(ns + "Priority", "7")),
                 new XElement(ns + "Actions",
                     new XAttribute("Context", "Author"),
                     new XElement(ns + "Exec",
-                        new XElement(ns + "Command", "powershell.exe"),
-                        new XElement(ns + "Arguments", $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command {QuotePowerShellArgument(command)}")))));
+                        new XElement(ns + "Command", supervisorPath),
+                        new XElement(ns + "Arguments", argument),
+                        new XElement(ns + "WorkingDirectory", supervisorWorkingDirectory)))));
 
         return document.ToString(SaveOptions.DisableFormatting);
     }
@@ -5793,20 +6148,11 @@ internal static class ScheduledTaskInstaller
         return document.ToString(SaveOptions.DisableFormatting);
     }
 
-    private static string BuildPowerShellCommand(string supervisorPath, string workingDirectory, string argument)
-    {
-        var supervisorPathLiteral = ToPowerShellSingleQuotedString(supervisorPath);
-        var workingDirectoryLiteral = ToPowerShellSingleQuotedString(workingDirectory);
-        var watcherArgumentLiteral = ToPowerShellSingleQuotedString(argument);
-
-        return $"Start-Process -WindowStyle Hidden -FilePath {supervisorPathLiteral} -ArgumentList {watcherArgumentLiteral} -WorkingDirectory {workingDirectoryLiteral}";
-    }
-
     public static string GetSupervisorExecutablePath()
     {
         var processPath = Environment.ProcessPath;
         if (!string.IsNullOrWhiteSpace(processPath)
-            && !string.Equals(Path.GetFileName(processPath), "dotnet.exe", StringComparison.OrdinalIgnoreCase))
+            && string.Equals(Path.GetFileName(processPath), SupervisorExecutableName, StringComparison.OrdinalIgnoreCase))
         {
             return processPath;
         }
@@ -5821,13 +6167,20 @@ internal static class ScheduledTaskInstaller
             }
         }
 
-        var fallbackPath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.exe");
+        var fallbackPath = Path.Combine(AppContext.BaseDirectory, SupervisorExecutableName);
         if (File.Exists(fallbackPath))
         {
             return fallbackPath;
         }
 
         throw new InvalidOperationException("Could not resolve PimaxVrcSupervisor.exe for the scheduled task action.");
+    }
+
+    private static string CreateOrUpdateWatcherExecutable(string supervisorPath)
+    {
+        var watcherPath = Path.Combine(Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory, WatcherExecutableName);
+        File.Copy(supervisorPath, watcherPath, overwrite: true);
+        return watcherPath;
     }
 
     private static async Task RunProcessAsync(string fileName, string[] arguments, CancellationToken cancellationToken)
@@ -5908,9 +6261,6 @@ internal static class ScheduledTaskInstaller
         }
     }
 
-    private static string QuotePowerShellArgument(string value) => "\"" + value.Replace("\"", "\\\"") + "\"";
-
-    private static string ToPowerShellSingleQuotedString(string value) => "'" + value.Replace("'", "''") + "'";
 }
 
 internal sealed record SteamVrStartupDetails(string AppKey, string ManifestPath);
@@ -5923,7 +6273,7 @@ internal static class StartupIntegration
         {
             case StartupLaunchMode.ScheduledTask:
                 LogStep("Creating or updating VRChat auto-launch scheduled task...");
-                await ScheduledTaskInstaller.CreateOrUpdateAsync(startWatcherImmediately: false, cancellationToken);
+                await ScheduledTaskInstaller.CreateOrUpdateAsync(startWatcherImmediately: true, skipCurrentSteamVrSession: true, cancellationToken);
                 LogStep("Disabling SteamVR startup manifest if present...");
                 await SteamVrStartupInstaller.DisableAsync(cancellationToken);
                 LogStep("Deleting SteamVR start helper scheduled task if present...");
@@ -7052,8 +7402,12 @@ internal sealed class SupervisorConfig
     public string VrcFaceTrackingPath { get; set; } = "";
     public string IntifacePath { get; set; } = "";
     public string OscGoesBrrrPath { get; set; } = "";
+    public bool UseBrokenEye { get; init; } = true;
     public bool BrokenEyeStartMinimized { get; set; }
     public bool VrcFaceTrackingStartMinimized { get; set; }
+    public bool FaceTrackerAutomationEnabled { get; init; } = true;
+    public bool FaceTrackerRestartOnReconnectEnabled { get; init; } = true;
+    public bool MouthTrackerRestartOnReconnectEnabled { get; init; } = true;
     public bool IntifaceStartMinimized { get; set; }
     public bool OscGoesBrrrStartMinimized { get; set; }
     public const string DefaultVrcFaceTrackingPath = @"C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking\VRCFaceTracking.exe";
@@ -7145,8 +7499,8 @@ internal sealed class SupervisorConfig
     public int PollIntervalSeconds { get; init; } = 2;
     public int StartupTimeoutSeconds { get; init; } = 30;
     public int StartupStableSeconds { get; init; } = 5;
-    public int DelayBeforeVrcFaceTrackingSeconds { get; init; } = 5;
-    public int DelayBeforeOscGoesBrrrSeconds { get; set; } = 5;
+    public int DelayBeforeVrcFaceTrackingSeconds { get; init; } = 3;
+    public int DelayBeforeOscGoesBrrrSeconds { get; set; } = 3;
     public int DelayBeforeOscGoesBrrrrSeconds
     {
         set => DelayBeforeOscGoesBrrrSeconds = value;
@@ -7160,7 +7514,7 @@ internal sealed class SupervisorConfig
     public bool DiagnosticsDebugSupervisor { get; init; }
     public bool DiagnosticsDebugSteamVrOverlay { get; init; }
     public bool DiagnosticsVerbose { get; init; }
-    public int DiagnosticsSummaryIntervalSeconds { get; init; } = 10;
+    public int DiagnosticsSummaryIntervalSeconds { get; init; } = 20;
     public string DiagnosticsLogDirectory { get; init; } = @"%TEMP%\PimaxVrcSupervisorDiagnostics";
 
     [JsonIgnore]
@@ -7338,8 +7692,7 @@ internal sealed class SupervisorConfig
     }
 
     public bool AreInitialSetupQuestionsComplete()
-        => TryGetMouthTrackerUser(out _)
-            && TryGetTurnOffSecondaryMonitors(out _)
+        => (!FaceTrackerAutomationEnabled || (TryGetMouthTrackerUser(out _) && TryGetTurnOffSecondaryMonitors(out _)))
             && GetEffectiveStartupLaunchMode() != StartupLaunchMode.Unspecified
             && TryGetBaseStationsEnabled(out _);
 

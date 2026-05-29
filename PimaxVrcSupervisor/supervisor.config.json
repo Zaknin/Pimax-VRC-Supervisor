@@ -1,10 +1,13 @@
-{
+﻿{
   // Friendly name shown in the config editor and supervisor startup banner.
   "DisplayName": "Default",
 
-  // Full path to Broken Eye. This app is started first.
-  // If this path is missing or invalid, the supervisor opens a browse dialog and saves your selection here.
+  // Full path to Broken Eye. This app is started first when UseBrokenEye is true.
+  // If UseBrokenEye is true and this path is missing or invalid, the supervisor opens a browse dialog and saves your selection here.
   "BrokenEyePath": "",
+
+  // Include Broken Eye in face-tracking startup, cleanup, and restart routines, including manual dashboard restarts.
+  "UseBrokenEye": true,
 
   // Start Broken Eye minimized, then try to minimize its main window after launch.
   "BrokenEyeStartMinimized": false,
@@ -16,6 +19,17 @@
 
   // Start VRCFaceTracking minimized, then try to minimize its main window after launch.
   "VrcFaceTrackingStartMinimized": false,
+
+  // Automatically start face-tracking applications during headset sessions.
+  "FaceTrackerAutomationEnabled": true,
+
+  // Restart configured face-tracking applications after the Pimax headset reconnects.
+  // Ignored when FaceTrackerAutomationEnabled is false.
+  "FaceTrackerRestartOnReconnectEnabled": true,
+
+  // Restart VRCFaceTracking after the mouth tracker reconnects while the headset stays connected.
+  // Ignored when FaceTrackerAutomationEnabled or MouthTrackerUser is false.
+  "MouthTrackerRestartOnReconnectEnabled": true,
 
   // Enable the OSCGoesBrrr workflow during headset sessions.
   // These apps are closed during normal VRChat/session cleanup, but they are not restarted when Pimax reconnects.
@@ -114,7 +128,7 @@
   // FriendlyName is only a user-facing alias; Name and BluetoothAddress keep the actual BLE identity visible.
   // Base Station 1.0 requires Id: the 8-character ID printed on the back label.
   // PowerStateReadUnsupported is set automatically when the station or firmware cannot report power state.
-  // When true, the supervisor skips state reads for faster startup; use Config Editor Refresh State to retry manually.
+  // When true, the supervisor skips state reads for faster startup; use Configurator Refresh State to retry manually.
   "BaseStations": [
     // {
     //   "FriendlyName": "Front left",
@@ -128,7 +142,7 @@
   ],
 
   // Set to true if you use a Vive face/mouth tracker exposed as HTC Multimedia Camera.
-  // Set to false to ignore all mouth-tracker detection and VRCFaceTracking-only restart logic.
+  // Set to false to ignore all mouth-tracker detection and reconnect restart logic.
   // Leave empty only for first setup. The supervisor asks while RunInitialSetupQuestions is true,
   // saves the answer here as true/false, and then stops asking after setup is complete.
   "MouthTrackerUser": "",
@@ -136,7 +150,7 @@
   // Run first setup questions once after executable paths are selected.
   // When true, empty first-setup values below trigger setup prompts.
   // The supervisor sets this to false after setup answers are saved.
-  // Config Editor does not expose this; restore defaults or edit this file manually to ask again.
+  // Configurator does not expose this; restore defaults or edit this file manually to ask again.
   // Existing older configs without this property behave as false and do not re-enter setup automatically.
   "RunInitialSetupQuestions": true,
 
@@ -154,12 +168,13 @@
   // Startup integration mode.
   // Unspecified means first setup should ask while RunInitialSetupQuestions is true.
   // None disables automatic startup.
-  // ScheduledTask creates an elevated Windows Scheduled Task that watches for VRChat.exe when vrserver.exe is running.
+  // ScheduledTask creates an elevated Windows Scheduled Task that starts the supervisor when vrserver.exe is running.
+  // The supervisor then waits for VRChat before starting managed apps.
   // SteamVrManifest registers a SteamVR dashboard host manifest and starts the supervisor when SteamVR starts.
   "StartupLaunchMode": "Unspecified",
 
   // Compatibility field. SteamVR shutdown behavior is controlled by StartupLaunchMode=SteamVrManifest.
-  // Config Editor writes this as true only for SteamVrManifest mode.
+  // Configurator writes this as true only for SteamVrManifest mode.
   "StopWithSteamVr": false,
 
   // Pimax headset detection rules. Each inner array is one possible match rule.
@@ -179,7 +194,7 @@
   ],
 
   // Vive mouth tracker detection rules. Each inner array is one possible match rule.
-  // When this appears after being missing, only VRCFaceTracking is restarted.
+  // When this appears after being missing, VRCFaceTracking can restart if MouthTrackerRestartOnReconnectEnabled is true.
   // Ignored when MouthTrackerUser is false.
   "MouthTrackerDetectors": [
     [ "USB\\VID_0BB4&PID_0321&MI_00" ],
@@ -219,10 +234,10 @@
   "StartupStableSeconds": 5,
 
   // Seconds to wait after starting Broken Eye before starting VRCFaceTracking.
-  "DelayBeforeVrcFaceTrackingSeconds": 5,
+  "DelayBeforeVrcFaceTrackingSeconds": 3,
 
   // Seconds to wait after Intiface is running before starting OscGoesBrrr.
-  "DelayBeforeOscGoesBrrrSeconds": 5,
+  "DelayBeforeOscGoesBrrrSeconds": 3,
 
   // Seconds each BLE scan burst runs when OscGoesBrrrBleScannerEnabled is true.
   "OscGoesBrrrBleScanSeconds": 30,
@@ -248,10 +263,10 @@
   // Write passive SteamVR dashboard host diagnostics to a text file. Leave off unless measuring performance.
   "DiagnosticsLogSteamVrOverlay": false,
 
-  // When supervisor diagnostics are enabled, also write supervisor debug events to a separate text file.
+  // Write supervisor debug events to a separate text file.
   "DiagnosticsDebugSupervisor": false,
 
-  // When SteamVR dashboard host diagnostics are enabled, also write overlay debug events to a separate text file.
+  // Write SteamVR dashboard host debug events to a separate text file.
   "DiagnosticsDebugSteamVrOverlay": false,
 
   // When SteamVR overlay debug events are enabled, draw the reported pointer position on the dashboard.
@@ -261,7 +276,7 @@
   "DiagnosticsVerbose": false,
 
   // Seconds between diagnostic summary lines.
-  "DiagnosticsSummaryIntervalSeconds": 10,
+  "DiagnosticsSummaryIntervalSeconds": 20,
 
   // Diagnostic log folder. Environment variables like %TEMP% are expanded.
   "DiagnosticsLogDirectory": "%TEMP%\\PimaxVrcSupervisorDiagnostics"

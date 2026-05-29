@@ -13,7 +13,7 @@ using System.Text.RegularExpressions;
 using System.Text.Json.Serialization;
 using PimaxVrcSupervisor.BaseStations;
 
-namespace PimaxVrcSupervisor.ConfigEditor;
+namespace PimaxVrcSupervisor.Configurator;
 
 internal static class Program
 {
@@ -27,7 +27,7 @@ internal static class Program
 
 internal sealed class ConfigEditorForm : Form
 {
-    private static readonly string BaseWindowTitle = $"Pimax VRC Supervisor Config Editor {AppVersion.Current}";
+    private static readonly string BaseWindowTitle = $"Pimax VRC Supervisor Configurator {AppVersion.Current}";
     private const int TemporaryStatusMilliseconds = 15000;
     private const int MinimumGridVisibleRows = 10;
     private const int CompactNumberInputWidth = 104;
@@ -36,7 +36,7 @@ internal sealed class ConfigEditorForm : Form
     private const int MaximumConfigSelectorWidth = 620;
     private const string DefaultConfigFileName = "supervisor.config.json";
     private const string ActiveConfigSelectionFileName = "supervisor.active-config.txt";
-    private const string DefaultConfigResourceName = "PimaxVrcSupervisor.ConfigEditor.Defaults.supervisor.config.json";
+    private const string DefaultConfigResourceName = "PimaxVrcSupervisor.Configurator.Defaults.supervisor.config.json";
     private const string DefaultVrcFaceTrackingDirectory = @"C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking";
     private static readonly string DefaultIntifacePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -67,7 +67,7 @@ internal sealed class ConfigEditorForm : Form
         "Ctrl+R = Reload",
         "Ctrl+L = Launch Supervisor",
         "Ctrl+Shift+V = Validate",
-        "Delete = Delete selected row in Auto Launch, Base Stations, or OSC Routes grids"
+        "Delete = Delete selected row in Auto Startup, Base Stations, or OSC Routes grids"
     ];
 
     private readonly ComboBox _configSelectorComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Left | AnchorStyles.Right };
@@ -77,14 +77,15 @@ internal sealed class ConfigEditorForm : Form
     private readonly TextBox _vrcFaceTrackingPathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _intifacePathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _oscGoesBrrrPathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
-    private readonly CheckBox _brokenEyeStartMinimizedCheckBox = new() { Text = "Start Broken Eye minimized", AutoSize = true };
-    private readonly CheckBox _vrcFaceTrackingStartMinimizedCheckBox = new() { Text = "Start VRCFaceTracking minimized", AutoSize = true };
-    private readonly CheckBox _intifaceStartMinimizedCheckBox = new() { Text = "Start Intiface minimized", AutoSize = true };
-    private readonly CheckBox _oscGoesBrrrStartMinimizedCheckBox = new() { Text = "Start OscGoesBrrr minimized", AutoSize = true };
-    private readonly CheckBox _oscGoesBrrrEnabledCheckBox = new() { Text = "Enabled", AutoSize = true };
-    private readonly CheckBox _oscGoesBrrrHotkeyCheckBox = new() { Text = "Use manual console launch mode", AutoSize = true };
-    private readonly CheckBox _oscGoesBrrrBleScannerCheckBox = new() { Text = "Enable BLE scanner", AutoSize = true };
-    private readonly CheckBox _oscRouterEnabledCheckBox = new() { Text = "Enable OSC routing", AutoSize = true };
+    private readonly CheckBox _useBrokenEyeCheckBox = new ThemedCheckBox { Text = "Use Broken Eye", AutoSize = true };
+    private readonly CheckBox _brokenEyeStartMinimizedCheckBox = new ThemedCheckBox { Text = "Start Broken Eye minimized", AutoSize = true };
+    private readonly CheckBox _vrcFaceTrackingStartMinimizedCheckBox = new ThemedCheckBox { Text = "Start VRCFaceTracking minimized", AutoSize = true };
+    private readonly CheckBox _intifaceStartMinimizedCheckBox = new ThemedCheckBox { Text = "Start Intiface minimized", AutoSize = true };
+    private readonly CheckBox _oscGoesBrrrStartMinimizedCheckBox = new ThemedCheckBox { Text = "Start OscGoesBrrr minimized", AutoSize = true };
+    private readonly CheckBox _oscGoesBrrrEnabledCheckBox = new ThemedCheckBox { Text = "Enabled", AutoSize = true };
+    private readonly CheckBox _oscGoesBrrrHotkeyCheckBox = new ThemedCheckBox { Text = "Use manual console launch mode", AutoSize = true };
+    private readonly CheckBox _oscGoesBrrrBleScannerCheckBox = new ThemedCheckBox { Text = "Enable BLE scanner", AutoSize = true };
+    private readonly CheckBox _oscRouterEnabledCheckBox = new ThemedCheckBox { Text = "Enable OSC routing", AutoSize = true };
     private readonly NumericUpDown _oscRouterReceivePortInput = new()
     {
         Minimum = 1,
@@ -93,20 +94,25 @@ internal sealed class ConfigEditorForm : Form
         Anchor = AnchorStyles.Left,
         Width = 110
     };
-    private readonly CheckBox _baseStationsEnabledCheckBox = new() { Text = "Enable base station power automation", AutoSize = true };
+    private readonly CheckBox _baseStationsEnabledCheckBox = new ThemedCheckBox { Text = "Enable base station power automation", AutoSize = true };
     private readonly ComboBox _baseStationPowerDownModeComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     private readonly CheckBox _mouthTrackerCheckBox = CreateOptionalConfigCheckBox("Use Vive mouth tracker");
     private readonly CheckBox _turnOffMonitorsCheckBox = CreateOptionalConfigCheckBox("Turn off secondary monitors during headset sessions");
-    private readonly CheckBox _autoLaunchTaskCheckBox = new() { Text = "Create/evaluate VRChat auto-launch Scheduled Task", AutoSize = true };
-    private readonly CheckBox _startWithSteamVrCheckBox = new() { Text = "Start with SteamVR", AutoSize = true };
-    private readonly CheckBox _usePimaxLogCheckBox = new() { Text = "Watch Pimax PiService logs for fast reconnects", AutoSize = true };
-    private readonly CheckBox _useMouthTrackerPnPCheckBox = new() { Text = "Watch Windows PnP events for fast mouth tracker reconnects", AutoSize = true };
+    private readonly CheckBox _autoLaunchTaskCheckBox = new ThemedCheckBox { Text = "Start in CLI mode when SteamVR is running", AutoSize = true };
+    private readonly CheckBox _startWithSteamVrCheckBox = new ThemedCheckBox { Text = "SteamVR Overlay", AutoSize = true };
+    private readonly CheckBox _faceTrackerAutomationEnabledCheckBox = new ThemedCheckBox { Text = "Enable Face Tracking Auto Startup", AutoSize = true };
+    private readonly CheckBox _faceTrackerRestartOnReconnectCheckBox = new ThemedCheckBox { Text = "Enable automatic restart on headset reconnects", AutoSize = true };
+    private readonly CheckBox _usePimaxLogCheckBox = new ThemedCheckBox { Text = "Watch Pimax PiService logs for fast reconnects", AutoSize = true };
+    private readonly CheckBox _useMouthTrackerPnPCheckBox = new ThemedCheckBox { Text = "Watch Windows PnP events for fast mouth tracker reconnects", AutoSize = true };
     private readonly TextBox _pimaxServiceLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
-    private readonly CheckBox _diagnosticsLogSupervisorCheckBox = new() { Text = "Log supervisor diagnostics", AutoSize = true };
-    private readonly CheckBox _diagnosticsLogSteamVrOverlayCheckBox = new() { Text = "Log SteamVR overlay diagnostics", AutoSize = true };
-    private readonly CheckBox _diagnosticsDebugSupervisorCheckBox = new() { Text = "Write supervisor debug log", AutoSize = true };
-    private readonly CheckBox _diagnosticsDebugSteamVrOverlayCheckBox = new() { Text = "Write SteamVR overlay debug log", AutoSize = true };
-    private readonly CheckBox _diagnosticsVerboseCheckBox = new() { Text = "Verbose diagnostic timings", AutoSize = true };
+    private readonly CheckBox _diagnosticsLogSupervisorCheckBox = new ThemedCheckBox { Text = "Log supervisor diagnostics", AutoSize = true };
+    private readonly CheckBox _diagnosticsLogSteamVrOverlayCheckBox = new ThemedCheckBox { Text = "Log SteamVR overlay diagnostics", AutoSize = true };
+    private readonly CheckBox _diagnosticsDebugSupervisorCheckBox = new ThemedCheckBox { Text = "Log Supervisor Debug", AutoSize = true };
+    private readonly CheckBox _diagnosticsDebugSteamVrOverlayCheckBox = new ThemedCheckBox { Text = "Log SteamVR Overlay Debug", AutoSize = true };
+    private readonly CheckBox _diagnosticsEnabledCheckBox = new ThemedCheckBox { Text = "Enable Diagnostics", AutoSize = true };
+    private readonly CheckBox _diagnosticsVerboseCheckBox = new ThemedCheckBox { Text = "Verbose diagnostic timings", AutoSize = true };
+    private readonly CheckBox _diagnosticsDebugSteamVrPointerCheckBox = new ThemedCheckBox { Text = "Show SteamVR overlay pointer marker", AutoSize = true };
+    private readonly CheckBox _mouthTrackerRestartOnReconnectCheckBox = new ThemedCheckBox { Text = "Enable automatic restart on mouth tracker reconnects", AutoSize = true };
     private readonly TextBox _diagnosticsLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly DataGridView _autoLaunchAppsGrid = new()
     {
@@ -168,6 +174,7 @@ internal sealed class ConfigEditorForm : Form
     private readonly Dictionary<string, string> _numberLabels = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _numberUnits = new(StringComparer.Ordinal);
     private readonly List<Action> _pathIndicatorRefreshers = [];
+    private readonly List<Control> _faceTrackerAutomationDependentControls = [];
     private readonly EditorState _editorState = EditorState.Load();
     private AppTheme _theme = AppTheme.Light;
     private string _loadedJson = "{\r\n}\r\n";
@@ -203,6 +210,8 @@ internal sealed class ConfigEditorForm : Form
         ConfigureToolTips();
         BuildLayout();
         ConfigureStartupOptionInteractions();
+        ConfigureDiagnosticsOptionInteractions();
+        ConfigureFaceTrackerAutomationOptionInteractions();
         RegisterDirtyTracking(this);
         ApplyWindowsTheme();
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
@@ -398,12 +407,58 @@ internal sealed class ConfigEditorForm : Form
         return button;
     }
 
+    private void ConfigureDiagnosticsOptionInteractions()
+    {
+        _diagnosticsEnabledCheckBox.CheckedChanged += (_, _) => UpdateDiagnosticsOptionStates();
+        _diagnosticsDebugSteamVrOverlayCheckBox.CheckedChanged += (_, _) => UpdateDiagnosticsOptionStates();
+        UpdateDiagnosticsOptionStates();
+    }
+
+    private void UpdateDiagnosticsOptionStates()
+    {
+        var diagnosticsEnabled = _diagnosticsEnabledCheckBox.Checked;
+        _diagnosticsLogSupervisorCheckBox.Enabled = diagnosticsEnabled;
+        _diagnosticsLogSteamVrOverlayCheckBox.Enabled = diagnosticsEnabled;
+        _diagnosticsDebugSupervisorCheckBox.Enabled = diagnosticsEnabled;
+        _diagnosticsDebugSteamVrOverlayCheckBox.Enabled = diagnosticsEnabled;
+        _diagnosticsVerboseCheckBox.Enabled = diagnosticsEnabled;
+
+        if (_numberInputs.TryGetValue("DiagnosticsSummaryIntervalSeconds", out var summaryIntervalInput))
+        {
+            summaryIntervalInput.Enabled = diagnosticsEnabled;
+        }
+
+        var pointerMarkerEnabled = diagnosticsEnabled && _diagnosticsDebugSteamVrOverlayCheckBox.Checked;
+        _diagnosticsDebugSteamVrPointerCheckBox.Enabled = pointerMarkerEnabled;
+    }
+
+    private void ConfigureFaceTrackerAutomationOptionInteractions()
+    {
+        _faceTrackerAutomationEnabledCheckBox.CheckedChanged += (_, _) => UpdateFaceTrackerAutomationOptionStates();
+        _mouthTrackerCheckBox.CheckedChanged += (_, _) => UpdateFaceTrackerAutomationOptionStates();
+        UpdateFaceTrackerAutomationOptionStates();
+    }
+
+    private void UpdateFaceTrackerAutomationOptionStates()
+    {
+        var automationEnabled = _faceTrackerAutomationEnabledCheckBox.Checked;
+        foreach (var control in _faceTrackerAutomationDependentControls)
+        {
+            control.Enabled = automationEnabled;
+        }
+
+        var mouthTrackerReconnectOptionsEnabled = automationEnabled && _mouthTrackerCheckBox.Checked;
+        _mouthTrackerRestartOnReconnectCheckBox.Enabled = mouthTrackerReconnectOptionsEnabled;
+        _useMouthTrackerPnPCheckBox.Enabled = mouthTrackerReconnectOptionsEnabled;
+    }
+
     private Control BuildTabs()
     {
         var selectedTab = _editorState.LastSelectedTab;
         _tabs.AddTab("General", BuildBasicsTab());
-        _tabs.AddTab("Auto Launch", BuildAutoLaunchTab());
+        _tabs.AddTab("Face Tracking", BuildFaceTrackingTab());
         _tabs.AddTab("Base Stations", BuildBaseStationsTab());
+        _tabs.AddTab("Auto Startup", BuildAutoLaunchTab());
         _tabs.AddTab("Detectors", BuildDetectorsTab());
         _tabs.AddTab("Processes", BuildProcessesTab());
         _tabs.AddTab("OSC Router", BuildOscRouterTab());
@@ -426,27 +481,17 @@ internal sealed class ConfigEditorForm : Form
         layout.AutoSize = true;
         layout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
-        AddPathRow(layout, "Broken Eye executable", _brokenEyePathTextBox, "Full path to Broken Eye.exe. The supervisor starts this app first.", configKey: "BrokenEyePath", defaultFileName: "Broken Eye.exe");
-        AddFullWidth(layout, _brokenEyeStartMinimizedCheckBox, "Checked means the supervisor starts Broken Eye minimized and tries to minimize its main window after launch.");
-        AddPathRow(
-            layout,
-            "VRCFaceTracking executable",
-            _vrcFaceTrackingPathTextBox,
-            "Full path to VRCFaceTracking.exe. The supervisor starts this after Broken Eye settles.",
-            DefaultVrcFaceTrackingDirectory,
-            "VrcFaceTrackingPath",
-            "VRCFaceTracking.exe");
-        AddFullWidth(layout, _vrcFaceTrackingStartMinimizedCheckBox, "Checked means the supervisor starts VRCFaceTracking minimized and tries to minimize its main window after launch.");
-        AddFullWidth(layout, _mouthTrackerCheckBox, "Checked means you use a Vive mouth tracker. Unchecked disables mouth-tracker monitoring.");
         AddSectionHeader(layout, "Startup");
         AddFullWidth(layout, _autoLaunchTaskCheckBox, "Checked lets the app create or repair the elevated auto-launch Scheduled Task.");
         AddFullWidth(layout, _startWithSteamVrCheckBox, "Checked registers the SteamVR dashboard host manifest and starts the supervisor when SteamVR starts.");
         AddFullWidth(layout, _turnOffMonitorsCheckBox, "Checked saves the current monitor layout and disables secondary monitors during the VR session. The layout is restored after VRChat and SteamVR close.");
         AddSectionHeader(layout, "Diagnostics");
+        AddFullWidth(layout, _diagnosticsEnabledCheckBox, "Checked enables diagnostic and debug settings in this editor. Unchecked saves all diagnostic and debug options as disabled.");
         AddFullWidth(layout, _diagnosticsLogSupervisorCheckBox, ToolTipWithConfigKey("Write periodic supervisor CPU, memory, loop, process detection, command, app, and base-station timing diagnostics to a text file.", "DiagnosticsLogSupervisor"));
         AddFullWidth(layout, _diagnosticsLogSteamVrOverlayCheckBox, ToolTipWithConfigKey("Write SteamVR dashboard host loop, visibility, refresh, render, D3D upload, and texture submit diagnostics to a text file.", "DiagnosticsLogSteamVrOverlay"));
-        AddFullWidth(layout, _diagnosticsDebugSupervisorCheckBox, ToolTipWithConfigKey("When supervisor diagnostics are enabled, also write supervisor debug events to a separate text file in the diagnostic log folder.", "DiagnosticsDebugSupervisor"));
-        AddFullWidth(layout, _diagnosticsDebugSteamVrOverlayCheckBox, ToolTipWithConfigKey("When SteamVR overlay diagnostics are enabled, also write overlay debug events to a separate text file in the diagnostic log folder.", "DiagnosticsDebugSteamVrOverlay"));
+        AddFullWidth(layout, _diagnosticsDebugSupervisorCheckBox, ToolTipWithConfigKey("Write supervisor debug events to a separate text file in the diagnostic log folder.", "DiagnosticsDebugSupervisor"));
+        AddFullWidth(layout, _diagnosticsDebugSteamVrOverlayCheckBox, ToolTipWithConfigKey("Write SteamVR overlay debug events to a separate text file in the diagnostic log folder.", "DiagnosticsDebugSteamVrOverlay"));
+        AddFullWidth(layout, _diagnosticsDebugSteamVrPointerCheckBox, ToolTipWithConfigKey("When SteamVR overlay debug logging is enabled, draw a visible pointer marker inside the overlay for hover hit-test troubleshooting.", "DiagnosticsDebugSteamVrPointer"));
         AddFullWidth(layout, _diagnosticsVerboseCheckBox, ToolTipWithConfigKey("Also log individual slow or per-operation diagnostic timing lines. Leave off unless collecting a short troubleshooting trace.", "DiagnosticsVerbose"));
         AddNumber(layout, "DiagnosticsSummaryIntervalSeconds", "Summary interval", 1, 3600, "Seconds between diagnostic summary lines when diagnostic logging is enabled.", "seconds");
         AddFolderValidationRow(
@@ -454,12 +499,6 @@ internal sealed class ConfigEditorForm : Form
             "Diagnostic log folder",
             _diagnosticsLogDirectoryTextBox,
             ToolTipWithConfigKey("Folder for diagnostic text logs. Default is %TEMP%\\PimaxVrcSupervisorDiagnostics.", "DiagnosticsLogDirectory"),
-            includeOpenButton: true);
-        AddFolderValidationRow(
-            layout,
-            "PiService log folder",
-            _pimaxServiceLogDirectoryTextBox,
-            ToolTipWithConfigKey("Folder containing PiService__*.log files. Environment variables such as %LOCALAPPDATA% are expanded by the supervisor.", "PimaxServiceLogDirectory"),
             includeOpenButton: true);
 
         var buttons = new FlowLayoutPanel
@@ -499,6 +538,58 @@ internal sealed class ConfigEditorForm : Form
             content);
     }
 
+    private Control BuildFaceTrackingTab()
+    {
+        var layout = CreateFormLayout(3, compact: true);
+        AddSectionHeader(layout, "Applications");
+        AddFullWidth(layout, _faceTrackerAutomationEnabledCheckBox, ToolTipWithConfigKey("Checked means the supervisor automatically starts face-tracking applications during headset sessions.", "FaceTrackerAutomationEnabled"));
+        AddFullWidth(layout, _useBrokenEyeCheckBox, ToolTipWithConfigKey("Checked means face-tracking startup and restart routines include Broken Eye. The executable path remains editable either way.", "UseBrokenEye"));
+
+        AddSectionHeader(layout, "Executables");
+        AddPathRow(layout, "Broken Eye executable", _brokenEyePathTextBox, "Full path to Broken Eye.exe. The supervisor starts this app first.", configKey: "BrokenEyePath", defaultFileName: "Broken Eye.exe");
+        AddPathRow(
+            layout,
+            "VRCFaceTracking executable",
+            _vrcFaceTrackingPathTextBox,
+            "Full path to VRCFaceTracking.exe. The supervisor starts this after Broken Eye settles.",
+            DefaultVrcFaceTrackingDirectory,
+            "VrcFaceTrackingPath",
+            "VRCFaceTracking.exe");
+
+        AddSectionHeader(layout, "Startup behavior");
+        AddFullWidth(layout, _brokenEyeStartMinimizedCheckBox, ToolTipWithConfigKey("Checked means the supervisor starts Broken Eye minimized and tries to minimize its main window after launch.", "BrokenEyeStartMinimized"));
+        AddFullWidth(layout, _vrcFaceTrackingStartMinimizedCheckBox, ToolTipWithConfigKey("Checked means the supervisor starts VRCFaceTracking minimized and tries to minimize its main window after launch.", "VrcFaceTrackingStartMinimized"));
+
+        AddSectionHeader(layout, "Mouth Tracker");
+        AddFullWidth(layout, _mouthTrackerCheckBox, "Checked means you use a Vive mouth tracker. Unchecked disables mouth-tracker monitoring.");
+        AddFullWidth(layout, _mouthTrackerRestartOnReconnectCheckBox, ToolTipWithConfigKey("Checked means the supervisor restarts VRCFaceTracking after a mouth tracker reconnect while the headset stays connected.", "MouthTrackerRestartOnReconnectEnabled"));
+
+        AddSectionHeader(layout, "Reconnect Detection");
+        AddFullWidth(layout, _faceTrackerRestartOnReconnectCheckBox, ToolTipWithConfigKey("Checked means the supervisor restarts the managed face-tracking apps after a Pimax headset reconnect.", "FaceTrackerRestartOnReconnectEnabled"));
+        _faceTrackerAutomationDependentControls.Add(_faceTrackerRestartOnReconnectCheckBox);
+        AddFullWidth(layout, _usePimaxLogCheckBox, ToolTipWithConfigKey("Also scan PiService logs for quick HID remove/add reconnects that normal USB polling can miss.", "UsePimaxServiceLogReconnectDetector"));
+        AddFullWidth(layout, _useMouthTrackerPnPCheckBox, ToolTipWithConfigKey("Also scan Windows Kernel-PnP events for quick mouth tracker reconnects that normal USB polling can miss.", "UseMouthTrackerPnPReconnectDetector"));
+        AddFolderValidationRow(
+            layout,
+            "PiService log folder",
+            _pimaxServiceLogDirectoryTextBox,
+            ToolTipWithConfigKey("Folder containing PiService__*.log files. Environment variables such as %LOCALAPPDATA% are expanded by the supervisor.", "PimaxServiceLogDirectory"),
+            includeOpenButton: true);
+        AddNumber(layout, "PimaxServiceLogReconnectLookbackLines", "Pimax log scan depth", 1, 100000, "Number of recent PiService log lines scanned each polling cycle.", "lines");
+        if (_numberInputs.TryGetValue("PimaxServiceLogReconnectLookbackLines", out var pimaxLogScanDepthInput))
+        {
+            _faceTrackerAutomationDependentControls.Add(pimaxLogScanDepthInput);
+        }
+        _faceTrackerAutomationDependentControls.Add(_usePimaxLogCheckBox);
+        _faceTrackerAutomationDependentControls.Add(_useMouthTrackerPnPCheckBox);
+
+        return BuildTabWithDescription(
+            "Face tracking applications",
+            "Configure Broken Eye, VRCFaceTracking, and mouth-tracker use.",
+            layout,
+            limitWidth: true);
+    }
+
     private Control BuildHotkeysPanel()
     {
         var panel = new TableLayoutPanel
@@ -524,7 +615,7 @@ internal sealed class ConfigEditorForm : Form
         panel.Controls.Add(CreateShortcutListLabel(ConsoleShortcutLines), 0, panel.RowCount++);
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var editorHeader = CreateMutedLabel("Config Editor shortcuts");
+        var editorHeader = CreateMutedLabel("Configurator shortcuts");
         editorHeader.Font = new Font(FontFamily.GenericSansSerif, 9F, FontStyle.Bold);
         editorHeader.Padding = new Padding(0, 14, 0, 3);
         panel.Controls.Add(editorHeader, 0, panel.RowCount++);
@@ -697,7 +788,7 @@ internal sealed class ConfigEditorForm : Form
         _baseStationsGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
             Name = "Name",
-            HeaderText = "BLE name",
+            HeaderText = "Bluetooth name",
             FillWeight = 14,
             MinimumWidth = 120
         });
@@ -1153,7 +1244,7 @@ internal sealed class ConfigEditorForm : Form
         layout.Controls.Add(routesPanel, 0, 1);
         return BuildTabWithDescription(
             "OSC routing",
-            "Configure local OSC forwarding from the supervisor to apps such as VRCFT and OSCB00P.",
+            "Forward OSC from VRChat to local applications. Can be used alongside OSCQuery-compatible apps.",
             layout);
     }
 
@@ -1289,7 +1380,7 @@ internal sealed class ConfigEditorForm : Form
         const string tooltip = "Optional apps to launch after Broken Eye and VRCFaceTracking are running. The supervisor infers the process name from the selected exe.";
         var label = new Label
         {
-            Text = "Auto-launch apps",
+            Text = "Auto-startup apps",
             AutoSize = true,
             Padding = new Padding(0, 0, 0, 4)
         };
@@ -1319,7 +1410,7 @@ internal sealed class ConfigEditorForm : Form
         layout.Controls.Add(_autoLaunchAppsGrid, 0, 2);
         UpdateDynamicGridHeight(_autoLaunchAppsGrid);
         return BuildTabWithDescription(
-            "Auto-launch apps",
+            "Auto-startup apps",
             "Configure optional tools that should start with the supervisor or restart after a Pimax reconnect.",
             layout);
     }
@@ -1469,9 +1560,6 @@ internal sealed class ConfigEditorForm : Form
         AddLabeledRow(layout, "Apps that trigger cleanup when closed", _watchedShutdownProcessesTextBox, ToolTipWithConfigKey("When one of these processes has run and then exits, the supervisor closes the managed apps.", "WatchedShutdownProcessNames"));
         AddSectionHeader(layout, "SteamVR process");
         AddLabeledRow(layout, "SteamVR server process name", _steamVrServerProcessesTextBox, ToolTipWithConfigKey("When monitor handling is enabled, the supervisor waits for these processes to exit before restoring monitors.", "SteamVrServerProcessNames"));
-        AddSectionHeader(layout, "Fast reconnect detection");
-        AddFullWidth(layout, _usePimaxLogCheckBox, "Also scan PiService logs for quick HID remove/add reconnects that normal USB polling can miss.");
-        AddFullWidth(layout, _useMouthTrackerPnPCheckBox, "Also scan Windows Kernel-PnP events for quick mouth tracker reconnects that normal USB polling can miss.");
         return BuildTabWithDescription(
             "Watched process names",
             "Configure the process names used to detect VRChat, Broken Eye, VRCFaceTracking, SteamVR, and shutdown conditions.",
@@ -1787,7 +1875,6 @@ internal sealed class ConfigEditorForm : Form
     {
         var layout = CreateFormLayout(2);
         AddSectionHeader(layout, "Reconnect detection");
-        AddNumber(layout, "PimaxServiceLogReconnectLookbackLines", "Pimax log scan depth", 1, 100000, "Number of recent PiService log lines scanned each polling cycle.", "lines");
         AddNumber(layout, "PollIntervalSeconds", "Supervisor check interval", 1, 3600, "How often the supervisor checks device and watched-process state.", "seconds");
         AddNumber(layout, "RestartDelayAfterReconnectSeconds", "Restart delay after reconnect", 0, 3600, "Seconds to wait after Pimax reconnects before restarting managed apps.", "seconds");
 
@@ -1908,11 +1995,12 @@ internal sealed class ConfigEditorForm : Form
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Bottom,
-            ColumnCount = 5,
+            ColumnCount = 6,
             AutoSize = true,
             Padding = new Padding(0, 10, 0, 0)
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -1927,6 +2015,10 @@ internal sealed class ConfigEditorForm : Form
         launchButton.FlatStyle = FlatStyle.Flat;
         _toolTips.SetToolTip(launchButton, "Launch Supervisor (Ctrl+L). Starts the console supervisor using the currently selected config file. Save changes first if you want the launched supervisor to use them.");
 
+        var launchSteamVrButton = CreateButton("Launch SteamVR");
+        launchSteamVrButton.Click += (_, _) => LaunchSteamVr();
+        _toolTips.SetToolTip(launchSteamVrButton, "Starts SteamVR normally through Steam.");
+
         var saveButton = CreateButton("Save");
         saveButton.Tag = "Primary";
         saveButton.Click += (_, _) => SaveConfig();
@@ -1939,8 +2031,9 @@ internal sealed class ConfigEditorForm : Form
         layout.Controls.Add(_statusLabel, 0, 0);
         layout.Controls.Add(validateButton, 1, 0);
         layout.Controls.Add(launchButton, 2, 0);
-        layout.Controls.Add(saveAsButton, 3, 0);
-        layout.Controls.Add(saveButton, 4, 0);
+        layout.Controls.Add(launchSteamVrButton, 3, 0);
+        layout.Controls.Add(saveAsButton, 4, 0);
+        layout.Controls.Add(saveButton, 5, 0);
         return layout;
     }
 
@@ -2091,7 +2184,13 @@ internal sealed class ConfigEditorForm : Form
         UpdatePathStatus();
     }
 
-    private void AddFolderValidationRow(TableLayoutPanel layout, string label, TextBox textBox, string tooltip, bool includeOpenButton = false)
+    private void AddFolderValidationRow(
+        TableLayoutPanel layout,
+        string label,
+        TextBox textBox,
+        string tooltip,
+        bool includeOpenButton = false,
+        ICollection<Control>? dependentControls = null)
     {
         var browseButton = CreateButton("Browse...", autoSize: false, width: 104, height: 27);
         browseButton.Click += (_, _) =>
@@ -2121,6 +2220,13 @@ internal sealed class ConfigEditorForm : Form
         if (openButton is not null)
         {
             openButton.Click += (_, _) => OpenFolderInExplorer(textBox.Text, label);
+        }
+
+        dependentControls?.Add(textBox);
+        dependentControls?.Add(browseButton);
+        if (openButton is not null)
+        {
+            dependentControls?.Add(openButton);
         }
 
         var labelControl = new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left };
@@ -2925,6 +3031,26 @@ internal sealed class ConfigEditorForm : Form
         }
     }
 
+    private void LaunchSteamVr()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "steam://rungameid/250820",
+                UseShellExecute = true,
+                ErrorDialog = true,
+                ErrorDialogParentHandle = Handle
+            });
+            SetStatus("Launched SteamVR.");
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessageBox(ex.Message, "Could not launch SteamVR", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus("SteamVR launch failed.");
+        }
+    }
+
     private static bool IsAdministrator()
     {
         using var identity = WindowsIdentity.GetCurrent();
@@ -2986,8 +3112,11 @@ internal sealed class ConfigEditorForm : Form
         _vrcFaceTrackingPathTextBox.Text = GetString(node, "VrcFaceTrackingPath");
         _intifacePathTextBox.Text = GetStringOrDefault(node, "IntifacePath", DefaultIntifacePath);
         _oscGoesBrrrPathTextBox.Text = GetStringOrFallbackOrDefault(node, "OscGoesBrrrPath", "OscGoesBrrrrPath", DefaultOscGoesBrrrPath);
+        _useBrokenEyeCheckBox.Checked = GetBool(node, "UseBrokenEye", defaultValue: true);
         _brokenEyeStartMinimizedCheckBox.Checked = GetBool(node, "BrokenEyeStartMinimized", defaultValue: false);
         _vrcFaceTrackingStartMinimizedCheckBox.Checked = GetBool(node, "VrcFaceTrackingStartMinimized", defaultValue: false);
+        _faceTrackerAutomationEnabledCheckBox.Checked = GetBool(node, "FaceTrackerAutomationEnabled", defaultValue: true);
+        _faceTrackerRestartOnReconnectCheckBox.Checked = GetBool(node, "FaceTrackerRestartOnReconnectEnabled", defaultValue: true);
         _intifaceStartMinimizedCheckBox.Checked = GetBool(node, "IntifaceStartMinimized", defaultValue: false);
         _oscGoesBrrrStartMinimizedCheckBox.Checked = GetBool(node, "OscGoesBrrrStartMinimized", defaultValue: false);
         _oscGoesBrrrEnabledCheckBox.Checked = GetBoolOrFallback(node, "OscGoesBrrrEnabled", "LovenseAutoLaunchEnabled", defaultValue: false);
@@ -3020,12 +3149,22 @@ internal sealed class ConfigEditorForm : Form
         }
         _usePimaxLogCheckBox.Checked = GetBool(node, "UsePimaxServiceLogReconnectDetector", defaultValue: true);
         _useMouthTrackerPnPCheckBox.Checked = GetBool(node, "UseMouthTrackerPnPReconnectDetector", defaultValue: true);
+        _mouthTrackerRestartOnReconnectCheckBox.Checked = GetBool(node, "MouthTrackerRestartOnReconnectEnabled", defaultValue: true);
+        UpdateFaceTrackerAutomationOptionStates();
         _pimaxServiceLogDirectoryTextBox.Text = GetString(node, "PimaxServiceLogDirectory");
         _diagnosticsLogSupervisorCheckBox.Checked = GetBool(node, "DiagnosticsLogSupervisor", defaultValue: false);
         _diagnosticsLogSteamVrOverlayCheckBox.Checked = GetBool(node, "DiagnosticsLogSteamVrOverlay", defaultValue: false);
         _diagnosticsDebugSupervisorCheckBox.Checked = GetBool(node, "DiagnosticsDebugSupervisor", defaultValue: false);
         _diagnosticsDebugSteamVrOverlayCheckBox.Checked = GetBool(node, "DiagnosticsDebugSteamVrOverlay", defaultValue: false);
         _diagnosticsVerboseCheckBox.Checked = GetBool(node, "DiagnosticsVerbose", defaultValue: false);
+        _diagnosticsDebugSteamVrPointerCheckBox.Checked = GetBool(node, "DiagnosticsDebugSteamVrPointer", defaultValue: false);
+        _diagnosticsEnabledCheckBox.Checked = _diagnosticsLogSupervisorCheckBox.Checked
+            || _diagnosticsLogSteamVrOverlayCheckBox.Checked
+            || _diagnosticsDebugSupervisorCheckBox.Checked
+            || _diagnosticsDebugSteamVrOverlayCheckBox.Checked
+            || _diagnosticsVerboseCheckBox.Checked
+            || _diagnosticsDebugSteamVrPointerCheckBox.Checked;
+        UpdateDiagnosticsOptionStates();
         _diagnosticsLogDirectoryTextBox.Text = GetStringOrDefault(node, "DiagnosticsLogDirectory", "%TEMP%\\PimaxVrcSupervisorDiagnostics");
         _baseStationsEnabledCheckBox.Checked = GetBool(node, "BaseStationsEnabled", defaultValue: false);
         _baseStationPowerDownModeComboBox.SelectedItem = GetStringOrDefault(node, "BaseStationPowerDownMode", BaseStationPowerDownMode.Sleep.ToString());
@@ -3051,10 +3190,11 @@ internal sealed class ConfigEditorForm : Form
         {
             var defaultValue = propertyName switch
             {
-                "DelayBeforeOscGoesBrrrSeconds" => 5,
+                "DelayBeforeVrcFaceTrackingSeconds" => 3,
+                "DelayBeforeOscGoesBrrrSeconds" => 3,
                 "OscGoesBrrrBleScanSeconds" => 30,
                 "OscGoesBrrrBleScanIntervalSeconds" => 60,
-                "DiagnosticsSummaryIntervalSeconds" => 10,
+                "DiagnosticsSummaryIntervalSeconds" => 20,
                 _ => decimal.ToInt32(input.Minimum)
             };
             var value = propertyName == "DelayBeforeOscGoesBrrrSeconds"
@@ -3191,15 +3331,17 @@ internal sealed class ConfigEditorForm : Form
 
         try
         {
+            var startupHelperPath = CreateOrUpdateStartupHelperExecutable(supervisorPath);
             var startInfo = new ProcessStartInfo
             {
-                FileName = supervisorPath,
-                WorkingDirectory = Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory,
+                FileName = startupHelperPath,
+                WorkingDirectory = Path.GetDirectoryName(startupHelperPath) ?? AppContext.BaseDirectory,
                 UseShellExecute = !IsAdministrator(),
                 ErrorDialog = true,
                 ErrorDialogParentHandle = Handle
             };
             startInfo.ArgumentList.Add("--apply-startup-integration");
+            startInfo.ArgumentList.Add("--hide-startup-helper");
             startInfo.ArgumentList.Add("--config");
             startInfo.ArgumentList.Add(Path.GetFullPath(configPath));
 
@@ -3220,7 +3362,7 @@ internal sealed class ConfigEditorForm : Form
                 process.Dispose();
                 SetStatus(startupLaunchMode switch
                 {
-                    "ScheduledTask" => "Saved config and requested Scheduled Task startup repair.",
+                    "ScheduledTask" => "Saved config and requested Scheduled Task startup repair and watcher start.",
                     "SteamVrManifest" => "Saved config and requested SteamVR startup repair.",
                     "None" => "Saved config and requested removal of managed startup tasks.",
                     _ => "Saved config and requested startup integration update."
@@ -3241,6 +3383,13 @@ internal sealed class ConfigEditorForm : Form
             ShowThemedMessageBox(ex.Message, "Could not apply startup integration", MessageBoxButtons.OK, MessageBoxIcon.Error);
             SetStatus("Startup integration apply failed.");
         }
+    }
+
+    private static string CreateOrUpdateStartupHelperExecutable(string supervisorPath)
+    {
+        var helperPath = Path.Combine(Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory, "PimaxVrcSupervisorStartupHelper.exe");
+        File.Copy(supervisorPath, helperPath, overwrite: true);
+        return helperPath;
     }
 
     private async Task MonitorStartupIntegrationApplyAsync(Process process, string startupLaunchMode)
@@ -3281,7 +3430,7 @@ internal sealed class ConfigEditorForm : Form
 
             RunOnUiThread(() => SetStatus(startupLaunchMode switch
             {
-                "ScheduledTask" => "Saved and applied Scheduled Task startup.",
+                "ScheduledTask" => "Saved and applied Scheduled Task startup; watcher is running.",
                 "SteamVrManifest" => "Saved and applied SteamVR startup manifest.",
                 "None" => "Saved and disabled startup integrations.",
                 _ => "Saved startup integration."
@@ -3531,7 +3680,7 @@ internal sealed class ConfigEditorForm : Form
         string currentReleaseFolder)
     {
         var builder = new StringBuilder();
-        builder.AppendLine("Current Config Editor folder:");
+        builder.AppendLine("Current Configurator folder:");
         builder.AppendLine(currentReleaseFolder);
         foreach (var task in staleTasks)
         {
@@ -3681,8 +3830,12 @@ internal sealed class ConfigEditorForm : Form
         json = JsonPropertyEditor.Replace(json, "VrcFaceTrackingPath", Serialize(_vrcFaceTrackingPathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "IntifacePath", Serialize(_intifacePathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrPath", Serialize(_oscGoesBrrrPathTextBox.Text.Trim()));
+        json = JsonPropertyEditor.Replace(json, "UseBrokenEye", _useBrokenEyeCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "BrokenEyeStartMinimized", _brokenEyeStartMinimizedCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "VrcFaceTrackingStartMinimized", _vrcFaceTrackingStartMinimizedCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "FaceTrackerAutomationEnabled", _faceTrackerAutomationEnabledCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "FaceTrackerRestartOnReconnectEnabled", _faceTrackerAutomationEnabledCheckBox.Checked && _faceTrackerRestartOnReconnectCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "MouthTrackerRestartOnReconnectEnabled", _faceTrackerAutomationEnabledCheckBox.Checked && _mouthTrackerCheckBox.Checked && _mouthTrackerRestartOnReconnectCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "IntifaceStartMinimized", _intifaceStartMinimizedCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrStartMinimized", _oscGoesBrrrStartMinimizedCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrEnabled", _oscGoesBrrrEnabledCheckBox.Checked ? "true" : "false");
@@ -3733,13 +3886,16 @@ internal sealed class ConfigEditorForm : Form
         json = JsonPropertyEditor.Replace(json, "MouthTrackerDetectors", Serialize(ParseStringMatrix(_mouthTrackerDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "LovenseDetectors", Serialize(ParseStringMatrix(_lovenseDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "UsePimaxServiceLogReconnectDetector", _usePimaxLogCheckBox.Checked ? "true" : "false");
-        json = JsonPropertyEditor.Replace(json, "UseMouthTrackerPnPReconnectDetector", _useMouthTrackerPnPCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "UseMouthTrackerPnPReconnectDetector", _mouthTrackerCheckBox.Checked && _useMouthTrackerPnPCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "PimaxServiceLogDirectory", Serialize(_pimaxServiceLogDirectoryTextBox.Text.Trim()));
-        json = JsonPropertyEditor.Replace(json, "DiagnosticsLogSupervisor", _diagnosticsLogSupervisorCheckBox.Checked ? "true" : "false");
-        json = JsonPropertyEditor.Replace(json, "DiagnosticsLogSteamVrOverlay", _diagnosticsLogSteamVrOverlayCheckBox.Checked ? "true" : "false");
-        json = JsonPropertyEditor.Replace(json, "DiagnosticsDebugSupervisor", _diagnosticsDebugSupervisorCheckBox.Checked ? "true" : "false");
-        json = JsonPropertyEditor.Replace(json, "DiagnosticsDebugSteamVrOverlay", _diagnosticsDebugSteamVrOverlayCheckBox.Checked ? "true" : "false");
-        json = JsonPropertyEditor.Replace(json, "DiagnosticsVerbose", _diagnosticsVerboseCheckBox.Checked ? "true" : "false");
+        var diagnosticsEnabled = _diagnosticsEnabledCheckBox.Checked;
+        var steamVrOverlayDebugEnabled = diagnosticsEnabled && _diagnosticsDebugSteamVrOverlayCheckBox.Checked;
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsLogSupervisor", diagnosticsEnabled && _diagnosticsLogSupervisorCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsLogSteamVrOverlay", diagnosticsEnabled && _diagnosticsLogSteamVrOverlayCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsDebugSupervisor", diagnosticsEnabled && _diagnosticsDebugSupervisorCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsDebugSteamVrOverlay", steamVrOverlayDebugEnabled ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsVerbose", diagnosticsEnabled && _diagnosticsVerboseCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsDebugSteamVrPointer", diagnosticsEnabled && _diagnosticsDebugSteamVrPointerCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "DiagnosticsLogDirectory", Serialize(_diagnosticsLogDirectoryTextBox.Text.Trim()));
 
         foreach (var (propertyName, input) in _numberInputs)
@@ -4481,7 +4637,7 @@ internal sealed class ConfigEditorForm : Form
 
     private static CheckBox CreateOptionalConfigCheckBox(string text)
     {
-        return new CheckBox
+        return new ThemedCheckBox
         {
             Text = text,
             AutoSize = true,
@@ -5088,7 +5244,7 @@ internal sealed class ConfigEditorForm : Form
 
         var titleLabel = new Label
         {
-            Text = "Pimax VRC Supervisor Config Editor",
+            Text = "Pimax VRC Supervisor Configurator",
             AutoSize = true,
             Font = new Font(Font, FontStyle.Bold),
             Margin = new Padding(0, 0, 0, 8)
@@ -5911,7 +6067,7 @@ internal sealed class ConfigEditorForm : Form
             }
             else if (enabled && (string.IsNullOrWhiteSpace(GetGridString(row, "FriendlyName")) || string.IsNullOrWhiteSpace(GetGridString(row, "Name"))))
             {
-                row.ErrorText = "Friendly name and BLE name are required.";
+                row.ErrorText = "Friendly name and Bluetooth name are required.";
             }
         }
     }
@@ -6157,6 +6313,13 @@ internal sealed class ConfigEditorForm : Form
                 checkBox.UseVisualStyleBackColor = false;
                 checkBox.BackColor = _theme.WindowBack;
                 checkBox.ForeColor = _theme.Text;
+                if (checkBox is ThemedCheckBox themedCheckBox)
+                {
+                    themedCheckBox.DisabledForeColor = _theme.DisabledText;
+                    themedCheckBox.CheckBackColor = _theme.InputBack;
+                    themedCheckBox.CheckBorderColor = _theme.Border;
+                    themedCheckBox.CheckMarkColor = _theme.Text;
+                }
                 break;
             case Label label:
                 label.BackColor = _theme.WindowBack;
@@ -6469,7 +6632,7 @@ internal sealed class ConfigEditorForm : Form
         var details = new TextBox
         {
             Text =
-                "Current Config Editor folder:\r\n" +
+                "Current Configurator folder:\r\n" +
                 currentReleaseFolder +
                 "\r\n\r\nRemembered config folder:\r\n" +
                 lastConfigFolder +
@@ -6609,7 +6772,7 @@ internal sealed record FriendlyValidationSummary(string Heading, string Body);
 
 internal sealed class EditorState
 {
-    private static readonly string StatePath = Path.Combine(Application.UserAppDataPath, "config-editor-state.json");
+    private static readonly string StatePath = Path.Combine(Application.UserAppDataPath, "configurator-state.json");
 
     public string? LastConfigPath { get; set; }
     public Rectangle? WindowBounds { get; set; }
@@ -6674,6 +6837,7 @@ internal sealed record AppTheme(
     Color ToolTipBack,
     Color ToolTipFore,
     Color Text,
+    Color DisabledText,
     Color Border,
     Color StrongBorder,
     Color PrimaryButtonBack)
@@ -6690,6 +6854,7 @@ internal sealed record AppTheme(
         ToolTipBack: SystemColors.Info,
         ToolTipFore: SystemColors.InfoText,
         Text: SystemColors.ControlText,
+        DisabledText: SystemColors.GrayText,
         Border: SystemColors.ControlDark,
         StrongBorder: Color.FromArgb(76, 128, 176),
         PrimaryButtonBack: Color.FromArgb(240, 247, 252));
@@ -6706,9 +6871,112 @@ internal sealed record AppTheme(
         ToolTipBack: Color.FromArgb(45, 45, 45),
         ToolTipFore: Color.WhiteSmoke,
         Text: Color.WhiteSmoke,
+        DisabledText: Color.FromArgb(158, 158, 158),
         Border: Color.FromArgb(86, 86, 86),
         StrongBorder: Color.FromArgb(160, 160, 160),
         PrimaryButtonBack: Color.FromArgb(76, 76, 76));
+}
+
+internal sealed class ThemedCheckBox : CheckBox
+{
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Color DisabledForeColor { get; set; } = SystemColors.GrayText;
+
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Color CheckBackColor { get; set; } = SystemColors.Window;
+
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Color CheckBorderColor { get; set; } = SystemColors.ControlDark;
+
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Color CheckMarkColor { get; set; } = SystemColors.ControlText;
+
+    public ThemedCheckBox()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        UseVisualStyleBackColor = false;
+        Padding = new Padding(0, 1, 0, 1);
+    }
+
+    public override Size GetPreferredSize(Size proposedSize)
+    {
+        var textSize = TextRenderer.MeasureText(Text, Font);
+        return new Size(20 + textSize.Width, Math.Max(18, textSize.Height + Padding.Vertical));
+    }
+
+    protected override void OnEnabledChanged(EventArgs e)
+    {
+        Invalidate();
+        base.OnEnabledChanged(e);
+    }
+
+    protected override void OnCheckedChanged(EventArgs e)
+    {
+        Invalidate();
+        base.OnCheckedChanged(e);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        e.Graphics.Clear(BackColor);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+        var boxSize = 13;
+        var boxTop = Math.Max(0, (Height - boxSize) / 2);
+        var boxBounds = new Rectangle(0, boxTop, boxSize, boxSize);
+        var borderColor = Enabled ? CheckBorderColor : DisabledForeColor;
+        var textColor = Enabled ? ForeColor : DisabledForeColor;
+        using var boxBack = new SolidBrush(Enabled ? CheckBackColor : BackColor);
+        using var boxBorder = new Pen(borderColor);
+        using var boxPath = CreateRoundedRectanglePath(boxBounds, 2);
+        e.Graphics.FillPath(boxBack, boxPath);
+        e.Graphics.DrawPath(boxBorder, boxPath);
+
+        if (CheckState == CheckState.Checked)
+        {
+            using var markPen = new Pen(textColor, 2F)
+            {
+                StartCap = LineCap.Round,
+                EndCap = LineCap.Round
+            };
+            e.Graphics.DrawLines(markPen, [new Point(3, boxTop + 7), new Point(6, boxTop + 10), new Point(10, boxTop + 3)]);
+        }
+        else if (CheckState == CheckState.Indeterminate)
+        {
+            using var markPen = new Pen(textColor, 2F);
+            e.Graphics.DrawLine(markPen, 3, boxTop + 6, 10, boxTop + 6);
+        }
+
+        var textBounds = new Rectangle(20, 0, Math.Max(0, Width - 20), Height);
+        TextRenderer.DrawText(
+            e.Graphics,
+            Text,
+            Font,
+            textBounds,
+            textColor,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+        if (Focused && ShowFocusCues)
+        {
+            ControlPaint.DrawFocusRectangle(e.Graphics, ClientRectangle);
+        }
+    }
+
+    private static GraphicsPath CreateRoundedRectanglePath(Rectangle bounds, int radius)
+    {
+        var diameter = radius * 2;
+        var path = new GraphicsPath();
+        path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
 }
 
 internal sealed class ThemedActionButton : Button
@@ -7030,6 +7298,13 @@ internal sealed class ThemedTabHost : UserControl
                 checkBox.UseVisualStyleBackColor = false;
                 checkBox.BackColor = _theme.WindowBack;
                 checkBox.ForeColor = _theme.Text;
+                if (checkBox is ThemedCheckBox themedCheckBox)
+                {
+                    themedCheckBox.DisabledForeColor = _theme.DisabledText;
+                    themedCheckBox.CheckBackColor = _theme.InputBack;
+                    themedCheckBox.CheckBorderColor = _theme.Border;
+                    themedCheckBox.CheckMarkColor = _theme.Text;
+                }
                 break;
             case Label label:
                 label.BackColor = _theme.WindowBack;

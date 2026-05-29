@@ -6,8 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
-    <AssemblyName>PimaxVrcSupervisorConfigEditor</AssemblyName>
-    <RootNamespace>PimaxVrcSupervisor.ConfigEditor</RootNamespace>
+    <AssemblyName>PimaxVrcSupervisorConfigurator</AssemblyName>
+    <RootNamespace>PimaxVrcSupervisor.Configurator</RootNamespace>
     <ApplicationIcon>Assets\config-editor.ico</ApplicationIcon>
     <Version>1.2.3</Version>
     <AssemblyVersion>1.2.3.0</AssemblyVersion>
@@ -22,7 +22,7 @@
     <None Include="..\PimaxVrcSupervisor\supervisor.config.json" Link="supervisor.config.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <EmbeddedResource Include="..\PimaxVrcSupervisor\supervisor.config.json" LogicalName="PimaxVrcSupervisor.ConfigEditor.Defaults.supervisor.config.json" />
+    <EmbeddedResource Include="..\PimaxVrcSupervisor\supervisor.config.json" LogicalName="PimaxVrcSupervisor.Configurator.Defaults.supervisor.config.json" />
     <None Include="..\README.md" Link="README.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

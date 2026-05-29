@@ -1,4 +1,4 @@
-# Installation Issues
+﻿# Installation Issues
 
 ## The Supervisor Exits Immediately
 
@@ -10,7 +10,7 @@ The supervisor uses a mutex (`Local\PimaxVrcSupervisor`) to prevent duplicate in
 
 | Check | Action |
 | --- | --- |
-| Executable path | Open the Config Editor and verify the path in the **General** tab. |
+| Executable path | Open the Configurator and verify the path in the **General** tab. |
 | Process name | Check the **Processes** tab. The process name must match the running process (without `.exe`). |
 | File exists | Ensure the executable exists at the configured path. |
 | Path variables | If using `%APPDATA%` or `%LOCALAPPDATA%`, verify the expanded path is correct. |
@@ -60,4 +60,4 @@ If the supervisor reports that `supervisor.config.json` doesn't exist:
 2. Place a valid `supervisor.config.json` next to the supervisor executables.
 3. Use the `--config <path>` argument to specify a custom path.
 
-See also: [Troubleshooting Overview](index.md) · [Config Editor Issues](config-editor-issues.md) · [OSC Issues](osc-issues.md)
+See also: [Troubleshooting Overview](index.md) Â· [Configurator Issues](config-editor-issues.md) Â· [OSC Issues](osc-issues.md)

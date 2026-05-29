@@ -1,6 +1,6 @@
-# OSC Router Tab
+﻿# OSC Router Tab
 
-The **OSC Router** tab configures the in-process OSC UDP router that forwards VRChat OSC output to multiple local apps.
+The **OSC Router** tab configures forwarding from VRChat to local applications. It can be used alongside applications that support OSCQuery.
 
 ## Settings
 
@@ -22,7 +22,7 @@ The **OSC Router** tab configures the in-process OSC UDP router that forwards VR
 | --- | --- |
 | Enabled | Whether the route is active. |
 | Name | Display name for the route. |
-| Target app receive port | Local UDP port of the target app (1–65535). |
+| Target app receive port | Local UDP port of the target app (1â€“65535). |
 
 ### Actions
 
@@ -45,7 +45,7 @@ OSCQuery-capable apps can coexist with the router because OSCQuery uses separate
 ## Validation
 
 The editor validates that:
-- Each enabled route has a name and a valid target port (1–65535).
+- Each enabled route has a name and a valid target port (1â€“65535).
 - No two enabled routes share the same target port.
 
-See also: [GUI Manual Overview](index.md) · [Auto Launch](auto-launch.md) · [OSCGoesBrrr](oscgoesbrrr.md)
+See also: [GUI Manual Overview](index.md) Â· [Auto Startup](auto-launch.md) Â· [OSCGoesBrrr](oscgoesbrrr.md)

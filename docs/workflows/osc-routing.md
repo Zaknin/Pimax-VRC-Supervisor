@@ -1,4 +1,4 @@
-# OSC Routing Workflow
+﻿# OSC Routing Workflow
 
 This page describes the OSC UDP routing system that forwards VRChat OSC output to multiple local apps.
 
@@ -7,7 +7,7 @@ This page describes the OSC UDP routing system that forwards VRChat OSC output t
 1. VRChat sends OSC output to `127.0.0.1:9000` (the standard VRChat OSC port).
 2. The supervisor listens on `127.0.0.1:OscRouterReceivePort` (default `9001`).
 3. Every received OSC datagram is forwarded unchanged to each enabled route's target port.
-4. No OSC address filtering is applied — all packets are forwarded.
+4. No OSC address filtering is applied â€” all packets are forwarded.
 
 ## Configuration
 
@@ -74,4 +74,4 @@ To forward VRChat OSC to VRCFaceTracking (port 9003) and another app (port 9005)
 
 Apps should continue sending OSC directly to VRChat at `127.0.0.1:9000`. The router only handles incoming packets from VRChat's output.
 
-See also: [Workflows Overview](index.md) · [Base Station Power](base-station-power.md) · [Auto Launch](auto-launch.md)
+See also: [Workflows Overview](index.md) Â· [Base Station Power](base-station-power.md) Â· [Auto Launch](auto-launch.md)

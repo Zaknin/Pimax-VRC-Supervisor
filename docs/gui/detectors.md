@@ -1,4 +1,4 @@
-# Detectors Tab
+﻿# Detectors Tab
 
 The **Detectors** tab configures keyword rules used to detect Pimax headsets, mouth trackers, and Lovense devices.
 
@@ -61,4 +61,4 @@ The supervisor uses `pnputil.exe /enum-devices /connected` to enumerate connecte
 
 For Lovense devices, the supervisor also checks the Windows Bluetooth registry (`HKLM\SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Devices`) for recently seen device names matching the detector rules.
 
-See also: [GUI Manual Overview](index.md) · [Base Stations](base-stations.md) · [Timing](timing.md)
+See also: [GUI Manual Overview](index.md) Â· [Base Stations](base-stations.md) Â· [Timing](timing.md)

@@ -1,4 +1,4 @@
-site_name: Pimax VRC Supervisor Manual
+﻿site_name: Pimax VRC Supervisor Manual
 site_description: User manual and technical reference for Pimax VRC Supervisor
 site_url: https://zaknin.github.io/Pimax-VRC-Supervisor/
 
@@ -51,9 +51,10 @@ nav:
   - GUI Manual:
       - Overview: gui/index.md
       - Basics: gui/basics.md
+      - Face Tracking: gui/face-tracking.md
       - Base Stations: gui/base-stations.md
+      - Auto Startup: gui/auto-launch.md
       - OSC Router: gui/osc-router.md
-      - Auto Launch: gui/auto-launch.md
       - OSCGoesBrrr: gui/oscgoesbrrr.md
       - Processes: gui/processes.md
       - Detectors: gui/detectors.md
@@ -76,12 +77,12 @@ nav:
       - Overview: reference/index.md
       - Configuration Fields: reference/configuration-fields.md
       - Supervisor Functions: reference/supervisor-functions.md
-      - Config Editor Functions: reference/config-editor-functions.md
+      - Configurator Functions: reference/config-editor-functions.md
       - Overlay Functions: reference/overlay-functions.md
   - Troubleshooting:
       - Overview: troubleshooting/index.md
       - Install Issues: troubleshooting/install-issues.md
-      - Config Editor Issues: troubleshooting/config-editor-issues.md
+      - Configurator Issues: troubleshooting/config-editor-issues.md
       - OSC Issues: troubleshooting/osc-issues.md
       - Base Station Issues: troubleshooting/base-station-issues.md
       - Overlay Issues: troubleshooting/overlay-issues.md

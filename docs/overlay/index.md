@@ -1,4 +1,4 @@
-# VR Overlay
+﻿# VR Overlay
 
 ## SteamVR Dashboard Host
 
@@ -6,9 +6,9 @@
 
 ## How It Works
 
-1. When **Start with SteamVR** is enabled in the Config Editor, the host is registered as a SteamVR dashboard overlay app.
+1. When **SteamVR Overlay** is enabled in the Configurator, the host is registered as a SteamVR dashboard overlay app.
 2. SteamVR starts the host, which launches the elevated supervisor with `--steamvr-start`.
-3. The supervisor starts managed apps immediately after SteamVR startup.
+3. The supervisor waits for the Pimax headset, powers on base stations if enabled, then waits for VRChat before starting managed apps.
 
 ## Dashboard Controls
 

@@ -1,4 +1,4 @@
-# Supervisor Functions Reference
+﻿# Supervisor Functions Reference
 
 Major behavior-defining functions and classes in `PimaxVrcSupervisor.exe`.
 
@@ -72,7 +72,7 @@ The main supervisor class that orchestrates the entire session lifecycle.
 | Method | Description |
 | --- | --- |
 | `StartLovenseIntifaceAsync()` | Starts Intiface. |
-| `StartLovenseOscAsync()` | Starts the full workflow (Intiface → delay → OscGoesBrrr). |
+| `StartLovenseOscAsync()` | Starts the full workflow (Intiface â†’ delay â†’ OscGoesBrrr). |
 | `StopLovenseAppsAsync()` | Stops OscGoesBrrr and Intiface. |
 | `ScanForLovenseBleAdvertisementAsync()` | Scans for Lovense BLE advertisements. |
 
@@ -104,4 +104,4 @@ Reads active SteamVR tracking references via OpenVR API.
 | `IsAvailable(out string)` | Checks if OpenVR is available. |
 | `ReadActiveTrackingReferences()` | Returns active tracking reference devices. |
 
-See also: [Reference Overview](index.md) · [Configuration Fields](configuration-fields.md) · [Config Editor Functions](config-editor-functions.md)
+See also: [Reference Overview](index.md) Â· [Configuration Fields](configuration-fields.md) Â· [Configurator Functions](config-editor-functions.md)

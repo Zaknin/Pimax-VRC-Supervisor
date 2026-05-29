@@ -1,6 +1,6 @@
-# Auto Launch Tab
+﻿# Auto Startup Tab
 
-The **Auto Launch** tab configures optional apps that start after Broken Eye and VRCFaceTracking are running.
+The **Auto Startup** tab configures optional apps that start after Broken Eye and VRCFaceTracking are running.
 
 ## Auto-Launch Apps Grid
 
@@ -53,4 +53,4 @@ The editor validates that:
 - The executable path exists on disk.
 - The path points to an `.exe` file.
 
-See also: [GUI Manual Overview](index.md) · [Basics](basics.md) · [Processes](processes.md)
+See also: [GUI Manual Overview](index.md) Â· [Basics](basics.md) Â· [Processes](processes.md)

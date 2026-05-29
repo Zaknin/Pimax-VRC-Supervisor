@@ -1,4 +1,4 @@
-# Reference
+﻿# Reference
 
 ## Full Configuration Reference
 
@@ -9,9 +9,13 @@ For the complete configuration schema, see the commented `supervisor.config.json
 | Setting | Type | Default | Description |
 | --- | --- | --- | --- |
 | `BrokenEyePath` | string | `""` | Path to `Broken Eye.exe`. Prompts on first run if empty. |
+| `UseBrokenEye` | bool | `true` | Include Broken Eye in face-tracking routines. |
 | `VrcFaceTrackingPath` | string | `""` | Path to `VRCFaceTracking.exe`. Prompts on first run if empty. |
 | `BrokenEyeStartMinimized` | bool | `false` | Start Broken Eye minimized. |
 | `VrcFaceTrackingStartMinimized` | bool | `false` | Start VRCFaceTracking minimized. |
+| `FaceTrackerAutomationEnabled` | bool | `true` | Automatically start configured face-tracking apps during headset sessions. |
+| `FaceTrackerRestartOnReconnectEnabled` | bool | `true` | Restart configured face-tracking apps after a Pimax headset reconnect. |
+| `MouthTrackerRestartOnReconnectEnabled` | bool | `true` | Restart VRCFaceTracking after a mouth tracker reconnect. |
 | `MouthTrackerUser` | bool? | `null` | `true` enables mouth tracker monitoring. Null prompts on first run. |
 | `TurnOffSecondaryMonitors` | bool? | `null` | `true` enables monitor layout handling. Null prompts on first run. |
 | `AutoLaunchScheduledTask` | bool? | `null` | `true` creates/repairs the auto-launch task. Null prompts on first setup. |
@@ -26,7 +30,7 @@ For the complete configuration schema, see the commented `supervisor.config.json
 | `OscGoesBrrrBleScannerEnabled` | bool | `false` | Enable Lovense BLE scanning. |
 | `IntifacePath` | string | `""` | Path to Intiface. |
 | `OscGoesBrrrPath` | string | `""` | Path to OscGoesBrrr. |
-| `DelayBeforeOscGoesBrrrSeconds` | int | `5` | Delay between Intiface and OscGoesBrrr startup. |
+| `DelayBeforeOscGoesBrrrSeconds` | int | `3` | Delay between Intiface and OscGoesBrrr startup. |
 | `LovenseDetectors` | array | `[]` | BLE advertisement prefixes to match. |
 | `OscRouterEnabled` | bool | `false` | Enable OSC UDP routing. |
 | `OscRouterReceivePort` | int | `9001` | Local UDP port for VRChat OSC output. |

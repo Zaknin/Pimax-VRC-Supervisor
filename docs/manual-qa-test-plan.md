@@ -1,4 +1,4 @@
-# Manual QA Test Plan — Pimax VRC Supervisor / vrmanifest-gui-overhaul
+﻿# Manual QA Test Plan â€” Pimax VRC Supervisor / vrmanifest-gui-overhaul
 
 Codex pre-check date: 2026-05-24
 
@@ -11,7 +11,7 @@ Codex pre-check summary:
 - .NET SDK found: `9.0.314`; Windows runtime environment: Windows `10.0.26200`, `win-x64`.
 - `dotnet build` succeeded for all three projects with `0 Warning(s)` and `0 Error(s)`.
 - `dotnet publish -c Release -r win-x64 --self-contained true` succeeded for all three projects into `publish-manual-qa-codex`.
-- Published executables found: `PimaxVrcSupervisor.exe`, `PimaxVrcSupervisorConfigEditor.exe`, `PimaxVrcSupervisorSteamVrHost.exe`.
+- Published executables found: `PimaxVrcSupervisor.exe`, `PimaxVrcSupervisorConfigurator.exe`, `PimaxVrcSupervisorSteamVrHost.exe`.
 - Published config/docs/assets found: `supervisor.config.json`, `README.md`, `RELEASE_NOTES.md`, `Assets/vr-overlay-icon.png`.
 - Published executable versions expected: file version `1.2.3.0`, product version `1.2.3` for all three executables.
 - Source documentation should reference `1.2.3` consistently across `README.md`, `RELEASE_NOTES.md`, and project files.
@@ -31,7 +31,7 @@ Codex pre-check summary:
 - Base station control: `PimaxVrcSupervisor/BaseStationSupport.cs`, `BaseStationDiscovery`, `BaseStationGattClient`, `BaseStationPowerDownRoutine`, supervisor power-on/down methods.
 - Monitor handling: `MonitorLayoutController`, `DisplayLayoutSnapshot`.
 - Scheduled tasks and startup integration: `ScheduledTaskInstaller`, `StartupIntegration`, `SteamVrStartupInstaller`, `ScheduledTaskPathValidator`.
-- Config editor GUI: `PimaxVrcSupervisor.ConfigEditor/Program.cs`, `ConfigEditorForm`.
+- Configurator GUI: `PimaxVrcSupervisor.ConfigEditor/Program.cs`, `ConfigEditorForm`.
 - GUI tabs: General, Auto Launch, Base Stations, Detectors, Processes, OSC Router, OSCGoesBrrr, Timing, Raw JSON.
 - GUI validation: `ValidateCurrentConfig`, `ValidatePath`, `ValidateAutoLaunchApps`, `ValidateOscRoutes`, `ValidateBaseStations`, `ValidateTimingValues`, `ValidateRawJsonText`.
 - SteamVR overlay host: `PimaxVrcSupervisor.SteamVrHost/Program.cs`, `SteamVrDashboardHost`, `OpenVrOverlaySession`, `GpuOverlayRenderer`.
@@ -65,7 +65,7 @@ Codex pre-check summary:
 
 ## 2. Build and packaging verification
 
-### BUILD-001 — Clean debug build
+### BUILD-001 â€” Clean debug build
 Purpose:
 Verify all projects compile from source.
 
@@ -95,7 +95,7 @@ Actual result:
 Notes:
 - Codex verified with local `dotnet build` commands on 2026-05-24.
 
-### BUILD-002 — Release publish output
+### BUILD-002 â€” Release publish output
 Purpose:
 Verify self-contained release-style output.
 
@@ -108,7 +108,7 @@ Steps:
 
 Expected result:
 - [x] `PimaxVrcSupervisor.exe` exists.
-- [x] `PimaxVrcSupervisorConfigEditor.exe` exists.
+- [x] `PimaxVrcSupervisorConfigurator.exe` exists.
 - [x] `PimaxVrcSupervisorSteamVrHost.exe` exists.
 - [x] `supervisor.config.json` exists.
 - [x] `README.md` exists.
@@ -125,7 +125,7 @@ Actual result:
 Notes:
 - Codex verified with local `dotnet publish` commands on 2026-05-24.
 
-### BUILD-003 — Resource and version stamping
+### BUILD-003 â€” Resource and version stamping
 Purpose:
 Verify expected resources and versions are present.
 
@@ -155,7 +155,7 @@ Actual result:
 Notes:
 - Codex verified static resource/version/manifest checks. Human QA still needs to verify visible icons and UAC launch behavior.
 
-### BUILD-004 — Documentation version consistency
+### BUILD-004 â€” Documentation version consistency
 Purpose:
 Catch version mismatches before release.
 
@@ -179,7 +179,7 @@ Actual result:
 Notes:
 - Codex should find `1.2.3` in project/executable versions and release-facing documentation.
 
-### BUILD-005 — Launch behavior from publish folder
+### BUILD-005 â€” Launch behavior from publish folder
 Purpose:
 Verify executables launch from a release-like folder.
 
@@ -188,12 +188,12 @@ Preconditions:
 - Human tester can interact with UAC and GUI windows.
 
 Steps:
-1. Launch `PimaxVrcSupervisorConfigEditor.exe`.
+1. Launch `PimaxVrcSupervisorConfigurator.exe`.
 2. Launch `PimaxVrcSupervisor.exe`.
 3. If SteamVR is installed and running, launch `PimaxVrcSupervisorSteamVrHost.exe`.
 
 Expected result:
-- [x] Config Editor opens and loads a config.
+- [x] Configurator opens and loads a config.
 - [x] Supervisor starts and prints version/config banner.
 - [x] SteamVR host starts or shows a clear SteamVR/OpenVR error.
 - [x] No app crashes immediately without a useful message.
@@ -206,7 +206,7 @@ Notes:
 
 ## 3. Configuration tests
 
-### CONFIG-001 — Load default commented config
+### CONFIG-001 â€” Load default commented config
 Purpose:
 Verify default config loads despite comments.
 
@@ -214,12 +214,12 @@ Preconditions:
 - Published output contains `supervisor.config.json`.
 
 Steps:
-1. Open Config Editor.
+1. Open Configurator.
 2. Confirm all tabs populate.
 3. Start Supervisor with the same config.
 
 Expected result:
-- [x] Config Editor loads without JSON errors.
+- [x] Configurator loads without JSON errors.
 - [x] Supervisor loads without JSON errors.
 - [x] Visible defaults match `PimaxVrcSupervisor/supervisor.config.json`.
 
@@ -229,7 +229,7 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-### CONFIG-002 — Explicit `--config` path
+### CONFIG-002 â€” Explicit `--config` path
 Purpose:
 Verify Supervisor can load a specific config.
 
@@ -252,7 +252,7 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-### CONFIG-003 — Save and reload config
+### CONFIG-003 â€” Save and reload config
 Purpose:
 Verify GUI saves current editor values.
 
@@ -263,7 +263,7 @@ Steps:
 1. Change `DisplayName`, executable paths, startup mode, one timing value, one route, and one app row.
 2. Click Save.
 3. Reopen the JSON file.
-4. Reload Config Editor.
+4. Reload Configurator.
 
 Expected result:
 - [x] Changed fields are saved.
@@ -277,7 +277,7 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-### CONFIG-004 — Legacy/fallback config fields
+### CONFIG-004 â€” Legacy/fallback config fields
 Purpose:
 Verify backward-compatible config fields still load.
 
@@ -288,7 +288,7 @@ Steps:
 1. Add `OscGoesBrrrrPath` with four `r`s and leave `OscGoesBrrrPath` empty.
 2. Add an OSC route using `OutputPort`.
 3. Add auto-launch app with `CloseOnPimaxDisconnect`.
-4. Load config in Config Editor and Supervisor.
+4. Load config in Configurator and Supervisor.
 
 Expected result:
 - [ ] Legacy OscGoesBrrr path is accepted when new field is empty.
@@ -302,9 +302,9 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-## 4. Console mode tests — `PimaxVrcSupervisor.exe`
+## 4. Console mode tests â€” `PimaxVrcSupervisor.exe`
 
-### CONSOLE-001 — First-run executable path prompts
+### CONSOLE-001 â€” First-run executable path prompts
 Purpose:
 Verify missing Broken Eye and VRCFaceTracking paths are prompted and saved.
 
@@ -329,7 +329,7 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-### CONSOLE-002 — First-run preference prompts
+### CONSOLE-002 â€” First-run preference prompts
 Purpose:
 Verify first-run prompt sequence and saved preferences.
 
@@ -358,11 +358,11 @@ Notes:
 missing prompt for monitors, mouth tracker, auto launch scheduled
 
 2026-05-25 retest: still failing with restored default config. Supervisor only prompted for Broken Eye and VRCFaceTracking; first-run preference prompts did not appear.
-2026-05-25 fix status: Config Editor now preserves unset first-run preference fields when loading/restoring defaults and saving unless those binary controls are changed. Note: published release folder still had a newer tester-edited config with concrete values after publish; restore defaults/save or replace with the source default config before retesting CONSOLE-002 from that folder.
+2026-05-25 fix status: Configurator now preserves unset first-run preference fields when loading/restoring defaults and saving unless those binary controls are changed. Note: published release folder still had a newer tester-edited config with concrete values after publish; restore defaults/save or replace with the source default config before retesting CONSOLE-002 from that folder.
 2026-05-25 follow-up fix status: First-run boolean preference saves now verify the written config and repair with a structured JSON update fallback if text replacement does not persist the selected Yes/No answer.
-2026-05-25 follow-up fix status: If either GUI first-run binary preference is changed, Config Editor now saves both mouth-tracker and secondary-monitor choices explicitly as true/false so later Supervisor launches do not treat the untouched one as unset.
+2026-05-25 follow-up fix status: If either GUI first-run binary preference is changed, Configurator now saves both mouth-tracker and secondary-monitor choices explicitly as true/false so later Supervisor launches do not treat the untouched one as unset.
 2026-05-25 follow-up fix status: Configured `StartupLaunchMode=None` now skips startup-integration cleanup during normal Supervisor launch. Cleanup still runs for first-run No selection and explicit GUI/CLI startup integration apply.
-2026-05-25 follow-up fix status: First-run prompts are now controlled by `RunInitialSetupQuestions`. Default config sets it true, Supervisor writes it false after setup choices are saved, and Config Editor does not expose it.
+2026-05-25 follow-up fix status: First-run prompts are now controlled by `RunInitialSetupQuestions`. Default config sets it true, Supervisor writes it false after setup choices are saved, and Configurator does not expose it.
 
 immeditely after selecing broken eye and vrcft exe output
 
@@ -376,7 +376,7 @@ Waiting 5 seconds before starting VRCFaceTracking...
 
 
 
-### CONSOLE-003 — Duplicate instance prevention
+### CONSOLE-003 â€” Duplicate instance prevention
 Purpose:
 Verify normal supervisor instances do not race.
 
@@ -395,9 +395,9 @@ Actual result:
 - [ ] Fail
 Notes:
 - [x] Human QA required.
-second instance immediately closes for supervisor. For the config editor, I can start a second instance.
+second instance immediately closes for supervisor. For the configurator, I can start a second instance.
 
-### CONSOLE-004 — Startup with no headset
+### CONSOLE-004 â€” Startup with no headset
 Purpose:
 Verify startup waits for Pimax headset.
 
@@ -421,7 +421,7 @@ Notes:
 - [x] Hardware-dependent.
 - [ ] Human QA required.
 
-### CONSOLE-005 — Startup with headset connected
+### CONSOLE-005 â€” Startup with headset connected
 Purpose:
 Verify normal startup sequencing.
 
@@ -448,7 +448,7 @@ Notes:
 - [x] Hardware-dependent.
 - [x] Human QA required.
 
-### CONSOLE-006 — Reconnect handling
+### CONSOLE-006 â€” Reconnect handling
 Purpose:
 Verify Pimax reconnect restarts managed apps.
 
@@ -474,7 +474,7 @@ Notes:
 - [X] Hardware-dependent.
 - [X] Human QA required.
 
-### CONSOLE-007 — Mouth tracker handling
+### CONSOLE-007 â€” Mouth tracker handling
 Purpose:
 Verify mouth tracker reconnect restarts only VRCFaceTracking.
 
@@ -499,7 +499,7 @@ Notes:
 - [ ] Hardware-dependent.
 - [ ] Human QA required.
 
-### CONSOLE-008 — VRChat shutdown cleanup
+### CONSOLE-008 â€” VRChat shutdown cleanup
 Purpose:
 Verify cleanup after VRChat exits.
 
@@ -523,7 +523,7 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-### CONSOLE-009 — VRChat crash grace period
+### CONSOLE-009 â€” VRChat crash grace period
 Purpose:
 Verify crash/relaunch behavior.
 
@@ -547,7 +547,7 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-### CONSOLE-010 — Auto-launch apps
+### CONSOLE-010 â€” Auto-launch apps
 Purpose:
 Verify extra app startup and cleanup.
 
@@ -571,7 +571,7 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-### CONSOLE-011 — OSCGoesBrrr / Intiface workflow
+### CONSOLE-011 â€” OSCGoesBrrr / Intiface workflow
 Purpose:
 Verify manual and repair workflow.
 
@@ -598,7 +598,7 @@ Notes:
 Intiface doesn't really work properly when started in elevated mode, so all will start and restart in non-elevated mode.
 2026-05-25 retest: OK. Intiface and OscGoesBrrr both launch as non-elevated tasks.
 
-### CONSOLE-012 — OSC router forwarding
+### CONSOLE-012 â€” OSC router forwarding
 Purpose:
 Verify UDP routing.
 
@@ -622,7 +622,7 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-### CONSOLE-013 — OSC router port conflict
+### CONSOLE-013 â€” OSC router port conflict
 Purpose:
 Verify conflict handling and retry.
 
@@ -657,7 +657,7 @@ F1 = Show console shortcuts
 Launching OSC routing startup...
 Warning: OSC router could not bind to 127.0.0.1:9001 because the endpoint is already in use. OSC routing is disabled temporarily. - WORKS OK AFTER PORT CLEAR AND RESTART AS INTENDED
 
-### CONSOLE-014 — Base station power control
+### CONSOLE-014 â€” Base station power control
 Purpose:
 Verify automatic and manual base station control.
 
@@ -713,7 +713,7 @@ Base station LHB-22CEE79A: power on pass 4 succeeded.
 Suggested Improvement: As it is verifying base stations by their unique identifications, only send additional restart commands to the base stations that are not found in SteamVR and are not actively tracking if their status is unsupported and they don't report their status being turned on. 
 
 
-### CONSOLE-015 — Monitor handling
+### CONSOLE-015 â€” Monitor handling
 Purpose:
 Verify secondary monitors are disabled and restored.
 
@@ -738,7 +738,7 @@ Notes:
 - [X] Hardware-dependent.
 - [X] Human QA required.
 
-### CONSOLE-016 — Ctrl+C and console close cleanup
+### CONSOLE-016 â€” Ctrl+C and console close cleanup
 Purpose:
 Verify emergency cleanup.
 
@@ -760,7 +760,7 @@ Actual result:
 Notes:
 - [X] Human QA required.
 
-### CONSOLE-017 — Command-line flags
+### CONSOLE-017 â€” Command-line flags
 Purpose:
 Verify special CLI modes.
 
@@ -776,7 +776,7 @@ Steps:
 Expected result:
 - [ ] Auto-launch task is created/updated.
 - [ ] Startup integration creates/deletes the expected tasks and manifests.
-- [ ] Watcher launches Supervisor only when VRChat and SteamVR are both running.
+- [ ] Watcher launches Supervisor only when SteamVR `vrserver.exe` is running; Supervisor waits for VRChat before starting managed apps.
 - [ ] Emergency cleanup attempts base station power-down and exits.
 
 Actual result:
@@ -785,7 +785,7 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-### CONSOLE-018 — Missing path and error handling
+### CONSOLE-018 â€” Missing path and error handling
 Purpose:
 Verify missing paths fail visibly and safely.
 
@@ -814,17 +814,17 @@ Starting configured auto-launch apps...
 Skipping Boop Counter: executable was not found at D:\VRCHATexes\Boop Counter\Boop Couer.exe
 BLE scanner enabled for OSCGoesBrrr. Scanning for 30 seconds every 60 seconds.
 
-## 5. GUI mode tests — `PimaxVrcSupervisorConfigEditor.exe`
+## 5. GUI mode tests â€” `PimaxVrcSupervisorConfigurator.exe`
 
-### GUI-001 — Initial load and all tabs
+### GUI-001 â€” Initial load and all tabs
 Purpose:
-Verify Config Editor opens and loads config.
+Verify Configurator opens and loads config.
 
 Preconditions:
 - Published folder has `supervisor.config.json`.
 
 Steps:
-1. Launch Config Editor.
+1. Launch Configurator.
 2. Inspect path bar, status bar, and tabs.
 
 Expected result:
@@ -839,12 +839,12 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-### GUI-002 — General tab
+### GUI-002 â€” General tab
 Purpose:
 Verify paths, startup choices, and first-run choices.
 
 Preconditions:
-- Config Editor open.
+- Configurator open.
 
 Steps:
 1. Change `DisplayName`.
@@ -866,12 +866,12 @@ Notes:
 - [X] Human QA required.
 Display name doesn't save. I can enter it, I press save, but it doesn't get saved at all. I have tried to save as and create alternative config and change the display name on it. It felt in the same way. 
 2026-05-25 retest: OK.
-### GUI-003 — Browse buttons
+### GUI-003 â€” Browse buttons
 Purpose:
 Verify all executable browse buttons.
 
 Preconditions:
-- Config Editor open.
+- Configurator open.
 
 Steps:
 1. Browse for Broken Eye.
@@ -891,7 +891,7 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-### GUI-004 — Save, Save As, Reload, restore backup
+### GUI-004 â€” Save, Save As, Reload, restore backup
 Purpose:
 Verify file persistence.
 
@@ -921,12 +921,12 @@ Notes:
 unsaved marker is completely missing. 
 2026-05-25 retest: OK.
 
-### GUI-005 — Validation
+### GUI-005 â€” Validation
 Purpose:
 Verify errors and warnings.
 
 Preconditions:
-- Config Editor open.
+- Configurator open.
 
 Steps:
 1. Validate a good config.
@@ -949,12 +949,12 @@ Notes:
 Error does not block saving. For example, I was able to save after adding an empty "auto app launch" line and an empty manually added "base station" via gui
 2026-05-25 retest: OK. Follow-up: Save behavior was later changed to JSON-only validation by request; full validation remains manual.
 
-### GUI-006 — Auto Launch tab
+### GUI-006 â€” Auto Launch tab
 Purpose:
 Verify app table behavior.
 
 Preconditions:
-- Config Editor open.
+- Configurator open.
 
 Steps:
 1. Add app.
@@ -974,7 +974,7 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-### GUI-007 — Base Stations tab
+### GUI-007 â€” Base Stations tab
 Purpose:
 Verify scan, edit, and command actions.
 
@@ -1005,12 +1005,12 @@ I am able to add version v1 id and save it on version 2 base stations, It should
 2026-05-25 retest: OK.
 
 
-### GUI-008 — Detectors tab
+### GUI-008 â€” Detectors tab
 Purpose:
 Verify detector rule editing and test actions.
 
 Preconditions:
-- Config Editor open.
+- Configurator open.
 
 Steps:
 1. Edit Pimax, mouth tracker, and Lovense detector rules.
@@ -1029,12 +1029,12 @@ Actual result:
 Notes:
 - [x] Human QA required.
 
-### GUI-009 — Processes tab
+### GUI-009 â€” Processes tab
 Purpose:
 Verify process settings.
 
 Preconditions:
-- Config Editor open.
+- Configurator open.
 
 Steps:
 1. Change all process name fields.
@@ -1051,12 +1051,12 @@ Actual result:
 Notes:
 - [x] Human QA required.
 
-### GUI-010 — OSC Router tab
+### GUI-010 â€” OSC Router tab
 Purpose:
 Verify OSC router config.
 
 Preconditions:
-- Config Editor open.
+- Configurator open.
 
 Steps:
 1. Enable OSC routing.
@@ -1079,12 +1079,12 @@ Notes:
 They detect duplicate ports, but the save button still allows saving even with duplicate ports. 
 2026-05-25 retest: OK. Follow-up: Save behavior was later changed to JSON-only validation by request; full validation remains manual.
 
-### GUI-011 — OSCGoesBrrr tab
+### GUI-011 â€” OSCGoesBrrr tab
 Purpose:
 Verify Intiface/OscGoesBrrr settings.
 
 Preconditions:
-- Config Editor open.
+- Configurator open.
 
 Steps:
 1. Enable workflow.
@@ -1107,12 +1107,12 @@ Notes:
 You can still save with the wrong selected executable. Even after selecting the right executable after all proper ones were deleted, it will stay as not found, at least visually in gui until you will validate it
 2026-05-25 retest: OK.
 
-### GUI-012 — Timing tab
+### GUI-012 â€” Timing tab
 Purpose:
 Verify numeric timing fields.
 
 Preconditions:
-- Config Editor open.
+- Configurator open.
 
 Steps:
 1. Change every timing field to allowed values.
@@ -1130,12 +1130,12 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-### GUI-013 — Raw JSON tab
+### GUI-013 â€” Raw JSON tab
 Purpose:
 Verify valid and invalid Raw JSON workflows.
 
 Preconditions:
-- Config Editor open.
+- Configurator open.
 
 Steps:
 1. Edit valid JSON and click Format JSON.
@@ -1157,12 +1157,12 @@ Actual result:
 Notes:
 - [x] Human QA required.
 
-### GUI-014 — Launch Supervisor from GUI
+### GUI-014 â€” Launch Supervisor from GUI
 Purpose:
 Verify Launch Supervisor button.
 
 Preconditions:
-- Config Editor open.
+- Configurator open.
 
 Steps:
 1. Make unsaved changes.
@@ -1184,11 +1184,11 @@ Range detector is working only for the first time after application launch. Exam
 2026-05-25 retest: OK.
 
 
-2026-05-25 fix status: Launch Supervisor now passes the currently loaded config with `--config`, and Config Editor writes the active selection for direct no-argument supervisor launches from the same folder.
+2026-05-25 fix status: Launch Supervisor now passes the currently loaded config with `--config`, and Configurator writes the active selection for direct no-argument supervisor launches from the same folder.
 
-## 6. Overlay / SteamVR mode tests — `PimaxVrcSupervisorSteamVrHost.exe`
+## 6. Overlay / SteamVR mode tests â€” `PimaxVrcSupervisorSteamVrHost.exe`
 
-### OVERLAY-001 — SteamVR manifest registration
+### OVERLAY-001 â€” SteamVR manifest registration
 Purpose:
 Verify SteamVR startup manifest install.
 
@@ -1213,7 +1213,7 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-### OVERLAY-002 — Host failure without SteamVR
+### OVERLAY-002 â€” Host failure without SteamVR
 Purpose:
 Verify clear failure when SteamVR is unavailable.
 
@@ -1234,7 +1234,7 @@ Actual result:
 Notes:
 - [x] Human QA required.
 
-### OVERLAY-003 — Dashboard visibility and rendering
+### OVERLAY-003 â€” Dashboard visibility and rendering
 Purpose:
 Verify overlay appears and is readable.
 
@@ -1260,7 +1260,7 @@ Notes:
 - [x] Hardware-dependent.
 - [x] Human QA required.
 
-### OVERLAY-004 — `--steamvr-start` flow
+### OVERLAY-004 â€” `--steamvr-start` flow
 Purpose:
 Verify host starts elevated hidden Supervisor.
 
@@ -1284,7 +1284,7 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-### OVERLAY-005 — Overlay controls
+### OVERLAY-005 â€” Overlay controls
 Purpose:
 Verify all dashboard buttons dispatch actions.
 
@@ -1316,7 +1316,7 @@ Notes:
 
 
 
-### OVERLAY-006 — Helper task missing or wrong
+### OVERLAY-006 â€” Helper task missing or wrong
 Purpose:
 Verify helper task failure handling.
 
@@ -1340,7 +1340,7 @@ Notes:
 Report that the bridge is not available, Buttons are pressable as they should. Supervisor is not running as expected. 
 2026-05-25 retest: OK.
 
-### OVERLAY-007 — Stop with SteamVR
+### OVERLAY-007 â€” Stop with SteamVR
 Purpose:
 Verify SteamVR shutdown behavior.
 
@@ -1365,7 +1365,7 @@ Notes:
 
 ## 7. Edge and error tests
 
-### EDGE-001 — Invalid JSON at startup
+### EDGE-001 â€” Invalid JSON at startup
 Purpose:
 Verify malformed config behavior.
 
@@ -1392,7 +1392,7 @@ It is possible to start multiple instances of not working steamVR host manually 
 
 
 
-### EDGE-002 — Missing SteamVR host executable
+### EDGE-002 â€” Missing SteamVR host executable
 Purpose:
 Verify manifest install failure.
 
@@ -1413,7 +1413,7 @@ Actual result:
 Notes:
 - [x] Human QA required.
 
-### EDGE-003 — Bluetooth LE unavailable
+### EDGE-003 â€” Bluetooth LE unavailable
 Purpose:
 Verify base station scan/control failure.
 
@@ -1422,7 +1422,7 @@ Preconditions:
 
 Steps:
 1. Enable base station automation.
-2. Scan from Config Editor.
+2. Scan from Configurator.
 3. Run Supervisor base station routine.
 
 Expected result:
@@ -1435,7 +1435,7 @@ Actual result:
 Notes:
 - [x] Human QA required.
 
-### EDGE-004 — Device probe timeout/failure
+### EDGE-004 â€” Device probe timeout/failure
 Purpose:
 Verify device query failures are handled.
 
@@ -1457,7 +1457,7 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-### EDGE-005 — Scheduled task points to another release
+### EDGE-005 â€” Scheduled task points to another release
 Purpose:
 Verify stale scheduled task warning.
 
@@ -1465,11 +1465,11 @@ Preconditions:
 - Create managed scheduled task pointing to another folder.
 
 Steps:
-1. Open Config Editor from current release folder.
+1. Open Configurator from current release folder.
 2. Run validation or startup integration.
 
 Expected result:
-- [ ] Config Editor warns task points to another release.
+- [ ] Configurator warns task points to another release.
 - [ ] Message includes task name and both paths.
 - [x] Recreating integration updates task path.
 
@@ -1480,15 +1480,15 @@ Notes:
 - [x] Human QA required.
 No warnings. Selection was as it was in the interface with the task pointing to the wrong folder, but unselecting and selecting the option again recreates the task properly. 
 2026-05-25 retest: OK.
-2026-05-25 follow-up: When switching startup modes and saving, Config Editor can appear hung for a long time while startup integration is applied. Local task query timings were fast, so the likely delay is the synchronous startup-integration child process, especially Task Scheduler create/delete or OpenVR manifest registration/disable calls.
-2026-05-25 fix status: Config Editor now starts elevated startup-integration apply asynchronously, drains output while waiting, keeps the UI responsive with status, and keeps the existing 30-second timeout. OpenVR registry calls used by SteamVR manifest enable/disable are also bounded to 10 seconds so unavailable OpenVR IPC fails fast and cleanup can continue.
+2026-05-25 follow-up: When switching startup modes and saving, Configurator can appear hung for a long time while startup integration is applied. Local task query timings were fast, so the likely delay is the synchronous startup-integration child process, especially Task Scheduler create/delete or OpenVR manifest registration/disable calls.
+2026-05-25 fix status: Configurator now starts elevated startup-integration apply asynchronously, drains output while waiting, keeps the UI responsive with status, and keeps the existing 30-second timeout. OpenVR registry calls used by SteamVR manifest enable/disable are also bounded to 10 seconds so unavailable OpenVR IPC fails fast and cleanup can continue.
 2026-05-25 follow-up fix status: The elevated startup-integration helper now logs its config path, selected mode, and each task/manifest step so the temporary console window is not blank while work is running.
 2026-05-25 follow-up fix status: Startup integration now bounds `schtasks.exe` create/delete/query work to 5 seconds and verifies final task state after create/delete timeouts. OpenVR manifest registry timeout reduced from 10 seconds to 5 seconds.
 2026-05-25 follow-up fix status: Startup integration task/OpenVR helper timeouts reduced to 3 seconds. Default config comments were updated to document `RunInitialSetupQuestions` and first-setup empty-value behavior for manual editing.
 
 ## 8. End-to-end workflow tests
 
-### E2E-001 — Console VRChat session
+### E2E-001 â€” Console VRChat session
 Purpose:
 Verify main console workflow.
 
@@ -1518,12 +1518,12 @@ Notes:
 - [ ] Hardware-dependent.
 - [ ] Human QA required.
 
-### E2E-002 — Config Editor to Supervisor workflow
+### E2E-002 â€” Configurator to Supervisor workflow
 Purpose:
 Verify GUI-created config drives Supervisor behavior.
 
 Preconditions:
-- Config Editor available.
+- Configurator available.
 
 Steps:
 1. Create or edit a config through GUI.
@@ -1541,7 +1541,7 @@ Actual result:
 Notes:
 - [ ] Human QA required.
 
-### E2E-003 — SteamVR overlay workflow
+### E2E-003 â€” SteamVR overlay workflow
 Purpose:
 Verify SteamVR-started full workflow.
 

@@ -1,4 +1,4 @@
-# Overlay Functions Reference
+﻿# Overlay Functions Reference
 
 Major behavior-defining functions and classes in `PimaxVrcSupervisorSteamVrHost.exe`.
 
@@ -96,4 +96,4 @@ internal sealed record DashboardButton(string Label, string Command, Rectangle B
 | `MouseButton` | 24 | Mouse button state. |
 | `CursorIndex` | 28 | Cursor index. |
 
-See also: [Reference Overview](index.md) · [Supervisor Functions](supervisor-functions.md) · [Config Editor Functions](config-editor-functions.md)
+See also: [Reference Overview](index.md) Â· [Supervisor Functions](supervisor-functions.md) Â· [Configurator Functions](config-editor-functions.md)

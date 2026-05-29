@@ -1,4 +1,4 @@
-# Timing Tab
+﻿# Timing Tab
 
 The **Timing** tab controls startup waits, reconnect delays, crash recovery, shutdown grace periods, and device probing.
 
@@ -6,30 +6,29 @@ The **Timing** tab controls startup waits, reconnect delays, crash recovery, shu
 
 | Field | Config Key | Default | Range | Description |
 | --- | --- | --- | --- | --- |
-| Pimax log scan depth | `PimaxServiceLogReconnectLookbackLines` | `400` | 1–100000 | Number of recent PiService log lines scanned each polling cycle. |
-| Supervisor check interval | `PollIntervalSeconds` | `2` | 1–3600 | How often the supervisor checks device and watched-process state. |
-| Restart delay after reconnect | `RestartDelayAfterReconnectSeconds` | `10` | 0–3600 | Seconds to wait after Pimax reconnects before restarting managed apps. |
+| Supervisor check interval | `PollIntervalSeconds` | `2` | 1â€“3600 | How often the supervisor checks device and watched-process state. |
+| Restart delay after reconnect | `RestartDelayAfterReconnectSeconds` | `10` | 0â€“3600 | Seconds to wait after Pimax reconnects before restarting managed apps. |
 
 ## Startup Verification
 
 | Field | Config Key | Default | Range | Description |
 | --- | --- | --- | --- | --- |
-| Startup timeout | `StartupTimeoutSeconds` | `30` | 1–3600 | Maximum seconds to wait for launched apps to appear before startup is considered failed. |
-| Required stable time | `StartupStableSeconds` | `5` | 0–3600 | Seconds an app must remain running before startup verification succeeds. |
-| Delay before VRCFaceTracking | `DelayBeforeVrcFaceTrackingSeconds` | `5` | 0–3600 | Seconds to wait after starting Broken Eye before starting VRCFaceTracking. |
+| Startup timeout | `StartupTimeoutSeconds` | `30` | 1â€“3600 | Maximum seconds to wait for launched apps to appear before startup is considered failed. |
+| Required stable time | `StartupStableSeconds` | `5` | 0â€“3600 | Seconds an app must remain running before startup verification succeeds. |
+| Delay before VRCFaceTracking | `DelayBeforeVrcFaceTrackingSeconds` | `3` | 0â€“3600 | Seconds to wait after starting Broken Eye before starting VRCFaceTracking. |
 
 ## Crash and Shutdown Behavior
 
 | Field | Config Key | Default | Range | Description |
 | --- | --- | --- | --- | --- |
-| Crash relaunch grace period | `WatchedProcessCrashRelaunchGraceSeconds` | `300` | 0–86400 | If VRChat exits with a likely crash code, seconds to wait for it to relaunch before cleanup. |
-| Shutdown grace period | `ShutdownGraceSeconds` | `8` | 0–3600 | Seconds to wait for graceful app shutdown before force-closing process trees. |
+| Crash relaunch grace period | `WatchedProcessCrashRelaunchGraceSeconds` | `300` | 0â€“86400 | If VRChat exits with a likely crash code, seconds to wait for it to relaunch before cleanup. |
+| Shutdown grace period | `ShutdownGraceSeconds` | `8` | 0â€“3600 | Seconds to wait for graceful app shutdown before force-closing process trees. |
 
 ## Device Probing
 
 | Field | Config Key | Default | Range | Description |
 | --- | --- | --- | --- | --- |
-| Device probe timeout | `DeviceProbeTimeoutSeconds` | `10` | 1–3600 | Maximum seconds to wait for the Windows device query command (`pnputil.exe`). |
+| Device probe timeout | `DeviceProbeTimeoutSeconds` | `10` | 1â€“3600 | Maximum seconds to wait for the Windows device query command (`pnputil.exe`). |
 
 ## Validation Warnings
 
@@ -44,4 +43,4 @@ The editor warns when timing values are outside recommended ranges:
 | ShutdownGraceSeconds | < 1 | > 120 |
 | DeviceProbeTimeoutSeconds | < 2 | > 120 |
 
-See also: [GUI Manual Overview](index.md) · [Detectors](detectors.md) · [Raw JSON](raw-json.md)
+See also: [GUI Manual Overview](index.md) Â· [Detectors](detectors.md) Â· [Raw JSON](raw-json.md)

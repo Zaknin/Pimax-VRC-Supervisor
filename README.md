@@ -1,4 +1,4 @@
-# Pimax VRC Supervisor
+﻿# Pimax VRC Supervisor
 
 ![Version](https://img.shields.io/badge/version-1.2.3-2563eb)
 ![Platform](https://img.shields.io/badge/platform-Windows-0f766e)
@@ -18,7 +18,7 @@ Pimax + VRChat setups can be fragile when USB devices blink, the runtime reconne
 - restart the right apps after headset or mouth tracker reconnects
 - optionally manage secondary monitors during VR
 - optionally manage SteamVR base-station power through native Bluetooth LE
-- optionally auto-launch when VRChat starts while SteamVR is running
+- optionally auto-launch when SteamVR starts, then wait for VRChat before starting managed apps
 - optionally start from SteamVR through a VR app manifest with a small SteamVR-launched control dashboard
 - optionally start Intiface and OscGoesBrrr for Lovense workflows
 - optionally route local OSC packets to multiple OSC apps
@@ -28,7 +28,7 @@ Pimax + VRChat setups can be fragile when USB devices blink, the runtime reconne
 | App | Purpose |
 | --- | --- |
 | `PimaxVrcSupervisor.exe` | Console supervisor that watches the VR session and manages apps/devices. |
-| `PimaxVrcSupervisorConfigEditor.exe` | GUI editor for `supervisor.config.json`. |
+| `PimaxVrcSupervisorConfigurator.exe` | GUI editor for `supervisor.config.json`. |
 | `supervisor.config.json` | Documented configuration file copied next to the executables. |
 
 All shipped executables are stamped with version `1.2.3`.
@@ -64,13 +64,13 @@ All shipped executables are stamped with version `1.2.3`.
 ### Base Station Power
 
 - Optional native Bluetooth LE control for SteamVR Base Station 1.0 and 2.0.
-- Config Editor can scan for stations, rename them, enable/disable rows, add manual rows, and send Power On, Sleep, Standby, and Identify test commands.
+- Configurator can scan for stations, rename them, enable/disable rows, add manual rows, and send Power On, Sleep, Standby, and Identify test commands.
 - Supervisor powers enabled stations on only after the Pimax headset is connected and SteamVR `vrserver.exe` is running.
 - Base stations are not restarted during Pimax, mouth tracker, or other device reconnect handling.
 - When OpenVR is available, startup checks SteamVR tracking 10 seconds after each wake cycle and retries up to 5 cycles until all enabled base stations are active.
 - If OpenVR is unavailable or cannot be queried, startup sends two normal wake passes; Base Station 1.0 and stations whose firmware does not support power-state reads get a third wake pass 30 seconds later.
 - Base Station 2.0 firmware with readable state is checked before wake so already-awake stations are not power-cycled.
-- Firmware that reports power-state reads as unsupported is cached per station as `PowerStateReadUnsupported` to speed later launches. Use Config Editor **Refresh State** to manually retry detection.
+- Firmware that reports power-state reads as unsupported is cached per station as `PowerStateReadUnsupported` to speed later launches. Use Configurator **Refresh State** to manually retry detection.
 - Session cleanup sends the configured Sleep or Standby command. Console-window close also starts a detached base-station cleanup helper so slow BLE shutdown can finish after the console closes.
 
 ### Monitor Management
@@ -84,7 +84,7 @@ All shipped executables are stamped with version `1.2.3`.
 
 - Optional elevated Scheduled Task named `Pimax VRC Supervisor Auto Launch`.
 - Starts a hidden watcher at Windows sign-in.
-- The watcher launches the supervisor only when `VRChat.exe` and SteamVR `vrserver.exe` are both running.
+- The watcher launches the supervisor when SteamVR `vrserver.exe` is running; the supervisor waits for VRChat before starting managed apps.
 - The task can be repaired directly with:
 
 ```powershell
@@ -109,13 +109,13 @@ All shipped executables are stamped with version `1.2.3`.
 - If the configured receive endpoint is already in use, the supervisor logs a warning, continues startup with routing disabled temporarily, then lets you press `Space` in the console to retry routing.
 - OSCQuery-capable apps can coexist with the router because OSCQuery uses separate discovery and HTTP ports. Do not also route to an app port VRChat already discovered through OSCQuery unless duplicate incoming packets are desired.
 
-### Config Editor
+### Configurator
 
 - Compact Windows GUI for editing `supervisor.config.json` without changing the config schema.
 - Validates expanded executable and folder paths, including paths that use `%APPDATA%` or `%LOCALAPPDATA%`.
 - Rechecks executable paths when **Validate** is pressed, so externally deleted or moved files are reported immediately.
 - Shows clearer `Found` / `Not found` indicators, keeps status messages from going stale across tabs, and keeps `Save` visually primary.
-- Resizes Auto Launch, Base Stations, and OSC Router tables to use available tab space while preserving the bottom status/action bar.
+- Resizes Auto Startup, Base Stations, and OSC Router tables to use available tab space while preserving the bottom status/action bar.
 
 ## Requirements
 
@@ -140,8 +140,8 @@ C:\Tools\PimaxVrcSupervisor
 
 3. Choose one initial setup path:
    - 3a. Run `PimaxVrcSupervisor.exe` and answer the first-run prompts.
-   - 3b. Use `PimaxVrcSupervisorConfigEditor.exe` for the initial config.
-4. Use `PimaxVrcSupervisorConfigEditor.exe` later if you want to edit paths, timers, detectors, or auto-launch apps without touching JSON by hand.
+   - 3b. Use `PimaxVrcSupervisorConfigurator.exe` for the initial config.
+4. Use `PimaxVrcSupervisorConfigurator.exe` later if you want to edit paths, timers, detectors, or auto-launch apps without touching JSON by hand.
 
 The supervisor requests administrator privileges through its manifest because some managed tools and monitor actions may require elevation.
 
@@ -158,20 +158,21 @@ On first launch, the supervisor may ask:
 
 Answers are saved to `supervisor.config.json` next to the exe.
 
-## Config Editor
+## Configurator
 
 Run:
 
 ```powershell
-.\PimaxVrcSupervisorConfigEditor.exe
+.\PimaxVrcSupervisorConfigurator.exe
 ```
 
 The editor includes tabs for:
 
-- **Basics**: main executable paths, Startup choices, and first-run choices
+- **General**: Startup choices, diagnostics, and editor utilities
+- **Face Tracking**: Broken Eye, VRCFaceTracking, mouth-tracker, and fast reconnect settings
 - **Base Stations**: scan, rename, enable, test, identify, and power SteamVR base stations
 - **OSC Router**: receive endpoint and output routes for local OSC routing
-- **Auto Launch**: extra apps to launch with the VR session
+- **Auto Startup**: extra apps to launch with the VR session
 - **OSCGoesBrrr**: Intiface, OscGoesBrrr, manual console launch mode, BLE scanner, and Lovense rules
 - **Processes**: watched process names and cleanup targets
 - **Detectors**: Pimax, mouth tracker, and Lovense detection rules
@@ -182,8 +183,8 @@ The editor includes tabs for:
 
 The **Basics** tab has a **Startup** section:
 
-- **Create/evaluate VRChat auto-launch Scheduled Task** keeps the existing behavior: a hidden elevated watcher starts the supervisor only after `VRChat.exe` and SteamVR `vrserver.exe` are both running.
-- **Start with SteamVR** registers `PimaxVrcSupervisorSteamVrHost.exe` as a SteamVR dashboard overlay app and creates a separate on-demand elevated helper task. SteamVR starts the host, the host starts the elevated supervisor with `--steamvr-start`, and the supervisor starts managed apps immediately after SteamVR startup.
+- **Start in CLI mode when SteamVR is running** uses a hidden elevated watcher that starts the supervisor after SteamVR `vrserver.exe` is running. The supervisor waits for the Pimax headset, powers on base stations if enabled, then waits for VRChat before starting managed apps.
+- **SteamVR Overlay** registers `PimaxVrcSupervisorSteamVrHost.exe` as a SteamVR dashboard overlay app and creates a separate on-demand elevated helper task. SteamVR starts the host, the host starts the elevated supervisor with `--steamvr-start`, and the supervisor waits for VRChat before starting managed apps.
 SteamVR manifest startup exits with SteamVR. When `vrserver.exe` exits, the supervisor powers down base stations if needed, restores monitors, closes managed apps, and exits.
 
 The SteamVR host dashboard includes buttons for restarting Broken Eye/VRCFaceTracking, turning base stations on or off, and restarting the OSC router.
@@ -195,6 +196,7 @@ The release includes a commented `supervisor.config.json`. Important settings:
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `BrokenEyePath` | empty | Prompts for Broken Eye on first run. |
+| `UseBrokenEye` | `true` | Includes Broken Eye in face-tracking startup, cleanup, and restart routines, including manual dashboard restarts. |
 | `VrcFaceTrackingPath` | empty | Prompts for VRCFaceTracking on first run. |
 | `BrokenEyeStartMinimized` | `false` | Requests/minimizes Broken Eye after launch. |
 | `VrcFaceTrackingStartMinimized` | `false` | Requests/minimizes VRCFaceTracking after launch. |
@@ -207,6 +209,9 @@ The release includes a commented `supervisor.config.json`. Important settings:
 | `BaseStationsEnabled` | `false` | Enables native SteamVR base-station power automation. |
 | `BaseStationPowerDownMode` | `Sleep` | Cleanup command: `Sleep` or `Standby` for Base Station 2.0. Base Station 1.0 falls back to sleep. |
 | `BaseStations` | `[]` | Configured base stations. Use the editor to scan and manage these rows. |
+| `FaceTrackerAutomationEnabled` | `true` | Automatically starts configured face-tracking applications during headset sessions. |
+| `FaceTrackerRestartOnReconnectEnabled` | `true` | Restarts configured face-tracking apps after a Pimax headset reconnect. |
+| `MouthTrackerRestartOnReconnectEnabled` | `true` | Restarts VRCFaceTracking after a mouth tracker reconnect while the headset stays connected. |
 | `OscGoesBrrrEnabled` | `false` | Enables Intiface/OscGoesBrrr workflow support. |
 | `OscGoesBrrrHotkeyEnabled` | `true` | Legacy name for manual console launch mode. Press `2` in a visible console to launch the workflow. |
 | `OscGoesBrrrBleScannerEnabled` | `false` | Enables Lovense BLE advertisement scanning. |
@@ -219,8 +224,11 @@ The release includes a commented `supervisor.config.json`. Important settings:
 | `RestartDelayAfterReconnectSeconds` | `10` | Stability wait before restarting apps after Pimax reconnect. |
 | `DiagnosticsLogSupervisor` | `false` | Writes passive supervisor performance diagnostics when enabled. |
 | `DiagnosticsLogSteamVrOverlay` | `false` | Writes passive SteamVR dashboard host diagnostics when enabled. |
+| `DiagnosticsDebugSupervisor` | `false` | Writes supervisor debug-event logs. |
+| `DiagnosticsDebugSteamVrOverlay` | `false` | Writes SteamVR overlay debug-event logs. |
+| `DiagnosticsDebugSteamVrPointer` | `false` | Draws the visible SteamVR overlay pointer marker for hover hit-test troubleshooting when overlay debug logging is enabled. |
 | `DiagnosticsVerbose` | `false` | Adds per-operation timing lines for short test captures. |
-| `DiagnosticsSummaryIntervalSeconds` | `10` | Seconds between diagnostic summaries. |
+| `DiagnosticsSummaryIntervalSeconds` | `20` | Seconds between diagnostic summaries. |
 | `DiagnosticsLogDirectory` | `%TEMP%\PimaxVrcSupervisorDiagnostics` | Folder for diagnostic text logs. |
 
 Example extra app:
@@ -258,7 +266,7 @@ Example Base Station 2.0 row:
 ]
 ```
 
-`PowerStateReadUnsupported` is set automatically when a station or firmware does not support reading power state. The supervisor skips future state reads for that station; Config Editor **Refresh State** can retry detection manually.
+`PowerStateReadUnsupported` is set automatically when a station or firmware does not support reading power state. The supervisor skips future state reads for that station; Configurator **Refresh State** can retry detection manually.
 
 Example OscGoesBrrr workflow:
 
@@ -268,7 +276,7 @@ Example OscGoesBrrr workflow:
 "OscGoesBrrrBleScannerEnabled": false,
 "IntifacePath": "%APPDATA%\\IntifaceCentral\\intiface_central.exe",
 "OscGoesBrrrPath": "%LOCALAPPDATA%\\Programs\\OscGoesBrrr\\OscGoesBrrr.exe",
-"DelayBeforeOscGoesBrrrSeconds": 5,
+"DelayBeforeOscGoesBrrrSeconds": 3,
 "LovenseDetectors": [
   [ "Lovense" ],
   [ "LVS-" ]
@@ -320,7 +328,7 @@ The output folder will contain both executables, the config file, and this READM
 | Symptom | Try |
 | --- | --- |
 | The supervisor exits immediately | Check whether another normal supervisor instance is already running. |
-| Broken Eye or VRCFaceTracking does not launch | Open the config editor and verify the executable path and process name. |
+| Broken Eye or VRCFaceTracking does not launch | Open the configurator and verify the executable path and process name. |
 | Reconnects are not detected | Confirm `PimaxDetectors`, `UsePimaxServiceLogReconnectDetector`, and the PiService log directory. |
 | Mouth tracker reconnects do nothing | Set `MouthTrackerUser` to `true` and verify `MouthTrackerDetectors`. |
 | Monitors are not restored | Let SteamVR fully exit; the supervisor waits for `vrserver.exe` before restoring when monitor handling is enabled. |
