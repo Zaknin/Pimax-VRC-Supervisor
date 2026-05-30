@@ -176,7 +176,7 @@ The editor includes tabs for:
 - **OSCGoesBrrr**: Intiface, OscGoesBrrr, manual console launch mode, BLE scanner, and Lovense rules
 - **Processes**: watched process names and cleanup targets
 - **Detectors**: Pimax, mouth tracker, and Lovense detection rules
-- **Timing**: poll intervals, startup delays, reconnect waits, and shutdown grace periods
+- **Timers**: poll intervals, startup delays, reconnect waits, and shutdown grace periods
 - **Raw JSON**: direct config editing when you need it
 
 ## SteamVR Startup

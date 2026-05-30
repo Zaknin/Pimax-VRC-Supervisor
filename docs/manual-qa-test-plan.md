@@ -32,7 +32,7 @@ Codex pre-check summary:
 - Monitor handling: `MonitorLayoutController`, `DisplayLayoutSnapshot`.
 - Scheduled tasks and startup integration: `ScheduledTaskInstaller`, `StartupIntegration`, `SteamVrStartupInstaller`, `ScheduledTaskPathValidator`.
 - Configurator GUI: `PimaxVrcSupervisor.ConfigEditor/Program.cs`, `ConfigEditorForm`.
-- GUI tabs: General, Auto Launch, Base Stations, Detectors, Processes, OSC Router, OSCGoesBrrr, Timing, Raw JSON.
+- GUI tabs: General, Auto Launch, Base Stations, Detectors, Processes, OSC Router, OSCGoesBrrr, Timers, Raw JSON.
 - GUI validation: `ValidateCurrentConfig`, `ValidatePath`, `ValidateAutoLaunchApps`, `ValidateOscRoutes`, `ValidateBaseStations`, `ValidateTimingValues`, `ValidateRawJsonText`.
 - SteamVR overlay host: `PimaxVrcSupervisor.SteamVrHost/Program.cs`, `SteamVrDashboardHost`, `OpenVrOverlaySession`, `GpuOverlayRenderer`.
 - Overlay commands: `restart-core-apps`, `restart-osc-router`, `start-osc-goes-brrr`, `base-stations-on`, `base-stations-off`, `restart-supervisor`.
@@ -830,7 +830,7 @@ Steps:
 Expected result:
 - [ ] Window title includes version `1.2.3`.
 - [ ] Config selector/path are populated.
-- [ ] Tabs are visible: General, Auto Launch, Base Stations, Detectors, Processes, OSC Router, OSCGoesBrrr, Timing, Raw JSON.
+- [ ] Tabs are visible: General, Auto Launch, Base Stations, Detectors, Processes, OSC Router, OSCGoesBrrr, Timers, Raw JSON.
 - [ ] Status is Ready or a clear loaded message.
 
 Actual result:
@@ -1107,7 +1107,7 @@ Notes:
 You can still save with the wrong selected executable. Even after selecting the right executable after all proper ones were deleted, it will stay as not found, at least visually in gui until you will validate it
 2026-05-25 retest: OK.
 
-### GUI-012 â€” Timing tab
+### GUI-012 â€” Timers tab
 Purpose:
 Verify numeric timing fields.
 

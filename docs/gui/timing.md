@@ -1,6 +1,6 @@
-﻿# Timing Tab
+﻿# Timers Tab
 
-The **Timing** tab controls startup waits, reconnect delays, crash recovery, shutdown grace periods, and device probing.
+The **Timers** tab controls startup waits, reconnect delays, crash recovery, shutdown grace periods, and device probing.
 
 ## Reconnect Detection
 

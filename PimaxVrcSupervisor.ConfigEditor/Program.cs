@@ -463,7 +463,7 @@ internal sealed class ConfigEditorForm : Form
         _tabs.AddTab("Processes", BuildProcessesTab());
         _tabs.AddTab("OSC Router", BuildOscRouterTab());
         _tabs.AddTab("OSCGoesBrrr", BuildLovenseTab());
-        _tabs.AddTab("Timing", BuildTimingTab());
+        _tabs.AddTab("Timers", BuildTimingTab());
         _tabs.AddTab("Raw JSON", BuildRawJsonTab());
         _tabs.SelectTab(Math.Clamp(selectedTab, 0, _tabs.TabCount - 1));
         _tabs.SelectedIndexChanged += (_, _) =>

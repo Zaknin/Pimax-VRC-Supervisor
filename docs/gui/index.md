@@ -47,7 +47,7 @@ Watched process names and cleanup targets.
 
 Pimax, mouth tracker, and Lovense detection rules.
 
-### Timing
+### Timers
 
 Poll intervals, startup delays, reconnect waits, and shutdown grace periods.
 
