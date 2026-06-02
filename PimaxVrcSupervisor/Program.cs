@@ -1189,6 +1189,15 @@ internal enum WatchedProcessState
     CrashGraceExpired
 }
 
+internal enum SupervisorLifecyclePhase
+{
+    WaitingForVrChat,
+    VrChatRunning,
+    WaitingForVrChatRestartOrSteamVrExit,
+    StartupRoutineRunning,
+    ShutdownRoutineRunning
+}
+
 internal struct ConsoleHotkeys
 {
     public bool LaunchBrokenEyeVrcFaceTracking { get; set; }
@@ -1258,6 +1267,7 @@ internal sealed class AppSupervisor
     private DateTimeOffset? _lastMouthTrackerPnPEventSeenAt;
     private bool _mouthTrackerPnPEventWarningShown;
     private volatile bool _forcedManualReloadRequested;
+    private SupervisorLifecyclePhase _lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChat;
 
     public AppSupervisor(SupervisorConfig config, bool steamVrStart, SupervisorDiagnosticsSession diagnostics)
     {
@@ -1364,6 +1374,7 @@ internal sealed class AppSupervisor
             await TryStartOscRouterAsync(cancellationToken);
             await StartManagedAppsAsync(cancellationToken);
             await InitializeOscGoesBrrrWorkflowAsync(cancellationToken);
+            _lifecyclePhase = SupervisorLifecyclePhase.VrChatRunning;
             ShowOscRouterRetryPromptIfNeeded();
             if (restartedFromForcedManualReload)
             {
@@ -1384,6 +1395,28 @@ internal sealed class AppSupervisor
                 {
                     RefreshOscGoesBrrrWorkflowState();
                     await HandleConsoleHotkeysAsync(cancellationToken);
+                    if (_lifecyclePhase == SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit)
+                    {
+                        if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+                        {
+                            _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
+                            Console.WriteLine("SteamVR exited; running shutdown routine.");
+                            await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
+                            return;
+                        }
+
+                        if (ObserveWatchedShutdownProcesses() == WatchedProcessState.Running)
+                        {
+                            Console.WriteLine("VRChat restarted; running startup routine.");
+                            await StartSessionAfterWatchedProcessRestartAsync(cancellationToken);
+                            Console.WriteLine(ShouldExitWithSteamVr()
+                                ? "Waiting for Pimax reconnects, VRChat shutdown, or SteamVR shutdown. Press Ctrl+C to stop."
+                                : "Waiting for Pimax reconnects or VRChat shutdown. Press Ctrl+C to stop.");
+                        }
+
+                        continue;
+                    }
+
                     if (_lastPimaxConnected == true)
                     {
                         await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
@@ -1391,7 +1424,11 @@ internal sealed class AppSupervisor
 
                     if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
                     {
-                        Console.WriteLine("SteamVR has shut down. Restoring monitors, closing managed apps, and exiting.");
+                        var previousLifecyclePhase = _lifecyclePhase;
+                        _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
+                        Console.WriteLine(previousLifecyclePhase == SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit
+                            ? "SteamVR exited; running shutdown routine."
+                            : "SteamVR has shut down. Restoring monitors, closing managed apps, and exiting.");
                         await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
                         return;
                     }
@@ -1399,18 +1436,32 @@ internal sealed class AppSupervisor
                     var watchedProcessState = ObserveWatchedShutdownProcesses();
                     if (watchedProcessState == WatchedProcessState.NormalExit)
                     {
-                        Console.WriteLine(ShouldExitWithSteamVr()
-                            ? "VRChat has shut down. Closing managed apps, then waiting for SteamVR shutdown before powering down base stations."
-                            : "VRChat has shut down. Closing managed apps and exiting.");
-                        await StopManagedAppsAfterWatchedProcessExitAsync(waitForSteamVrServerExitBeforeBaseStationPowerDown: ShouldExitWithSteamVr(), cancellationToken);
+                        if (ShouldExitWithSteamVr() && IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+                        {
+                            Console.WriteLine("VRChat closed; SteamVR still running. Waiting for VRChat restart or SteamVR exit.");
+                            await StopManagedAppsWhileWaitingForWatchedProcessRestartAsync(cancellationToken);
+                            _lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit;
+                            continue;
+                        }
+
+                        _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
+                        Console.WriteLine("VRChat has shut down. Closing managed apps and exiting.");
+                        await StopManagedAppsAfterWatchedProcessExitAsync(waitForSteamVrServerExitBeforeBaseStationPowerDown: false, cancellationToken);
                         return;
                     }
                     if (watchedProcessState == WatchedProcessState.CrashGraceExpired)
                     {
-                        Console.WriteLine(ShouldExitWithSteamVr()
-                            ? "VRChat did not relaunch after a likely crash. Closing managed apps, then waiting for SteamVR shutdown before powering down base stations."
-                            : "VRChat did not relaunch after a likely crash. Closing managed apps and exiting.");
-                        await StopManagedAppsAfterWatchedProcessExitAsync(waitForSteamVrServerExitBeforeBaseStationPowerDown: ShouldExitWithSteamVr(), cancellationToken);
+                        if (ShouldExitWithSteamVr() && IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+                        {
+                            Console.WriteLine("VRChat did not relaunch after a likely crash. SteamVR still running. Waiting for VRChat restart or SteamVR exit.");
+                            await StopManagedAppsWhileWaitingForWatchedProcessRestartAsync(cancellationToken);
+                            _lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit;
+                            continue;
+                        }
+
+                        _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
+                        Console.WriteLine("VRChat did not relaunch after a likely crash. Closing managed apps and exiting.");
+                        await StopManagedAppsAfterWatchedProcessExitAsync(waitForSteamVrServerExitBeforeBaseStationPowerDown: false, cancellationToken);
                         return;
                     }
 
@@ -2496,6 +2547,7 @@ internal sealed class AppSupervisor
     {
         var sawExitCode = false;
         var sawAbnormalExit = false;
+        var sawUnavailableExitCode = false;
 
         foreach (var process in _watchedProcessHandles.Values)
         {
@@ -2513,10 +2565,27 @@ internal sealed class AppSupervisor
                     sawAbnormalExit = true;
                 }
             }
-            catch (Exception ex)
+            catch (InvalidOperationException)
             {
-                Console.WriteLine($"Could not read watched process exit code: {ex.Message}");
+                sawUnavailableExitCode = true;
             }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                sawUnavailableExitCode = true;
+            }
+            catch (NotSupportedException)
+            {
+                sawUnavailableExitCode = true;
+            }
+            catch
+            {
+                sawUnavailableExitCode = true;
+            }
+        }
+
+        if (sawUnavailableExitCode)
+        {
+            Console.WriteLine("Watched process exited; exit code unavailable for externally attached process.");
         }
 
         return sawExitCode && sawAbnormalExit;
@@ -2544,6 +2613,32 @@ internal sealed class AppSupervisor
         PrepareMonitorLayoutForVrSession();
         await StartCoreAppsAsync(cancellationToken);
         await StartAutoLaunchAppsAsync(cancellationToken);
+    }
+
+    private async Task StartSessionAfterWatchedProcessRestartAsync(CancellationToken cancellationToken)
+    {
+        _lifecyclePhase = SupervisorLifecyclePhase.StartupRoutineRunning;
+        try
+        {
+            if (_mouthTrackerUser)
+            {
+                _lastMouthTrackerConnected = await IsMouthTrackerConnectedAsync(cancellationToken);
+                Console.WriteLine(_lastMouthTrackerConnected.Value
+                    ? "Mouth tracker detected."
+                    : "you forgot to connect mouth tracker!");
+            }
+
+            await TryStartOscRouterAsync(cancellationToken);
+            await StartManagedAppsAsync(cancellationToken);
+            await InitializeOscGoesBrrrWorkflowAsync(cancellationToken);
+            ShowOscRouterRetryPromptIfNeeded();
+            _lifecyclePhase = SupervisorLifecyclePhase.VrChatRunning;
+        }
+        catch
+        {
+            _lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit;
+            throw;
+        }
     }
 
     private async Task StartCoreAppsAsync(CancellationToken cancellationToken)
@@ -2808,7 +2903,16 @@ internal sealed class AppSupervisor
             : "disabled";
         var oscRouter = _oscRouter is null ? "stopped" : "running";
         var oscGoesBrrr = GetOscGoesBrrrStatus();
-        return $"Mode={mode}; SteamVR={steamVrRunning}; CoreApps={coreApps}; BaseStations={baseStations}; OscRouter={oscRouter}; OscGoesBrrr={oscGoesBrrr}";
+        var lifecycle = _lifecyclePhase switch
+        {
+            SupervisorLifecyclePhase.WaitingForVrChat => "waiting-vrchat",
+            SupervisorLifecyclePhase.VrChatRunning => "vrchat-running",
+            SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit => "waiting-vrchat-or-steamvr",
+            SupervisorLifecyclePhase.StartupRoutineRunning => "startup-running",
+            SupervisorLifecyclePhase.ShutdownRoutineRunning => "shutdown-running",
+            _ => "unknown"
+        };
+        return $"Mode={mode}; SteamVR={steamVrRunning}; Lifecycle={lifecycle}; CoreApps={coreApps}; BaseStations={baseStations}; OscRouter={oscRouter}; OscGoesBrrr={oscGoesBrrr}";
     }
 
     private bool IsFaceTrackingAppSetRunning()
@@ -3547,6 +3651,23 @@ internal sealed class AppSupervisor
 
     private async Task RestoreMonitorsAndStopManagedAppsAsync(bool waitForSteamVrServerExit, CancellationToken cancellationToken)
         => await RunCleanupOnceAsync(waitForSteamVrServerExit, emergencyClose: false, cancellationToken);
+
+    private async Task StopManagedAppsWhileWaitingForWatchedProcessRestartAsync(CancellationToken cancellationToken)
+    {
+        if (!await _cleanupLock.WaitAsync(0, cancellationToken))
+        {
+            return;
+        }
+
+        try
+        {
+            await StopManagedAppsAsync(ManagedAppStopReason.SessionEnding, cancellationToken);
+        }
+        finally
+        {
+            _cleanupLock.Release();
+        }
+    }
 
     private async Task StopManagedAppsAfterWatchedProcessExitAsync(bool waitForSteamVrServerExitBeforeBaseStationPowerDown, CancellationToken cancellationToken)
     {
