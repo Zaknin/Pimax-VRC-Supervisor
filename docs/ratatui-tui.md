@@ -87,6 +87,12 @@ Do not commit generated `target/` or `release/` output. Keep `PimaxVrcSupervisor
 - No filesystem diagnostic log browsing.
 - No Configurator setting for desktop console mode yet.
 
+## Action Safety Design
+
+Action execution is planned but not implemented. The current TUI remains read-only and does not execute legacy bridge action commands.
+
+The safety and confirmation model for future action execution is documented separately in [TUI Action Execution Safety Design](ratatui-action-execution-design.md).
+
 ## Future Direction
 
 Future Configurator naming should use:

@@ -74,6 +74,7 @@ nav:
       - Auto Launch: workflows/auto-launch.md
       - VR Overlay Workflow: workflows/vr-overlay-workflow.md
       - Desktop TUI: ratatui-tui.md
+      - TUI Action Safety Design: ratatui-action-execution-design.md
   - Reference:
       - Overview: reference/index.md
       - Configuration Fields: reference/configuration-fields.md

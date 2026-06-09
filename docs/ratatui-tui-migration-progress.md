@@ -164,6 +164,10 @@ Phase 7 - Packaging, integration, and optional future IPC transport review
 
 Status: Completed
 
+Phase 8 - Safe desktop TUI action execution design
+
+Status: Completed
+
 ## Known Risks
 
 - `PimaxVrcSupervisor/Program.cs` is a large monolithic file, so small UI/event refactors can accidentally touch unrelated lifecycle or cleanup logic.
@@ -840,12 +844,86 @@ Known risks:
 - Documentation now describes the TUI as a `cli-ui2` / `1.3.0-test` feature while the main README still describes the current public release as v1.2.3.
 - Future action execution must still be designed before implementation, including confirmations and dangerous/disruptive command gating.
 
+### Phase 8 - Safe desktop TUI action execution design
+
+Status: Completed
+
+Summary:
+
+- Created a design-only safety plan for future desktop TUI action execution.
+- No action execution, `action-json`, confirmation handling, backend behavior, Rust TUI behavior, SteamVR host behavior, old console behavior, protocol, config, cleanup, lifecycle, monitor, base-station, OSC, scheduled-task, manifest, launcher, release-note, or packaging behavior changed.
+
+Files changed:
+
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+- `mkdocs.yml`
+
+Design document:
+
+- Added `docs/ratatui-action-execution-design.md`.
+- Documented the current read-only TUI state and existing legacy action-command bridge.
+- Documented that the SteamVR host remains on the legacy protocol and is not forced to change.
+- Documented that `commands-json` `available=true` means accepted by the current backend bridge, not safe or executable from the desktop TUI.
+- Proposed separate future action metadata fields: `actionSupported`, `actionSafetyCategory`, `tuiExecutable`, `requiresConfirmation`, and `blockedReason`.
+- Defined action safety categories: `ReadOnly`, `LowRisk`, `Disruptive`, `Dangerous`, and `Blocked`.
+- Classified `force-stop-supervisor` as `Blocked` for desktop TUI execution even though it exists as a legacy bridge command.
+
+Initial classification:
+
+- `ReadOnly`: `status`, `status-json`, `commands-json`, `log`, `log-json`, `query-json`.
+- `LowRisk`: `restart-osc-router`.
+- `Disruptive`: `start-osc-goes-brrr`, `restart-core-apps`, `base-stations-on`, `base-stations-off`.
+- `Blocked`: `force-stop-supervisor`.
+
+Recommended future implementation order:
+
+- First candidate: backend-only structured `action-json` support for `restart-osc-router`.
+- Possible second candidate: `start-osc-goes-brrr`.
+- Deferred: `restart-core-apps`, `base-stations-on`, `base-stations-off`.
+- Blocked by default: `force-stop-supervisor`.
+
+Documentation updates:
+
+- Added a short `Action Safety Design` section to `docs/ratatui-tui.md`.
+- Added `docs/ratatui-action-execution-design.md` to the existing MkDocs navigation near `Desktop TUI` as `TUI Action Safety Design`.
+- `RELEASE_NOTES.md` was left unchanged because there is no suitable development/unreleased section.
+
+Build/test commands run:
+
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- Rust debug build succeeded.
+- Rust release build succeeded.
+- All three explicit C# Release builds succeeded with 0 warnings and 0 errors.
+- No runtime test was required for this design-only phase.
+- The supervisor was not started.
+
+Generated output status:
+
+- `git status --short release` reported no staged or unstaged tracked release changes.
+- `git status --ignored --short release` reported `!! release/`, confirming generated release output is ignored.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported ignored Rust build output under `PimaxVrcSupervisor.Tui/target/`.
+
+Known risks:
+
+- Future implementation must keep backend validation authoritative; TUI confirmation cannot be the only safety layer.
+- Legacy bridge availability and future desktop TUI executability must remain separate concepts.
+- `force-stop-supervisor` remains especially sensitive because it bypasses cleanup routines.
+
 ## Next Prompt Handling
 
 Full phase prompts are prepared manually outside this file and pasted into Codex when needed.
 
-Short Phase 8 direction:
+Short Phase 9 direction:
 
-- Pause before adding action execution.
-- Plan safe desktop TUI action execution design.
-- Cover confirmation model, dangerous/disruptive command gating, backend response standardization, and review before implementation.
+- Implement backend-only structured `action-json` support for a tiny allowlist, preferably only `restart-osc-router`.
+- Add confirmation-required metadata and structured failure responses.
+- Do not add TUI action buttons yet.
