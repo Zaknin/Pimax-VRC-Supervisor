@@ -19,7 +19,7 @@ Prepare the existing C# Pimax VRC Supervisor application for a future separate R
 
 - The C# supervisor remains the backend and owns the safety-critical workflow.
 - A separate Rust Ratatui frontend can become a dashboard/controller after the backend is prepared.
-- The frontend should communicate with the backend through a local IPC bridge, preferably Windows named pipes.
+- Near-term desktop TUI work should extend the existing local loopback TCP command bridge additively with structured read-only JSON surfaces. A future Windows named-pipe transport may be considered later after the backend protocol is stable.
 - The backend remains responsible for Windows, VR, SteamVR, VRChat, cleanup, monitor, OSC, and base-station logic.
 - The old console interface remains available as the fallback UI throughout migration.
 
@@ -36,6 +36,9 @@ Prepare the existing C# Pimax VRC Supervisor application for a future separate R
 - Do not add Rust/Ratatui until backend is prepared.
 - Work in small buildable phases.
 - Update this file at the end of every phase.
+- Ratatui is a separate desktop terminal/operator TUI, not a replacement for the SteamVR overlay.
+- Do not change SteamVR overlay rendering, VR console/status/log rendering, OpenVR/D3D texture rendering, or dashboard button layout unless a phase explicitly requires it.
+- Preserve the existing loopback TCP command bridge and extend it only additively until a later IPC transport phase is approved.
 
 ## Current Repository Architecture
 
@@ -123,34 +126,43 @@ Configured startup modes are:
 
 Ratatui should be a separate Rust frontend instead of being embedded directly into the C# app. The existing C# supervisor is already the Windows-specific, safety-critical backend and should continue to own VR, SteamVR, VRChat, cleanup, monitor layout, OSC routing, managed-app lifecycle, base-station power, scheduled-task, and SteamVR manifest behavior.
 
-Embedding Ratatui directly into the C# supervisor would mix frontend rendering concerns with cleanup-sensitive Windows automation and would not fit Ratatui's Rust-native model. The safer migration path is to first make the C# backend emit structured events, expose structured status, and accept structured commands while preserving the existing console. A future Rust Ratatui app can then connect over local IPC, preferably Windows named pipes, and act as a dashboard/controller without taking over backend ownership.
+Embedding Ratatui directly into the C# supervisor would mix frontend rendering concerns with cleanup-sensitive Windows automation and would not fit Ratatui's Rust-native model. The safer migration path is to first make the C# backend expose structured read-only status, command metadata, and recent-log surfaces while preserving the existing console and SteamVR dashboard behavior.
 
-The current SteamVR host already uses a local loopback TCP command bridge for dashboard commands. That bridge is useful current context, but the future Ratatui IPC should be designed intentionally rather than coupled to the dashboard helper's existing implementation.
+The current SteamVR host already uses a local loopback TCP command bridge for dashboard commands. In the near term, this bridge should be extended additively with structured JSON commands such as status-json, commands-json, and log-json. Existing one-line text commands must remain compatible. A future Windows named-pipe transport can be considered later after the protocol is stable and the desktop Ratatui client requirements are clearer.
 
 ## Recommended Migration Roadmap
 
-### Phase 0 - Repository inspection and architecture documentation
+Recommended Migration Roadmap
+Phase 0 - Repository inspection and architecture documentation
+
 Status: Completed
 
-### Phase 1 - Structured status snapshot and v1.3.0-test publish baseline
+Phase 1 - Structured status snapshot and v1.3.0-test publish baseline
+
 Status: Completed
 
-### Phase 2 - Command metadata/capabilities and structured DTO baseline
+Phase 2 - Command metadata/capabilities and structured DTO baseline
+
 Status: Completed
 
-### Phase 3 - Structured recent log/event DTOs
+Phase 3 - Structured recent log DTOs and read-only log-json surface
+
 Status: Not started
 
-### Phase 4 - Local IPC server
+Phase 4 - Read-only JSON request envelope for safe read-only commands
+
 Status: Not started
 
-### Phase 5 - Minimal Rust Ratatui frontend
+Phase 5 - Minimal Rust Ratatui desktop frontend
+
 Status: Not started
 
-### Phase 6 - Full dashboard screens
+Phase 6 - Full desktop Ratatui dashboard screens
+
 Status: Not started
 
-### Phase 7 - Packaging and integration
+Phase 7 - Packaging, integration, and optional future IPC transport review
+
 Status: Not started
 
 ## Known Risks
@@ -358,62 +370,6 @@ Known issues:
 - The current bridge remains a one-line string protocol over loopback TCP.
 - Release output is generated locally and ignored; it must not be committed unless release policy changes.
 
-## Next Codex Prompt
+## Next Prompt Handling
 
-You are working on the `cli-ui2` branch of `Zaknin/Pimax-VRC-Supervisor`.
-
-Phase 3 - Structured recent log/event DTOs.
-
-Rules:
-
-- Work only on `cli-ui2`.
-- Do not switch branches.
-- Do not modify tags.
-- Do not rewrite history.
-- Preserve current behavior.
-- Preserve all existing CLI modes.
-- Preserve Ctrl+C and console-close emergency cleanup.
-- Do not remove the old console interface.
-- Do not add Rust or Ratatui yet.
-- Do not add named-pipe IPC yet.
-- Do not replace the existing one-line dashboard command protocol.
-- Preserve the existing SteamVR dashboard compatibility.
-- Do not update `PimaxVrcSupervisor.SteamVrHost` to consume new JSON commands.
-- Do not modify the SteamVR overlay renderer, texture rendering, dashboard button layout, OpenVR/D3D rendering paths, or console/log rendering inside VR.
-- Do not refactor cleanup, process lifecycle, monitor handling, base-station handling, OSC routing, scheduled tasks, SteamVR manifest behavior, or config semantics.
-- Keep changes small and buildable.
-- Update `docs/ratatui-tui-migration-progress.md` at the end of the phase.
-
-Tasks:
-
-1. Read `docs/ratatui-tui-migration-progress.md`.
-2. Inspect `SupervisorConsoleLog`, `ExecuteSupervisorCommandAsync(...)`, `SupervisorCommandServer`, the current `log` command, diagnostics/debug logging surfaces, and the SteamVR host `log` parser.
-3. Add a compact structured recent log/event DTO, for example `SupervisorRecentLogEntry` and `SupervisorRecentLogSnapshot`.
-4. Add a read-only `log-json` or `events-json` command that wraps existing recent console lines without replacing `SupervisorConsoleLog` or the existing `log` command.
-5. Keep `log` fully compatible with the SteamVR dashboard: it must continue returning a JSON string array.
-6. The new structured log/event command should return compact one-line camelCase JSON for the line-oriented bridge.
-7. Include timestamp fields only when safely available from existing data. If the existing recent console line already contains a timestamp prefix, parse it conservatively or expose the raw line plus best-effort parsed timestamp.
-8. Do not create a parallel logging system and do not replace diagnostic/debug logging.
-9. Preserve all existing command names, response strings, timing diagnostics, and behavior.
-10. Do not implement generic JSON action execution in this phase.
-11. Run explicit Release builds for all three projects. Do not use plain root `dotnet build`.
-12. Publish to the existing `release\PimaxVrcSupervisor-v1.3.0-test` folder and verify release output remains ignored.
-13. If launching the supervisor is unsafe or environment-dependent, verify by code inspection and successful build/publish, and document that limitation.
-14. Update this progress file with files changed, new model names, new command name, build/publish results, compatibility notes, runtime-test limitations, known risks, and the next recommended phase.
-
-
-Important UI boundary for `cli-ui2`:
-
-For now, the VR/SteamVR overlay part must stay as-is.
-
-Do not replace the SteamVR overlay dashboard with Ratatui.
-
-Do not change the VR overlay renderer, texture rendering, dashboard button layout, OpenVR/D3D rendering path, or console/log rendering inside VR.
-
-The existing `PimaxVrcSupervisorSteamVrHost.exe` should continue using the current text `status` command, current `log` command, and existing dashboard action commands.
-
-Ratatui is planned as a separate desktop terminal/operator TUI, not as a replacement for the VR overlay.
-
-The supervisor backend command/status bridge may be extended additively with new JSON commands such as `status-json`, `commands-json`, or future structured command results, but existing SteamVR host behavior must remain compatible.
-
-In Phase 2 and nearby phases, avoid changes to `PimaxVrcSupervisor.SteamVrHost` unless required for version/build metadata or a clearly documented compatibility fix.
+Full phase prompts are prepared manually outside this file and pasted into Codex when needed.
