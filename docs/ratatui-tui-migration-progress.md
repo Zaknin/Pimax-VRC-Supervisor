@@ -154,7 +154,7 @@ Status: Completed
 
 Phase 5 - Minimal Rust Ratatui desktop frontend
 
-Status: Completed with local Rust build blocked by missing toolchain
+Status: Completed and Rust build verified
 
 Phase 6 - Improve read-only desktop Ratatui TUI UX
 
@@ -540,7 +540,7 @@ Known issues:
 
 ### Phase 5 - Minimal read-only Rust Ratatui desktop frontend
 
-Status: Completed with local Rust build blocked by missing toolchain
+Status: Completed and Rust build verified
 
 Summary:
 
