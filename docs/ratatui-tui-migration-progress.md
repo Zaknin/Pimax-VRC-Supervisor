@@ -172,6 +172,10 @@ Phase 9 - Backend-only structured action-json allowlist
 
 Status: Completed
 
+Phase 10 - Display action metadata in read-only Ratatui TUI
+
+Status: Completed
+
 ## Known Risks
 
 - `PimaxVrcSupervisor/Program.cs` is a large monolithic file, so small UI/event refactors can accidentally touch unrelated lifecycle or cleanup logic.
@@ -1012,11 +1016,80 @@ Known risks:
 - Only `restart-osc-router` is allowlisted; expanding the allowlist needs separate review.
 - `force-stop-supervisor` remains blocked from structured desktop TUI action flow despite legacy bridge availability.
 
+### Phase 10 - Display action metadata in read-only Ratatui TUI
+
+Status: Completed
+
+Summary:
+
+- Updated the Rust desktop TUI command capability display to include Phase 9 action metadata.
+- Kept the TUI strictly read-only.
+- No backend behavior, SteamVR host behavior, old console behavior, packaging behavior, config, cleanup, lifecycle, monitor, base-station, OSC, scheduled-task, manifest, or release-note behavior changed.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/models.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+TUI metadata display:
+
+- Replaced ad hoc command-field extraction with a tolerant serde `CommandSummary` model using camelCase field mapping.
+- Added display support for `actionSupported`, `actionSafetyCategory`, `tuiExecutable`, and `blockedReason`.
+- Missing or null action metadata falls back safely: `actionSupported=false`, `actionSafetyCategory="-"`, `tuiExecutable=false`, and `blockedReason=""`.
+- Command rows now show name, category, output kind, action safety category, and markers such as `[danger]`, `[confirm]`, `[backend-action]`, `[tui-disabled]`, and `[blocked]`.
+- Blocked or deferred reasons are shown as a second detail line when present.
+- Footer/help text now states that action metadata is for planning only, no action commands are executed, and backend `action-json` is not called by the TUI.
+
+Read-only bridge verification:
+
+- `PimaxVrcSupervisor.Tui/src/bridge.rs` was inspected with `rg`.
+- The TUI still does not send `action-json`.
+- The TUI still does not send legacy action commands such as `restart-osc-router`, `force-stop-supervisor`, `restart-core-apps`, `start-osc-goes-brrr`, `base-stations-on`, or `base-stations-off`.
+- The only bridge command send path remains `query-json {request_json}`.
+- Query helpers remain limited to `status`, `commands`, and `log` with max log request size 80.
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- Rust formatting completed successfully.
+- Rust debug build succeeded.
+- Rust release build succeeded.
+- Main supervisor Release build succeeded with 0 warnings and 0 errors.
+- ConfigEditor Release build succeeded with 0 warnings and 0 errors.
+- SteamVrHost Release build succeeded with 0 warnings and 0 errors.
+
+Runtime testing:
+
+- Runtime bridge testing was not performed because this phase should not start the supervisor just for testing.
+- Verification was by code inspection plus successful C# and Rust builds.
+
+Generated output status:
+
+- `git status --short release` reported no staged or unstaged tracked release changes.
+- `git status --ignored --short release` reported `!! release/`, confirming generated release output is ignored.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported ignored Rust build output under `PimaxVrcSupervisor.Tui/target/`.
+
+Known risks:
+
+- The TUI display depends on Phase 9 action metadata being present in backend `commands-json`; older supervisors will show safe defaults.
+- Future TUI action execution still needs a reviewed confirmation UX and backend-authoritative gating before any action keybindings are added.
+
 ## Next Prompt Handling
 
 Full phase prompts are prepared manually outside this file and pasted into Codex when needed.
 
-Short Phase 10 direction:
+Short Phase 11 direction:
 
-- Display future action metadata in the TUI without executing actions, or prepare a reviewed TUI confirmation UX for `restart-osc-router`.
-- Keep action execution disabled in the TUI until explicitly approved.
+- Prepare a reviewed confirmation UX for `restart-osc-router` without enabling accidental single-key execution.
+- Keep backend validation authoritative and keep `force-stop-supervisor` blocked from desktop TUI execution.

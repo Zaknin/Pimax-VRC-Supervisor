@@ -24,6 +24,12 @@ The desktop TUI remains read-only. No TUI action buttons, action keybindings, or
 
 All other action commands remain rejected by `action-json`, and `force-stop-supervisor` remains blocked from the structured desktop TUI action flow.
 
+## Phase 10 Implementation Status
+
+Phase 10 displays action metadata from `commands-json` in the read-only desktop TUI. The TUI shows action safety category, backend action support, TUI-disabled state, confirmation metadata, danger markers, and blocked/deferred reasons as informational data only.
+
+The TUI still sends only read-only `query-json` requests for `status`, `commands`, and `log`. It does not call `action-json`, does not call legacy action commands, and does not expose action buttons, action keybindings, selection, or confirmation UI.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:

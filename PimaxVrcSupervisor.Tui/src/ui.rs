@@ -127,21 +127,31 @@ fn render_commands(frame: &mut Frame<'_>, area: Rect, app: &App) {
         app.commands
             .iter()
             .map(|command| {
-                let marker = if command.dangerous {
-                    " [danger]"
-                } else if command.requires_confirmation {
-                    " [confirm]"
-                } else {
-                    ""
-                };
-
-                ListItem::new(Line::from(vec![
+                let mut lines = vec![Line::from(vec![
                     Span::styled(command.name.as_str(), Style::default().fg(Color::Cyan)),
                     Span::raw(format!(
-                        "  {} / {}{}",
-                        command.category, command.output_kind, marker
+                        "  {} / {} / action:{}",
+                        command.category, command.output_kind, command.action_safety_category
                     )),
-                ]))
+                    command_marker(command.dangerous, "[danger]", Color::Red),
+                    command_marker(command.requires_confirmation, "[confirm]", Color::Yellow),
+                    command_marker(command.action_supported, "[backend-action]", Color::Blue),
+                    command_marker(
+                        command.action_supported && !command.tui_executable,
+                        "[tui-disabled]",
+                        Color::Gray,
+                    ),
+                    command_marker(command_is_blocked(command), "[blocked]", Color::Red),
+                ])];
+
+                if !command.blocked_reason.trim().is_empty() {
+                    lines.push(Line::from(vec![
+                        Span::styled("  reason: ", Style::default().fg(Color::DarkGray)),
+                        Span::raw(command.blocked_reason.as_str()),
+                    ]));
+                }
+
+                ListItem::new(lines)
             })
             .collect()
     };
@@ -247,7 +257,7 @@ fn render_logs(frame: &mut Frame<'_>, area: Rect, app: &App) {
 fn render_footer(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(
         Paragraph::new(
-            "Read-only query-json client   arrows/PageUp/PageDown/Home/End scroll logs   h/? help",
+            "Read-only query-json client   action metadata only; no action-json calls   h/? help",
         ),
         area,
     );
@@ -266,6 +276,8 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("Home/End jump log scroll"),
         Line::from(""),
         Line::from("Read-only mode: no action commands are executed by this TUI."),
+        Line::from("Action metadata is displayed for planning only."),
+        Line::from("Backend action-json exists, but this TUI does not call it."),
     ];
 
     frame.render_widget(Clear, popup);
@@ -309,4 +321,19 @@ fn title_style() -> Style {
 
 fn labeled_line<'a>(label: &'a str, value: &'a str) -> Line<'a> {
     Line::from(vec![Span::styled(label, label_style()), Span::raw(value)])
+}
+
+fn command_marker(show: bool, text: &'static str, color: Color) -> Span<'static> {
+    if show {
+        Span::styled(format!(" {text}"), Style::default().fg(color))
+    } else {
+        Span::raw("")
+    }
+}
+
+fn command_is_blocked(command: &crate::models::CommandSummary) -> bool {
+    command
+        .action_safety_category
+        .eq_ignore_ascii_case("Blocked")
+        || !command.blocked_reason.trim().is_empty()
 }

@@ -95,6 +95,8 @@ The safety and confirmation model for future action execution is documented sepa
 
 Phase 9 starts backend-only structured `action-json` support for the `restart-osc-router` allowlist entry. The desktop TUI still does not expose action execution, action buttons, action keybindings, or confirmation UI.
 
+Phase 10 displays backend action metadata in the command capability panel for planning and review. The metadata is informational only: the TUI still sends only read-only `query-json` requests and does not call `action-json` or legacy action commands.
+
 ## Future Direction
 
 Future Configurator naming should use:

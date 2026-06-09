@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 #[derive(Debug, Deserialize, Default)]
@@ -26,13 +26,46 @@ pub struct StatusSummary {
     pub osc_goes_brrr: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct CommandSummary {
+    #[serde(deserialize_with = "deserialize_string_or_empty")]
     pub name: String,
+    #[serde(deserialize_with = "deserialize_string_or_empty")]
     pub category: String,
+    #[serde(deserialize_with = "deserialize_string_or_empty")]
     pub output_kind: String,
+    #[serde(deserialize_with = "deserialize_bool_or_false")]
     pub dangerous: bool,
+    #[serde(deserialize_with = "deserialize_bool_or_false")]
     pub requires_confirmation: bool,
+    #[serde(deserialize_with = "deserialize_bool_or_false")]
+    pub action_supported: bool,
+    #[serde(
+        default = "default_action_safety_category",
+        deserialize_with = "deserialize_string_or_dash"
+    )]
+    pub action_safety_category: String,
+    #[serde(deserialize_with = "deserialize_bool_or_false")]
+    pub tui_executable: bool,
+    #[serde(deserialize_with = "deserialize_string_or_empty")]
+    pub blocked_reason: String,
+}
+
+impl Default for CommandSummary {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            category: String::new(),
+            output_kind: String::new(),
+            dangerous: false,
+            requires_confirmation: false,
+            action_supported: false,
+            action_safety_category: default_action_safety_category(),
+            tui_executable: false,
+            blocked_reason: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -66,19 +99,7 @@ pub fn commands_from_response(response: &QueryResponse) -> Vec<CommandSummary> {
         .map(|items| {
             items
                 .iter()
-                .map(|item| CommandSummary {
-                    name: string_value(item, "name"),
-                    category: string_value(item, "category"),
-                    output_kind: string_value(item, "outputKind"),
-                    dangerous: item
-                        .get("dangerous")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                    requires_confirmation: item
-                        .get("requiresConfirmation")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                })
+                .filter_map(|item| serde_json::from_value::<CommandSummary>(item.clone()).ok())
                 .collect()
         })
         .unwrap_or_default()
@@ -111,4 +132,29 @@ fn string_value(data: &Value, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or("-")
         .to_string()
+}
+
+fn default_action_safety_category() -> String {
+    "-".to_string()
+}
+
+fn deserialize_string_or_empty<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+fn deserialize_string_or_dash<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_else(default_action_safety_category))
+}
+
+fn deserialize_bool_or_false<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<bool>::deserialize(deserializer)?.unwrap_or(false))
 }
