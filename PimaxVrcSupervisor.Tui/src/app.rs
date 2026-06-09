@@ -11,7 +11,7 @@ use crate::{
 };
 
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
-pub const HELP_TOGGLE_GUARD: Duration = Duration::from_millis(200);
+pub const HELP_KEY_QUIET_INTERVAL: Duration = Duration::from_millis(400);
 pub const MAX_LOG_LINES: usize = 80;
 pub const LOG_PAGE_SIZE: usize = 8;
 
@@ -46,7 +46,7 @@ pub struct App {
     pub last_attempt: Option<Instant>,
     pub refresh_in_progress: bool,
     pub help_visible: bool,
-    pub last_help_toggled_at: Option<Instant>,
+    pub last_help_key_event_at: Option<Instant>,
     pub log_scroll: usize,
     pub confirmation: Option<ConfirmationModal>,
     pub action_in_progress: bool,
@@ -72,7 +72,7 @@ impl App {
             last_attempt: None,
             refresh_in_progress: false,
             help_visible: false,
-            last_help_toggled_at: None,
+            last_help_key_event_at: None,
             log_scroll: 0,
             confirmation: None,
             action_in_progress: false,
@@ -149,17 +149,21 @@ impl App {
         self.help_visible = !self.help_visible;
     }
 
-    pub fn toggle_help_guarded(&mut self, now: Instant) {
-        if self
-            .last_help_toggled_at
-            .map(|last| now.duration_since(last) < HELP_TOGGLE_GUARD)
-            .unwrap_or(false)
-        {
-            return;
+    pub fn handle_help_key(&mut self, now: Instant) {
+        let should_toggle = self
+            .last_help_key_event_at
+            .map(|last| now.duration_since(last) >= HELP_KEY_QUIET_INTERVAL)
+            .unwrap_or(true);
+
+        if should_toggle {
+            self.toggle_help();
         }
 
-        self.toggle_help();
-        self.last_help_toggled_at = Some(now);
+        self.last_help_key_event_at = Some(now);
+    }
+
+    pub fn note_help_key_event(&mut self, now: Instant) {
+        self.last_help_key_event_at = Some(now);
     }
 
     pub fn close_help(&mut self) {

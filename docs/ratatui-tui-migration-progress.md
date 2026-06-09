@@ -188,6 +188,10 @@ Phase 13 - Unified layout-independent shortcut UX and help alignment
 
 Status: Completed
 
+Phase 14 - TUI help shortcut polish
+
+Status: Completed
+
 ## Known Risks
 
 - `PimaxVrcSupervisor/Program.cs` is a large monolithic file, so small UI/event refactors can accidentally touch unrelated lifecycle or cleanup logic.
@@ -1464,7 +1468,96 @@ Known risks:
 
 Full phase prompts are prepared manually outside this file and pasted into Codex when needed.
 
-Short Phase 14 direction:
+### Phase 14 - TUI help shortcut polish
+
+Status: Completed
+
+Summary:
+
+- Changed the Rust desktop TUI so `H`/`h` is the only help shortcut.
+- Removed `F1`, `?`, and Russian `Р`/`р` as TUI help triggers.
+- Added a `400 ms` quiet-interval H-key guard.
+- Kept `restart-osc-router` as the only executable TUI action.
+- Kept execution confirmation-gated through the narrow backend `action-json` helper.
+- Left classic console behavior unchanged; it still uses `1`-`6` plus `F1`.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `PimaxVrcSupervisor/Program.cs`
+- `PimaxVrcSupervisor.ConfigEditor/Program.cs`
+- `README.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+TUI shortcut behavior:
+
+- Dashboard: `H` opens help, `F5` refreshes, `1` opens Restart OSC Router confirmation, `Q` quits, and log navigation keys scroll logs.
+- Help overlay: `H`, `Esc`, and `Q` close help; `1`, `O`, `Enter`, `F1`, `?`, and removed help aliases do not trigger dashboard actions.
+- Confirmation modal: `Enter` confirms, `Esc`/`Q`/`N` cancel, `Y` remains a secondary confirm alias, and `1` never confirms.
+- Letter shortcuts are displayed uppercase, but lowercase input is still accepted.
+- Russian-layout aliases remain only for selected non-help refresh, restart, quit, confirm, and cancel keys where terminal character input provides them.
+
+Help held-key guard:
+
+- The TUI still ignores `KeyEventKind::Repeat` and `KeyEventKind::Release`.
+- The TUI now also tracks the previous raw `H`/`h` help-key event timestamp.
+- On each `H`/`h` event, it compares `now` against the previous timestamp before updating it.
+- Help toggles only when the previous `H`/`h` event is missing or at least `400 ms` old.
+- The previous `H`/`h` timestamp is updated on every `H`/`h` event, including ignored held/repeated events.
+
+Classic console and Configurator:
+
+- Classic console behavior was not changed.
+- Existing modern desktop TUI informational text was updated from `F1 help` to `H help`.
+- No Configurator settings or `Desktop console mode` behavior were added.
+
+Bridge/backend status:
+
+- `PimaxVrcSupervisor.Tui/src/bridge.rs` remains limited to read-only `query-json` helpers plus `execute_restart_osc_router()`.
+- `action-json` appears only inside `execute_restart_osc_router()`.
+- No generic action executor was added.
+- No legacy action command strings were added.
+- Backend `action-json` allowlist remains `restart-osc-router` only.
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- Rust formatting completed successfully.
+- Rust debug build succeeded.
+- Rust release build succeeded.
+- Main supervisor Release build succeeded with 0 warnings and 0 errors.
+- ConfigEditor Release build succeeded with 0 warnings and 0 errors.
+- SteamVrHost Release build succeeded with 0 warnings and 0 errors.
+
+Generated output status:
+
+- `git status --short release` reported no staged or unstaged tracked release changes.
+- `git status --ignored --short release` reported `!! release/`, confirming generated release output is ignored.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`, confirming Rust build output is ignored.
+
+Runtime testing:
+
+- Runtime shortcut testing was not performed during implementation unless explicitly recorded later.
+- Expected runtime acceptance: `H` opens/closes help without held-key flicker; `F1`, `?`, and Russian help aliases do not open help; only confirmed `restart-osc-router` can execute.
+
+Known risks:
+
+- Russian-layout aliases depend on terminal character delivery and may not work through every IME.
+- Runtime shortcut testing should still be done across keyboard layouts and terminals.
+
+Short Phase 15 direction:
 
 - Build and run a manual/runtime shortcut test matrix across keyboard layouts.
 - Continue polishing action confirmation safety and failure paths without adding new executable actions.

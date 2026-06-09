@@ -57,6 +57,10 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         if event::poll(app.poll_timeout(Instant::now()))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press {
+                    if Shortcut::is_help_key(key) {
+                        app.note_help_key_event(Instant::now());
+                    }
+
                     continue;
                 }
 
@@ -91,7 +95,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     if app.help_visible {
         match shortcut {
             Some(Shortcut::Help) => {
-                app.toggle_help_guarded(now);
+                app.handle_help_key(now);
                 false
             }
             Some(Shortcut::Cancel | Shortcut::Quit) => {
@@ -109,7 +113,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
                 false
             }
             Some(Shortcut::Help) => {
-                app.toggle_help_guarded(now);
+                app.handle_help_key(now);
                 false
             }
             Some(Shortcut::OpenRestartOscRouter) => {
@@ -153,9 +157,12 @@ fn handle_navigation_key(app: &mut App, key: KeyEvent) -> bool {
 }
 
 impl Shortcut {
+    fn is_help_key(key: KeyEvent) -> bool {
+        matches!(key.code, KeyCode::Char('h' | 'H'))
+    }
+
     fn from_key(key: KeyEvent) -> Option<Self> {
         match key.code {
-            KeyCode::F(1) => Some(Self::Help),
             KeyCode::F(5) => Some(Self::Refresh),
             KeyCode::Enter => Some(Self::Confirm),
             KeyCode::Esc => Some(Self::Cancel),
@@ -167,7 +174,7 @@ impl Shortcut {
     fn from_char(value: char) -> Option<Self> {
         match value {
             '1' => Some(Self::OpenRestartOscRouter),
-            '?' | 'h' | 'H' | 'р' | 'Р' => Some(Self::Help),
+            'h' | 'H' => Some(Self::Help),
             'r' | 'R' | 'к' | 'К' => Some(Self::Refresh),
             'q' | 'Q' | 'й' | 'Й' => Some(Self::Quit),
             'o' | 'O' | 'щ' | 'Щ' => Some(Self::OpenRestartOscRouter),

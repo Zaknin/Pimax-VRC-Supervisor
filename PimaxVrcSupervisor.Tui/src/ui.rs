@@ -62,7 +62,7 @@ fn render_small_terminal(frame: &mut Frame<'_>, area: Rect) {
         )),
         Line::from("Terminal is too small for the dashboard."),
         Line::from(format!("Minimum: {MIN_WIDTH}x{MIN_HEIGHT}")),
-        Line::from("Resize the terminal, or press q / Esc to quit."),
+        Line::from("Resize the terminal, or press Q / Esc to quit."),
         Line::from("OSC router restart requires confirmation."),
     ];
 
@@ -93,7 +93,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         Span::raw(format!("  auto refresh {}s", REFRESH_INTERVAL.as_secs())),
     ]);
 
-    let help = Line::from("F1 Help   F5 Refresh   1 Restart OSC   Q Quit   Esc Cancel/Quit");
+    let help = Line::from("H Help   F5 Refresh   1 Restart OSC   Q Quit   Esc Cancel/Quit");
 
     frame.render_widget(
         Paragraph::new(vec![line, help])
@@ -302,7 +302,7 @@ fn render_logs(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(
-        Paragraph::new("F1 Help   F5 Refresh   1 Restart OSC   Q Quit   aliases: ?/H/R/O"),
+        Paragraph::new("H Help   F5 Refresh   1 Restart OSC   Q Quit   aliases: R/O"),
         area,
     );
 }
@@ -311,7 +311,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
     let popup = centered_rect(62, 54, area);
     let lines = vec![
         Line::from(Span::styled("Keybindings", title_style())),
-        Line::from("F1      help"),
+        Line::from("H       help"),
         Line::from("F5      refresh now"),
         Line::from("1       open Restart OSC Router confirmation"),
         Line::from("Q       close help first, otherwise quit"),
@@ -320,8 +320,9 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("PgUp/PgDn scroll logs one page"),
         Line::from("Home/End jump log scroll"),
         Line::from(""),
-        Line::from("?/H help, R refresh, O restart OSC are convenience aliases."),
-        Line::from("Russian layout aliases are accepted where terminal input provides them."),
+        Line::from("Letters are shown uppercase; lowercase input is also accepted."),
+        Line::from("R refresh and O restart OSC are convenience aliases."),
+        Line::from("Russian layout aliases are limited to selected non-help keys."),
         Line::from(""),
         Line::from("Only restart-osc-router is currently executable."),
         Line::from("It requires confirmation and uses backend action-json."),

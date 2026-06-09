@@ -199,7 +199,7 @@ You can close the TUI without stopping the supervisor. If the backend is not run
 
 Keybindings:
 
-- `F1`: help
+- `H` / `h`: help
 - `F5`: refresh
 - `1`: open Restart OSC Router confirmation
 - `Enter`: confirm inside the confirmation modal
@@ -209,7 +209,7 @@ Keybindings:
 - `Home` / `End`: jump logs
 - `Q` / `q`: close help first, otherwise quit; cancel confirmation when confirmation is open
 
-Letter shortcuts such as `?`, `H`, `R`, and `O` remain convenience aliases. Use the number/function/Enter/Esc shortcuts when keyboard layout or IME behavior makes letters unreliable.
+Letter shortcuts are displayed uppercase, but lowercase input is also accepted. `R` refreshes, `O` opens the Restart OSC Router confirmation, and selected Russian-layout aliases remain limited to non-help keys. `F1`, `?`, and Russian help aliases do not open TUI help.
 
 ## Key Configuration
 
