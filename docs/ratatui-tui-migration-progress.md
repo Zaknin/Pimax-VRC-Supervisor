@@ -1884,6 +1884,13 @@ Runtime testing:
 - If testing from `release\PimaxVrcSupervisor-v1.3.0-test`, copy the rebuilt TUI exe and publish the supervisor/config editor only if those projects changed.
 - If a release-folder executable is locked during runtime-test preparation, kill locked processes automatically per user instruction before retrying the copy/publish.
 
+Backend concurrency audit result:
+
+- Model A with subsystem-local backend guards.
+- Evidence: TCP bridge accepts concurrent clients via per-client `Task.Run`; `ExecuteSupervisorCommandAsync` and `ExecuteActionJsonAsync` do not use a global serializer; individual subsystems use local locks for core apps, OSCGoesBrrr, OSC router, Autostart, and cleanup.
+- Base-station manual actions share mutable base-station state, so the TUI keeps Base Stations On/Off mutual exclusion.
+- Final TUI behavior chosen: background execution remains enabled; duplicate same-command starts are blocked; Base Stations On/Off overlap is blocked; no backend threading rewrite.
+
 Short Phase 17 direction:
 
 - Run a manual VR-session test matrix for concurrent TUI actions, duplicate blocking, Base Stations On/Off mutual exclusion, and duplicate Autostart validation/runtime skipping.
