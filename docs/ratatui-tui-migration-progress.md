@@ -128,11 +128,10 @@ Ratatui should be a separate Rust frontend instead of being embedded directly in
 
 Embedding Ratatui directly into the C# supervisor would mix frontend rendering concerns with cleanup-sensitive Windows automation and would not fit Ratatui's Rust-native model. The safer migration path is to first make the C# backend expose structured read-only status, command metadata, and recent-log surfaces while preserving the existing console and SteamVR dashboard behavior.
 
-The current SteamVR host already uses a local loopback TCP command bridge for dashboard commands. In the near term, this bridge should be extended additively with structured JSON commands such as status-json, commands-json, and log-json. Existing one-line text commands must remain compatible. A future Windows named-pipe transport can be considered later after the protocol is stable and the desktop Ratatui client requirements are clearer.
+The current SteamVR host already uses a local loopback TCP command bridge for dashboard commands. In the near term, this bridge should be extended additively with structured JSON commands such as status-json, commands-json, log-json, and query-json. Existing one-line text commands must remain compatible. A future Windows named-pipe transport can be considered later after the protocol is stable and the desktop Ratatui client requirements are clearer.
 
 ## Recommended Migration Roadmap
 
-Recommended Migration Roadmap
 Phase 0 - Repository inspection and architecture documentation
 
 Status: Completed
@@ -151,7 +150,7 @@ Status: Completed
 
 Phase 4 - Read-only JSON request envelope for safe read-only commands
 
-Status: Not started
+Status: Completed
 
 Phase 5 - Minimal Rust Ratatui desktop frontend
 
@@ -179,6 +178,7 @@ Status: Not started
 - `status-json` was verified by code inspection and successful build only; runtime testing would require launching the elevated supervisor workflow in the local VR/SteamVR environment.
 - `commands-json` was verified by code inspection and successful build only; runtime testing would require launching the elevated supervisor workflow in the local VR/SteamVR environment.
 - `log-json` was verified by code inspection and successful build only; runtime testing would require launching the elevated supervisor workflow in the local VR/SteamVR environment.
+- `query-json` was verified by code inspection and successful build only; runtime testing would require launching the elevated supervisor workflow in the local VR/SteamVR environment.
 
 ## Phase Log
 
@@ -449,12 +449,103 @@ Known issues:
 - The structured recent-log surface is derived only from the bounded in-memory console buffer, not diagnostics files.
 - Release output is generated locally and ignored; it must not be committed unless release policy changes.
 
+### Phase 4 - Read-only JSON request envelope for safe read-only commands
+
+Status: Completed
+
+Summary:
+
+- Added a compact read-only JSON request envelope for future desktop Ratatui/JSON clients.
+- Added the `query-json` command for read-only resources only.
+- Preserved all existing simple commands and the SteamVR dashboard protocol.
+- Kept action command execution, generic `command-json`, and confirmation handling deferred.
+- Re-published the local test output folder `release/PimaxVrcSupervisor-v1.3.0-test`.
+
+Files changed:
+
+- `PimaxVrcSupervisor/Program.cs`
+- `docs/ratatui-tui-migration-progress.md`
+
+Models added or updated:
+
+- `SupervisorReadOnlyJsonRequest`
+- `SupervisorCommandResult` now includes optional `requestId`.
+
+Build/test commands run:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- All three explicit Release builds succeeded with 0 warnings and 0 errors.
+- `query-json` was not runtime-tested because launching the supervisor can trigger the local elevated VR/SteamVR/Pimax workflow. It was verified by code inspection and successful build.
+
+Publish commands run:
+
+- `New-Item -ItemType Directory -Force .\release\PimaxVrcSupervisor-v1.3.0-test | Out-Null`
+- `dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `dotnet publish .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+
+Publish result:
+
+- Publish succeeded for all three projects.
+- Release folder: `release/PimaxVrcSupervisor-v1.3.0-test`
+- `git status --short release` reported no staged or unstaged tracked release changes.
+- `git status --ignored --short release` reported `!! release/`, confirming generated release output is ignored.
+
+New read-only query surface:
+
+- New command: `query-json`
+- Syntax: `query-json {"requestId":"optional-id","resource":"status"}`
+- Supported resources: `status`, `commands`, and `log`.
+- `status` maps to the same data as `status-json`.
+- `commands` maps to the same data as `commands-json`.
+- `log` maps to the same data as `log-json` and supports `maxLines` clamped from 1 to 80, defaulting to 14.
+- `requestId` is echoed on success and failure when the JSON request can be parsed far enough to read it. Malformed JSON that cannot be safely read returns `requestId=null`.
+
+Compatibility:
+
+- `status` remains legacy parser-compatible text.
+- `status-json`, `commands-json`, and `log-json` remain raw compact snapshot JSON commands.
+- `log` remains the recent console-line JSON string array used by the SteamVR dashboard.
+- Existing dashboard action commands keep their names, response strings, timing diagnostics, and behavior.
+- `PimaxVrcSupervisor.SteamVrHost` was not changed.
+- The SteamVR overlay and VR dashboard rendering were not changed.
+
+Deferred:
+
+- `query-json` intentionally does not support action commands.
+- Generic `command-json` action execution remains deferred.
+- Confirmation handling remains deferred.
+- Dangerous/disruptive command behavior was not changed.
+
+Future Configurator naming note:
+
+- Future Configurator desktop interface setting should likely be named `Desktop console mode`.
+- User-facing options: `Classic console`, `Modern console`, `Hidden`.
+- `Classic console`: current visible console UI and hotkeys.
+- `Modern console`: future Ratatui desktop terminal UI.
+- `Hidden`: backend/no-console mode for advanced/startup use.
+- This setting must not replace or disable the SteamVR overlay dashboard.
+
+Known issues:
+
+- `query-json` runtime behavior should be exercised in a safe supervisor session before relying on it for an external frontend.
+- The query envelope is read-only only; action-command support still needs a confirmation/danger model.
+- The current bridge remains a one-line string protocol over loopback TCP.
+- Release output is generated locally and ignored; it must not be committed unless release policy changes.
+
 ## Next Prompt Handling
 
 Full phase prompts are prepared manually outside this file and pasted into Codex when needed.
 
-Short Phase 4 direction:
+Short Phase 5 direction:
 
-- Add a read-only JSON request envelope for safe read-only commands only: `status-json`, `commands-json`, and `log-json`.
-- Do not add JSON execution for action commands yet.
-- Keep action commands such as `restart-core-apps`, `base-stations-off`, and `force-stop-supervisor` as legacy string commands until confirmation and danger handling are designed.
+- Create a minimal read-only Rust Ratatui desktop frontend.
+- Connect to the existing loopback TCP bridge and call `query-json` for `status`, `commands`, and `log`.
+- Render a simple dashboard with status, command list, and recent logs.
+- The TUI should quit without stopping the supervisor.
+- Do not execute action commands yet.

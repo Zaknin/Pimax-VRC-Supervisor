@@ -1266,12 +1266,18 @@ internal sealed record SupervisorCommandCapabilitiesSnapshot(
 
 internal sealed record SupervisorCommandResult(
     DateTimeOffset Timestamp,
+    string? RequestId,
     string Command,
     bool Success,
     string Message,
     string ResultType,
     object? Data,
     string? Error);
+
+internal sealed record SupervisorReadOnlyJsonRequest(
+    string? RequestId,
+    string? Resource,
+    int? MaxLines);
 
 internal sealed record SupervisorLogLine(
     int Index,
@@ -2915,18 +2921,30 @@ internal sealed class AppSupervisor
 
     internal async Task<string> ExecuteSupervisorCommandAsync(string command, CancellationToken cancellationToken)
     {
-        command = command.Trim().ToLowerInvariant();
+        var rawCommand = command.Trim();
+        var commandVerb = GetCommandVerb(rawCommand).ToLowerInvariant();
+        var commandName = string.Equals(commandVerb, "query-json", StringComparison.Ordinal)
+            ? commandVerb
+            : rawCommand.ToLowerInvariant();
         var startedAt = Stopwatch.GetTimestamp();
         var success = false;
         var response = "";
-        if (_diagnostics.ShouldWriteCommandDebug(command))
+        if (_diagnostics.ShouldWriteCommandDebug(commandName))
         {
-            WriteDebug("command received; name=" + (command.Length == 0 ? "empty" : command));
+            WriteDebug("command received; name=" + (commandName.Length == 0 ? "empty" : commandName));
         }
 
         try
         {
-            response = command switch
+            if (string.Equals(commandVerb, "query-json", StringComparison.Ordinal))
+            {
+                var result = ExecuteReadOnlyJsonQuery(GetCommandPayload(rawCommand));
+                response = JsonSerializer.Serialize(result, CommandBridgeJsonOptions);
+                success = result.Success;
+                return response;
+            }
+
+            response = commandName switch
             {
                 "status" => BuildSupervisorStatus(),
                 "status-json" => JsonSerializer.Serialize(BuildSupervisorStatusSnapshot(), CommandBridgeJsonOptions),
@@ -2939,7 +2957,7 @@ internal sealed class AppSupervisor
                 "base-stations-off" => await ManualPowerDownBaseStationsAndReturnAsync(cancellationToken),
                 "restart-osc-router" => await RestartOscRouterAndReturnAsync(cancellationToken),
                 "force-stop-supervisor" => ForceStopSupervisorAndReturn(),
-                _ => "Unknown command: " + command
+                _ => "Unknown command: " + commandName
             };
             success = !response.StartsWith("Command failed:", StringComparison.OrdinalIgnoreCase);
             return response;
@@ -2994,12 +3012,12 @@ internal sealed class AppSupervisor
         finally
         {
             var elapsed = Stopwatch.GetElapsedTime(startedAt);
-            _diagnostics.RecordCommand(command, elapsed, success);
-            if (_diagnostics.ShouldWriteCommandDebug(command))
+            _diagnostics.RecordCommand(commandName, elapsed, success);
+            if (_diagnostics.ShouldWriteCommandDebug(commandName))
             {
                 WriteDebug(
                     "command completed"
-                    + $"; name={(command.Length == 0 ? "empty" : command)}"
+                    + $"; name={(commandName.Length == 0 ? "empty" : commandName)}"
                     + $"; success={success}"
                     + $"; elapsedMs={elapsed.TotalMilliseconds:0.0}"
                     + $"; response={TruncateDebugValue(response)}");
@@ -3115,6 +3133,13 @@ internal sealed class AppSupervisor
                     "Json",
                     "Read-only command capability metadata."),
                 CommandDefinition(
+                    "query-json",
+                    "Read-only JSON Query",
+                    "Executes a structured read-only JSON query for status, command capabilities, or recent logs.",
+                    "Status",
+                    "Json",
+                    "Read-only JSON request envelope for future desktop TUI clients. Does not execute action commands."),
+                CommandDefinition(
                     "restart-core-apps",
                     "Restart Core Apps",
                     "Restarts configured face-tracking applications.",
@@ -3181,6 +3206,142 @@ internal sealed class AppSupervisor
             outputKind,
             name,
             notes);
+
+    private SupervisorCommandResult ExecuteReadOnlyJsonQuery(string payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+        {
+            return ReadOnlyJsonQueryResult(
+                requestId: null,
+                success: false,
+                message: "query-json requires a JSON request payload.",
+                resultType: "error",
+                data: null,
+                error: "Missing JSON request payload.");
+        }
+
+        SupervisorReadOnlyJsonRequest? request;
+        string? requestId = null;
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return ReadOnlyJsonQueryResult(
+                    requestId,
+                    success: false,
+                    message: "query-json request must be a JSON object.",
+                    resultType: "error",
+                    data: null,
+                    error: "Request root was not an object.");
+            }
+
+            requestId = TryReadStringProperty(document.RootElement, "requestId");
+            request = document.RootElement.Deserialize<SupervisorReadOnlyJsonRequest>(CommandBridgeJsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            return ReadOnlyJsonQueryResult(
+                requestId,
+                success: false,
+                message: "query-json request payload is not valid JSON.",
+                resultType: "error",
+                data: null,
+                error: ex.Message);
+        }
+
+        requestId ??= request?.RequestId;
+        var resource = request?.Resource?.Trim();
+        if (string.IsNullOrWhiteSpace(resource))
+        {
+            return ReadOnlyJsonQueryResult(
+                requestId,
+                success: false,
+                message: "query-json request requires a resource.",
+                resultType: "error",
+                data: null,
+                error: "Missing resource. Supported resources: status, commands, log.");
+        }
+
+        return resource.ToLowerInvariant() switch
+        {
+            "status" => ReadOnlyJsonQueryResult(
+                requestId,
+                success: true,
+                message: "Status snapshot returned.",
+                resultType: "status",
+                data: BuildSupervisorStatusSnapshot(),
+                error: null),
+            "commands" => ReadOnlyJsonQueryResult(
+                requestId,
+                success: true,
+                message: "Command capabilities returned.",
+                resultType: "commands",
+                data: BuildSupervisorCommandCapabilitiesSnapshot(),
+                error: null),
+            "log" => ReadOnlyJsonQueryResult(
+                requestId,
+                success: true,
+                message: "Recent log snapshot returned.",
+                resultType: "log",
+                data: BuildSupervisorRecentLogSnapshot(Math.Clamp(request?.MaxLines ?? 14, 1, 80)),
+                error: null),
+            _ => ReadOnlyJsonQueryResult(
+                requestId,
+                success: false,
+                message: $"Unsupported query-json resource: {resource}.",
+                resultType: "error",
+                data: null,
+                error: "Supported resources: status, commands, log.")
+        };
+    }
+
+    private static SupervisorCommandResult ReadOnlyJsonQueryResult(
+        string? requestId,
+        bool success,
+        string message,
+        string resultType,
+        object? data,
+        string? error)
+        => new(
+            DateTimeOffset.UtcNow,
+            requestId,
+            "query-json",
+            success,
+            message,
+            resultType,
+            data,
+            error);
+
+    private static string? TryReadStringProperty(JsonElement element, string propertyName)
+        => element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+
+    private static string GetCommandVerb(string rawCommand)
+    {
+        var separatorIndex = FindCommandSeparator(rawCommand);
+        return separatorIndex < 0 ? rawCommand : rawCommand[..separatorIndex];
+    }
+
+    private static string GetCommandPayload(string rawCommand)
+    {
+        var separatorIndex = FindCommandSeparator(rawCommand);
+        return separatorIndex < 0 ? "" : rawCommand[(separatorIndex + 1)..].TrimStart();
+    }
+
+    private static int FindCommandSeparator(string rawCommand)
+    {
+        var spaceIndex = rawCommand.IndexOf(' ');
+        var tabIndex = rawCommand.IndexOf('\t');
+        return (spaceIndex, tabIndex) switch
+        {
+            (< 0, < 0) => -1,
+            (< 0, _) => tabIndex,
+            (_, < 0) => spaceIndex,
+            _ => Math.Min(spaceIndex, tabIndex)
+        };
+    }
 
     private SupervisorRecentLogSnapshot BuildSupervisorRecentLogSnapshot(int maxLines)
     {
