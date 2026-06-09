@@ -1273,6 +1273,22 @@ internal sealed record SupervisorCommandResult(
     object? Data,
     string? Error);
 
+internal sealed record SupervisorLogLine(
+    int Index,
+    DateTimeOffset? Timestamp,
+    string Message,
+    string Source,
+    string Level,
+    string Raw);
+
+internal sealed record SupervisorRecentLogSnapshot(
+    DateTimeOffset Timestamp,
+    string AppVersion,
+    string Source,
+    int Count,
+    SupervisorLogLine[] Lines,
+    string Notes);
+
 internal sealed class AppSupervisor
 {
     private const int BrokenEyeStartupMaxAttempts = 10;
@@ -2915,6 +2931,7 @@ internal sealed class AppSupervisor
                 "status" => BuildSupervisorStatus(),
                 "status-json" => JsonSerializer.Serialize(BuildSupervisorStatusSnapshot(), CommandBridgeJsonOptions),
                 "log" => JsonSerializer.Serialize(SupervisorConsoleLog.GetRecentLines(14)),
+                "log-json" => JsonSerializer.Serialize(BuildSupervisorRecentLogSnapshot(14), CommandBridgeJsonOptions),
                 "commands-json" => JsonSerializer.Serialize(BuildSupervisorCommandCapabilitiesSnapshot(), CommandBridgeJsonOptions),
                 "restart-core-apps" => await RestartCoreAppsAndReturnAsync(cancellationToken),
                 "start-osc-goes-brrr" => await StartOscGoesBrrrAndReturnAsync(cancellationToken),
@@ -3084,6 +3101,13 @@ internal sealed class AppSupervisor
                     "JsonArray",
                     "Recent console-line array used by SteamVR dashboard."),
                 CommandDefinition(
+                    "log-json",
+                    "Recent Log JSON",
+                    "Returns a structured recent console-log snapshot.",
+                    "Logs",
+                    "Json",
+                    "Structured recent console-log snapshot for future desktop TUI clients."),
+                CommandDefinition(
                     "commands-json",
                     "Command Capabilities",
                     "Returns command capability metadata as compact JSON.",
@@ -3157,6 +3181,62 @@ internal sealed class AppSupervisor
             outputKind,
             name,
             notes);
+
+    private SupervisorRecentLogSnapshot BuildSupervisorRecentLogSnapshot(int maxLines)
+    {
+        var rawLines = SupervisorConsoleLog.GetRecentLines(maxLines);
+        var lines = rawLines
+            .Select((line, index) => BuildSupervisorLogLine(index, line))
+            .ToArray();
+
+        return new SupervisorRecentLogSnapshot(
+            DateTimeOffset.UtcNow,
+            AppVersion.Current,
+            "console",
+            lines.Length,
+            lines,
+            "Read-only snapshot of the existing recent console-line buffer. Per-line timestamps are best-effort local same-day values parsed from HH:mm:ss prefixes; timestamp is null when parsing fails.");
+    }
+
+    private static SupervisorLogLine BuildSupervisorLogLine(int index, string raw)
+    {
+        var message = raw;
+        DateTimeOffset? timestamp = null;
+        if (TryParseRecentConsoleTimestamp(raw, out var parsedTimestamp, out var parsedMessage))
+        {
+            timestamp = parsedTimestamp;
+            message = parsedMessage;
+        }
+
+        return new SupervisorLogLine(
+            index,
+            timestamp,
+            message,
+            "console",
+            "info",
+            raw);
+    }
+
+    private static bool TryParseRecentConsoleTimestamp(string raw, out DateTimeOffset timestamp, out string message)
+    {
+        timestamp = default;
+        message = raw;
+        if (raw.Length < 9 || raw[8] != ' ')
+        {
+            return false;
+        }
+
+        var timeText = raw[..8];
+        if (!TimeSpan.TryParseExact(timeText, @"hh\:mm\:ss", CultureInfo.InvariantCulture, out var timeOfDay))
+        {
+            return false;
+        }
+
+        var now = DateTimeOffset.Now;
+        timestamp = new DateTimeOffset(now.Date.Add(timeOfDay), now.Offset);
+        message = raw[9..];
+        return true;
+    }
 
     private bool IsFaceTrackingAppSetRunning()
         => (!_config.UseBrokenEye || IsAnyProcessRunning(_config.BrokenEyeProcessNames))

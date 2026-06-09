@@ -147,7 +147,7 @@ Status: Completed
 
 Phase 3 - Structured recent log DTOs and read-only log-json surface
 
-Status: Not started
+Status: Completed
 
 Phase 4 - Read-only JSON request envelope for safe read-only commands
 
@@ -178,6 +178,7 @@ Status: Not started
 - Root `dotnet build` does not work because there is no project or solution file at the repository root; future phases may need explicit project builds or a solution file if build verification policy changes.
 - `status-json` was verified by code inspection and successful build only; runtime testing would require launching the elevated supervisor workflow in the local VR/SteamVR environment.
 - `commands-json` was verified by code inspection and successful build only; runtime testing would require launching the elevated supervisor workflow in the local VR/SteamVR environment.
+- `log-json` was verified by code inspection and successful build only; runtime testing would require launching the elevated supervisor workflow in the local VR/SteamVR environment.
 
 ## Phase Log
 
@@ -370,6 +371,90 @@ Known issues:
 - The current bridge remains a one-line string protocol over loopback TCP.
 - Release output is generated locally and ignored; it must not be committed unless release policy changes.
 
+### Phase 3 - Structured recent log DTOs and read-only log-json surface
+
+Status: Completed
+
+Summary:
+
+- Added compact structured recent-log DTOs for future Ratatui/JSON clients.
+- Added the read-only `log-json` dashboard command, serialized as compact one-line camelCase JSON for the existing line-oriented TCP bridge.
+- Wrapped only the existing `SupervisorConsoleLog.GetRecentLines(...)` data source.
+- Preserved the existing `log` command used by the SteamVR dashboard.
+- Re-published the local test output folder `release/PimaxVrcSupervisor-v1.3.0-test`.
+
+Files changed:
+
+- `PimaxVrcSupervisor/Program.cs`
+- `docs/ratatui-tui-migration-progress.md`
+
+Models added:
+
+- `SupervisorLogLine`
+- `SupervisorRecentLogSnapshot`
+
+Build/test commands run:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- All three explicit Release builds succeeded with 0 warnings and 0 errors.
+- `log-json` was not runtime-tested because launching the supervisor can trigger the local elevated VR/SteamVR/Pimax workflow. It was verified by code inspection and successful build.
+
+Publish commands run:
+
+- `New-Item -ItemType Directory -Force .\release\PimaxVrcSupervisor-v1.3.0-test | Out-Null`
+- `dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `dotnet publish .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+
+Publish result:
+
+- Publish succeeded for all three projects.
+- Release folder: `release/PimaxVrcSupervisor-v1.3.0-test`
+- `git status --short release` reported no staged or unstaged tracked release changes.
+- `git status --ignored --short release` reported `!! release/`, confirming generated release output is ignored.
+
+New recent-log surface:
+
+- New command: `log-json`
+- JSON is compact one-line output for the current line-oriented TCP bridge.
+- `log-json` uses the same default recent-line count as `log`: 14 lines.
+- Per-line timestamps are best-effort local same-day values parsed from the existing `HH:mm:ss` prefix. If parsing fails, the per-line `timestamp` is `null`.
+- Each line preserves `raw`, uses source `console`, and uses level `info`.
+- `commands-json` now includes `log-json` metadata.
+
+Compatibility:
+
+- `log` remains unchanged and still returns the recent console-line JSON string array used by the SteamVR dashboard.
+- `status`, `status-json`, `commands-json`, and all existing dashboard action commands keep their names and behavior.
+- `PimaxVrcSupervisor.SteamVrHost` was not changed.
+- Existing `SupervisorConsoleLog`, `SupervisorDiagnosticsSession`, debug logging, and diagnostic logging were not replaced.
+
+Deferred:
+
+- Full diagnostic log-file access was intentionally not added.
+- Filesystem log browsing was intentionally not added.
+- Streaming events were intentionally deferred.
+- `events-json` was intentionally not implemented in this phase.
+- Generic JSON action execution remains deferred.
+
+Known issues:
+
+- `log-json` runtime behavior should be exercised in a safe supervisor session before relying on it for an external frontend.
+- Per-line timestamps are best-effort because the existing console buffer stores only time of day, not date or offset.
+- The structured recent-log surface is derived only from the bounded in-memory console buffer, not diagnostics files.
+- Release output is generated locally and ignored; it must not be committed unless release policy changes.
+
 ## Next Prompt Handling
 
 Full phase prompts are prepared manually outside this file and pasted into Codex when needed.
+
+Short Phase 4 direction:
+
+- Add a read-only JSON request envelope for safe read-only commands only: `status-json`, `commands-json`, and `log-json`.
+- Do not add JSON execution for action commands yet.
+- Keep action commands such as `restart-core-apps`, `base-stations-off`, and `force-stop-supervisor` as legacy string commands until confirmation and danger handling are designed.
