@@ -132,10 +132,10 @@ The current SteamVR host already uses a local loopback TCP command bridge for da
 ### Phase 0 - Repository inspection and architecture documentation
 Status: Completed
 
-### Phase 1 - Console output and event abstraction
-Status: Not started
+### Phase 1 - Structured status snapshot and v1.3.0-test publish baseline
+Status: Completed
 
-### Phase 2 - Structured status snapshot model
+### Phase 2 - Structured command request/response models
 Status: Not started
 
 ### Phase 3 - Backend command model
@@ -164,6 +164,7 @@ Status: Not started
 - Base-station power behavior includes BLE timing, retries, unsupported state reads, OpenVR confirmation, and detached emergency cleanup; future UI work must not alter command ordering or shutdown safety.
 - The existing SteamVR dashboard bridge uses loopback TCP port `37957`; future Ratatui IPC should account for it without breaking the SteamVR host.
 - Root `dotnet build` does not work because there is no project or solution file at the repository root; future phases may need explicit project builds or a solution file if build verification policy changes.
+- `status-json` was verified by code inspection and successful build only; runtime testing would require launching the elevated supervisor workflow in the local VR/SteamVR environment.
 
 ## Phase Log
 
@@ -198,11 +199,86 @@ Known issues:
 - Existing SteamVR dashboard bridge uses loopback TCP and should not be broken while preparing future IPC.
 - Root build ambiguity should be resolved or future prompts should run explicit project builds.
 
+### Phase 1 - Structured status snapshot and v1.3.0-test publish baseline
+
+Status: Completed
+
+Summary:
+
+- Added a compact structured `SupervisorStatusSnapshot` beside the existing string `BuildSupervisorStatus()` output.
+- Added the `status-json` dashboard command, serialized as compact one-line camelCase JSON for the line-oriented TCP command bridge.
+- Preserved the old text `status` command key names/order and the `log` command response used by the SteamVR dashboard.
+- Updated all project version metadata to `1.3.0-test` with numeric assembly/file versions `1.3.0.0`.
+- Published the local test output folder `release/PimaxVrcSupervisor-v1.3.0-test`.
+
+Files changed:
+
+- `PimaxVrcSupervisor/Program.cs`
+- `PimaxVrcSupervisor/PimaxVrcSupervisor.csproj`
+- `PimaxVrcSupervisor.ConfigEditor/PimaxVrcSupervisor.ConfigEditor.csproj`
+- `PimaxVrcSupervisor.SteamVrHost/PimaxVrcSupervisor.SteamVrHost.csproj`
+- `docs/ratatui-tui-migration-progress.md`
+
+Build/test commands run:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- All three explicit Release builds succeeded with 0 warnings and 0 errors.
+- `status-json` was not runtime-tested because launching the supervisor can trigger the local elevated VR/SteamVR/Pimax workflow. It was verified by code inspection and successful build.
+
+Publish commands run:
+
+- `New-Item -ItemType Directory -Force .\release\PimaxVrcSupervisor-v1.3.0-test | Out-Null`
+- `dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `dotnet publish .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+
+Publish result:
+
+- Publish succeeded for all three projects.
+- Release folder: `release/PimaxVrcSupervisor-v1.3.0-test`
+- Verified release output includes `PimaxVrcSupervisor.exe`, `PimaxVrcSupervisorConfigurator.exe`, `PimaxVrcSupervisorSteamVrHost.exe`, `supervisor.config.json`, runtime/dependency files, and `Assets/vr-overlay-icon.png`.
+- `git status --short release` reported no staged or unstaged tracked release changes.
+- `git status --ignored --short release` reported `!! release/`, confirming generated release output is ignored.
+
+New status surface:
+
+- New command: `status-json`
+- JSON is compact one-line output for the current line-oriented TCP bridge.
+- JSON fields are camelCase: `timestamp`, `appVersion`, `mode`, `steamVr`, `lifecycle`, `coreApps`, `baseStations`, `oscRouter`, `oscGoesBrrr`, `shutdownProgress`, `shutdownProgressElapsed`, `shutdownBlockedBy`, `shutdownBlockedElapsed`, and `blockingProcesses`.
+- `timestamp` uses `DateTimeOffset.UtcNow`.
+- `appVersion` uses `AppVersion.Current`.
+
+Compatibility:
+
+- `status` remains text-based and parser-compatible with the existing SteamVR host. It preserves `Mode`, `SteamVR`, `Lifecycle`, `CoreApps`, `BaseStations`, `OscRouter`, and `OscGoesBrrr` key names and order.
+- Optional text suffixes remain compatible for `ShutdownProgress`, `ShutdownBlockedBy`, and `BlockingProcesses`.
+- `log` still returns the recent console-line JSON string array used by the SteamVR dashboard.
+- Existing dashboard action commands keep their names and behavior.
+
+Version metadata changes:
+
+- `Version`: `1.3.0-test`
+- `InformationalVersion`: `1.3.0-test`
+- `AssemblyVersion`: `1.3.0.0`
+- `FileVersion`: `1.3.0.0`
+
+Known issues:
+
+- The initial snapshot intentionally mirrors the current string status and does not yet model nested process, app, base-station, or OSC route details.
+- The existing command bridge remains the one-line string protocol over loopback TCP.
+- `status-json` runtime behavior should be exercised in a safe supervisor session before relying on it for an external frontend.
+- Release output is generated locally and ignored; it must not be committed unless release policy changes.
+
 ## Next Codex Prompt
 
 You are working on the `cli-ui2` branch of `Zaknin/Pimax-VRC-Supervisor`.
 
-Phase 1 - Console output and event abstraction.
+Phase 2 - Structured command request/response models.
 
 Rules:
 
@@ -214,20 +290,24 @@ Rules:
 - Preserve all existing CLI modes.
 - Preserve Ctrl+C and console-close emergency cleanup.
 - Do not remove the old console interface.
-- Do not add IPC yet.
 - Do not add Rust or Ratatui yet.
+- Do not add named-pipe IPC yet.
+- Do not replace the existing one-line dashboard command protocol.
+- Preserve the existing SteamVR dashboard compatibility.
+- Do not refactor cleanup, process lifecycle, monitor handling, base-station handling, OSC routing, scheduled tasks, SteamVR manifest behavior, or config semantics.
 - Keep changes small and buildable.
 - Update `docs/ratatui-tui-migration-progress.md` at the end of the phase.
 
 Tasks:
 
 1. Read `docs/ratatui-tui-migration-progress.md`.
-2. Inspect the current console output implementation, especially `SupervisorConsoleLog` and direct `Console.WriteLine` usage in `PimaxVrcSupervisor/Program.cs`.
-3. Add a small event/log abstraction for supervisor output, using names such as `SupervisorEvent` and `ISupervisorEventSink` or equivalent.
-4. `SupervisorEvent` should include timestamp, severity, category, source, and message fields.
-5. Add a console sink that preserves the current console output behavior.
-6. Add or evolve a bounded in-memory event/log buffer. If replacing or extending `SupervisorConsoleLog`, preserve the current recent-console-lines behavior used by the SteamVR dashboard.
-7. Start with only small safe replacements of direct console output. Do not attempt to replace every `Console.WriteLine` in one phase.
-8. Do not change startup behavior, process lifecycle behavior, cleanup behavior, dashboard commands, scheduled tasks, monitor handling, base-station handling, OSC routing, or config semantics.
-9. Run `dotnet build`. If the root build still fails because no solution/project exists at the root, document that result and, if safe, run explicit project builds for the existing `.csproj` files.
-10. Summarize files changed, build/test result, remaining risks, and the next phase.
+2. Inspect `ExecuteSupervisorCommandAsync(...)`, `SupervisorCommandServer`, the SteamVR host command sender/parser, and the new `status-json` command.
+3. Add small structured command request/response model types for future JSON clients, for example `SupervisorCommandRequest` and `SupervisorCommandResponse`.
+4. Preserve all existing one-line string commands and responses. The current SteamVR host must continue sending commands such as `status`, `log`, `restart-core-apps`, and receiving compatible string responses.
+5. Add a new JSON command entrypoint only if it can be done without breaking the current line-oriented bridge, such as a `command-json` command that accepts a compact JSON request payload on the same line.
+6. The response model should include at least timestamp, command, success, message, and optional data fields where safe.
+7. Do not change command behavior, cleanup behavior, process lifecycle behavior, dashboard button behavior, or old command names.
+8. If `command-json` cannot be safely added without protocol ambiguity, document the reason and add only the model/types plus a clear next-step design note.
+9. Run explicit Release builds for all three projects. Do not use plain root `dotnet build`.
+10. If safe and requested by the phase scope, publish to the existing `release/PimaxVrcSupervisor-v1.3.0-test` folder and verify release output remains ignored.
+11. Update this progress file with files changed, build/publish results, compatibility notes, runtime-test limitations, known risks, and the next recommended phase.

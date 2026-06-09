@@ -1229,10 +1229,30 @@ internal struct ConsoleHotkeys
     public bool ShowHelp { get; set; }
 }
 
+internal sealed record SupervisorStatusSnapshot(
+    DateTimeOffset Timestamp,
+    string AppVersion,
+    string Mode,
+    string SteamVr,
+    string Lifecycle,
+    string CoreApps,
+    string BaseStations,
+    string OscRouter,
+    string OscGoesBrrr,
+    string? ShutdownProgress,
+    string? ShutdownProgressElapsed,
+    string? ShutdownBlockedBy,
+    string? ShutdownBlockedElapsed,
+    string? BlockingProcesses);
+
 internal sealed class AppSupervisor
 {
     private const int BrokenEyeStartupMaxAttempts = 10;
     private const string ForcedManualReloadMarkerFileName = "PimaxVrcSupervisorForcedManualReload.marker";
+    private static readonly JsonSerializerOptions StatusSnapshotJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
     private static readonly TimeSpan BrokenEyeStartupCheckDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan SteamVrBaseStationStartupDelay = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan LovenseBluetoothRegistryRecentWindow = TimeSpan.FromHours(1);
@@ -2865,6 +2885,7 @@ internal sealed class AppSupervisor
             response = command switch
             {
                 "status" => BuildSupervisorStatus(),
+                "status-json" => JsonSerializer.Serialize(BuildSupervisorStatusSnapshot(), StatusSnapshotJsonOptions),
                 "log" => JsonSerializer.Serialize(SupervisorConsoleLog.GetRecentLines(14)),
                 "restart-core-apps" => await RestartCoreAppsAndReturnAsync(cancellationToken),
                 "start-osc-goes-brrr" => await StartOscGoesBrrrAndReturnAsync(cancellationToken),
@@ -2945,6 +2966,19 @@ internal sealed class AppSupervisor
 
     private string BuildSupervisorStatus()
     {
+        var snapshot = BuildSupervisorStatusSnapshot();
+        var shutdownProgress = snapshot.ShutdownProgress is null || snapshot.ShutdownProgressElapsed is null
+            ? ""
+            : $"; ShutdownProgress={snapshot.ShutdownProgress}({snapshot.ShutdownProgressElapsed})";
+        var blockedBySteamVr = snapshot.ShutdownBlockedBy is null || snapshot.ShutdownBlockedElapsed is null || snapshot.BlockingProcesses is null
+            ? ""
+            : $"; ShutdownBlockedBy={snapshot.ShutdownBlockedBy}({snapshot.ShutdownBlockedElapsed}); BlockingProcesses={snapshot.BlockingProcesses}";
+        return $"Mode={snapshot.Mode}; SteamVR={snapshot.SteamVr}; Lifecycle={snapshot.Lifecycle}; CoreApps={snapshot.CoreApps}; BaseStations={snapshot.BaseStations}; OscRouter={snapshot.OscRouter}; OscGoesBrrr={snapshot.OscGoesBrrr}{shutdownProgress}{blockedBySteamVr}";
+    }
+
+    private SupervisorStatusSnapshot BuildSupervisorStatusSnapshot()
+    {
+        var now = DateTimeOffset.UtcNow;
         var mode = _steamVrStart ? "SteamVR" : "VRChat";
         var steamVrRunning = IsAnyProcessRunning(_config.SteamVrServerProcessNames) ? "running" : "not running";
         var coreApps = !_config.FaceTrackerAutomationEnabled
@@ -2966,13 +3000,31 @@ internal sealed class AppSupervisor
             SupervisorLifecyclePhase.ShutdownRoutineRunning => "shutdown-running",
             _ => "unknown"
         };
-        var blockedBySteamVr = _shutdownBlockedBySteamVrSince is null
-            ? ""
-            : $"; ShutdownBlockedBy=SteamVR({FormatElapsed(DateTimeOffset.UtcNow - _shutdownBlockedBySteamVrSince.Value)}); BlockingProcesses={DescribeRunningProcesses(_config.SteamVrServerProcessNames)}";
-        var shutdownProgress = _shutdownProgress is null || _shutdownProgressSince is null
-            ? ""
-            : $"; ShutdownProgress={_shutdownProgress}({FormatElapsed(DateTimeOffset.UtcNow - _shutdownProgressSince.Value)})";
-        return $"Mode={mode}; SteamVR={steamVrRunning}; Lifecycle={lifecycle}; CoreApps={coreApps}; BaseStations={baseStations}; OscRouter={oscRouter}; OscGoesBrrr={oscGoesBrrr}{shutdownProgress}{blockedBySteamVr}";
+        var shutdownProgressElapsed = _shutdownProgress is null || _shutdownProgressSince is null
+            ? null
+            : FormatElapsed(now - _shutdownProgressSince.Value);
+        var shutdownBlockedElapsed = _shutdownBlockedBySteamVrSince is null
+            ? null
+            : FormatElapsed(now - _shutdownBlockedBySteamVrSince.Value);
+        var blockingProcesses = _shutdownBlockedBySteamVrSince is null
+            ? null
+            : DescribeRunningProcesses(_config.SteamVrServerProcessNames);
+
+        return new SupervisorStatusSnapshot(
+            now,
+            AppVersion.Current,
+            mode,
+            steamVrRunning,
+            lifecycle,
+            coreApps,
+            baseStations,
+            oscRouter,
+            oscGoesBrrr,
+            _shutdownProgress,
+            shutdownProgressElapsed,
+            _shutdownBlockedBySteamVrSince is null ? null : "SteamVR",
+            shutdownBlockedElapsed,
+            blockingProcesses);
     }
 
     private bool IsFaceTrackingAppSetRunning()
