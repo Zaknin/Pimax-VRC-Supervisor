@@ -100,7 +100,7 @@ Confirmed actions run in background worker threads. The confirmation modal close
 The TUI tracks running actions by canonical backend command name:
 
 - The same command cannot be started twice while it is already running.
-- `base-stations-on` and `base-stations-off` cannot run at the same time.
+- `base-stations-on` and `base-stations-off` cannot run at the same time; the supervisor backend also rejects overlapping manual base-station power actions from other entry points.
 - Other different actions may run concurrently.
 
 If `Q` is pressed while actions are running, only the Rust TUI exits. It does not cancel backend work, stop the supervisor, send `force-stop-supervisor`, or run cleanup routines. Pending action results may be lost after the TUI exits.
@@ -131,7 +131,7 @@ Do not commit generated `target/` or `release/` output. Keep `PimaxVrcSupervisor
 - Only the six audited regular classic-console actions are executable from the TUI.
 - Every TUI action requires explicit confirmation and uses backend `action-json`.
 - Read-only `query-json` polling keeps short timeouts; confirmed `action-json` requests use a separate longer timeout so successful backend work is not reported as a short polling timeout.
-- Confirmed actions run in the background; duplicate commands and Base Stations On/Off overlap are blocked in the TUI.
+- Confirmed actions run in the background; duplicate commands are blocked in the TUI, and Base Stations On/Off overlap is blocked by both the TUI and supervisor backend.
 - No legacy action commands are sent by the TUI.
 - `force-stop-supervisor` remains blocked and is not exposed.
 - No backend auto-start.
@@ -161,6 +161,8 @@ Phase 15 adds classic-console action parity for regular operator actions. Number
 Phase 15C fixes runtime UX issues from parity testing. `0` is now primary Help, `H` remains an English-layout alias, Help closes on any key press and consumes that key, the footer lists direct `1`-`6` action mappings on wide terminals, dashboard `Q` quits only the Rust TUI, and confirmed actions use a separate 30 second response timeout.
 
 Phase 16 moves confirmed TUI actions into background workers and allows safe concurrent actions. It blocks duplicate same-command starts and Base Stations On/Off overlap only. It also adds Configurator validation that refuses core app executables in Autostart apps, plus supervisor runtime protection that warns and skips manually configured duplicate Autostart entries.
+
+Phase 16B adds the matching backend-local manual base-station action guard, so Base Stations On/Off overlap is rejected by the supervisor even when the request comes from classic console input, a legacy bridge client, structured `action-json`, or a future UI client.
 
 ## Future Direction
 

@@ -1230,6 +1230,8 @@ internal struct ConsoleHotkeys
     public bool ShowHelp { get; set; }
 }
 
+internal sealed record ManualBaseStationActionResult(bool Accepted, string Message);
+
 internal sealed record SupervisorStatusSnapshot(
     DateTimeOffset Timestamp,
     string AppVersion,
@@ -1330,6 +1332,7 @@ internal sealed class AppSupervisor
     private readonly SemaphoreSlim _cleanupLock = new(1, 1);
     private readonly SemaphoreSlim _coreAppRestartLock = new(1, 1);
     private readonly SemaphoreSlim _autoLaunchAppsRoutineLock = new(1, 1);
+    private readonly SemaphoreSlim _manualBaseStationActionLock = new(1, 1);
     private readonly DateTimeOffset _startedAt = DateTimeOffset.Now;
     private bool? _lastPimaxConnected;
     private bool? _lastMouthTrackerConnected;
@@ -3030,20 +3033,10 @@ internal sealed class AppSupervisor
     }
 
     private async Task<string> ManualPowerOnBaseStationsCommandAsync(CancellationToken token)
-    {
-        await ManualPowerOnBaseStationsAsync(token);
-        return _config.BaseStationsEnabled
-            ? "Base station power-on requested."
-            : "Base stations are not enabled in config; manual startup routine requested.";
-    }
+        => (await ManualPowerOnBaseStationsAsync(token)).Message;
 
     private async Task<string> ManualPowerDownBaseStationsCommandAsync(CancellationToken token)
-    {
-        await ManualPowerDownBaseStationsAsync(token);
-        return _config.BaseStationsEnabled
-            ? "Base station power-off requested."
-            : "Base stations are not enabled in config; manual shutdown routine requested.";
-    }
+        => (await ManualPowerDownBaseStationsAsync(token)).Message;
 
     private async Task<string> ReloadAutostartAppsCommandAsync(CancellationToken token)
     {
@@ -3455,8 +3448,8 @@ internal sealed class AppSupervisor
         {
             "restart-core-apps" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, RestartCoreAppsCommandAsync, cancellationToken),
             "start-osc-goes-brrr" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, StartOscGoesBrrrCommandAsync, cancellationToken),
-            "base-stations-on" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ManualPowerOnBaseStationsCommandAsync, cancellationToken),
-            "base-stations-off" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ManualPowerDownBaseStationsCommandAsync, cancellationToken),
+            "base-stations-on" => await ExecuteConfirmedBaseStationActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ManualPowerOnBaseStationsAsync, cancellationToken),
+            "base-stations-off" => await ExecuteConfirmedBaseStationActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ManualPowerDownBaseStationsAsync, cancellationToken),
             "restart-osc-router" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, RestartOscRouterCommandAsync, cancellationToken),
             "reload-autostart-apps" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ReloadAutostartAppsCommandAsync, cancellationToken),
             "force-stop-supervisor" => ActionJsonResult(
@@ -3511,6 +3504,47 @@ internal sealed class AppSupervisor
                 message,
                 data: null,
                 error: null);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            return ActionJsonResult(
+                requestId,
+                canonicalCommand,
+                success: false,
+                message: $"{canonicalCommand} action failed.",
+                data: null,
+                error: ex.Message);
+        }
+    }
+
+    private async Task<SupervisorCommandResult> ExecuteConfirmedBaseStationActionAsync(
+        string? requestId,
+        string canonicalCommand,
+        bool? confirmed,
+        Func<CancellationToken, Task<ManualBaseStationActionResult>> executeAsync,
+        CancellationToken cancellationToken)
+    {
+        if (confirmed != true)
+        {
+            return ActionJsonResult(
+                requestId,
+                canonicalCommand,
+                success: false,
+                message: $"{canonicalCommand} requires confirmed=true.",
+                data: null,
+                error: "Structured action requires JSON boolean confirmed=true.");
+        }
+
+        try
+        {
+            var result = await executeAsync(cancellationToken);
+            return ActionJsonResult(
+                requestId,
+                canonicalCommand,
+                success: result.Accepted,
+                message: result.Message,
+                data: null,
+                error: result.Accepted ? null : result.Message);
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
@@ -3712,13 +3746,33 @@ internal sealed class AppSupervisor
         }
     }
 
-    private async Task ManualPowerOnBaseStationsAsync(CancellationToken cancellationToken)
+    private async Task<ManualBaseStationActionResult> ManualPowerOnBaseStationsAsync(CancellationToken cancellationToken)
     {
+        if (!await _manualBaseStationActionLock.WaitAsync(0, cancellationToken))
+        {
+            return BaseStationActionBusy();
+        }
+
+        try
+        {
+            return await ManualPowerOnBaseStationsCoreAsync(cancellationToken);
+        }
+        finally
+        {
+            _manualBaseStationActionLock.Release();
+        }
+    }
+
+    private async Task<ManualBaseStationActionResult> ManualPowerOnBaseStationsCoreAsync(CancellationToken cancellationToken)
+    {
+        var resultMessage = _config.BaseStationsEnabled
+            ? "Base station power-on requested."
+            : "Base stations are not enabled in config; manual startup routine requested.";
         var baseStations = GetEnabledBaseStations();
         if (baseStations.Length == 0)
         {
             Console.WriteLine("No enabled configured base stations to power on.");
-            return;
+            return new ManualBaseStationActionResult(true, resultMessage);
         }
 
         if (!_config.BaseStationsEnabled)
@@ -3735,15 +3789,36 @@ internal sealed class AppSupervisor
         _baseStationSteamVrConfirmedActive.Clear();
         _nextBaseStationPowerOnAttemptAt = null;
         await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken, manualOverride: true);
+        return new ManualBaseStationActionResult(true, resultMessage);
     }
 
-    private async Task ManualPowerDownBaseStationsAsync(CancellationToken cancellationToken)
+    private async Task<ManualBaseStationActionResult> ManualPowerDownBaseStationsAsync(CancellationToken cancellationToken)
     {
+        if (!await _manualBaseStationActionLock.WaitAsync(0, cancellationToken))
+        {
+            return BaseStationActionBusy();
+        }
+
+        try
+        {
+            return await ManualPowerDownBaseStationsCoreAsync(cancellationToken);
+        }
+        finally
+        {
+            _manualBaseStationActionLock.Release();
+        }
+    }
+
+    private async Task<ManualBaseStationActionResult> ManualPowerDownBaseStationsCoreAsync(CancellationToken cancellationToken)
+    {
+        var resultMessage = _config.BaseStationsEnabled
+            ? "Base station power-off requested."
+            : "Base stations are not enabled in config; manual shutdown routine requested.";
         var baseStations = GetEnabledBaseStations();
         if (baseStations.Length == 0)
         {
             Console.WriteLine("No enabled configured base stations to power off.");
-            return;
+            return new ManualBaseStationActionResult(true, resultMessage);
         }
 
         if (!_config.BaseStationsEnabled)
@@ -3754,6 +3829,14 @@ internal sealed class AppSupervisor
         _baseStationPowerOnAttempted = true;
         _baseStationsPoweredOn = true;
         await TryPowerDownBaseStationsForSessionAsync(cancellationToken, manualOverride: true);
+        return new ManualBaseStationActionResult(true, resultMessage);
+    }
+
+    private static ManualBaseStationActionResult BaseStationActionBusy()
+    {
+        const string message = "Base station power action already in progress; ignoring overlapping request.";
+        Console.WriteLine(message);
+        return new ManualBaseStationActionResult(false, message);
     }
 
     private async Task RestartOscRouterAsync(CancellationToken cancellationToken, bool manualOverride = false)

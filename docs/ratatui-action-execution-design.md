@@ -72,6 +72,10 @@ Action completion, timeout, bridge failure, or worker panic records a failed or 
 
 Phase 16 also protects against duplicated core app launches: the Configurator refuses to save Broken Eye or VRCFaceTracking as Autostart apps, and the supervisor warns and skips manually configured duplicate Autostart entries at runtime.
 
+## Phase 16B Implementation Status
+
+Phase 16B adds a backend-local manual base-station action guard. Base Stations On/Off overlap is now protected both by the TUI conflict model and by the supervisor backend itself, so classic console input, legacy bridge clients, structured `action-json`, and future clients cannot mutate base-station state concurrently.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:
@@ -132,7 +136,7 @@ For Phase 15 actions:
 - Help closes on any key press and consumes the key instead of passing it through to dashboard shortcuts.
 - Action results appear in the backend/status area.
 - Duplicate same-command starts are rejected while that command is running.
-- `base-stations-on` and `base-stations-off` are mutually exclusive while running.
+- `base-stations-on` and `base-stations-off` are mutually exclusive while running; this is enforced in both the TUI and the supervisor backend.
 - Blocked commands should not be executable and should explain why when selected or inspected.
 
 ## Future Backend Protocol

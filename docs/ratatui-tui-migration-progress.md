@@ -1891,9 +1891,70 @@ Backend concurrency audit result:
 - Base-station manual actions share mutable base-station state, so the TUI keeps Base Stations On/Off mutual exclusion.
 - Final TUI behavior chosen: background execution remains enabled; duplicate same-command starts are blocked; Base Stations On/Off overlap is blocked; no backend threading rewrite.
 
+### Phase 16B - Backend base-station action guard
+
+Status: Completed
+
+Summary:
+
+- Added a backend-local manual base-station action guard.
+- Base Stations On/Off overlap is now protected both by the TUI conflict model and by the supervisor backend itself, so other entry points cannot mutate base-station state concurrently.
+- Kept the backend `action-json` allowlist unchanged at the six Phase 15/16 classic-console parity actions.
+- Kept `force-stop-supervisor` blocked and not TUI-executable.
+- Kept SteamVR host behavior, classic console key mappings, cleanup/lifecycle behavior, TCP bridge concurrency, and TUI behavior unchanged.
+
+Backend changes:
+
+- Added one shared manual base-station action semaphore in `PimaxVrcSupervisor/Program.cs`.
+- Added a small `ManualBaseStationActionResult` with `Accepted` and `Message`.
+- Wrapped the common manual Base Stations On/Off helper path with non-blocking guard acquisition and `finally` release.
+- Overlapping manual Base Stations On/Off requests return/log `Base station power action already in progress; ignoring overlapping request.`
+- Legacy bridge and structured `action-json` responses use the guarded helper result message, so busy overlap is reported directly.
+- Structured `action-json` Base Stations On/Off overlap returns `success=false` with the exact busy message.
+
+Documentation changes:
+
+- Updated `docs/ratatui-action-execution-design.md` and `docs/ratatui-tui.md` to record that Base Stations On/Off mutual exclusion is enforced by both the TUI and supervisor backend.
+
+Files changed:
+
+- `PimaxVrcSupervisor/Program.cs`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Build/test commands run:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+
+Build/test result:
+
+- All three C# release builds completed successfully with 0 warnings and 0 errors.
+- Initial Cargo commands failed because `cargo` was not visible in the current shell PATH.
+- After refreshing `$env:Path += ";$env:USERPROFILE\.cargo\bin"`, Rust debug and release builds completed successfully.
+- Source inspection confirmed Base Stations On/Off share one backend-local guard and the guard release is in `finally`.
+- Source inspection confirmed the backend `action-json` allowlist remains the six Phase 15/16 parity actions and `force-stop-supervisor` remains blocked/not TUI-executable.
+- Source inspection confirmed the TUI still sends `action-json` only through `execute_tui_action(TuiAction)` and sends no legacy action command strings directly.
+
+Generated output status:
+
+- `git status --short release` produced no staged/tracked release output.
+- `git status --ignored --short release` reported `!! release/`.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
+- Generated `release/` and Rust `target/` output remain ignored and were not staged.
+
+Runtime testing:
+
+- Runtime base-station overlap testing was not performed during implementation.
+- When safe, test Base Stations On/Off overlap from separate entry points and verify the overlapping request logs/returns the busy message while the supervisor continues running.
+
 Short Phase 17 direction:
 
-- Run a manual VR-session test matrix for concurrent TUI actions, duplicate blocking, Base Stations On/Off mutual exclusion, and duplicate Autostart validation/runtime skipping.
+- Run a manual VR-session test matrix for concurrent TUI actions, duplicate blocking, backend/TUI Base Stations On/Off mutual exclusion, and duplicate Autostart validation/runtime skipping.
 
 ### Phase 15C - TUI action parity runtime UX fixes
 
