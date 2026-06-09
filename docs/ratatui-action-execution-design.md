@@ -48,7 +48,7 @@ The TUI tracks action in-progress state and rejects duplicate action attempts wi
 
 ## Phase 13/14 Implementation Status
 
-Phase 13 made layout-independent keys the primary desktop TUI shortcuts. Phase 14 changes help to `H` only, removes `F1`, `?`, and Russian help aliases, and keeps `F5` refresh, `1` Restart OSC Router confirmation, `Enter` confirm, and `Esc` cancel. Phase 14B replaces the `400 ms` quiet-interval guard with a fixed `250 ms` debounce based on the last successful Help toggle, making normal `H` presses more responsive while still ignoring repeat/release events.
+Phase 13 made layout-independent keys the primary desktop TUI shortcuts. Phase 14 changes help to `H` only, removes `F1`, `?`, and Russian help aliases, and keeps `F5` refresh, `1` Restart OSC Router confirmation, `Enter` confirm, and `Esc` cancel. Phase 14B replaces the `400 ms` quiet-interval guard with a fixed `100 ms` debounce based on the last successful Help toggle, making normal `H` presses more responsive while still ignoring repeat/release events.
 
 The classic console behavior remains unchanged and continues to use `1`-`6` plus `F1`. The backend action allowlist is unchanged, and `restart-osc-router` remains the only executable desktop TUI action.
 

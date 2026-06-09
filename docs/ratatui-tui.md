@@ -126,7 +126,7 @@ Phase 11 enables the first controlled TUI action for `restart-osc-router` only. 
 
 Phase 12 hardens overlay input handling and action result display. The TUI ignores repeated/released key events, confirmation input takes priority over help and dashboard input, help closes before `q` quits, duplicate action attempts are rejected while an action is in progress, and the latest action result is shown in the backend/status area.
 
-Phase 13 made layout-independent shortcuts primary with `F1` help. Phase 14 changed TUI help to `H` only, removed `F1`, `?`, and Russian help aliases, and added a `400 ms` quiet-interval H-key guard. Phase 14B tunes that to a fixed `250 ms` debounce based on the last successful Help toggle, making normal `H` presses more responsive while still ignoring repeat/release events. The classic console keeps its existing `1`-`6` and `F1` hotkeys.
+Phase 13 made layout-independent shortcuts primary with `F1` help. Phase 14 changed TUI help to `H` only, removed `F1`, `?`, and Russian help aliases, and added a `400 ms` quiet-interval H-key guard. Phase 14B tunes that to a fixed `100 ms` debounce based on the last successful Help toggle, making normal `H` presses more responsive while still ignoring repeat/release events. The classic console keeps its existing `1`-`6` and `F1` hotkeys.
 
 ## Future Direction
 

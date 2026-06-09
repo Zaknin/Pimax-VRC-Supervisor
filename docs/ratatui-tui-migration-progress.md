@@ -1567,7 +1567,7 @@ Status: Completed
 
 Summary:
 
-- Replaced the Phase 14 `400 ms` quiet-interval H-key guard with a fixed `250 ms` debounce.
+- Replaced the Phase 14 `400 ms` quiet-interval H-key guard with a fixed `100 ms` debounce.
 - Debounce is based on the last successful Help toggle.
 - Ignored `H`/`h` events no longer update the debounce timestamp.
 - Kept `H`/`h` as the only Help trigger.
@@ -1632,6 +1632,13 @@ Runtime testing:
 
 - Runtime shortcut testing was not performed during implementation unless explicitly recorded later.
 - Expected runtime acceptance: normal `H` presses feel more responsive than Phase 14, held `H` does not flicker badly, Help no longer lists Russian aliases, and only confirmed `restart-osc-router` can execute.
+
+Post-14B tuning:
+
+- Tuned the fixed Help debounce from `250 ms` to `100 ms` to make normal `H` presses more reactive.
+- Kept debounce based on the last successful Help toggle.
+- Kept `KeyEventKind::Repeat` and `KeyEventKind::Release` ignored.
+- No shortcut mappings, executable actions, backend behavior, SteamVR host behavior, classic console behavior, or Configurator behavior changed.
 
 Short Phase 15 direction:
 

@@ -11,7 +11,7 @@ use crate::{
 };
 
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
-pub const HELP_TOGGLE_DEBOUNCE: Duration = Duration::from_millis(250);
+pub const HELP_TOGGLE_DEBOUNCE: Duration = Duration::from_millis(100);
 pub const MAX_LOG_LINES: usize = 80;
 pub const LOG_PAGE_SIZE: usize = 8;
 
