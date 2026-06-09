@@ -315,6 +315,7 @@ internal sealed class DiagnosticTextLog : IDisposable
             }
 
             _writer.WriteLine($"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz} {message}");
+            _writer.Flush();
         }
     }
 
@@ -391,6 +392,7 @@ internal sealed class DebugLogSession : IDisposable
             }
 
             _writer.WriteLine($"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz} {message}");
+            _writer.Flush();
         }
     }
 
@@ -465,8 +467,9 @@ internal sealed class SupervisorDiagnosticsSession : IDisposable
     private readonly OperationStats _mainLoop = new();
     private readonly OperationStats _processDetection = new();
     private readonly OperationStats _pimaxLogScan = new();
-    private readonly OperationStats _baseStationPowerOn = new();
-    private readonly OperationStats _baseStationPowerDown = new();
+    private readonly OperationStats _baseStationWakeRoutine = new();
+    private readonly OperationStats _baseStationWakeNoop = new();
+    private readonly OperationStats _baseStationPowerDownRoutine = new();
     private readonly OperationStats _coreAppStart = new();
     private readonly OperationStats _coreAppRestart = new();
     private readonly ConcurrentDictionary<string, OperationStats> _commands = new(StringComparer.OrdinalIgnoreCase);
@@ -548,11 +551,14 @@ internal sealed class SupervisorDiagnosticsSession : IDisposable
         }
     }
 
-    public void RecordBaseStationPowerOn(TimeSpan elapsed)
-        => _baseStationPowerOn.Record(elapsed);
+    public void RecordBaseStationWakeRoutine(TimeSpan elapsed)
+        => _baseStationWakeRoutine.Record(elapsed);
 
-    public void RecordBaseStationPowerDown(TimeSpan elapsed)
-        => _baseStationPowerDown.Record(elapsed);
+    public void RecordBaseStationWakeNoop(TimeSpan elapsed)
+        => _baseStationWakeNoop.Record(elapsed);
+
+    public void RecordBaseStationPowerDownRoutine(TimeSpan elapsed)
+        => _baseStationPowerDownRoutine.Record(elapsed);
 
     public void RecordCoreAppStart(TimeSpan elapsed)
         => _coreAppStart.Record(elapsed);
@@ -562,6 +568,9 @@ internal sealed class SupervisorDiagnosticsSession : IDisposable
 
     public void WriteVerbose(string message)
         => _log.WriteVerbose(message);
+
+    public void WriteEvent(string message)
+        => _log.Write(message);
 
     public bool ShouldWriteCommandDebug(string command)
         => DebugEnabled && (Verbose || !IsRoutineDashboardPollCommand(command));
@@ -588,8 +597,9 @@ internal sealed class SupervisorDiagnosticsSession : IDisposable
         var mainLoop = _mainLoop.SnapshotAndReset();
         var processDetection = _processDetection.SnapshotAndReset();
         var pimaxLogScan = _pimaxLogScan.SnapshotAndReset();
-        var baseStationPowerOn = _baseStationPowerOn.SnapshotAndReset();
-        var baseStationPowerDown = _baseStationPowerDown.SnapshotAndReset();
+        var baseStationWakeRoutine = _baseStationWakeRoutine.SnapshotAndReset();
+        var baseStationWakeNoop = _baseStationWakeNoop.SnapshotAndReset();
+        var baseStationPowerDownRoutine = _baseStationPowerDownRoutine.SnapshotAndReset();
         var coreAppStart = _coreAppStart.SnapshotAndReset();
         var coreAppRestart = _coreAppRestart.SnapshotAndReset();
         var commandSummary = string.Join(
@@ -612,8 +622,9 @@ internal sealed class SupervisorDiagnosticsSession : IDisposable
             + $"; mainLoop=count={mainLoop.Count},avgMs={mainLoop.AverageMilliseconds:0.0},maxMs={mainLoop.Max.TotalMilliseconds:0.0}"
             + $"; processDetection=count={processDetection.Count},avgMs={processDetection.AverageMilliseconds:0.0},maxMs={processDetection.Max.TotalMilliseconds:0.0}"
             + $"; pimaxLogScan=count={pimaxLogScan.Count},avgMs={pimaxLogScan.AverageMilliseconds:0.0},maxMs={pimaxLogScan.Max.TotalMilliseconds:0.0},reconnects={Interlocked.Exchange(ref _reconnectEvents, 0)}"
-            + $"; baseStationsOn=count={baseStationPowerOn.Count},avgMs={baseStationPowerOn.AverageMilliseconds:0.0},maxMs={baseStationPowerOn.Max.TotalMilliseconds:0.0}"
-            + $"; baseStationsOff=count={baseStationPowerDown.Count},avgMs={baseStationPowerDown.AverageMilliseconds:0.0},maxMs={baseStationPowerDown.Max.TotalMilliseconds:0.0}"
+            + $"; baseStationWakeRoutine=count={baseStationWakeRoutine.Count},avgMs={baseStationWakeRoutine.AverageMilliseconds:0.0},maxMs={baseStationWakeRoutine.Max.TotalMilliseconds:0.0}"
+            + $"; baseStationWakeNoop=count={baseStationWakeNoop.Count},avgMs={baseStationWakeNoop.AverageMilliseconds:0.0},maxMs={baseStationWakeNoop.Max.TotalMilliseconds:0.0}"
+            + $"; baseStationPowerDownRoutine=count={baseStationPowerDownRoutine.Count},avgMs={baseStationPowerDownRoutine.AverageMilliseconds:0.0},maxMs={baseStationPowerDownRoutine.Max.TotalMilliseconds:0.0}"
             + $"; coreAppStart=count={coreAppStart.Count},avgMs={coreAppStart.AverageMilliseconds:0.0},maxMs={coreAppStart.Max.TotalMilliseconds:0.0}"
             + $"; coreAppRestart=count={coreAppRestart.Count},avgMs={coreAppRestart.AverageMilliseconds:0.0},maxMs={coreAppRestart.Max.TotalMilliseconds:0.0}"
             + $"; commands=[{commandSummary}]");
@@ -1198,6 +1209,15 @@ internal enum SupervisorLifecyclePhase
     ShutdownRoutineRunning
 }
 
+internal enum BaseStationWakeRoutineResult
+{
+    Ran,
+    NoopAlreadyComplete,
+    NoopNoStations,
+    NoopSteamVrNotRunning,
+    NoopWaitingForRetry
+}
+
 internal struct ConsoleHotkeys
 {
     public bool LaunchBrokenEyeVrcFaceTracking { get; set; }
@@ -1247,6 +1267,9 @@ internal sealed class AppSupervisor
     private DateTimeOffset? _lastBaseStationPowerOnSkippedLogAt;
     private DateTimeOffset? _nextBaseStationPowerOnAttemptAt;
     private DateTimeOffset? _baseStationSecondPowerOnPassCompletedAt;
+    private DateTimeOffset? _shutdownBlockedBySteamVrSince;
+    private string? _shutdownProgress;
+    private DateTimeOffset? _shutdownProgressSince;
     private bool _baseStationSettingsNeedSave;
     private bool? _steamVrTrackingReferenceStartupAvailable;
     private bool _steamVrTrackingReferenceStartupUnavailableLogged;
@@ -1337,8 +1360,14 @@ internal sealed class AppSupervisor
                 Console.WriteLine($"SteamVR startup requested, but no SteamVR server process is running: {string.Join(", ", _config.SteamVrServerProcessNames)}");
                 return;
             }
+            if (ShouldExitWithSteamVr())
+            {
+                WriteDiagnosticEvent("lifecycle; steamvr detected at startup; processes=" + DescribeRunningProcesses(_config.SteamVrServerProcessNames));
+            }
 
+            WriteDiagnosticEvent("lifecycle; waiting for pimax headset on startup");
             _lastPimaxConnected = await WaitForPimaxOnStartupAsync(cancellationToken);
+            WriteDiagnosticEvent($"lifecycle; pimax startup wait complete; connected={_lastPimaxConnected}");
 
             await WaitForSteamVrBaseStationStartupWindowAsync(cancellationToken);
             await TryPowerOnBaseStationsBeforeWatchedProcessAsync(cancellationToken);
@@ -1372,7 +1401,9 @@ internal sealed class AppSupervisor
             }
 
             await TryStartOscRouterAsync(cancellationToken);
+            WriteDiagnosticEvent("lifecycle; managed app startup begin");
             await StartManagedAppsAsync(cancellationToken);
+            WriteDiagnosticEvent("lifecycle; managed app startup complete");
             await InitializeOscGoesBrrrWorkflowAsync(cancellationToken);
             _lifecyclePhase = SupervisorLifecyclePhase.VrChatRunning;
             ShowOscRouterRetryPromptIfNeeded();
@@ -1400,6 +1431,8 @@ internal sealed class AppSupervisor
                         if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
                         {
                             _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
+                            _shutdownBlockedBySteamVrSince = null;
+                            SetShutdownProgress("running cleanup after SteamVR exit");
                             Console.WriteLine("SteamVR exited; running shutdown routine.");
                             await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
                             return;
@@ -1408,6 +1441,7 @@ internal sealed class AppSupervisor
                         if (ObserveWatchedShutdownProcesses() == WatchedProcessState.Running)
                         {
                             Console.WriteLine("VRChat restarted; running startup routine.");
+                            _shutdownBlockedBySteamVrSince = null;
                             await StartSessionAfterWatchedProcessRestartAsync(cancellationToken);
                             Console.WriteLine(ShouldExitWithSteamVr()
                                 ? "Waiting for Pimax reconnects, VRChat shutdown, or SteamVR shutdown. Press Ctrl+C to stop."
@@ -1426,6 +1460,8 @@ internal sealed class AppSupervisor
                     {
                         var previousLifecyclePhase = _lifecyclePhase;
                         _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
+                        _shutdownBlockedBySteamVrSince = null;
+                        SetShutdownProgress("running cleanup after SteamVR exit");
                         Console.WriteLine(previousLifecyclePhase == SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit
                             ? "SteamVR exited; running shutdown routine."
                             : "SteamVR has shut down. Restoring monitors, closing managed apps, and exiting.");
@@ -1439,12 +1475,16 @@ internal sealed class AppSupervisor
                         if (ShouldExitWithSteamVr() && IsAnyProcessRunning(_config.SteamVrServerProcessNames))
                         {
                             Console.WriteLine("VRChat closed; SteamVR still running. Waiting for VRChat restart or SteamVR exit.");
+                            _shutdownBlockedBySteamVrSince = DateTimeOffset.UtcNow;
+                            WriteDiagnosticEvent("shutdown; vrchat closed; waiting for steamvr exit; processes=" + DescribeRunningProcesses(_config.SteamVrServerProcessNames));
                             await StopManagedAppsWhileWaitingForWatchedProcessRestartAsync(cancellationToken);
                             _lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit;
                             continue;
                         }
 
                         _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
+                        _shutdownBlockedBySteamVrSince = null;
+                        SetShutdownProgress("running cleanup after VRChat exit");
                         Console.WriteLine("VRChat has shut down. Closing managed apps and exiting.");
                         await StopManagedAppsAfterWatchedProcessExitAsync(waitForSteamVrServerExitBeforeBaseStationPowerDown: false, cancellationToken);
                         return;
@@ -1454,12 +1494,16 @@ internal sealed class AppSupervisor
                         if (ShouldExitWithSteamVr() && IsAnyProcessRunning(_config.SteamVrServerProcessNames))
                         {
                             Console.WriteLine("VRChat did not relaunch after a likely crash. SteamVR still running. Waiting for VRChat restart or SteamVR exit.");
+                            _shutdownBlockedBySteamVrSince = DateTimeOffset.UtcNow;
+                            WriteDiagnosticEvent("shutdown; vrchat crash grace expired; waiting for steamvr exit; processes=" + DescribeRunningProcesses(_config.SteamVrServerProcessNames));
                             await StopManagedAppsWhileWaitingForWatchedProcessRestartAsync(cancellationToken);
                             _lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit;
                             continue;
                         }
 
                         _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
+                        _shutdownBlockedBySteamVrSince = null;
+                        SetShutdownProgress("running cleanup after VRChat crash grace");
                         Console.WriteLine("VRChat did not relaunch after a likely crash. Closing managed apps and exiting.");
                         await StopManagedAppsAfterWatchedProcessExitAsync(waitForSteamVrServerExitBeforeBaseStationPowerDown: false, cancellationToken);
                         return;
@@ -2192,6 +2236,7 @@ internal sealed class AppSupervisor
     {
         if (await ReadDeviceConnectedOrPreviousAsync("Pimax Crystal", IsPimaxConnectedAsync, previousConnected: false, cancellationToken))
         {
+            Console.WriteLine("Pimax Crystal already connected.");
             return true;
         }
 
@@ -2216,10 +2261,12 @@ internal sealed class AppSupervisor
         if (ObserveWatchedShutdownProcesses() == WatchedProcessState.Running)
         {
             Console.WriteLine($"Watched process is running: {string.Join(", ", _config.WatchedShutdownProcessNames)}");
+            WriteDiagnosticEvent("lifecycle; watched process already running; processes=" + DescribeRunningProcesses(_config.WatchedShutdownProcessNames));
             return true;
         }
 
         Console.WriteLine($"Waiting for watched process before starting managed apps: {string.Join(", ", _config.WatchedShutdownProcessNames)}");
+        WriteDiagnosticEvent("lifecycle; watched process wait begin; names=" + string.Join(",", _config.WatchedShutdownProcessNames));
         while (!cancellationToken.IsCancellationRequested)
         {
             await Task.Delay(_pollInterval, cancellationToken);
@@ -2234,6 +2281,7 @@ internal sealed class AppSupervisor
             if (ObserveWatchedShutdownProcesses() == WatchedProcessState.Running)
             {
                 Console.WriteLine("Watched process detected. Starting managed apps.");
+                WriteDiagnosticEvent("lifecycle; watched process wait complete; processes=" + DescribeRunningProcesses(_config.WatchedShutdownProcessNames));
                 return true;
             }
         }
@@ -2606,13 +2654,17 @@ internal sealed class AppSupervisor
         if (!_config.FaceTrackerAutomationEnabled)
         {
             Console.WriteLine("Face tracker automation is disabled. Skipping automatic face-tracking startup.");
+            WriteDiagnosticEvent("lifecycle; managed app startup skipped; reason=face-tracker-automation-disabled");
             return;
         }
 
+        var startedAt = Stopwatch.GetTimestamp();
+        WriteDiagnosticEvent("lifecycle; managed app startup routine begin");
         _managedAppsStarted = true;
         PrepareMonitorLayoutForVrSession();
         await StartCoreAppsAsync(cancellationToken);
         await StartAutoLaunchAppsAsync(cancellationToken);
+        WriteDiagnosticEvent($"lifecycle; managed app startup routine complete; elapsedMs={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.0}");
     }
 
     private async Task StartSessionAfterWatchedProcessRestartAsync(CancellationToken cancellationToken)
@@ -2629,7 +2681,9 @@ internal sealed class AppSupervisor
             }
 
             await TryStartOscRouterAsync(cancellationToken);
+            WriteDiagnosticEvent("lifecycle; managed app startup begin after watched process restart");
             await StartManagedAppsAsync(cancellationToken);
+            WriteDiagnosticEvent("lifecycle; managed app startup complete after watched process restart");
             await InitializeOscGoesBrrrWorkflowAsync(cancellationToken);
             ShowOscRouterRetryPromptIfNeeded();
             _lifecyclePhase = SupervisorLifecyclePhase.VrChatRunning;
@@ -2912,7 +2966,13 @@ internal sealed class AppSupervisor
             SupervisorLifecyclePhase.ShutdownRoutineRunning => "shutdown-running",
             _ => "unknown"
         };
-        return $"Mode={mode}; SteamVR={steamVrRunning}; Lifecycle={lifecycle}; CoreApps={coreApps}; BaseStations={baseStations}; OscRouter={oscRouter}; OscGoesBrrr={oscGoesBrrr}";
+        var blockedBySteamVr = _shutdownBlockedBySteamVrSince is null
+            ? ""
+            : $"; ShutdownBlockedBy=SteamVR({FormatElapsed(DateTimeOffset.UtcNow - _shutdownBlockedBySteamVrSince.Value)}); BlockingProcesses={DescribeRunningProcesses(_config.SteamVrServerProcessNames)}";
+        var shutdownProgress = _shutdownProgress is null || _shutdownProgressSince is null
+            ? ""
+            : $"; ShutdownProgress={_shutdownProgress}({FormatElapsed(DateTimeOffset.UtcNow - _shutdownProgressSince.Value)})";
+        return $"Mode={mode}; SteamVR={steamVrRunning}; Lifecycle={lifecycle}; CoreApps={coreApps}; BaseStations={baseStations}; OscRouter={oscRouter}; OscGoesBrrr={oscGoesBrrr}{shutdownProgress}{blockedBySteamVr}";
     }
 
     private bool IsFaceTrackingAppSetRunning()
@@ -2921,6 +2981,22 @@ internal sealed class AppSupervisor
 
     internal void WriteDebug(string message)
         => _diagnostics.WriteDebug(message);
+
+    private void WriteDiagnosticEvent(string message)
+    {
+        _diagnostics.WriteEvent(message);
+        WriteDebug(message);
+    }
+
+    private void SetShutdownProgress(string? progress)
+    {
+        _shutdownProgress = progress;
+        _shutdownProgressSince = progress is null ? null : DateTimeOffset.UtcNow;
+        if (!string.IsNullOrWhiteSpace(progress))
+        {
+            WriteDiagnosticEvent("shutdown; progress=" + progress);
+        }
+    }
 
     internal bool IsForcedManualReloadRequested()
         => _forcedManualReloadRequested;
@@ -3032,16 +3108,27 @@ internal sealed class AppSupervisor
         }
     }
 
-    private async Task TryPowerOnBaseStationsForSessionAsync(int targetPowerOnPasses, CancellationToken cancellationToken, bool manualOverride = false)
+    private async Task TryPowerOnBaseStationsForSessionAsync(
+        int targetPowerOnPasses,
+        CancellationToken cancellationToken,
+        bool manualOverride = false,
+        bool waitForSteamVrTrackingConfirmation = true)
     {
         var startedAt = Stopwatch.GetTimestamp();
-        try
+        var result = await TryPowerOnBaseStationsForSessionCoreAsync(
+            targetPowerOnPasses,
+            cancellationToken,
+            manualOverride,
+            waitForSteamVrTrackingConfirmation);
+        var elapsed = Stopwatch.GetElapsedTime(startedAt);
+        if (result == BaseStationWakeRoutineResult.Ran)
         {
-            await TryPowerOnBaseStationsForSessionCoreAsync(targetPowerOnPasses, cancellationToken, manualOverride);
+            _diagnostics.RecordBaseStationWakeRoutine(elapsed);
         }
-        finally
+        else
         {
-            _diagnostics.RecordBaseStationPowerOn(Stopwatch.GetElapsedTime(startedAt));
+            _diagnostics.RecordBaseStationWakeNoop(elapsed);
+            _diagnostics.WriteVerbose($"base-station wake noop; reason={result}; elapsedMs={elapsed.TotalMilliseconds:0.0}");
         }
     }
 
@@ -3062,11 +3149,14 @@ internal sealed class AppSupervisor
         var remaining = SteamVrBaseStationStartupDelay - elapsed;
         if (remaining <= TimeSpan.Zero)
         {
+            WriteDiagnosticEvent($"base-station startup delay skipped; steamVrAgeSeconds={elapsed.TotalSeconds:0.0}");
             return;
         }
 
         Console.WriteLine($"Waiting {remaining.TotalSeconds:0} seconds for SteamVR base-station startup before power-on...");
+        WriteDiagnosticEvent($"base-station startup delay begin; remainingSeconds={remaining.TotalSeconds:0.0}; steamVrStartedAt={latestSteamVrStart.Value:O}");
         await Task.Delay(remaining, cancellationToken);
+        WriteDiagnosticEvent("base-station startup delay complete");
     }
 
     private static DateTimeOffset? TryGetLatestProcessStartTime(IEnumerable<string> processNames)
@@ -3109,7 +3199,20 @@ internal sealed class AppSupervisor
 
     private async Task TryPowerOnBaseStationsBeforeWatchedProcessAsync(CancellationToken cancellationToken)
     {
-        await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
+        WriteDiagnosticEvent("base-station startup wake begin; mode=initial-pass-before-managed-apps");
+        await TryPowerOnBaseStationsForSessionAsync(
+            1,
+            cancellationToken,
+            waitForSteamVrTrackingConfirmation: false);
+        if (!_baseStationPowerOnComplete && _baseStationPowerOnPassesCompleted > 0)
+        {
+            Console.WriteLine("Base station wake pass sent. Continuing startup while SteamVR confirmation continues later.");
+            WriteDiagnosticEvent(
+                "base-station startup wake partial; continuing before openvr confirmation"
+                + $"; passesCompleted={_baseStationPowerOnPassesCompleted}"
+                + $"; commandSucceeded={_baseStationPowerOnCommandSucceeded.Count}");
+        }
+
         while (!_baseStationPowerOnComplete
             && _baseStationPowerOnPassesCompleted > 0
             && _nextBaseStationPowerOnAttemptAt is { } nextAttemptAt)
@@ -3130,17 +3233,21 @@ internal sealed class AppSupervisor
         }
     }
 
-    private async Task TryPowerOnBaseStationsForSessionCoreAsync(int targetPowerOnPasses, CancellationToken cancellationToken, bool manualOverride)
+    private async Task<BaseStationWakeRoutineResult> TryPowerOnBaseStationsForSessionCoreAsync(
+        int targetPowerOnPasses,
+        CancellationToken cancellationToken,
+        bool manualOverride,
+        bool waitForSteamVrTrackingConfirmation)
     {
         if (_baseStationPowerOnComplete)
         {
-            return;
+            return BaseStationWakeRoutineResult.NoopAlreadyComplete;
         }
 
         var baseStations = GetEnabledBaseStations();
         if ((!_config.BaseStationsEnabled && !manualOverride) || baseStations.Length == 0)
         {
-            return;
+            return BaseStationWakeRoutineResult.NoopNoStations;
         }
 
         if (!IsAnyProcessRunning(_config.SteamVrServerProcessNames))
@@ -3151,15 +3258,27 @@ internal sealed class AppSupervisor
                 _lastBaseStationPowerOnSkippedLogAt = DateTimeOffset.UtcNow;
             }
 
-            return;
+            return BaseStationWakeRoutineResult.NoopSteamVrNotRunning;
         }
 
         if (_nextBaseStationPowerOnAttemptAt is { } nextAttempt && DateTimeOffset.UtcNow < nextAttempt)
         {
-            return;
+            return BaseStationWakeRoutineResult.NoopWaitingForRetry;
         }
 
-        var useSteamVrTrackingConfirmation = CanUseSteamVrTrackingConfirmationForStartup();
+        var routineStartedAt = Stopwatch.GetTimestamp();
+        WriteDiagnosticEvent(
+            "base-station wake routine begin"
+            + $"; targetPasses={targetPowerOnPasses}"
+            + $"; manualOverride={manualOverride}"
+            + $"; waitForOpenVrConfirmation={waitForSteamVrTrackingConfirmation}"
+            + $"; stations={DescribeBaseStations(baseStations)}");
+        var useSteamVrTrackingConfirmation = waitForSteamVrTrackingConfirmation
+            && CanUseSteamVrTrackingConfirmationForStartup();
+        WriteDiagnosticEvent(
+            "base-station openvr confirmation availability"
+            + $"; requested={waitForSteamVrTrackingConfirmation}"
+            + $"; available={useSteamVrTrackingConfirmation}");
         if (useSteamVrTrackingConfirmation && targetPowerOnPasses >= BaseStationCommandTiming.PowerOnPasses)
         {
             targetPowerOnPasses = BaseStationCommandTiming.OpenVrPowerOnCycles;
@@ -3185,7 +3304,8 @@ internal sealed class AppSupervisor
             Console.WriteLine("All enabled base stations already report awake.");
             _baseStationPowerOnComplete = true;
             _nextBaseStationPowerOnAttemptAt = null;
-            return;
+            WriteDiagnosticEvent($"base-station wake routine complete; result=already-awake; elapsedMs={Stopwatch.GetElapsedTime(routineStartedAt).TotalMilliseconds:0.0}");
+            return BaseStationWakeRoutineResult.Ran;
         }
 
         _baseStationPowerOnAttempted = true;
@@ -3202,7 +3322,8 @@ internal sealed class AppSupervisor
                 if (DateTimeOffset.UtcNow < thirdPassAt)
                 {
                     _nextBaseStationPowerOnAttemptAt = thirdPassAt;
-                    return;
+                    WriteDiagnosticEvent($"base-station wake routine deferred; nextAttemptAt={thirdPassAt:O}; elapsedMs={Stopwatch.GetElapsedTime(routineStartedAt).TotalMilliseconds:0.0}");
+                    return BaseStationWakeRoutineResult.Ran;
                 }
             }
 
@@ -3235,7 +3356,8 @@ internal sealed class AppSupervisor
                     _baseStationsPoweredOn = true;
                     _baseStationPowerOnComplete = true;
                     _nextBaseStationPowerOnAttemptAt = null;
-                    return;
+                    WriteDiagnosticEvent($"base-station wake routine complete; result=openvr-confirmed; elapsedMs={Stopwatch.GetElapsedTime(routineStartedAt).TotalMilliseconds:0.0}");
+                    return BaseStationWakeRoutineResult.Ran;
                 }
 
                 if (confirmation is null)
@@ -3260,7 +3382,8 @@ internal sealed class AppSupervisor
                         _baseStationsPoweredOn = true;
                         _baseStationPowerOnComplete = true;
                         _nextBaseStationPowerOnAttemptAt = null;
-                        return;
+                        WriteDiagnosticEvent($"base-station wake routine complete; result=openvr-remaining-confirmed; elapsedMs={Stopwatch.GetElapsedTime(routineStartedAt).TotalMilliseconds:0.0}");
+                        return BaseStationWakeRoutineResult.Ran;
                     }
                 }
             }
@@ -3270,7 +3393,8 @@ internal sealed class AppSupervisor
         if (targetPowerOnPasses < maximumPowerOnPasses)
         {
             _nextBaseStationPowerOnAttemptAt = null;
-            return;
+            WriteDiagnosticEvent($"base-station wake routine complete; result=partial-target; elapsedMs={Stopwatch.GetElapsedTime(routineStartedAt).TotalMilliseconds:0.0}");
+            return BaseStationWakeRoutineResult.Ran;
         }
 
         var finalStates = await ReadBaseStationPowerStatesAsync(baseStations, cancellationToken, saveSettings: !manualOverride);
@@ -3285,7 +3409,8 @@ internal sealed class AppSupervisor
         if (_baseStationPowerOnComplete)
         {
             _nextBaseStationPowerOnAttemptAt = null;
-            return;
+            WriteDiagnosticEvent($"base-station wake routine complete; result=state-or-command-confirmed; elapsedMs={Stopwatch.GetElapsedTime(routineStartedAt).TotalMilliseconds:0.0}");
+            return BaseStationWakeRoutineResult.Ran;
         }
 
         _baseStationPowerOnPassesCompleted = 0;
@@ -3293,6 +3418,8 @@ internal sealed class AppSupervisor
         _baseStationPowerOnCommandSucceeded.Clear();
         _baseStationSteamVrConfirmedActive.Clear();
         _nextBaseStationPowerOnAttemptAt = DateTimeOffset.UtcNow.AddSeconds(10);
+        WriteDiagnosticEvent($"base-station wake routine incomplete; nextAttemptAt={_nextBaseStationPowerOnAttemptAt.Value:O}; elapsedMs={Stopwatch.GetElapsedTime(routineStartedAt).TotalMilliseconds:0.0}");
+        return BaseStationWakeRoutineResult.Ran;
     }
 
     private bool CanUseSteamVrTrackingConfirmationForStartup()
@@ -3316,16 +3443,27 @@ internal sealed class AppSupervisor
     private async Task<bool?> TryConfirmBaseStationStartupWithSteamVrAsync(BaseStationDevice[] baseStations, CancellationToken cancellationToken)
     {
         Console.WriteLine($"Waiting {BaseStationCommandTiming.OpenVrTrackingCheckDelay.TotalSeconds:0} seconds before checking SteamVR base-station tracking...");
+        WriteDiagnosticEvent($"base-station openvr confirmation wait begin; seconds={BaseStationCommandTiming.OpenVrTrackingCheckDelay.TotalSeconds:0}");
         await Task.Delay(BaseStationCommandTiming.OpenVrTrackingCheckDelay, cancellationToken);
 
         try
         {
+            var startedAt = Stopwatch.GetTimestamp();
             var trackingReferences = _steamVrTrackingReferenceReader.ReadActiveTrackingReferences();
+            var elapsed = Stopwatch.GetElapsedTime(startedAt);
             var match = SteamVrBaseStationMatcher.Match(baseStations, trackingReferences);
             foreach (var address in match.ExactMatchedBluetoothAddresses)
             {
                 _baseStationSteamVrConfirmedActive.Add(address);
             }
+
+            WriteDiagnosticEvent(
+                "base-station openvr confirmation result"
+                + $"; elapsedMs={elapsed.TotalMilliseconds:0.0}"
+                + $"; activeTrackingReferences={match.ActiveTrackingReferenceCount}"
+                + $"; exactMatches={match.ExactMatchCount}/{baseStations.Length}"
+                + $"; allMatchedExactly={match.AllMatchedExactly}"
+                + $"; countFallbackMatched={match.CountFallbackMatched}");
 
             if (match.AllMatchedExactly)
             {
@@ -3345,6 +3483,7 @@ internal sealed class AppSupervisor
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
             _steamVrTrackingReferenceStartupAvailable = false;
+            WriteDiagnosticEvent($"base-station openvr confirmation failed; error={ex.Message}");
             if (!_steamVrTrackingReferenceStartupUnavailableLogged)
             {
                 Console.WriteLine($"SteamVR base-station tracking confirmation failed: {ex.Message}. Using BLE startup fallback.");
@@ -3364,7 +3503,7 @@ internal sealed class AppSupervisor
         }
         finally
         {
-            _diagnostics.RecordBaseStationPowerDown(Stopwatch.GetElapsedTime(startedAt));
+            _diagnostics.RecordBaseStationPowerDownRoutine(Stopwatch.GetElapsedTime(startedAt));
         }
     }
 
@@ -3389,14 +3528,30 @@ internal sealed class AppSupervisor
         }
 
         var mode = _config.BaseStationPowerDownMode;
+        SetShutdownProgress($"base-station-{mode.ToString().ToLowerInvariant()} starting");
         Console.WriteLine($"Sending {mode.ToString().ToLowerInvariant()} to {baseStations.Length} base station(s)...");
+        WriteDiagnosticEvent(
+            "base-station power-down routine begin"
+            + $"; mode={mode}"
+            + $"; manualOverride={manualOverride}"
+            + $"; stations={DescribeBaseStations(baseStations)}");
         var result = await BaseStationPowerDownRoutine.RunAsync(
             baseStations,
             mode,
             _baseStationGattClient,
             Console.WriteLine,
             manualOverride ? () => { } : _config.SaveBaseStationSettings,
-            cancellationToken);
+            cancellationToken,
+            SetShutdownProgress);
+        WriteDiagnosticEvent(
+            "base-station power-down routine complete"
+            + $"; handled={result.HandledCount}/{result.StationCount}"
+            + $"; allHandled={result.AllStationsHandled}"
+            + $"; settingsChanged={result.SettingsChanged}");
+
+        SetShutdownProgress(result.AllStationsHandled
+            ? "base-station power-down complete"
+            : $"base-station power-down incomplete {result.HandledCount}/{result.StationCount}");
 
         if (result.AllStationsHandled)
         {
@@ -3552,6 +3707,8 @@ internal sealed class AppSupervisor
     private async Task<bool[]> SendBaseStationPowerOnPassAsync(BaseStationDevice[] baseStations, int pass, int totalPasses, CancellationToken cancellationToken)
     {
         var stationSucceeded = new bool[baseStations.Length];
+        var startedAt = Stopwatch.GetTimestamp();
+        var burstCycles = ShouldUseUnsupportedV2PowerOnBurst(baseStations, pass) ? 2 : 1;
         if (pass > 1)
         {
             Console.WriteLine($"Repeating base station power-on pass {pass}/{totalPasses}...");
@@ -3561,15 +3718,71 @@ internal sealed class AppSupervisor
             Console.WriteLine($"Powering on {baseStations.Length} base station(s)...");
         }
 
-        await SendBaseStationCommandsAsync(
-            baseStations,
-            pass == 1 ? "power on" : $"power on pass {pass}",
-            (baseStation, token) => _baseStationGattClient.PowerOnAsync(baseStation, token),
-            cancellationToken,
-            BaseStationCommandTiming.PowerOnAttempts,
-            index => stationSucceeded[index] = true);
+        WriteDiagnosticEvent(
+            "base-station wake pass begin"
+            + $"; pass={pass}/{totalPasses}"
+            + $"; stationCount={baseStations.Length}"
+            + $"; burstCycles={burstCycles}"
+            + $"; burstDelayMs={(burstCycles > 1 ? BaseStationCommandTiming.UnsupportedV2PowerOnBurstDelay.TotalMilliseconds : 0):0}"
+            + $"; stations={DescribeBaseStations(baseStations)}");
+
+        for (var burstCycle = 1; burstCycle <= burstCycles; burstCycle++)
+        {
+            if (burstCycles > 1)
+            {
+                WriteDiagnosticEvent(
+                    "base-station wake burst cycle begin"
+                    + $"; pass={pass}/{totalPasses}"
+                    + $"; cycle={burstCycle}/{burstCycles}"
+                    + $"; stations={DescribeBaseStations(baseStations)}");
+            }
+
+            await SendBaseStationCommandsAsync(
+                baseStations,
+                GetBaseStationPowerOnAction(pass, burstCycles, burstCycle),
+                (baseStation, token) => _baseStationGattClient.PowerOnAsync(baseStation, token),
+                cancellationToken,
+                BaseStationCommandTiming.PowerOnAttempts,
+                index => stationSucceeded[index] = true);
+
+            if (burstCycles > 1)
+            {
+                WriteDiagnosticEvent(
+                    "base-station wake burst cycle complete"
+                    + $"; pass={pass}/{totalPasses}"
+                    + $"; cycle={burstCycle}/{burstCycles}"
+                    + $"; succeededSoFar={stationSucceeded.Count(value => value)}/{baseStations.Length}");
+            }
+
+            if (burstCycle < burstCycles)
+            {
+                Console.WriteLine($"Waiting {BaseStationCommandTiming.UnsupportedV2PowerOnBurstDelay.TotalSeconds:0.0} seconds before the next unsupported V2 base-station wake burst...");
+                await Task.Delay(BaseStationCommandTiming.UnsupportedV2PowerOnBurstDelay, cancellationToken);
+            }
+        }
+
+        WriteDiagnosticEvent(
+            "base-station wake pass complete"
+            + $"; pass={pass}/{totalPasses}"
+            + $"; succeeded={stationSucceeded.Count(value => value)}/{baseStations.Length}"
+            + $"; burstCycles={burstCycles}"
+            + $"; elapsedMs={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.0}"
+            + $"; successes={string.Join(",", baseStations.Where((_, index) => stationSucceeded[index]).Select(station => station.BluetoothAddress))}");
 
         return stationSucceeded;
+    }
+
+    private static bool ShouldUseUnsupportedV2PowerOnBurst(BaseStationDevice[] baseStations, int pass)
+        => pass == 1 && baseStations.Any(baseStation =>
+            baseStation.EffectiveVersion == BaseStationVersion.V2
+            && baseStation.PowerStateReadUnsupported);
+
+    private static string GetBaseStationPowerOnAction(int pass, int burstCycles, int burstCycle)
+    {
+        var action = pass == 1 ? "power on" : $"power on pass {pass}";
+        return burstCycles > 1
+            ? $"{action} burst {burstCycle}/{burstCycles}"
+            : action;
     }
 
     private async Task<BaseStationPowerState[]> ReadBaseStationPowerStatesAsync(BaseStationDevice[] baseStations, CancellationToken cancellationToken, bool saveSettings = true)
@@ -3704,6 +3917,7 @@ internal sealed class AppSupervisor
     {
         if (waitForSteamVrServerExit)
         {
+            SetShutdownProgress("waiting for SteamVR server exit");
             await WaitForSteamVrServerExitAsync(cancellationToken);
         }
 
@@ -3732,16 +3946,34 @@ internal sealed class AppSupervisor
     {
         if (!IsAnyProcessRunning(_config.SteamVrServerProcessNames))
         {
+            _shutdownBlockedBySteamVrSince = null;
+            SetShutdownProgress(null);
             return;
         }
 
         Console.WriteLine($"Waiting for SteamVR server to exit: {string.Join(", ", _config.SteamVrServerProcessNames)}");
+        var startedAt = DateTimeOffset.UtcNow;
+        _shutdownBlockedBySteamVrSince ??= startedAt;
+        var lastDetailLogAt = DateTimeOffset.MinValue;
         while (IsAnyProcessRunning(_config.SteamVrServerProcessNames))
         {
+            var now = DateTimeOffset.UtcNow;
+            if (lastDetailLogAt == DateTimeOffset.MinValue || now - lastDetailLogAt >= TimeSpan.FromSeconds(20))
+            {
+                lastDetailLogAt = now;
+                var elapsed = now - startedAt;
+                var processDetails = DescribeRunningProcesses(_config.SteamVrServerProcessNames);
+                Console.WriteLine($"Still waiting for SteamVR server to exit after {FormatElapsed(elapsed)}: {processDetails}");
+                WriteDiagnosticEvent($"shutdown; waiting for steamvr exit; elapsedSeconds={elapsed.TotalSeconds:0.0}; processes={processDetails}");
+            }
+
             await Task.Delay(_pollInterval, cancellationToken);
         }
 
+        _shutdownBlockedBySteamVrSince = null;
+        SetShutdownProgress("SteamVR server exited");
         Console.WriteLine("SteamVR server has exited.");
+        WriteDiagnosticEvent($"shutdown; steamvr exit observed; elapsedSeconds={(DateTimeOffset.UtcNow - startedAt).TotalSeconds:0.0}");
     }
 
     private void RestoreMonitorLayout()
@@ -4997,6 +5229,64 @@ internal sealed class AppSupervisor
         {
             processes.ForEach(process => process.Dispose());
         }
+    }
+
+    private static string DescribeRunningProcesses(string[] processNames)
+    {
+        var processes = GetProcesses(processNames);
+        try
+        {
+            if (processes.Count == 0)
+            {
+                return "none";
+            }
+
+            return string.Join(",", processes.Select(DescribeProcess));
+        }
+        finally
+        {
+            processes.ForEach(process => process.Dispose());
+        }
+    }
+
+    private static string DescribeProcess(Process process)
+    {
+        var startTime = "unknown";
+        try
+        {
+            startTime = new DateTimeOffset(process.StartTime).ToString("O", CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+        }
+
+        string processName;
+        try
+        {
+            processName = process.ProcessName;
+        }
+        catch
+        {
+            processName = "unknown";
+        }
+
+        return $"{processName}(pid={process.Id},started={startTime})";
+    }
+
+    private static string DescribeBaseStations(BaseStationDevice[] baseStations)
+        => string.Join(
+            ",",
+            baseStations.Select(station =>
+                $"{station.DisplayName}[{station.BluetoothAddress},version={station.EffectiveVersion},unsupportedRead={station.PowerStateReadUnsupported}]"));
+
+    private static string FormatElapsed(TimeSpan elapsed)
+    {
+        if (elapsed.TotalHours >= 1)
+        {
+            return elapsed.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture);
+        }
+
+        return elapsed.ToString(@"m\:ss", CultureInfo.InvariantCulture);
     }
 
     private static List<Process> GetProcesses(string[] processNames)
