@@ -1085,6 +1085,58 @@ Known risks:
 - The TUI display depends on Phase 9 action metadata being present in backend `commands-json`; older supervisors will show safe defaults.
 - Future TUI action execution still needs a reviewed confirmation UX and backend-authoritative gating before any action keybindings are added.
 
+### Phase 10B - Read-only action metadata display semantics cleanup
+
+Status: Completed
+
+Summary:
+
+- Corrected a runtime UX issue where read-only commands could appear with `[blocked]` and a blocked reason when backend metadata included a default `blockedReason`.
+- Treated `actionSafetyCategory="ReadOnly"` as authoritative for read-only command display.
+- Kept this as a TUI display-only change; backend action metadata, the Phase 9 `action-json` allowlist, legacy commands, SteamVR host behavior, and old console behavior were not changed.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `docs/ratatui-tui-migration-progress.md`
+
+Display behavior:
+
+- `ReadOnly` commands now show `[read-only]`.
+- `ReadOnly` commands no longer show `[blocked]`.
+- `ReadOnly` commands no longer show `blockedReason` detail lines.
+- `[blocked]` remains reserved for `actionSafetyCategory="Blocked"` commands such as `force-stop-supervisor`.
+- Backend-supported actions such as `restart-osc-router` still show `[backend-action]` and `[tui-disabled]` while remaining non-executable from the TUI.
+
+Read-only bridge status:
+
+- The TUI remains read-only and still does not call `action-json`.
+- The TUI still does not send legacy action commands.
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- Rust formatting completed successfully.
+- Rust debug build succeeded.
+- Rust release build succeeded.
+- Main supervisor Release build succeeded with 0 warnings and 0 errors.
+- ConfigEditor Release build succeeded with 0 warnings and 0 errors.
+- SteamVrHost Release build succeeded with 0 warnings and 0 errors.
+
+Bridge inspection:
+
+- `PimaxVrcSupervisor.Tui/src/bridge.rs` still sends only `query-json {request_json}`.
+- Bridge helpers remain limited to `status`, `commands`, and `log`.
+- No `action-json` or legacy action command strings were found in `bridge.rs`.
+
 ## Next Prompt Handling
 
 Full phase prompts are prepared manually outside this file and pasted into Codex when needed.

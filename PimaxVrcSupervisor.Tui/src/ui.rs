@@ -135,6 +135,7 @@ fn render_commands(frame: &mut Frame<'_>, area: Rect, app: &App) {
                     )),
                     command_marker(command.dangerous, "[danger]", Color::Red),
                     command_marker(command.requires_confirmation, "[confirm]", Color::Yellow),
+                    command_marker(command_is_read_only(command), "[read-only]", Color::Green),
                     command_marker(command.action_supported, "[backend-action]", Color::Blue),
                     command_marker(
                         command.action_supported && !command.tui_executable,
@@ -144,7 +145,7 @@ fn render_commands(frame: &mut Frame<'_>, area: Rect, app: &App) {
                     command_marker(command_is_blocked(command), "[blocked]", Color::Red),
                 ])];
 
-                if !command.blocked_reason.trim().is_empty() {
+                if !command_is_read_only(command) && !command.blocked_reason.trim().is_empty() {
                     lines.push(Line::from(vec![
                         Span::styled("  reason: ", Style::default().fg(Color::DarkGray)),
                         Span::raw(command.blocked_reason.as_str()),
@@ -335,5 +336,10 @@ fn command_is_blocked(command: &crate::models::CommandSummary) -> bool {
     command
         .action_safety_category
         .eq_ignore_ascii_case("Blocked")
-        || !command.blocked_reason.trim().is_empty()
+}
+
+fn command_is_read_only(command: &crate::models::CommandSummary) -> bool {
+    command
+        .action_safety_category
+        .eq_ignore_ascii_case("ReadOnly")
 }
