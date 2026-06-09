@@ -158,7 +158,7 @@ Status: Completed and Rust build verified
 
 Phase 6 - Improve read-only desktop Ratatui TUI UX
 
-Status: Not started
+Status: Completed
 
 Phase 7 - Packaging, integration, and optional future IPC transport review
 
@@ -678,13 +678,98 @@ Runtime test:
 - The optional runtime TUI check was not run because it requires an attached interactive terminal to verify the disconnected screen and quit with `q` or `Esc`.
 - The supervisor was not started and no elevated VR/SteamVR/Pimax workflow was triggered.
 
+### Phase 6 - Improve read-only desktop Ratatui TUI UX
+
+Status: Completed
+
+Summary:
+
+- Improved the Rust desktop TUI for read-only monitoring and troubleshooting.
+- Kept the TUI on the existing one-line loopback TCP bridge and existing `query-json` resources.
+- Preserved C# backend behavior, old console behavior, SteamVR overlay behavior, and all action-command behavior.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/bridge.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `docs/ratatui-tui-migration-progress.md`
+
+UX improvements implemented:
+
+- Added explicit Rust TUI constants for backend host, backend port, connect timeout, read/write timeout, refresh interval, and max log request size.
+- Added bounded synchronous periodic refresh every 3 seconds.
+- Manual `r` refresh remains available and retries immediately.
+- Refresh attempts do not overlap because the app remains single-threaded and refreshes are synchronous with short timeouts.
+- Added last successful refresh age and last error age/message display.
+- Added a backend/error panel with `Backend unavailable at 127.0.0.1:37957` when disconnected.
+- Increased read-only log request size to 80 lines using `query-json {"resource":"log","maxLines":80}`.
+- Added scrollable recent logs with clamped scroll offset after refresh and scroll operations.
+- Improved command capability display with name, category, output kind, `[danger]`, and `[confirm]` markers.
+- Added a help popup.
+- Added a compact fallback view for terminals smaller than 72x20.
+
+Keybindings:
+
+- `r`: manual read-only refresh.
+- `q`: quit.
+- `Esc`: close help if open; otherwise quit.
+- `h` or `?`: toggle help.
+- `Up` / `Down`: scroll logs by one line.
+- `PageUp` / `PageDown`: scroll logs by one page.
+- `Home` / `End`: jump log scroll to top or bottom.
+
+Read-only behavior:
+
+- The TUI still only sends `query-json` requests for `status`, `commands`, and `log`.
+- No action commands were added or executed from the TUI.
+- No `command-json`, confirmation handling, named-pipe IPC, streaming events, filesystem log browsing, or backend protocol changes were added.
+- `PimaxVrcSupervisor.SteamVrHost` was not changed.
+- The old console and SteamVR overlay remain unchanged.
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- Rust formatting completed successfully.
+- Rust debug build succeeded.
+- Rust release build succeeded.
+- All three explicit C# Release builds succeeded with 0 warnings and 0 errors.
+
+Release copy result:
+
+- Copied `PimaxVrcSupervisor.Tui\target\release\PimaxVrcSupervisorTui.exe` into `release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe`.
+- `git status --short release` reported no staged or unstaged tracked release changes.
+- `git status --ignored --short release` reported `!! release/`, confirming generated release output is ignored.
+- `git status --short PimaxVrcSupervisor.Tui` reported only tracked Rust source changes during implementation; generated `target/` output remained ignored.
+
+Runtime test:
+
+- The optional runtime TUI check was not run because the current shell is not an attached interactive terminal suitable for verifying alternate-screen rendering, key handling, and clean terminal restoration.
+- The supervisor was not started and no elevated VR/SteamVR/Pimax workflow was triggered.
+
+Known risks:
+
+- Runtime disconnected-state behavior should still be checked manually in an interactive terminal before relying on the TUI operationally.
+- Periodic refresh is synchronous and bounded; a slow backend can still pause the UI briefly until the bridge timeout returns.
+- The TUI remains a read-only TCP bridge client; action execution and confirmation design remain deferred.
+- Release output is generated locally and ignored; it must not be committed unless release policy changes.
+
 ## Next Prompt Handling
 
 Full phase prompts are prepared manually outside this file and pasted into Codex when needed.
 
-Short Phase 6 direction:
+Short Phase 7 direction:
 
-- Improve the read-only desktop TUI UX.
-- Keep using `query-json` for `status`, `commands`, and `log`.
-- Add better navigation, refresh state, error presentation, and layout polish.
-- Keep the TUI read-only and preserve the old console and SteamVR overlay behavior.
+- Prepare launch and integration documentation for `PimaxVrcSupervisorTui`.
+- Add README guidance and optionally a simple local launcher script.
+- Consider future Configurator naming for `Desktop console mode`: `Classic console`, `Modern console`, `Hidden`.
+- Continue avoiding action command execution until confirmation handling is designed.

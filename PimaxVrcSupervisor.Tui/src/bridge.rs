@@ -4,13 +4,15 @@ use std::{
     time::Duration,
 };
 
-use color_eyre::eyre::{eyre, Result};
-use serde_json::{json, Value};
+use color_eyre::eyre::{Result, eyre};
+use serde_json::{Value, json};
 
 use crate::models::QueryResponse;
 
-const ENDPOINT: &str = "127.0.0.1:37957";
-const TIMEOUT: Duration = Duration::from_millis(1000);
+pub const BACKEND_HOST: &str = "127.0.0.1";
+pub const BACKEND_PORT: u16 = 37957;
+pub const CONNECT_TIMEOUT: Duration = Duration::from_millis(1000);
+pub const READ_WRITE_TIMEOUT: Duration = Duration::from_millis(1000);
 
 pub struct SupervisorBridge {
     endpoint: SocketAddr,
@@ -19,9 +21,15 @@ pub struct SupervisorBridge {
 impl Default for SupervisorBridge {
     fn default() -> Self {
         Self {
-            endpoint: ENDPOINT.parse().expect("static endpoint is valid"),
+            endpoint: backend_endpoint()
+                .parse()
+                .expect("static endpoint is valid"),
         }
     }
+}
+
+pub fn backend_endpoint() -> String {
+    format!("{BACKEND_HOST}:{BACKEND_PORT}")
 }
 
 impl SupervisorBridge {
@@ -41,9 +49,7 @@ impl SupervisorBridge {
         let request_json = serde_json::to_string(&request)?;
         let response_line = self.send_line(&format!("query-json {request_json}"))?;
         let response = serde_json::from_str::<QueryResponse>(&response_line).map_err(|error| {
-            eyre!(
-                "could not parse supervisor response: {error}; response={response_line}"
-            )
+            eyre!("could not parse supervisor response: {error}; response={response_line}")
         })?;
 
         if response.success {
@@ -59,11 +65,11 @@ impl SupervisorBridge {
     }
 
     fn send_line(&self, command: &str) -> Result<String> {
-        let mut stream = TcpStream::connect_timeout(&self.endpoint, TIMEOUT)
+        let mut stream = TcpStream::connect_timeout(&self.endpoint, CONNECT_TIMEOUT)
             .map_err(|error| eyre!("backend unavailable at {}: {error}", self.endpoint))?;
 
-        stream.set_read_timeout(Some(TIMEOUT))?;
-        stream.set_write_timeout(Some(TIMEOUT))?;
+        stream.set_read_timeout(Some(READ_WRITE_TIMEOUT))?;
+        stream.set_write_timeout(Some(READ_WRITE_TIMEOUT))?;
 
         writeln!(stream, "{command}")?;
 
