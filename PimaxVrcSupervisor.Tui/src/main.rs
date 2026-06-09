@@ -91,7 +91,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     if app.help_visible {
         match shortcut {
             Some(Shortcut::Help) => {
-                app.handle_help_key(now);
+                app.toggle_help();
                 false
             }
             Some(Shortcut::Cancel | Shortcut::Quit) => {
@@ -109,7 +109,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
                 false
             }
             Some(Shortcut::Help) => {
-                app.handle_help_key(now);
+                app.toggle_help();
                 false
             }
             Some(Shortcut::OpenRestartOscRouter) => {

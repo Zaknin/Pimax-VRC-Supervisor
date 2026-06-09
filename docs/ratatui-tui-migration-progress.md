@@ -196,6 +196,10 @@ Phase 14B - TUI help debounce and alias text cleanup
 
 Status: Completed
 
+Phase 14C - Remove sticky TUI help debounce
+
+Status: Completed
+
 ## Known Risks
 
 - `PimaxVrcSupervisor/Program.cs` is a large monolithic file, so small UI/event refactors can accidentally touch unrelated lifecycle or cleanup logic.
@@ -1639,6 +1643,67 @@ Post-14B tuning:
 - Kept debounce based on the last successful Help toggle.
 - Kept `KeyEventKind::Repeat` and `KeyEventKind::Release` ignored.
 - No shortcut mappings, executable actions, backend behavior, SteamVR host behavior, classic console behavior, or Configurator behavior changed.
+
+### Phase 14C - Remove sticky TUI help debounce
+
+Status: Completed
+
+Summary:
+
+- Removed the Help debounce/guard state after runtime feedback that quick press-release sequences still felt sticky.
+- Restored immediate `H`/`h` Help toggling.
+- Kept `F1`, `?`, and Russian help aliases disabled for Help.
+- Kept Russian-layout aliases working for selected non-help shortcuts.
+- Kept `KeyEventKind::Repeat` and `KeyEventKind::Release` ignored.
+- Kept `restart-osc-router` as the only executable TUI action.
+- No backend action allowlist, SteamVR host behavior, classic console behavior, Configurator behavior, config semantics, or release packaging changed.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+TUI behavior:
+
+- Dashboard `H`/`h` toggles Help immediately.
+- Help overlay `H`/`h` closes Help immediately.
+- `F1`, `?`, and Russian help aliases do not open Help.
+- Dashboard `1` still opens the Restart OSC Router confirmation.
+- Modal `1` still does not confirm.
+- Modal `Enter` and `Y`/`y` still confirm.
+- Modal `Esc`, `Q`/`q`, and `N`/`n` still cancel.
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+
+Build/test result:
+
+- Rust formatting completed successfully.
+- Rust debug build succeeded.
+- Rust release build succeeded.
+
+Generated output status:
+
+- `git status --short release` reported no staged or unstaged tracked release changes.
+- `git status --ignored --short release` reported `!! release/`, confirming generated release output is ignored.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`, confirming Rust build output is ignored.
+
+Release copy result:
+
+- Attempted to copy updated `PimaxVrcSupervisor.Tui\target\release\PimaxVrcSupervisorTui.exe` into `release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe`.
+- Copy failed because the release-folder `PimaxVrcSupervisorTui.exe` was in use by another process.
+- The process was not terminated automatically.
+
+Runtime testing:
+
+- Runtime shortcut testing was not performed during implementation unless explicitly recorded later.
+- Expected runtime acceptance: quick `H` press-release sequences open/close Help without debounce stickiness; `F1`, `?`, and Russian help aliases do not open Help.
 
 Short Phase 15 direction:
 
