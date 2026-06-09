@@ -1245,11 +1245,39 @@ internal sealed record SupervisorStatusSnapshot(
     string? ShutdownBlockedElapsed,
     string? BlockingProcesses);
 
+internal sealed record SupervisorCommandDefinition(
+    string Name,
+    string DisplayName,
+    string Description,
+    string Category,
+    bool Dangerous,
+    bool RequiresConfirmation,
+    bool Available,
+    string OutputKind,
+    string LegacyTextCommand,
+    string Notes);
+
+internal sealed record SupervisorCommandCapabilitiesSnapshot(
+    DateTimeOffset Timestamp,
+    string AppVersion,
+    string Protocol,
+    SupervisorCommandDefinition[] Commands,
+    string Notes);
+
+internal sealed record SupervisorCommandResult(
+    DateTimeOffset Timestamp,
+    string Command,
+    bool Success,
+    string Message,
+    string ResultType,
+    object? Data,
+    string? Error);
+
 internal sealed class AppSupervisor
 {
     private const int BrokenEyeStartupMaxAttempts = 10;
     private const string ForcedManualReloadMarkerFileName = "PimaxVrcSupervisorForcedManualReload.marker";
-    private static readonly JsonSerializerOptions StatusSnapshotJsonOptions = new()
+    private static readonly JsonSerializerOptions CommandBridgeJsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
@@ -2885,8 +2913,9 @@ internal sealed class AppSupervisor
             response = command switch
             {
                 "status" => BuildSupervisorStatus(),
-                "status-json" => JsonSerializer.Serialize(BuildSupervisorStatusSnapshot(), StatusSnapshotJsonOptions),
+                "status-json" => JsonSerializer.Serialize(BuildSupervisorStatusSnapshot(), CommandBridgeJsonOptions),
                 "log" => JsonSerializer.Serialize(SupervisorConsoleLog.GetRecentLines(14)),
+                "commands-json" => JsonSerializer.Serialize(BuildSupervisorCommandCapabilitiesSnapshot(), CommandBridgeJsonOptions),
                 "restart-core-apps" => await RestartCoreAppsAndReturnAsync(cancellationToken),
                 "start-osc-goes-brrr" => await StartOscGoesBrrrAndReturnAsync(cancellationToken),
                 "base-stations-on" => await ManualPowerOnBaseStationsAndReturnAsync(cancellationToken),
@@ -3026,6 +3055,108 @@ internal sealed class AppSupervisor
             shutdownBlockedElapsed,
             blockingProcesses);
     }
+
+    private SupervisorCommandCapabilitiesSnapshot BuildSupervisorCommandCapabilitiesSnapshot()
+        => new(
+            DateTimeOffset.UtcNow,
+            AppVersion.Current,
+            "line-oriented-tcp-v1",
+            [
+                CommandDefinition(
+                    "status",
+                    "Status",
+                    "Returns the legacy parser-compatible text supervisor status.",
+                    "Status",
+                    "Text",
+                    "Legacy parser-compatible text status."),
+                CommandDefinition(
+                    "status-json",
+                    "Status JSON",
+                    "Returns a compact structured supervisor status snapshot.",
+                    "Status",
+                    "Json",
+                    "Compact structured status snapshot."),
+                CommandDefinition(
+                    "log",
+                    "Recent Log",
+                    "Returns recent console lines as a JSON string array.",
+                    "Logs",
+                    "JsonArray",
+                    "Recent console-line array used by SteamVR dashboard."),
+                CommandDefinition(
+                    "commands-json",
+                    "Command Capabilities",
+                    "Returns command capability metadata as compact JSON.",
+                    "Status",
+                    "Json",
+                    "Read-only command capability metadata."),
+                CommandDefinition(
+                    "restart-core-apps",
+                    "Restart Core Apps",
+                    "Restarts configured face-tracking applications.",
+                    "CoreApps",
+                    "ActionResult",
+                    "Disruptive: restarts configured face-tracking apps; future TUIs may choose to confirm."),
+                CommandDefinition(
+                    "start-osc-goes-brrr",
+                    "Start OSCGoesBrrr",
+                    "Launches or repairs the Intiface and OSCGoesBrrr workflow.",
+                    "Osc",
+                    "ActionResult",
+                    "May launch or repair Intiface/OscGoesBrrr workflow."),
+                CommandDefinition(
+                    "base-stations-on",
+                    "Base Stations On",
+                    "Runs the configured base-station power-on routine.",
+                    "BaseStations",
+                    "ActionResult",
+                    "Sends configured base-station power-on routine."),
+                CommandDefinition(
+                    "base-stations-off",
+                    "Base Stations Off",
+                    "Runs the configured base-station power-off routine.",
+                    "BaseStations",
+                    "ActionResult",
+                    "Disruptive: powers off configured base stations; future TUIs should confirm."),
+                CommandDefinition(
+                    "restart-osc-router",
+                    "Restart OSC Router",
+                    "Restarts or manually starts OSC routing.",
+                    "Osc",
+                    "ActionResult",
+                    "Restarts or manually starts OSC routing."),
+                CommandDefinition(
+                    "force-stop-supervisor",
+                    "Force Stop Supervisor",
+                    "Hard-stops the supervisor without cleanup routines.",
+                    "Supervisor",
+                    "ActionResult",
+                    "Hard-stops supervisor without cleanup routines; future UIs must confirm.",
+                    dangerous: true,
+                    requiresConfirmation: true)
+            ],
+            "Read-only metadata. available=true means the command is accepted by the current bridge, not that the underlying configured subsystem is enabled.");
+
+    private static SupervisorCommandDefinition CommandDefinition(
+        string name,
+        string displayName,
+        string description,
+        string category,
+        string outputKind,
+        string notes,
+        bool dangerous = false,
+        bool requiresConfirmation = false)
+        => new(
+            name,
+            displayName,
+            description,
+            category,
+            dangerous,
+            requiresConfirmation,
+            true,
+            outputKind,
+            name,
+            notes);
 
     private bool IsFaceTrackingAppSetRunning()
         => (!_config.UseBrokenEye || IsAnyProcessRunning(_config.BrokenEyeProcessNames))
