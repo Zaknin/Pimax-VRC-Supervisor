@@ -73,6 +73,7 @@ nav:
       - OSC Routing: workflows/osc-routing.md
       - Auto Launch: workflows/auto-launch.md
       - VR Overlay Workflow: workflows/vr-overlay-workflow.md
+      - Desktop TUI: ratatui-tui.md
   - Reference:
       - Overview: reference/index.md
       - Configuration Fields: reference/configuration-fields.md

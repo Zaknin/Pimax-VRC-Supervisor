@@ -39,6 +39,8 @@ PimaxVrcSupervisor-vX.Y.Z\
   PimaxVrcSupervisorSteamVrHost.deps.json
   PimaxVrcSupervisorSteamVrHost.runtimeconfig.json
 
+  PimaxVrcSupervisorTui.exe
+
   PimaxVrcSupervisorStartupHelper.exe
   PimaxVrcSupervisorWatcher.exe
 
@@ -139,3 +141,31 @@ Assets\vr-overlay-icon.png
 The `.ico` files are embedded into the executables at build time and are not needed at runtime. The SteamVR overlay icon PNG is loaded from disk and must stay in `Assets\` beside the executables.
 
 The language folders are .NET/Windows Forms satellite resources. They are not required while the app is English-only and no interface/software translation is planned.
+
+## Rust Desktop TUI Packaging
+
+For the `cli-ui2` / `1.3.0-test` line, include the read-only desktop TUI executable:
+
+```text
+PimaxVrcSupervisorTui.exe
+```
+
+Build it with the Rust stable MSVC toolchain:
+
+```powershell
+cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release
+```
+
+After the C# publish output is prepared, copy the Rust release binary into the same flat local test release folder:
+
+```powershell
+Copy-Item .\PimaxVrcSupervisor.Tui\target\release\PimaxVrcSupervisorTui.exe `
+  .\release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe `
+  -Force
+```
+
+Generated output rules:
+
+- `PimaxVrcSupervisor.Tui\target\` is generated Rust build output and must not be committed.
+- `release\` is generated local release output and must not be committed.
+- `PimaxVrcSupervisor.Tui\Cargo.lock` should be committed because the TUI is an application binary crate.

@@ -162,7 +162,7 @@ Status: Completed
 
 Phase 7 - Packaging, integration, and optional future IPC transport review
 
-Status: Not started
+Status: Completed
 
 ## Known Risks
 
@@ -763,13 +763,89 @@ Known risks:
 - The TUI remains a read-only TCP bridge client; action execution and confirmation design remain deferred.
 - Release output is generated locally and ignored; it must not be committed unless release policy changes.
 
+### Phase 7 - TUI launch/integration documentation and packaging planning
+
+Status: Completed
+
+Summary:
+
+- Documented how the read-only Rust/Ratatui desktop TUI is built, launched, packaged, and positioned in the project.
+- Kept this phase documentation-only.
+- No C# backend behavior, Rust TUI behavior, SteamVR host behavior, old console behavior, protocol, config, cleanup, lifecycle, monitor, base-station, OSC, scheduled-task, or manifest behavior changed.
+
+Files changed:
+
+- `README.md`
+- `RELEASE_PACKAGING.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+- `mkdocs.yml`
+
+Documentation updates:
+
+- Added a `Read-only desktop TUI` section to `README.md`.
+- Added `cli-ui2` / `1.3.0-test` Rust TUI build and local release-copy instructions to `README.md`.
+- Added `docs/ratatui-tui.md` with purpose, architecture, launch requirements, keybindings, build commands, limitations, and future direction.
+- Added `docs/ratatui-tui.md` to the existing MkDocs navigation under `Workflows` as `Desktop TUI`.
+- Documented that the TUI uses the existing loopback TCP bridge and `query-json` for `status`, `commands`, and `log`.
+- Documented that the TUI is read-only, does not start or stop the supervisor, does not execute action commands, does not replace the SteamVR overlay, and does not replace the classic console.
+- Documented the manual runtime check result from migration context: the TUI can connect to a running supervisor at `127.0.0.1:37957` and display status, command capabilities, and logs.
+
+Packaging notes:
+
+- Added `PimaxVrcSupervisorTui.exe` to the flat release package layout in `RELEASE_PACKAGING.md`.
+- Documented the Rust release build command and copy step for the local `release\PimaxVrcSupervisor-v1.3.0-test` folder.
+- Documented that `PimaxVrcSupervisor.Tui\target\` and `release\` are generated output and must not be committed.
+- Documented that `PimaxVrcSupervisor.Tui\Cargo.lock` should stay committed because the TUI is an application binary crate.
+
+Intentionally skipped:
+
+- `RELEASE_NOTES.md` was left unchanged because it is specific to v1.2.3 and has no suitable unreleased/development section.
+- No launcher script was added because there is no existing `scripts/` folder and launch commands are documented instead.
+- No `Desktop console mode` Configurator setting was implemented.
+
+Future Configurator note:
+
+- Future setting name: `Desktop console mode`.
+- Options: `Classic console`, `Modern console`, `Hidden`.
+- `Classic console`: current visible console UI and hotkeys.
+- `Modern console`: future Ratatui desktop terminal UI.
+- `Hidden`: backend/no-console mode for advanced/startup use.
+- This setting must not replace or disable the SteamVR overlay dashboard.
+
+Build/test commands run:
+
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- Rust debug build succeeded.
+- Rust release build succeeded.
+- All three explicit C# Release builds succeeded with 0 warnings and 0 errors.
+- No runtime test was required for this documentation-only phase.
+- The supervisor was not started.
+
+Generated output status:
+
+- `git status --short release` reported no staged or unstaged tracked release changes.
+- `git status --ignored --short release` reported `!! release/`, confirming generated release output is ignored.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported ignored Rust build output under `PimaxVrcSupervisor.Tui/target/`.
+
+Known risks:
+
+- Documentation now describes the TUI as a `cli-ui2` / `1.3.0-test` feature while the main README still describes the current public release as v1.2.3.
+- Future action execution must still be designed before implementation, including confirmations and dangerous/disruptive command gating.
+
 ## Next Prompt Handling
 
 Full phase prompts are prepared manually outside this file and pasted into Codex when needed.
 
-Short Phase 7 direction:
+Short Phase 8 direction:
 
-- Prepare launch and integration documentation for `PimaxVrcSupervisorTui`.
-- Add README guidance and optionally a simple local launcher script.
-- Consider future Configurator naming for `Desktop console mode`: `Classic console`, `Modern console`, `Hidden`.
-- Continue avoiding action command execution until confirmation handling is designed.
+- Pause before adding action execution.
+- Plan safe desktop TUI action execution design.
+- Cover confirmation model, dangerous/disruptive command gating, backend response standardization, and review before implementation.

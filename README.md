@@ -189,6 +189,24 @@ SteamVR manifest startup exits with SteamVR. When `vrserver.exe` exits, the supe
 
 The SteamVR host dashboard includes buttons for restarting Broken Eye/VRCFaceTracking, turning base stations on or off, and restarting the OSC router.
 
+## Read-only desktop TUI
+
+The `cli-ui2` / `1.3.0-test` work adds `PimaxVrcSupervisorTui.exe`, a separate Rust/Ratatui desktop terminal UI for monitoring a running supervisor.
+
+The TUI connects to the existing supervisor backend at `127.0.0.1:37957` and uses the structured `query-json` bridge to display supervisor status, command capabilities, and recent logs. It is currently read-only: it does not start or stop the supervisor, does not execute action commands, does not replace the SteamVR dashboard overlay, and does not replace the classic console yet.
+
+You can close the TUI without stopping the supervisor. If the backend is not running, the TUI opens in a disconnected/backend unavailable state.
+
+Keybindings:
+
+- `r`: refresh
+- `h` or `?`: help
+- `Up` / `Down`: scroll logs
+- `PageUp` / `PageDown`: scroll logs by page
+- `Home` / `End`: jump logs
+- `q`: quit
+- `Esc`: close help or quit
+
 ## Key Configuration
 
 The release includes a commented `supervisor.config.json`. Important settings:
@@ -322,6 +340,23 @@ dotnet publish .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.c
 ```
 
 The output folder will contain both executables, the config file, and this README.
+
+For the `cli-ui2` / `1.3.0-test` read-only desktop TUI, install the Rust stable MSVC toolchain. Visual Studio Build Tools with the C++ workload may also be required on Windows.
+
+Build the TUI with:
+
+```powershell
+cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml
+cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release
+```
+
+After the C# publish and Rust release build, copy the local test TUI executable into the release folder with:
+
+```powershell
+Copy-Item .\PimaxVrcSupervisor.Tui\target\release\PimaxVrcSupervisorTui.exe `
+  .\release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe `
+  -Force
+```
 
 ## Troubleshooting
 
