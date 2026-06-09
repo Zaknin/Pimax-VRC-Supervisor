@@ -57,7 +57,7 @@ internal sealed class ConfigEditorForm : Form
         "5 = OSC Router launch/restart",
         "6 = Reload Autostart apps",
         "F1 = Show console shortcuts",
-        "Modern desktop TUI primary keys: H help, F5 refresh, 1-6 actions, Enter confirm, Esc cancel"
+        "Modern desktop TUI primary keys: 0 help, F5 refresh, 1-6 actions, Q quit TUI, Enter confirm, Esc cancel"
     ];
     private static readonly string[] EditorShortcutLines =
     [

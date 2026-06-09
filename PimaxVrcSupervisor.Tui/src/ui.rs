@@ -62,8 +62,8 @@ fn render_small_terminal(frame: &mut Frame<'_>, area: Rect) {
         )),
         Line::from("Terminal is too small for the dashboard."),
         Line::from(format!("Minimum: {MIN_WIDTH}x{MIN_HEIGHT}")),
-        Line::from("Resize the terminal, or press Q / Esc to quit."),
-        Line::from("OSC router restart requires confirmation."),
+        Line::from("Resize the terminal, or press Q / Esc to quit the TUI."),
+        Line::from("Confirmed 1-6 actions use action-json."),
     ];
 
     frame.render_widget(
@@ -93,7 +93,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         Span::raw(format!("  auto refresh {}s", REFRESH_INTERVAL.as_secs())),
     ]);
 
-    let help = Line::from("H Help   F5 Refresh   1-6 Actions   Q Quit   ESC Cancel/Quit");
+    let help = Line::from(shortcut_line(area.width));
 
     frame.render_widget(
         Paragraph::new(vec![line, help])
@@ -174,7 +174,7 @@ fn render_commands(frame: &mut Frame<'_>, area: Rect, app: &App) {
 fn render_backend(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     let mut lines = vec![Line::from(vec![
         Span::styled("Action safety: ", label_style()),
-        Span::raw("only confirmed 1-6 actions use action-json."),
+        Span::raw("confirmed 1-6 actions use action-json."),
     ])];
 
     let mut backend_line = vec![Span::styled("Backend: ", label_style())];
@@ -184,27 +184,23 @@ fn render_backend(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         }
         ConnectionState::Disconnected => {
             backend_line.push(Span::styled(
-                format!("Backend unavailable at {}", app.backend_endpoint),
+                format!("unavailable at {}", app.backend_endpoint),
                 Style::default().fg(Color::Red),
             ));
         }
     }
 
+    lines.push(Line::from(backend_line));
+
     if let Some(error) = &app.last_error {
         let when = app
             .last_error_label(now)
             .unwrap_or_else(|| "unknown time".to_string());
-        backend_line.push(Span::raw("  "));
-        backend_line.push(Span::styled(
-            format!("Last error ({when}): "),
-            label_style(),
-        ));
-        backend_line.push(Span::raw(error.as_str()));
-    } else {
-        backend_line.push(Span::raw("  No connection or parse errors recorded."));
+        lines.push(Line::from(vec![
+            Span::styled(format!("Latest error ({when}): "), label_style()),
+            Span::raw(error.as_str()),
+        ]));
     }
-
-    lines.push(Line::from(backend_line));
 
     if app.action_in_progress {
         let command = app.last_action_command.as_deref().unwrap_or("action");
@@ -212,7 +208,7 @@ fn render_backend(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
             .last_action_started_label(now)
             .unwrap_or_else(|| "unknown time".to_string());
         lines.push(Line::from(vec![
-            Span::styled("Action: ", label_style()),
+            Span::styled("Last action: ", label_style()),
             Span::styled(
                 format!("{command} in progress, started {when}"),
                 Style::default().fg(Color::Yellow),
@@ -295,17 +291,15 @@ fn render_logs(frame: &mut Frame<'_>, area: Rect, app: &App) {
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect) {
-    frame.render_widget(
-        Paragraph::new("H Help   F5 Refresh   1-6 Actions   Q Quit"),
-        area,
-    );
+    frame.render_widget(Paragraph::new(shortcut_line(area.width)), area);
 }
 
 fn render_help(frame: &mut Frame<'_>, area: Rect) {
-    let popup = centered_rect(62, 54, area);
+    let popup = centered_rect(62, 58, area);
     let lines = vec![
         Line::from(Span::styled("Keybindings", title_style())),
-        Line::from("H       Help"),
+        Line::from("0       Help"),
+        Line::from("H       Help alias on English layout"),
         Line::from("F5      Refresh"),
         Line::from("1       Restart Core Apps"),
         Line::from("2       Start OSCGoesBrrr"),
@@ -315,16 +309,19 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("6       Reload Autostart Apps"),
         Line::from("ENTER   Confirm in modal"),
         Line::from("ESC     Cancel / Close"),
-        Line::from("Q       Quit / Cancel"),
+        Line::from("Q       Quit TUI / Cancel / Close by state"),
         Line::from("Up/Down scroll logs one line"),
         Line::from("PgUp/PgDn scroll logs one page"),
         Line::from("Home/End jump log scroll"),
         Line::from(""),
+        Line::from("Help closes on any key press and consumes that key."),
+        Line::from("Q quits only this TUI on the dashboard; it never stops the supervisor."),
         Line::from("Letters are shown uppercase; lowercase input is also accepted."),
         Line::from(""),
         Line::from("Numbers open confirmation only; they never execute directly."),
         Line::from("All TUI actions require confirmation and use backend action-json."),
         Line::from("Confirmation owns input; help and dashboard keys are ignored there."),
+        Line::from("F1, ?, and Russian help aliases are not mapped."),
         Line::from("force-stop-supervisor is not exposed."),
     ];
 
@@ -378,6 +375,14 @@ fn render_action_confirmation(frame: &mut Frame<'_>, area: Rect, app: &App) {
             .wrap(Wrap { trim: true }),
         popup,
     );
+}
+
+fn shortcut_line(width: u16) -> &'static str {
+    if width >= 100 {
+        "0 Help  F5 Refresh  1 Core  2 OGB  3 BS On  4 BS Off  5 OSC  6 Autostart  Q Quit TUI"
+    } else {
+        "0 Help  F5 Refresh  1-6 Actions  Q Quit TUI"
+    }
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

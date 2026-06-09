@@ -63,7 +63,8 @@ During the migration work, a manual runtime check confirmed the TUI can connect 
 
 Primary shortcuts:
 
-- `H` / `h`: help
+- `0`: help
+- `H` / `h`: help alias on English keyboard layouts
 - `F5`: refresh
 - `1`: open Restart Core Apps confirmation
 - `2`: open Start OSCGoesBrrr confirmation
@@ -72,17 +73,21 @@ Primary shortcuts:
 - `5`: open Restart OSC Router confirmation
 - `6`: open Reload Autostart Apps confirmation
 - `Enter`: confirm inside the confirmation modal
-- `Esc`: close help, cancel confirmation, or quit
+- `Esc`: close Help, cancel confirmation, or quit the TUI
 - `Up` / `Down`: scroll logs
 - `PageUp` / `PageDown`: scroll logs by page
 - `Home` / `End`: jump logs
-- `Q` / `q`: close help first, otherwise quit; cancel confirmation when confirmation is open
+- `Q` / `q`: quit only the Rust TUI from the dashboard; close Help or cancel confirmation in overlays
 
 Convenience aliases:
 
 - `R` / `r`: refresh
 - `Y` / `y`: confirm inside the confirmation modal
 - `N` / `n`: cancel inside the confirmation modal
+
+The footer lists direct action mappings on wide terminals: `0 Help`, `F5 Refresh`, `1 Core`, `2 OGB`, `3 BS On`, `4 BS Off`, `5 OSC`, `6 Autostart`, and `Q Quit TUI`. Narrow terminals may use the compact `1-6 Actions` label.
+
+Help closes on any key press and consumes that key. For example, pressing `1`, `Enter`, `Q`, or `F5` while Help is visible closes Help only and does not trigger the dashboard action underneath.
 
 Letter shortcuts are displayed uppercase, but lowercase input is also accepted. `F1`, `?`, and Russian help aliases do not open TUI help. Selected Russian-layout aliases remain limited to non-help refresh, quit, confirm, and cancel keys, but are not listed in the main Help overlay.
 
@@ -113,6 +118,7 @@ Do not commit generated `target/` or `release/` output. Keep `PimaxVrcSupervisor
 
 - Only the six audited regular classic-console actions are executable from the TUI.
 - Every TUI action requires explicit confirmation and uses backend `action-json`.
+- Read-only `query-json` polling keeps short timeouts; confirmed `action-json` requests use a separate longer timeout so successful backend work is not reported as a short polling timeout.
 - No legacy action commands are sent by the TUI.
 - `force-stop-supervisor` remains blocked and is not exposed.
 - No backend auto-start.
@@ -138,6 +144,8 @@ Phase 12 hardens overlay input handling and action result display. The TUI ignor
 Phase 13 made layout-independent shortcuts primary with `F1` help. Phase 14 changed TUI help to `H` only and removed `F1`, `?`, and Russian help aliases. Phase 14B tried debounce tuning, but current behavior restores immediate `H`/`h` Help toggling while still ignoring repeat/release events. The classic console keeps its existing `1`-`6` and `F1` hotkeys.
 
 Phase 15 adds classic-console action parity for regular operator actions. Numbers `1`-`6` open confirmation modals in the same order as the classic console, `Enter` confirms, `Esc` cancels, and `force-stop-supervisor` remains blocked.
+
+Phase 15C fixes runtime UX issues from parity testing. `0` is now primary Help, `H` remains an English-layout alias, Help closes on any key press and consumes that key, the footer lists direct `1`-`6` action mappings on wide terminals, dashboard `Q` quits only the Rust TUI, and confirmed actions use a separate 30 second response timeout.
 
 ## Future Direction
 

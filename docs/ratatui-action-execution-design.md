@@ -58,6 +58,12 @@ Phase 15 mirrors the regular classic-console action order in the desktop TUI. Nu
 
 Every TUI action requires confirmation and sends `action-json` with `confirmed=true`. The TUI uses a local allowlist enum and does not send legacy action command strings. `force-stop-supervisor` remains blocked and is not exposed.
 
+## Phase 15C Implementation Status
+
+Phase 15C keeps the Phase 15 backend allowlist unchanged and fixes desktop TUI runtime UX. Read-only `query-json` polling keeps its short timeout, while confirmed `action-json` requests use a separate 30 second response timeout so longer successful actions are not shown as short polling timeouts.
+
+`0` is the primary Help shortcut because it is layout-independent in the terminal. `H`/`h` remain English-layout aliases. `F1`, `?`, and Russian Help aliases remain unmapped. Help closes on any key press and consumes that key. Dashboard `Q` quits only the Rust TUI process and never sends `force-stop-supervisor`, shutdown, cleanup, SteamVR, VRChat, or lifecycle commands.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:
@@ -113,7 +119,8 @@ For Phase 15 actions:
 - `Enter` confirms inside the confirmation modal.
 - Confirmation shows command name, safety category, expected effect, and backend warning.
 - `Esc`, `n`, and modal `q` cancel confirmation.
-- Number keys, `H`, `F1`, `?`, removed help aliases, and dashboard keys are ignored while confirmation is visible.
+- Number keys, `0`, `H`, `F1`, `?`, removed help aliases, and dashboard keys are ignored while confirmation is visible.
+- Help closes on any key press and consumes the key instead of passing it through to dashboard shortcuts.
 - Action results appear in the backend/status area.
 - Blocked commands should not be executable and should explain why when selected or inspected.
 

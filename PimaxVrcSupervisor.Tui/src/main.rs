@@ -90,17 +90,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     }
 
     if app.help_visible {
-        match shortcut {
-            Some(Shortcut::Help) => {
-                app.toggle_help();
-                false
-            }
-            Some(Shortcut::Cancel | Shortcut::Quit) => {
-                app.close_help();
-                false
-            }
-            _ => false,
-        }
+        app.close_help();
+        return false;
     } else {
         match shortcut {
             Some(Shortcut::Quit) => true,
@@ -166,6 +157,7 @@ impl Shortcut {
 
     fn from_char(value: char) -> Option<Self> {
         match value {
+            '0' => Some(Self::Help),
             '1' | '2' | '3' | '4' | '5' | '6' => TuiAction::from_digit(value).map(Self::OpenAction),
             'h' | 'H' => Some(Self::Help),
             'r' | 'R' | 'к' | 'К' => Some(Self::Refresh),

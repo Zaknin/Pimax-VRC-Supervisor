@@ -204,6 +204,10 @@ Phase 15 - Classic console action parity in TUI
 
 Status: Completed
 
+Phase 15C - TUI action parity runtime UX fixes
+
+Status: Completed
+
 ## Known Risks
 
 - `PimaxVrcSupervisor/Program.cs` is a large monolithic file, so small UI/event refactors can accidentally touch unrelated lifecycle or cleanup logic.
@@ -1792,6 +1796,82 @@ Runtime testing:
 
 - Runtime shortcut/action testing was not performed during implementation.
 - User will manually test the TUI in VR before release-preparation work.
+
+Short Phase 16 direction:
+
+- Build and run a manual/runtime shortcut test matrix across keyboard layouts.
+- Continue polishing action confirmation safety and failure paths without expanding beyond the Phase 15 parity action set.
+
+### Phase 15C - TUI action parity runtime UX fixes
+
+Status: Completed
+
+Summary:
+
+- Fixed runtime UX issues found after Phase 15 parity testing.
+- Kept the backend action allowlist unchanged at the six regular classic-console parity actions.
+- Kept `force-stop-supervisor` blocked and not TUI-executable.
+- Kept classic console behavior, SteamVR overlay behavior, cleanup/lifecycle behavior, Configurator behavior, and config semantics unchanged.
+- Did not perform release-preparation work.
+
+Rust TUI changes:
+
+- Kept read-only `query-json` requests on the existing short `1s` read/write timeout.
+- Added a separate `30s` read/write timeout for confirmed `action-json` requests, used only through `execute_tui_action(TuiAction)`.
+- Added `0` as the primary layout-independent Help shortcut.
+- Kept `H`/`h` as English-layout Help aliases.
+- Kept `F1`, `?`, and Russian Help aliases unmapped.
+- Changed Help overlay input so any key press closes Help and consumes that key without triggering dashboard actions underneath.
+- Updated footer/header text to show direct action mappings on wide terminals: `0 Help`, `F5 Refresh`, `1 Core`, `2 OGB`, `3 BS On`, `4 BS Off`, `5 OSC`, `6 Autostart`, and `Q Quit TUI`.
+- Kept confirmation modal behavior safe: `Enter`/`Y` confirm, `Esc`/`Q`/`N` cancel, and number/help/dashboard keys do not switch or execute actions inside the modal.
+- Cleaned the Backend / Errors panel so action safety, backend state, latest error, and latest action result appear once each.
+
+Documentation changes:
+
+- Updated README and Ratatui docs to document `0 Help`, `H` as an English-layout alias, Help closing on any key press, direct footer mappings, `Q Quit TUI`, and the separate action timeout.
+- Updated action safety design to record that Phase 15C does not expand the backend allowlist.
+- Updated existing C# informational text to point users at `0 help`, `1-6 actions`, and `Q quit TUI`; classic console `1`-`6`/`F1` behavior remains unchanged.
+
+Files changed:
+
+- `PimaxVrcSupervisor/Program.cs`
+- `PimaxVrcSupervisor.ConfigEditor/Program.cs`
+- `PimaxVrcSupervisor.Tui/src/bridge.rs`
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `README.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- `cargo fmt` completed successfully.
+- Rust debug and release builds completed successfully.
+- All three explicit C# Release builds completed successfully with 0 warnings and 0 errors.
+- Bridge/source inspection confirmed the TUI sends `action-json` only through `execute_tui_action(TuiAction)`, has no generic arbitrary command executor, and sends no legacy action command strings directly.
+- Backend inspection confirmed the `action-json` allowlist remains the six Phase 15 classic-console parity actions and `force-stop-supervisor` remains blocked/not TUI-executable.
+
+Generated output status:
+
+- `git status --short release` produced no staged/tracked release output.
+- `git status --ignored --short release` reported `!! release/`.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
+- Generated `release/` and Rust `target/` output remain ignored and were not staged.
+
+Runtime testing:
+
+- Runtime shortcut/action testing was not performed during implementation.
+- If testing from `release\PimaxVrcSupervisor-v1.3.0-test`, copy the updated release TUI binary first; if it is locked, document the copy failure and do not kill the process automatically.
 
 Short Phase 16 direction:
 

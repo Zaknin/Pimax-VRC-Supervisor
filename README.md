@@ -199,7 +199,8 @@ You can close the TUI without stopping the supervisor. If the backend is not run
 
 Keybindings:
 
-- `H` / `h`: help
+- `0`: help
+- `H` / `h`: help alias on English keyboard layouts
 - `F5`: refresh
 - `1`: open Restart Core Apps confirmation
 - `2`: open Start OSCGoesBrrr confirmation
@@ -208,13 +209,13 @@ Keybindings:
 - `5`: open Restart OSC Router confirmation
 - `6`: open Reload Autostart Apps confirmation
 - `Enter`: confirm inside the confirmation modal
-- `Esc`: close help, cancel confirmation, or quit
+- `Esc`: cancel confirmation, close Help, or quit the TUI
 - `Up` / `Down`: scroll logs
 - `PageUp` / `PageDown`: scroll logs by page
 - `Home` / `End`: jump logs
-- `Q` / `q`: close help first, otherwise quit; cancel confirmation when confirmation is open
+- `Q` / `q`: quit only the Rust TUI from the dashboard; close Help or cancel confirmation in overlays
 
-Letter shortcuts are displayed uppercase, but lowercase input is also accepted. Selected Russian-layout aliases remain limited to non-help keys. `F1`, `?`, and Russian help aliases do not open TUI help; the main Help overlay keeps those alias details out of the shortcut list. `force-stop-supervisor` remains blocked from the TUI.
+Help closes on any key press and consumes that key, so pressing `1` while Help is visible closes Help without opening an action confirmation. Letter shortcuts are displayed uppercase, but lowercase input is also accepted. Selected Russian-layout aliases remain limited to non-help keys. `F1`, `?`, and Russian help aliases do not open TUI help; the main Help overlay keeps those alias details out of the shortcut list. `Q` never stops the supervisor backend, sends shutdown commands, or runs cleanup routines. `force-stop-supervisor` remains blocked from the TUI.
 
 ## Key Configuration
 
