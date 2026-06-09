@@ -154,9 +154,9 @@ Status: Completed
 
 Phase 5 - Minimal Rust Ratatui desktop frontend
 
-Status: Not started
+Status: Completed with local Rust build blocked by missing toolchain
 
-Phase 6 - Full desktop Ratatui dashboard screens
+Phase 6 - Improve read-only desktop Ratatui TUI UX
 
 Status: Not started
 
@@ -538,14 +538,104 @@ Known issues:
 - The current bridge remains a one-line string protocol over loopback TCP.
 - Release output is generated locally and ignored; it must not be committed unless release policy changes.
 
+### Phase 5 - Minimal read-only Rust Ratatui desktop frontend
+
+Status: Completed with local Rust build blocked by missing toolchain
+
+Summary:
+
+- Added a new separate Rust crate for a read-only desktop Ratatui frontend.
+- Crate path: `PimaxVrcSupervisor.Tui/`
+- TUI binary name: `PimaxVrcSupervisorTui`
+- The TUI uses the existing loopback TCP bridge at `127.0.0.1:37957`.
+- The TUI sends only read-only `query-json` requests for `status`, `commands`, and `log`.
+- The TUI never sends action commands and does not stop, restart, clean up, or mutate supervisor state.
+- The old C# console UI and SteamVR overlay/dashboard behavior remain unchanged.
+
+Files changed:
+
+- `.gitignore`
+- `PimaxVrcSupervisor.Tui/Cargo.toml`
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/bridge.rs`
+- `PimaxVrcSupervisor.Tui/src/models.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `docs/ratatui-tui-migration-progress.md`
+
+Rust crate baseline:
+
+- Package name: `pimax-vrc-supervisor-tui`
+- Binary: `PimaxVrcSupervisorTui`
+- Edition remains `2024`.
+- Ratatui dependency remains `ratatui = "0.30.1"`.
+- Crossterm dependency remains `crossterm = "0.29.0"`.
+- No Ratatui dependency or feature adjustment was made because Cargo is not available locally to perform a build-resolution check.
+- `PimaxVrcSupervisor.Tui/target/` was added to `.gitignore`.
+
+Read-only bridge behavior:
+
+- `query-json {"resource":"status"}`
+- `query-json {"resource":"commands"}`
+- `query-json {"resource":"log","maxLines":14}`
+- Connects with short read/write/connect timeouts.
+- Sends one command line and reads one response line.
+- Backend unavailable and disconnected states render without panicking.
+
+TUI behavior:
+
+- Renders a title/status bar, supervisor status panel, bridge command list, recent logs, and footer.
+- `r` refreshes read-only data.
+- `q` and `Esc` quit the TUI only.
+- No action-command execution, confirmation handling, IPC transport changes, Rust-to-C# embedding, or SteamVR host changes were added.
+
+Build/test commands run:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `rustc --version`
+
+Build/test result:
+
+- All three explicit C# Release builds succeeded with 0 warnings and 0 errors.
+- Rust build was blocked because `cargo` is not on PATH.
+- Rust compiler verification was blocked because `rustc` is not on PATH.
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release` was not run because Cargo is not available locally.
+- The TUI bridge was not runtime-tested because the Rust binary could not be built locally and launching the supervisor can trigger the elevated VR/SteamVR/Pimax workflow.
+
+Publish commands run:
+
+- `New-Item -ItemType Directory -Force .\release\PimaxVrcSupervisor-v1.3.0-test | Out-Null`
+- `dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `dotnet publish .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+
+Publish/copy result:
+
+- C# publish succeeded for all three projects.
+- Release folder: `release/PimaxVrcSupervisor-v1.3.0-test`
+- Release folder inspection found `PimaxVrcSupervisor.exe`, `PimaxVrcSupervisorConfigurator.exe`, `PimaxVrcSupervisorSteamVrHost.exe`, `supervisor.config.json`, and `Assets/vr-overlay-icon.png`.
+- `PimaxVrcSupervisorTui.exe` was not copied because the Rust release build could not be produced without Cargo.
+- `git status --short release` reported no staged or unstaged tracked release changes.
+- `git status --ignored --short release` reported `!! release/`, confirming generated release output is ignored.
+
+Known issues:
+
+- Rust build verification should be rerun after installing or exposing a Rust toolchain on PATH.
+- Ratatui `0.30.1` and Rust edition `2024` compatibility were not locally verified because Cargo is unavailable.
+- The TUI is intentionally read-only and currently depends on the existing loopback TCP bridge.
+- Runtime bridge behavior should be tested in a safe supervisor session before relying on the TUI operationally.
+- Release output is generated locally and ignored; it must not be committed unless release policy changes.
+
 ## Next Prompt Handling
 
 Full phase prompts are prepared manually outside this file and pasted into Codex when needed.
 
-Short Phase 5 direction:
+Short Phase 6 direction:
 
-- Create a minimal read-only Rust Ratatui desktop frontend.
-- Connect to the existing loopback TCP bridge and call `query-json` for `status`, `commands`, and `log`.
-- Render a simple dashboard with status, command list, and recent logs.
-- The TUI should quit without stopping the supervisor.
-- Do not execute action commands yet.
+- Improve the read-only desktop TUI UX.
+- Keep using `query-json` for `status`, `commands`, and `log`.
+- Add better navigation, refresh state, error presentation, and layout polish.
+- Keep the TUI read-only and preserve the old console and SteamVR overlay behavior.

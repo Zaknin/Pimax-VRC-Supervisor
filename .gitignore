@@ -7,4 +7,5 @@
 .templateengine/
 publish*/
 release/
+PimaxVrcSupervisor.Tui/target/
 *.user
