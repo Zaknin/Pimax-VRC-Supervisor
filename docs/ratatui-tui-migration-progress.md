@@ -168,6 +168,10 @@ Phase 8 - Safe desktop TUI action execution design
 
 Status: Completed
 
+Phase 9 - Backend-only structured action-json allowlist
+
+Status: Completed
+
 ## Known Risks
 
 - `PimaxVrcSupervisor/Program.cs` is a large monolithic file, so small UI/event refactors can accidentally touch unrelated lifecycle or cleanup logic.
@@ -918,12 +922,101 @@ Known risks:
 - Legacy bridge availability and future desktop TUI executability must remain separate concepts.
 - `force-stop-supervisor` remains especially sensitive because it bypasses cleanup routines.
 
+### Phase 9 - Backend-only structured `action-json` allowlist
+
+Status: Completed
+
+Summary:
+
+- Added backend-only structured `action-json` support for a tiny allowlist.
+- The only allowed structured action is `restart-osc-router`.
+- The Rust TUI remains read-only; no TUI action buttons, keybindings, selection, or confirmation modal were added.
+- Legacy string commands remain compatible.
+- The SteamVR host was not changed and still uses the legacy command protocol.
+
+Files changed:
+
+- `PimaxVrcSupervisor/Program.cs`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Backend behavior:
+
+- Added one-line `action-json` command verb.
+- Added `SupervisorActionJsonRequest` with `requestId`, `command`, and nullable boolean `confirmed`.
+- Reused compact camelCase `SupervisorCommandResult` responses with `resultType="action"`.
+- Preserved raw JSON payload after the `action-json` verb; only the leading verb is split.
+- Matched action command names case-insensitively and returned canonical lowercase command names in structured responses.
+- Required `confirmed=true` as a real JSON boolean for `restart-osc-router`; missing, `false`, `null`, and string `"true"` do not authorize execution.
+- Shared the existing OSC router restart behavior through `RestartOscRouterCommandAsync(...)`, preserving the legacy response text `OSC router restart requested.`.
+- Preserved dispatcher diagnostics/timing wrapping without adding duplicate diagnostics around the helper.
+
+Allowlist and rejection behavior:
+
+- Allowed: `restart-osc-router` with JSON boolean `confirmed=true`.
+- Rejected read-only commands through `action-json`: `status`, `status-json`, `commands-json`, `log`, `log-json`, and `query-json`.
+- Rejected deferred actions through `action-json`: `restart-core-apps`, `start-osc-goes-brrr`, `base-stations-on`, and `base-stations-off`.
+- Explicitly blocked: `force-stop-supervisor`, because it hard-stops without cleanup routines and is not executable from the structured desktop TUI action flow.
+- Unknown commands return structured failure.
+- Malformed, missing, or non-object JSON returns structured failure and does not throw unhandled TCP exceptions to the client.
+- `requestId` is echoed when it can be safely parsed as a string; otherwise it is `null`.
+
+Command metadata:
+
+- Added `action-json` to `commands-json` metadata.
+- Added future action metadata fields additively: `actionSupported`, `actionSafetyCategory`, `tuiExecutable`, and `blockedReason`.
+- Kept `available=true` meaning bridge availability only; it does not mean safe or executable from the desktop TUI.
+- `restart-osc-router`: `actionSupported=true`, `actionSafetyCategory="LowRisk"`, `tuiExecutable=false`, `requiresConfirmation=true`.
+- `force-stop-supervisor`: `actionSupported=false`, `actionSafetyCategory="Blocked"`, `tuiExecutable=false`, with a cleanup-bypass blocked reason.
+- Deferred actions are classified with design-aligned safety categories and blocked reasons.
+
+Documentation updates:
+
+- Updated `docs/ratatui-action-execution-design.md` with Phase 9 implementation status.
+- Updated `docs/ratatui-tui.md` to clarify that backend structured action support has started but the desktop TUI remains read-only.
+- `RELEASE_NOTES.md` was not updated because there is no suitable development/unreleased section.
+- Packaging behavior was not changed.
+
+Build/test commands run:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+
+Build/test result:
+
+- Main supervisor Release build succeeded with 0 warnings and 0 errors.
+- ConfigEditor Release build succeeded with 0 warnings and 0 errors.
+- SteamVrHost Release build succeeded with 0 warnings and 0 errors.
+- Rust debug build succeeded.
+- Rust release build succeeded.
+
+Runtime testing:
+
+- Runtime bridge testing was not performed because this phase should not start the supervisor just for testing.
+- Successful `restart-osc-router` was not runtime-tested because it should only be exercised in a known-safe active session.
+- Verification was by code inspection plus successful C# and Rust builds.
+
+Generated output status:
+
+- `git status --short release` reported no staged or unstaged tracked release changes.
+- `git status --ignored --short release` reported `!! release/`, confirming generated release output is ignored.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported ignored Rust build output under `PimaxVrcSupervisor.Tui/target/`.
+
+Known risks:
+
+- `action-json` is backend-only; future TUI UX must still avoid accidental execution and must use explicit confirmation.
+- Only `restart-osc-router` is allowlisted; expanding the allowlist needs separate review.
+- `force-stop-supervisor` remains blocked from structured desktop TUI action flow despite legacy bridge availability.
+
 ## Next Prompt Handling
 
 Full phase prompts are prepared manually outside this file and pasted into Codex when needed.
 
-Short Phase 9 direction:
+Short Phase 10 direction:
 
-- Implement backend-only structured `action-json` support for a tiny allowlist, preferably only `restart-osc-router`.
-- Add confirmation-required metadata and structured failure responses.
-- Do not add TUI action buttons yet.
+- Display future action metadata in the TUI without executing actions, or prepare a reviewed TUI confirmation UX for `restart-osc-router`.
+- Keep action execution disabled in the TUI until explicitly approved.

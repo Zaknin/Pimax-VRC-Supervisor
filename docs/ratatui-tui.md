@@ -93,6 +93,8 @@ Action execution is planned but not implemented. The current TUI remains read-on
 
 The safety and confirmation model for future action execution is documented separately in [TUI Action Execution Safety Design](ratatui-action-execution-design.md).
 
+Phase 9 starts backend-only structured `action-json` support for the `restart-osc-router` allowlist entry. The desktop TUI still does not expose action execution, action buttons, action keybindings, or confirmation UI.
+
 ## Future Direction
 
 Future Configurator naming should use:

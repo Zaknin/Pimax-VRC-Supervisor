@@ -16,6 +16,14 @@ The backend also accepts legacy string action commands on the same bridge. The S
 
 Important metadata distinction: `commands-json` currently uses `available=true` to mean "accepted by the current backend bridge." It does not mean a command is safe, supported by future JSON action execution, or executable from the desktop TUI.
 
+## Phase 9 Implementation Status
+
+Phase 9 adds backend-only structured `action-json` support for one allowlisted command: `restart-osc-router`.
+
+The desktop TUI remains read-only. No TUI action buttons, action keybindings, or confirmation modal are implemented. The SteamVR host remains on the legacy command protocol.
+
+All other action commands remain rejected by `action-json`, and `force-stop-supervisor` remains blocked from the structured desktop TUI action flow.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:
@@ -75,7 +83,7 @@ When action support is implemented in a later phase:
 
 ## Future Backend Protocol
 
-Add a structured `action-json` command in a later implementation phase. Do not repurpose `query-json`; it remains read-only.
+Phase 9 starts a structured `action-json` command for a tiny backend-only allowlist. Do not repurpose `query-json`; it remains read-only.
 
 Example request:
 
@@ -102,7 +110,7 @@ Example response:
 }
 ```
 
-The response should reuse the existing `SupervisorCommandResult` shape where practical. Legacy string commands must remain compatible, and the SteamVR host must not be required to consume `action-json`.
+The response reuses the existing `SupervisorCommandResult` shape where practical. Legacy string commands remain compatible, and the SteamVR host is not required to consume `action-json`.
 
 ## Backend Guardrails
 
@@ -121,7 +129,7 @@ TUI confirmation is only a user-experience layer. Backend validation must enforc
 
 ## Recommended Implementation Order
 
-Phase 9 should implement backend-only structured `action-json` support for a tiny allowlist, preferably only `restart-osc-router`, with no TUI action buttons yet.
+Phase 9 implements backend-only structured `action-json` support for a tiny allowlist, currently only `restart-osc-router`, with no TUI action buttons yet.
 
 Possible later candidate:
 

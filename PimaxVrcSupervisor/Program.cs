@@ -1255,7 +1255,11 @@ internal sealed record SupervisorCommandDefinition(
     bool Available,
     string OutputKind,
     string LegacyTextCommand,
-    string Notes);
+    string Notes,
+    bool ActionSupported,
+    string ActionSafetyCategory,
+    bool TuiExecutable,
+    string? BlockedReason);
 
 internal sealed record SupervisorCommandCapabilitiesSnapshot(
     DateTimeOffset Timestamp,
@@ -1278,6 +1282,11 @@ internal sealed record SupervisorReadOnlyJsonRequest(
     string? RequestId,
     string? Resource,
     int? MaxLines);
+
+internal sealed record SupervisorActionJsonRequest(
+    string? RequestId,
+    string? Command,
+    bool? Confirmed);
 
 internal sealed record SupervisorLogLine(
     int Index,
@@ -2924,6 +2933,7 @@ internal sealed class AppSupervisor
         var rawCommand = command.Trim();
         var commandVerb = GetCommandVerb(rawCommand).ToLowerInvariant();
         var commandName = string.Equals(commandVerb, "query-json", StringComparison.Ordinal)
+            || string.Equals(commandVerb, "action-json", StringComparison.Ordinal)
             ? commandVerb
             : rawCommand.ToLowerInvariant();
         var startedAt = Stopwatch.GetTimestamp();
@@ -2944,6 +2954,14 @@ internal sealed class AppSupervisor
                 return response;
             }
 
+            if (string.Equals(commandVerb, "action-json", StringComparison.Ordinal))
+            {
+                var result = await ExecuteActionJsonAsync(GetCommandPayload(rawCommand), cancellationToken);
+                response = JsonSerializer.Serialize(result, CommandBridgeJsonOptions);
+                success = result.Success;
+                return response;
+            }
+
             response = commandName switch
             {
                 "status" => BuildSupervisorStatus(),
@@ -2955,7 +2973,7 @@ internal sealed class AppSupervisor
                 "start-osc-goes-brrr" => await StartOscGoesBrrrAndReturnAsync(cancellationToken),
                 "base-stations-on" => await ManualPowerOnBaseStationsAndReturnAsync(cancellationToken),
                 "base-stations-off" => await ManualPowerDownBaseStationsAndReturnAsync(cancellationToken),
-                "restart-osc-router" => await RestartOscRouterAndReturnAsync(cancellationToken),
+                "restart-osc-router" => await RestartOscRouterCommandAsync(cancellationToken),
                 "force-stop-supervisor" => ForceStopSupervisorAndReturn(),
                 _ => "Unknown command: " + commandName
             };
@@ -2992,12 +3010,6 @@ internal sealed class AppSupervisor
                     : "Base stations are not enabled in config; manual shutdown routine requested.";
             }
 
-            async Task<string> RestartOscRouterAndReturnAsync(CancellationToken token)
-            {
-                await RestartOscRouterAsync(token, manualOverride: true);
-                return "OSC router restart requested.";
-            }
-
             string ForceStopSupervisorAndReturn()
             {
                 ForceStopSupervisorFromDashboard();
@@ -3023,6 +3035,12 @@ internal sealed class AppSupervisor
                     + $"; response={TruncateDebugValue(response)}");
             }
         }
+    }
+
+    private async Task<string> RestartOscRouterCommandAsync(CancellationToken token)
+    {
+        await RestartOscRouterAsync(token, manualOverride: true);
+        return "OSC router restart requested.";
     }
 
     private static string TruncateDebugValue(string value)
@@ -3140,40 +3158,63 @@ internal sealed class AppSupervisor
                     "Json",
                     "Read-only JSON request envelope for future desktop TUI clients. Does not execute action commands."),
                 CommandDefinition(
+                    "action-json",
+                    "Structured Action JSON",
+                    "Executes a tiny allowlisted structured action request.",
+                    "Actions",
+                    "Json",
+                    "Backend-only structured action envelope. Phase 9 allowlist supports restart-osc-router only.",
+                    requiresConfirmation: true,
+                    actionSupported: true,
+                    actionSafetyCategory: "LowRisk",
+                    blockedReason: "Backend-only structured action envelope; not exposed by the desktop TUI yet."),
+                CommandDefinition(
                     "restart-core-apps",
                     "Restart Core Apps",
                     "Restarts configured face-tracking applications.",
                     "CoreApps",
                     "ActionResult",
-                    "Disruptive: restarts configured face-tracking apps; future TUIs may choose to confirm."),
+                    "Disruptive: restarts configured face-tracking apps; future TUIs may choose to confirm.",
+                    actionSafetyCategory: "Disruptive",
+                    blockedReason: "Deferred until confirmation and TUI action UX are reviewed."),
                 CommandDefinition(
                     "start-osc-goes-brrr",
                     "Start OSCGoesBrrr",
                     "Launches or repairs the Intiface and OSCGoesBrrr workflow.",
                     "Osc",
                     "ActionResult",
-                    "May launch or repair Intiface/OscGoesBrrr workflow."),
+                    "May launch or repair Intiface/OscGoesBrrr workflow.",
+                    actionSafetyCategory: "Disruptive",
+                    blockedReason: "Deferred until confirmation and workflow launch effects are reviewed."),
                 CommandDefinition(
                     "base-stations-on",
                     "Base Stations On",
                     "Runs the configured base-station power-on routine.",
                     "BaseStations",
                     "ActionResult",
-                    "Sends configured base-station power-on routine."),
+                    "Sends configured base-station power-on routine.",
+                    actionSafetyCategory: "Disruptive",
+                    blockedReason: "Deferred because base-station actions affect hardware state."),
                 CommandDefinition(
                     "base-stations-off",
                     "Base Stations Off",
                     "Runs the configured base-station power-off routine.",
                     "BaseStations",
                     "ActionResult",
-                    "Disruptive: powers off configured base stations; future TUIs should confirm."),
+                    "Disruptive: powers off configured base stations; future TUIs should confirm.",
+                    actionSafetyCategory: "Disruptive",
+                    blockedReason: "Deferred because base-station actions affect tracking hardware state."),
                 CommandDefinition(
                     "restart-osc-router",
                     "Restart OSC Router",
                     "Restarts or manually starts OSC routing.",
                     "Osc",
                     "ActionResult",
-                    "Restarts or manually starts OSC routing."),
+                    "Restarts or manually starts OSC routing.",
+                    requiresConfirmation: true,
+                    actionSupported: true,
+                    actionSafetyCategory: "LowRisk",
+                    blockedReason: "Structured backend action is supported, but desktop TUI execution is not exposed yet."),
                 CommandDefinition(
                     "force-stop-supervisor",
                     "Force Stop Supervisor",
@@ -3182,9 +3223,11 @@ internal sealed class AppSupervisor
                     "ActionResult",
                     "Hard-stops supervisor without cleanup routines; future UIs must confirm.",
                     dangerous: true,
-                    requiresConfirmation: true)
+                    requiresConfirmation: true,
+                    actionSafetyCategory: "Blocked",
+                    blockedReason: "Blocked from structured desktop TUI action flow because it hard-stops without cleanup routines.")
             ],
-            "Read-only metadata. available=true means the command is accepted by the current bridge, not that the underlying configured subsystem is enabled.");
+            "Metadata. available=true means the command is accepted by the current bridge, not that the underlying configured subsystem is enabled or safe/executable from the desktop TUI.");
 
     private static SupervisorCommandDefinition CommandDefinition(
         string name,
@@ -3194,7 +3237,11 @@ internal sealed class AppSupervisor
         string outputKind,
         string notes,
         bool dangerous = false,
-        bool requiresConfirmation = false)
+        bool requiresConfirmation = false,
+        bool actionSupported = false,
+        string actionSafetyCategory = "ReadOnly",
+        bool tuiExecutable = false,
+        string? blockedReason = "Read-only or not exposed through structured desktop TUI action execution.")
         => new(
             name,
             displayName,
@@ -3205,7 +3252,11 @@ internal sealed class AppSupervisor
             true,
             outputKind,
             name,
-            notes);
+            notes,
+            actionSupported,
+            actionSafetyCategory,
+            tuiExecutable,
+            blockedReason);
 
     private SupervisorCommandResult ExecuteReadOnlyJsonQuery(string payload)
     {
@@ -3313,9 +3364,161 @@ internal sealed class AppSupervisor
             data,
             error);
 
+    private async Task<SupervisorCommandResult> ExecuteActionJsonAsync(string payload, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+        {
+            return ActionJsonResult(
+                requestId: null,
+                command: "action-json",
+                success: false,
+                message: "action-json requires a JSON request payload.",
+                data: null,
+                error: "Missing JSON request payload.");
+        }
+
+        SupervisorActionJsonRequest request;
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return ActionJsonResult(
+                    requestId: null,
+                    command: "action-json",
+                    success: false,
+                    message: "action-json request must be a JSON object.",
+                    data: null,
+                    error: "Request root was not an object.");
+            }
+
+            request = new SupervisorActionJsonRequest(
+                TryReadStringProperty(document.RootElement, "requestId"),
+                TryReadStringProperty(document.RootElement, "command"),
+                TryReadBooleanProperty(document.RootElement, "confirmed"));
+        }
+        catch (JsonException ex)
+        {
+            return ActionJsonResult(
+                requestId: null,
+                command: "action-json",
+                success: false,
+                message: "action-json request payload is not valid JSON.",
+                data: null,
+                error: ex.Message);
+        }
+
+        var canonicalCommand = request.Command?.Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(canonicalCommand))
+        {
+            return ActionJsonResult(
+                request.RequestId,
+                "action-json",
+                success: false,
+                message: "action-json request requires a command.",
+                data: null,
+                error: "Missing command. Phase 9 supported command: restart-osc-router.");
+        }
+
+        return canonicalCommand switch
+        {
+            "restart-osc-router" => await ExecuteRestartOscRouterActionAsync(request.RequestId, request.Confirmed, cancellationToken),
+            "force-stop-supervisor" => ActionJsonResult(
+                request.RequestId,
+                canonicalCommand,
+                success: false,
+                message: "force-stop-supervisor is blocked from structured desktop TUI action flow.",
+                data: null,
+                error: "Blocked command: hard-stops supervisor without cleanup routines."),
+            "status" or "status-json" or "commands-json" or "log" or "log-json" or "query-json" => ActionJsonResult(
+                request.RequestId,
+                canonicalCommand,
+                success: false,
+                message: $"{canonicalCommand} is read-only and cannot be executed through action-json.",
+                data: null,
+                error: "Use query-json or the existing read-only command surface."),
+            "restart-core-apps" or "start-osc-goes-brrr" or "base-stations-on" or "base-stations-off" => ActionJsonResult(
+                request.RequestId,
+                canonicalCommand,
+                success: false,
+                message: $"{canonicalCommand} is not in the Phase 9 action-json allowlist.",
+                data: null,
+                error: "Deferred action. Phase 9 supports restart-osc-router only."),
+            _ => ActionJsonResult(
+                request.RequestId,
+                canonicalCommand,
+                success: false,
+                message: $"Unsupported action-json command: {canonicalCommand}.",
+                data: null,
+                error: "Phase 9 supported command: restart-osc-router.")
+        };
+    }
+
+    private async Task<SupervisorCommandResult> ExecuteRestartOscRouterActionAsync(
+        string? requestId,
+        bool? confirmed,
+        CancellationToken cancellationToken)
+    {
+        if (confirmed != true)
+        {
+            return ActionJsonResult(
+                requestId,
+                "restart-osc-router",
+                success: false,
+                message: "restart-osc-router requires confirmed=true.",
+                data: null,
+                error: "Structured action requires JSON boolean confirmed=true.");
+        }
+
+        try
+        {
+            var message = await RestartOscRouterCommandAsync(cancellationToken);
+            return ActionJsonResult(
+                requestId,
+                "restart-osc-router",
+                success: true,
+                message,
+                data: null,
+                error: null);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            return ActionJsonResult(
+                requestId,
+                "restart-osc-router",
+                success: false,
+                message: "restart-osc-router action failed.",
+                data: null,
+                error: ex.Message);
+        }
+    }
+
+    private static SupervisorCommandResult ActionJsonResult(
+        string? requestId,
+        string command,
+        bool success,
+        string message,
+        object? data,
+        string? error)
+        => new(
+            DateTimeOffset.UtcNow,
+            requestId,
+            command,
+            success,
+            message,
+            "action",
+            data,
+            error);
+
     private static string? TryReadStringProperty(JsonElement element, string propertyName)
         => element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
             ? property.GetString()
+            : null;
+
+    private static bool? TryReadBooleanProperty(JsonElement element, string propertyName)
+        => element.TryGetProperty(propertyName, out var property)
+            && (property.ValueKind == JsonValueKind.True || property.ValueKind == JsonValueKind.False)
+            ? property.GetBoolean()
             : null;
 
     private static string GetCommandVerb(string rawCommand)
