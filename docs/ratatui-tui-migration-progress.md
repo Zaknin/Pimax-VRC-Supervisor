@@ -1137,6 +1137,16 @@ Bridge inspection:
 - Bridge helpers remain limited to `status`, `commands`, and `log`.
 - No `action-json` or legacy action command strings were found in `bridge.rs`.
 
+Runtime validation:
+
+- Ran the latest Phase 10B TUI against the supervisor backend without launching SteamVR or VRChat.
+- TUI connected successfully to `127.0.0.1:37957`.
+- Confirmed read-only commands now display `[read-only]` instead of `[blocked]`.
+- Confirmed backend action metadata is visible for `action-json`.
+- Confirmed deferred action metadata/reasons are visible for unsupported actions.
+- Confirmed footer states action metadata only and no `action-json` calls.
+- No action commands were executed.
+
 ## Next Prompt Handling
 
 Full phase prompts are prepared manually outside this file and pasted into Codex when needed.
