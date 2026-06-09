@@ -5,6 +5,7 @@ mod ui;
 
 use std::{io, time::Instant};
 
+use crate::models::TuiAction;
 use app::{App, LOG_PAGE_SIZE};
 use color_eyre::eyre::Result;
 use crossterm::{
@@ -19,7 +20,7 @@ enum Shortcut {
     Help,
     Refresh,
     Quit,
-    OpenRestartOscRouter,
+    OpenAction(TuiAction),
     Confirm,
     Cancel,
 }
@@ -77,7 +78,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     if app.confirmation.is_some() {
         match shortcut {
             Some(Shortcut::Confirm) => {
-                app.confirm_restart_osc_router(now);
+                app.confirm_action(now);
                 return false;
             }
             Some(Shortcut::Cancel | Shortcut::Quit) => {
@@ -112,8 +113,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
                 app.toggle_help();
                 false
             }
-            Some(Shortcut::OpenRestartOscRouter) => {
-                app.request_restart_osc_router_confirmation(now);
+            Some(Shortcut::OpenAction(action)) => {
+                app.request_action_confirmation(action, now);
                 false
             }
             Some(Shortcut::Confirm) => false,
@@ -165,11 +166,10 @@ impl Shortcut {
 
     fn from_char(value: char) -> Option<Self> {
         match value {
-            '1' => Some(Self::OpenRestartOscRouter),
+            '1' | '2' | '3' | '4' | '5' | '6' => TuiAction::from_digit(value).map(Self::OpenAction),
             'h' | 'H' => Some(Self::Help),
             'r' | 'R' | 'к' | 'К' => Some(Self::Refresh),
             'q' | 'Q' | 'й' | 'Й' => Some(Self::Quit),
-            'o' | 'O' | 'щ' | 'Щ' => Some(Self::OpenRestartOscRouter),
             'y' | 'Y' | 'н' | 'Н' => Some(Self::Confirm),
             'n' | 'N' | 'т' | 'Т' => Some(Self::Cancel),
             _ => None,

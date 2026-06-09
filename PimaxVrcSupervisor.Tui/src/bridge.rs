@@ -7,7 +7,7 @@ use std::{
 use color_eyre::eyre::{Result, eyre};
 use serde_json::{Value, json};
 
-use crate::models::{CommandResult, QueryResponse};
+use crate::models::{CommandResult, QueryResponse, TuiAction};
 
 pub const BACKEND_HOST: &str = "127.0.0.1";
 pub const BACKEND_PORT: u16 = 37957;
@@ -45,9 +45,9 @@ impl SupervisorBridge {
         self.query(json!({ "resource": "log", "maxLines": max_lines }))
     }
 
-    pub fn execute_restart_osc_router(&self) -> Result<CommandResult> {
+    pub fn execute_tui_action(&self, action: TuiAction) -> Result<CommandResult> {
         let request_json =
-            serde_json::to_string(&json!({ "command": "restart-osc-router", "confirmed": true }))?;
+            serde_json::to_string(&json!({ "command": action.command_name(), "confirmed": true }))?;
         let response_line = self.send_line(&format!("action-json {request_json}"))?;
         let response = serde_json::from_str::<CommandResult>(&response_line).map_err(|error| {
             eyre!("could not parse supervisor action response: {error}; response={response_line}")

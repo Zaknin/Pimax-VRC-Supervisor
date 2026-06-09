@@ -50,7 +50,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     }
 
     if app.confirmation.is_some() {
-        render_restart_osc_router_confirmation(frame, area);
+        render_action_confirmation(frame, area, app);
     }
 }
 
@@ -93,7 +93,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         Span::raw(format!("  auto refresh {}s", REFRESH_INTERVAL.as_secs())),
     ]);
 
-    let help = Line::from("H Help   F5 Refresh   1 Restart OSC   Q Quit   Esc Cancel/Quit");
+    let help = Line::from("H Help   F5 Refresh   1-6 Actions   Q Quit   ESC Cancel/Quit");
 
     frame.render_widget(
         Paragraph::new(vec![line, help])
@@ -174,7 +174,7 @@ fn render_commands(frame: &mut Frame<'_>, area: Rect, app: &App) {
 fn render_backend(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     let mut lines = vec![Line::from(vec![
         Span::styled("Action safety: ", label_style()),
-        Span::raw("only confirmed restart-osc-router uses action-json."),
+        Span::raw("only confirmed 1-6 actions use action-json."),
     ])];
 
     let mut backend_line = vec![Span::styled("Backend: ", label_style())];
@@ -207,10 +207,7 @@ fn render_backend(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     lines.push(Line::from(backend_line));
 
     if app.action_in_progress {
-        let command = app
-            .last_action_command
-            .as_deref()
-            .unwrap_or("restart-osc-router");
+        let command = app.last_action_command.as_deref().unwrap_or("action");
         let when = app
             .last_action_started_label(now)
             .unwrap_or_else(|| "unknown time".to_string());
@@ -222,10 +219,7 @@ fn render_backend(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
             ),
         ]));
     } else if let Some(outcome) = app.last_action_outcome {
-        let command = app
-            .last_action_command
-            .as_deref()
-            .unwrap_or("restart-osc-router");
+        let command = app.last_action_command.as_deref().unwrap_or("action");
         let when = app
             .last_action_completed_label(now)
             .unwrap_or_else(|| "unknown time".to_string());
@@ -302,7 +296,7 @@ fn render_logs(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(
-        Paragraph::new("H Help   F5 Refresh   1 Restart OSC   Q Quit   aliases: R/O"),
+        Paragraph::new("H Help   F5 Refresh   1-6 Actions   Q Quit"),
         area,
     );
 }
@@ -311,22 +305,27 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
     let popup = centered_rect(62, 54, area);
     let lines = vec![
         Line::from(Span::styled("Keybindings", title_style())),
-        Line::from("H       help"),
-        Line::from("F5      refresh now"),
-        Line::from("1       open Restart OSC Router confirmation"),
-        Line::from("Q       close help first, otherwise quit"),
-        Line::from("Esc     close help, cancel confirmation, otherwise quit"),
+        Line::from("H       Help"),
+        Line::from("F5      Refresh"),
+        Line::from("1       Restart Core Apps"),
+        Line::from("2       Start OSCGoesBrrr"),
+        Line::from("3       Base Stations On"),
+        Line::from("4       Base Stations Off"),
+        Line::from("5       Restart OSC Router"),
+        Line::from("6       Reload Autostart Apps"),
+        Line::from("ENTER   Confirm in modal"),
+        Line::from("ESC     Cancel / Close"),
+        Line::from("Q       Quit / Cancel"),
         Line::from("Up/Down scroll logs one line"),
         Line::from("PgUp/PgDn scroll logs one page"),
         Line::from("Home/End jump log scroll"),
         Line::from(""),
         Line::from("Letters are shown uppercase; lowercase input is also accepted."),
-        Line::from("R refresh and O restart OSC are convenience aliases."),
         Line::from(""),
-        Line::from("Only restart-osc-router is currently executable."),
-        Line::from("It requires confirmation and uses backend action-json."),
+        Line::from("Numbers open confirmation only; they never execute directly."),
+        Line::from("All TUI actions require confirmation and use backend action-json."),
         Line::from("Confirmation owns input; help and dashboard keys are ignored there."),
-        Line::from("No legacy action commands or other actions are exposed."),
+        Line::from("force-stop-supervisor is not exposed."),
     ];
 
     frame.render_widget(Clear, popup);
@@ -338,15 +337,25 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
     );
 }
 
-fn render_restart_osc_router_confirmation(frame: &mut Frame<'_>, area: Rect) {
+fn render_action_confirmation(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let Some(action) = app.confirmation else {
+        return;
+    };
+
     let popup = centered_rect(64, 48, area);
+    let safety_category = app
+        .action_metadata(action)
+        .map(|command| command.action_safety_category.as_str())
+        .unwrap_or("-");
     let lines = vec![
         Line::from(Span::styled("Confirm Action", title_style())),
         Line::from(""),
-        labeled_line("Command: ", "restart-osc-router"),
-        labeled_line("Category: ", "LowRisk"),
+        labeled_line("Action: ", action.display_name()),
+        labeled_line("Command: ", action.command_name()),
+        labeled_line("Category: ", safety_category),
         Line::from(""),
-        Line::from("Expected effect: restarts or manually starts OSC routing."),
+        Line::from(format!("Expected effect: {}", action.expected_effect())),
+        Line::from(action.warning()),
         Line::from("This action will be sent to the supervisor backend."),
         Line::from(""),
         Line::from(Span::styled(
@@ -364,7 +373,7 @@ fn render_restart_osc_router_confirmation(frame: &mut Frame<'_>, area: Rect) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Restart OSC Router"),
+                    .title(action.display_name()),
             )
             .wrap(Wrap { trim: true }),
         popup,

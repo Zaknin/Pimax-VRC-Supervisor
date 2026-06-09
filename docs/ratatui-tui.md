@@ -1,6 +1,6 @@
 # Desktop TUI
 
-`PimaxVrcSupervisorTui.exe` is a separate Rust/Ratatui desktop terminal UI for monitoring a running Pimax VRC Supervisor backend and, starting in Phase 11, confirming one narrow OSC router restart action.
+`PimaxVrcSupervisorTui.exe` is a separate Rust/Ratatui desktop terminal UI for monitoring a running Pimax VRC Supervisor backend and confirming regular classic-console actions.
 
 The TUI is part of the `cli-ui2` / `1.3.0-test` migration work. It is not a replacement for the SteamVR dashboard overlay or the classic supervisor console.
 
@@ -12,7 +12,7 @@ The TUI gives a desktop/operator view of the supervisor with tightly limited con
 - command capability metadata
 - recent console-log lines
 - disconnected/backend unavailable state
-- a confirmation-gated OSC router restart action
+- confirmation-gated classic-console actions in the same `1`-`6` order
 
 The TUI can be closed without stopping the supervisor.
 
@@ -28,10 +28,15 @@ query-json {"resource":"commands"}
 query-json {"resource":"log","maxLines":80}
 ```
 
-For the single Phase 11 action, it uses the structured backend action envelope:
+For confirmed actions, it uses the structured backend action envelope with canonical lowercase command names:
 
 ```text
+action-json {"command":"restart-core-apps","confirmed":true}
+action-json {"command":"start-osc-goes-brrr","confirmed":true}
+action-json {"command":"base-stations-on","confirmed":true}
+action-json {"command":"base-stations-off","confirmed":true}
 action-json {"command":"restart-osc-router","confirmed":true}
+action-json {"command":"reload-autostart-apps","confirmed":true}
 ```
 
 No legacy action command strings are sent by the TUI.
@@ -60,7 +65,12 @@ Primary shortcuts:
 
 - `H` / `h`: help
 - `F5`: refresh
-- `1`: open Restart OSC Router confirmation
+- `1`: open Restart Core Apps confirmation
+- `2`: open Start OSCGoesBrrr confirmation
+- `3`: open Base Stations On confirmation
+- `4`: open Base Stations Off confirmation
+- `5`: open Restart OSC Router confirmation
+- `6`: open Reload Autostart Apps confirmation
 - `Enter`: confirm inside the confirmation modal
 - `Esc`: close help, cancel confirmation, or quit
 - `Up` / `Down`: scroll logs
@@ -71,11 +81,10 @@ Primary shortcuts:
 Convenience aliases:
 
 - `R` / `r`: refresh
-- `O` / `o`: open Restart OSC Router confirmation
 - `Y` / `y`: confirm inside the confirmation modal
 - `N` / `n`: cancel inside the confirmation modal
 
-Letter shortcuts are displayed uppercase, but lowercase input is also accepted. `F1`, `?`, and Russian help aliases do not open TUI help. Selected Russian-layout aliases remain limited to non-help refresh, restart, quit, confirm, and cancel keys, but are not listed in the main Help overlay.
+Letter shortcuts are displayed uppercase, but lowercase input is also accepted. `F1`, `?`, and Russian help aliases do not open TUI help. Selected Russian-layout aliases remain limited to non-help refresh, quit, confirm, and cancel keys, but are not listed in the main Help overlay.
 
 Simple Russian-layout aliases are accepted for the same physical keys where terminal input provides them. Other layouts and IMEs should use the primary number/function/Enter/Esc shortcuts.
 
@@ -102,10 +111,10 @@ Do not commit generated `target/` or `release/` output. Keep `PimaxVrcSupervisor
 
 ## Current Limitations
 
-- Only `restart-osc-router` is executable from the TUI.
-- `restart-osc-router` requires explicit confirmation and uses backend `action-json`.
+- Only the six audited regular classic-console actions are executable from the TUI.
+- Every TUI action requires explicit confirmation and uses backend `action-json`.
 - No legacy action commands are sent by the TUI.
-- No base-station, core-app restart, OSCGoesBrrr startup, or force-stop actions are exposed.
+- `force-stop-supervisor` remains blocked and is not exposed.
 - No backend auto-start.
 - No named-pipe IPC.
 - No streaming events.
@@ -114,7 +123,7 @@ Do not commit generated `target/` or `release/` output. Keep `PimaxVrcSupervisor
 
 ## Action Safety Design
 
-Action execution is intentionally narrow. The current TUI exposes only a confirmation-gated `restart-osc-router` action through backend `action-json` and does not execute legacy bridge action commands.
+Action execution is intentionally allowlisted. The current TUI exposes only confirmation-gated regular classic-console actions through backend `action-json` and does not execute legacy bridge action commands.
 
 The safety and confirmation model for future action execution is documented separately in [TUI Action Execution Safety Design](ratatui-action-execution-design.md).
 
@@ -127,6 +136,8 @@ Phase 11 enables the first controlled TUI action for `restart-osc-router` only. 
 Phase 12 hardens overlay input handling and action result display. The TUI ignores repeated/released key events, confirmation input takes priority over help and dashboard input, help closes before `q` quits, duplicate action attempts are rejected while an action is in progress, and the latest action result is shown in the backend/status area.
 
 Phase 13 made layout-independent shortcuts primary with `F1` help. Phase 14 changed TUI help to `H` only and removed `F1`, `?`, and Russian help aliases. Phase 14B tried debounce tuning, but current behavior restores immediate `H`/`h` Help toggling while still ignoring repeat/release events. The classic console keeps its existing `1`-`6` and `F1` hotkeys.
+
+Phase 15 adds classic-console action parity for regular operator actions. Numbers `1`-`6` open confirmation modals in the same order as the classic console, `Enter` confirms, `Esc` cancels, and `force-stop-supervisor` remains blocked.
 
 ## Future Direction
 

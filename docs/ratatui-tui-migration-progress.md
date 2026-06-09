@@ -200,6 +200,10 @@ Phase 14C - Remove sticky TUI help debounce
 
 Status: Completed
 
+Phase 15 - Classic console action parity in TUI
+
+Status: Completed
+
 ## Known Risks
 
 - `PimaxVrcSupervisor/Program.cs` is a large monolithic file, so small UI/event refactors can accidentally touch unrelated lifecycle or cleanup logic.
@@ -1705,7 +1709,91 @@ Runtime testing:
 - Runtime shortcut testing was not performed during implementation unless explicitly recorded later.
 - Expected runtime acceptance: quick `H` press-release sequences open/close Help without debounce stickiness; `F1`, `?`, and Russian help aliases do not open Help.
 
-Short Phase 15 direction:
+### Phase 15 - Classic console action parity in TUI
+
+Status: Completed
+
+Summary:
+
+- Added confirmed desktop TUI parity for the regular classic-console `1`-`6` actions.
+- Used canonical lowercase backend command names in structured metadata and responses.
+- Kept Help immediate and `H`/`h` only.
+- Kept `force-stop-supervisor` blocked and not TUI-executable.
+- Kept classic console behavior, SteamVR overlay behavior, cleanup/lifecycle behavior, Configurator behavior, and config semantics unchanged.
+- Did not perform release-preparation work.
+
+Confirmed classic console order:
+
+- `1`: `restart-core-apps`
+- `2`: `start-osc-goes-brrr`
+- `3`: `base-stations-on`
+- `4`: `base-stations-off`
+- `5`: `restart-osc-router`
+- `6`: `reload-autostart-apps`
+- `F1`: classic console shortcut help
+
+Backend changes:
+
+- Expanded `action-json` to allow only the six audited regular actions.
+- Added `reload-autostart-apps` as a small legacy bridge command reusing the same helper as `action-json`.
+- Required JSON boolean `confirmed=true` for all structured actions.
+- Kept read-only commands rejected through `action-json`.
+- Kept `force-stop-supervisor` blocked with a cleanup-bypass blocked reason.
+- Updated `commands-json` metadata so the six regular actions are `actionSupported=true`, `tuiExecutable=true`, and `requiresConfirmation=true`.
+- Kept `available=true` semantics as bridge availability only.
+
+Rust TUI changes:
+
+- Added a closed local `TuiAction` enum for the six regular actions.
+- Mapped dashboard number keys `1`-`6` to the classic-console action order.
+- Replaced the single restart helper with an allowlisted `execute_tui_action(TuiAction)` bridge helper.
+- The TUI still sends no legacy action command strings.
+- Confirmation modals now show action display name, canonical backend command, safety category, expected effect, and warning.
+- Duplicate-action protection and latest action result display apply to all actions.
+
+Files changed:
+
+- `PimaxVrcSupervisor/Program.cs`
+- `PimaxVrcSupervisor.ConfigEditor/Program.cs`
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/bridge.rs`
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `PimaxVrcSupervisor.Tui/src/models.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `README.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- `cargo fmt` completed successfully.
+- Rust debug and release builds completed successfully.
+- All three explicit C# Release builds completed successfully with 0 warnings and 0 errors.
+- Bridge/source inspection confirmed the TUI sends `action-json` only through the closed `TuiAction` helper path and sends no legacy action command strings directly.
+
+Generated output status:
+
+- `git status --short release` produced no staged/tracked release output.
+- `git status --ignored --short release` reported `!! release/`.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
+- Generated `release/` and Rust `target/` output remain ignored and were not staged.
+
+Runtime testing:
+
+- Runtime shortcut/action testing was not performed during implementation.
+- User will manually test the TUI in VR before release-preparation work.
+
+Short Phase 16 direction:
 
 - Build and run a manual/runtime shortcut test matrix across keyboard layouts.
-- Continue polishing action confirmation safety and failure paths without adding new executable actions.
+- Continue polishing action confirmation safety and failure paths without expanding beyond the Phase 15 parity action set.

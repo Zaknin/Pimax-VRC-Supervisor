@@ -27,6 +27,74 @@ pub struct CommandResult {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum TuiAction {
+    RestartCoreApps,
+    StartOscGoesBrrr,
+    BaseStationsOn,
+    BaseStationsOff,
+    RestartOscRouter,
+    ReloadAutostartApps,
+}
+
+impl TuiAction {
+    pub fn from_digit(value: char) -> Option<Self> {
+        match value {
+            '1' => Some(Self::RestartCoreApps),
+            '2' => Some(Self::StartOscGoesBrrr),
+            '3' => Some(Self::BaseStationsOn),
+            '4' => Some(Self::BaseStationsOff),
+            '5' => Some(Self::RestartOscRouter),
+            '6' => Some(Self::ReloadAutostartApps),
+            _ => None,
+        }
+    }
+
+    pub fn command_name(self) -> &'static str {
+        match self {
+            Self::RestartCoreApps => "restart-core-apps",
+            Self::StartOscGoesBrrr => "start-osc-goes-brrr",
+            Self::BaseStationsOn => "base-stations-on",
+            Self::BaseStationsOff => "base-stations-off",
+            Self::RestartOscRouter => "restart-osc-router",
+            Self::ReloadAutostartApps => "reload-autostart-apps",
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::RestartCoreApps => "Restart Core Apps",
+            Self::StartOscGoesBrrr => "Start OSCGoesBrrr",
+            Self::BaseStationsOn => "Base Stations On",
+            Self::BaseStationsOff => "Base Stations Off",
+            Self::RestartOscRouter => "Restart OSC Router",
+            Self::ReloadAutostartApps => "Reload Autostart Apps",
+        }
+    }
+
+    pub fn expected_effect(self) -> &'static str {
+        match self {
+            Self::RestartCoreApps => "Restarts configured face-tracking applications.",
+            Self::StartOscGoesBrrr => "Launches or repairs the Intiface and OSCGoesBrrr workflow.",
+            Self::BaseStationsOn => "Runs the configured base-station power-on routine.",
+            Self::BaseStationsOff => "Runs the configured base-station power-off routine.",
+            Self::RestartOscRouter => "Restarts or manually starts OSC routing.",
+            Self::ReloadAutostartApps => "Reloads or starts configured Autostart apps.",
+        }
+    }
+
+    pub fn warning(self) -> &'static str {
+        match self {
+            Self::RestartOscRouter => {
+                "Low-risk routing action; confirm before sending it to the supervisor backend."
+            }
+            _ => {
+                "Disruptive action: may restart apps, launch workflows, or affect hardware/session state."
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct StatusSummary {
     pub app_version: String,

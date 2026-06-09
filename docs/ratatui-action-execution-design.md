@@ -1,6 +1,6 @@
 # TUI Action Execution Safety Design
 
-This document defines the safety model for desktop Ratatui TUI action execution. Phase 8 was design-only; Phase 11 enables the first narrow confirmed action for `restart-osc-router`.
+This document defines the safety model for desktop Ratatui TUI action execution. Phase 15 enables confirmed action parity for the regular classic-console actions while keeping `force-stop-supervisor` blocked.
 
 ## Current State
 
@@ -22,7 +22,7 @@ Phase 9 adds backend-only structured `action-json` support for one allowlisted c
 
 The desktop TUI remains read-only. No TUI action buttons, action keybindings, or confirmation modal are implemented. The SteamVR host remains on the legacy command protocol.
 
-All other action commands remain rejected by `action-json`, and `force-stop-supervisor` remains blocked from the structured desktop TUI action flow.
+Phase 15 expands the allowlist to regular audited classic-console actions. `force-stop-supervisor` remains blocked from the structured desktop TUI action flow.
 
 ## Phase 10 Implementation Status
 
@@ -48,9 +48,15 @@ The TUI tracks action in-progress state and rejects duplicate action attempts wi
 
 ## Phase 13/14 Implementation Status
 
-Phase 13 made layout-independent keys the primary desktop TUI shortcuts. Phase 14 changes help to `H` only, removes `F1`, `?`, and Russian help aliases, and keeps `F5` refresh, `1` Restart OSC Router confirmation, `Enter` confirm, and `Esc` cancel. Phase 14B debounce tuning was removed after runtime feedback; current behavior toggles Help immediately on `H`/`h` while still ignoring repeat/release events.
+Phase 13 made layout-independent keys the primary desktop TUI shortcuts. Phase 14 changes help to `H` only and removes `F1`, `?`, and Russian help aliases. Phase 14B debounce tuning was removed after runtime feedback; current behavior toggles Help immediately on `H`/`h` while still ignoring repeat/release events.
 
-The classic console behavior remains unchanged and continues to use `1`-`6` plus `F1`. The backend action allowlist is unchanged, and `restart-osc-router` remains the only executable desktop TUI action.
+The classic console behavior remains unchanged and continues to use `1`-`6` plus `F1`.
+
+## Phase 15 Implementation Status
+
+Phase 15 mirrors the regular classic-console action order in the desktop TUI. Number keys `1`-`6` open confirmation for the canonical lowercase backend commands `restart-core-apps`, `start-osc-goes-brrr`, `base-stations-on`, `base-stations-off`, `restart-osc-router`, and `reload-autostart-apps`.
+
+Every TUI action requires confirmation and sends `action-json` with `confirmed=true`. The TUI uses a local allowlist enum and does not send legacy action command strings. `force-stop-supervisor` remains blocked and is not exposed.
 
 ## Future Action Metadata
 
@@ -86,11 +92,12 @@ The backend remains the final authority. TUI-side metadata is not sufficient by 
 | `log` | `ReadOnly` | no action surface | Legacy recent log array for SteamVR dashboard. |
 | `log-json` | `ReadOnly` | no action surface | Structured recent log snapshot. |
 | `query-json` | `ReadOnly` | no action surface | Read-only request envelope. |
+| `restart-core-apps` | `Disruptive` | enabled with confirmation | Restarts configured face-tracking apps during the session. |
+| `start-osc-goes-brrr` | `Disruptive` | enabled with confirmation | May launch or repair Intiface/OscGoesBrrr workflow. |
+| `base-stations-on` | `Disruptive` | enabled with confirmation | Powers configured base stations and touches hardware state. |
+| `base-stations-off` | `Disruptive` | enabled with confirmation | Powers down configured base stations and can disrupt tracking. |
 | `restart-osc-router` | `LowRisk` | enabled with confirmation | Restarts or manually starts OSC routing; does not power hardware or bypass cleanup. |
-| `start-osc-goes-brrr` | `Disruptive` | possible second candidate | May launch or repair Intiface/OscGoesBrrr workflow. |
-| `restart-core-apps` | `Disruptive` | deferred | Restarts configured face-tracking apps during the session. |
-| `base-stations-on` | `Disruptive` | deferred | Powers configured base stations and touches hardware state. |
-| `base-stations-off` | `Disruptive` | deferred | Powers down configured base stations and can disrupt tracking. |
+| `reload-autostart-apps` | `Disruptive` | enabled with confirmation | Reloads or starts configured Autostart apps. |
 | `force-stop-supervisor` | `Blocked` | never by default | Legacy bridge command exists, but it hard-stops without cleanup routines. |
 
 `force-stop-supervisor` is the key distinction between backend bridge availability and TUI executability: it may remain accepted by the legacy bridge, but the desktop TUI design classifies it as `Blocked`.
@@ -99,27 +106,27 @@ The backend remains the final authority. TUI-side metadata is not sufficient by 
 
 The command list remains metadata-oriented; it is not a generic action picker.
 
-For the Phase 11 `restart-osc-router` action:
+For Phase 15 actions:
 
-- The `1` key opens confirmation only.
+- Number keys `1`-`6` open confirmation only.
 - No action runs from a single accidental keypress.
 - `Enter` confirms inside the confirmation modal.
 - Confirmation shows command name, safety category, expected effect, and backend warning.
 - `Esc`, `n`, and modal `q` cancel confirmation.
-- `1`, `H`, `F1`, `?`, removed help aliases, and dashboard keys are ignored while confirmation is visible.
+- Number keys, `H`, `F1`, `?`, removed help aliases, and dashboard keys are ignored while confirmation is visible.
 - Action results appear in the backend/status area.
 - Blocked commands should not be executable and should explain why when selected or inspected.
 
 ## Future Backend Protocol
 
-Phase 9 starts a structured `action-json` command for a tiny allowlist. Phase 11 exposes only `restart-osc-router` from the desktop TUI. Do not repurpose `query-json`; it remains read-only.
+Phase 9 starts a structured `action-json` command for a tiny allowlist. Phase 15 expands the allowlist to audited regular classic-console actions. Do not repurpose `query-json`; it remains read-only.
 
 Example request:
 
 ```json
 {
   "requestId": "optional-id",
-  "command": "restart-osc-router",
+  "command": "restart-core-apps",
   "confirmed": true
 }
 ```
@@ -130,7 +137,7 @@ Example response:
 {
   "timestamp": "...",
   "requestId": "optional-id",
-  "command": "restart-osc-router",
+  "command": "restart-core-apps",
   "success": true,
   "message": "...",
   "resultType": "action",
@@ -156,23 +163,9 @@ The backend must:
 
 TUI confirmation is only a user-experience layer. Backend validation must enforce the same or stricter policy.
 
-## Recommended Implementation Order
+## Current Implementation Boundary
 
-Phase 11 implements the first confirmed TUI execution path for `restart-osc-router`.
-
-Possible later candidate:
-
-- `start-osc-goes-brrr`, after confirming expected launch/repair behavior and messaging.
-
-Deferred candidates:
-
-- `restart-core-apps`
-- `base-stations-on`
-- `base-stations-off`
-
-Blocked by default:
-
-- `force-stop-supervisor`
+The current implementation boundary is the six regular classic-console actions. Future phases should focus on manual VR-session testing, failure-path polish, and release readiness. `force-stop-supervisor` remains blocked until a separate reviewed safety design exists.
 
 ## Future Test Strategy
 

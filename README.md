@@ -191,9 +191,9 @@ The SteamVR host dashboard includes buttons for restarting Broken Eye/VRCFaceTra
 
 ## Desktop TUI
 
-The `cli-ui2` / `1.3.0-test` work adds `PimaxVrcSupervisorTui.exe`, a separate Rust/Ratatui desktop terminal UI for monitoring a running supervisor and confirming one narrow OSC router restart action.
+The `cli-ui2` / `1.3.0-test` work adds `PimaxVrcSupervisorTui.exe`, a separate Rust/Ratatui desktop terminal UI for monitoring a running supervisor and confirming regular classic-console actions.
 
-The TUI connects to the existing supervisor backend at `127.0.0.1:37957` and uses the structured `query-json` bridge to display supervisor status, command capabilities, and recent logs. The only executable TUI action is confirmed OSC router restart through `action-json`; it does not start or stop the supervisor, does not send legacy action commands, does not replace the SteamVR dashboard overlay, and does not replace the classic console.
+The TUI connects to the existing supervisor backend at `127.0.0.1:37957` and uses the structured `query-json` bridge to display supervisor status, command capabilities, and recent logs. Its executable actions use confirmed `action-json` requests only; it does not send legacy action commands, does not replace the SteamVR dashboard overlay, and does not replace the classic console.
 
 You can close the TUI without stopping the supervisor. If the backend is not running, the TUI opens in a disconnected/backend unavailable state.
 
@@ -201,7 +201,12 @@ Keybindings:
 
 - `H` / `h`: help
 - `F5`: refresh
-- `1`: open Restart OSC Router confirmation
+- `1`: open Restart Core Apps confirmation
+- `2`: open Start OSCGoesBrrr confirmation
+- `3`: open Base Stations On confirmation
+- `4`: open Base Stations Off confirmation
+- `5`: open Restart OSC Router confirmation
+- `6`: open Reload Autostart Apps confirmation
 - `Enter`: confirm inside the confirmation modal
 - `Esc`: close help, cancel confirmation, or quit
 - `Up` / `Down`: scroll logs
@@ -209,7 +214,7 @@ Keybindings:
 - `Home` / `End`: jump logs
 - `Q` / `q`: close help first, otherwise quit; cancel confirmation when confirmation is open
 
-Letter shortcuts are displayed uppercase, but lowercase input is also accepted. `R` refreshes, `O` opens the Restart OSC Router confirmation, and selected Russian-layout aliases remain limited to non-help keys. `F1`, `?`, and Russian help aliases do not open TUI help; the main Help overlay keeps those alias details out of the shortcut list.
+Letter shortcuts are displayed uppercase, but lowercase input is also accepted. Selected Russian-layout aliases remain limited to non-help keys. `F1`, `?`, and Russian help aliases do not open TUI help; the main Help overlay keeps those alias details out of the shortcut list. `force-stop-supervisor` remains blocked from the TUI.
 
 ## Key Configuration
 

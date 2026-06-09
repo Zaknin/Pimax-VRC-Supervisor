@@ -2969,46 +2969,17 @@ internal sealed class AppSupervisor
                 "log" => JsonSerializer.Serialize(SupervisorConsoleLog.GetRecentLines(14)),
                 "log-json" => JsonSerializer.Serialize(BuildSupervisorRecentLogSnapshot(14), CommandBridgeJsonOptions),
                 "commands-json" => JsonSerializer.Serialize(BuildSupervisorCommandCapabilitiesSnapshot(), CommandBridgeJsonOptions),
-                "restart-core-apps" => await RestartCoreAppsAndReturnAsync(cancellationToken),
-                "start-osc-goes-brrr" => await StartOscGoesBrrrAndReturnAsync(cancellationToken),
-                "base-stations-on" => await ManualPowerOnBaseStationsAndReturnAsync(cancellationToken),
-                "base-stations-off" => await ManualPowerDownBaseStationsAndReturnAsync(cancellationToken),
+                "restart-core-apps" => await RestartCoreAppsCommandAsync(cancellationToken),
+                "start-osc-goes-brrr" => await StartOscGoesBrrrCommandAsync(cancellationToken),
+                "base-stations-on" => await ManualPowerOnBaseStationsCommandAsync(cancellationToken),
+                "base-stations-off" => await ManualPowerDownBaseStationsCommandAsync(cancellationToken),
                 "restart-osc-router" => await RestartOscRouterCommandAsync(cancellationToken),
+                "reload-autostart-apps" => await ReloadAutostartAppsCommandAsync(cancellationToken),
                 "force-stop-supervisor" => ForceStopSupervisorAndReturn(),
                 _ => "Unknown command: " + commandName
             };
             success = !response.StartsWith("Command failed:", StringComparison.OrdinalIgnoreCase);
             return response;
-
-            async Task<string> RestartCoreAppsAndReturnAsync(CancellationToken token)
-            {
-                await RestartCoreAppsAsync(token);
-                return _config.UseBrokenEye
-                    ? "Restarted Broken Eye and VRCFaceTracking."
-                    : "Restarted VRCFaceTracking.";
-            }
-
-            async Task<string> StartOscGoesBrrrAndReturnAsync(CancellationToken token)
-            {
-                await StartOscGoesBrrrFromDashboardAsync(token);
-                return "OSCGoesBrrr workflow start requested.";
-            }
-
-            async Task<string> ManualPowerOnBaseStationsAndReturnAsync(CancellationToken token)
-            {
-                await ManualPowerOnBaseStationsAsync(token);
-                return _config.BaseStationsEnabled
-                    ? "Base station power-on requested."
-                    : "Base stations are not enabled in config; manual startup routine requested.";
-            }
-
-            async Task<string> ManualPowerDownBaseStationsAndReturnAsync(CancellationToken token)
-            {
-                await ManualPowerDownBaseStationsAsync(token);
-                return _config.BaseStationsEnabled
-                    ? "Base station power-off requested."
-                    : "Base stations are not enabled in config; manual shutdown routine requested.";
-            }
 
             string ForceStopSupervisorAndReturn()
             {
@@ -3041,6 +3012,42 @@ internal sealed class AppSupervisor
     {
         await RestartOscRouterAsync(token, manualOverride: true);
         return "OSC router restart requested.";
+    }
+
+    private async Task<string> RestartCoreAppsCommandAsync(CancellationToken token)
+    {
+        await RestartCoreAppsAsync(token);
+        return _config.UseBrokenEye
+            ? "Restarted Broken Eye and VRCFaceTracking."
+            : "Restarted VRCFaceTracking.";
+    }
+
+    private async Task<string> StartOscGoesBrrrCommandAsync(CancellationToken token)
+    {
+        await StartOscGoesBrrrFromDashboardAsync(token);
+        return "OSCGoesBrrr workflow start requested.";
+    }
+
+    private async Task<string> ManualPowerOnBaseStationsCommandAsync(CancellationToken token)
+    {
+        await ManualPowerOnBaseStationsAsync(token);
+        return _config.BaseStationsEnabled
+            ? "Base station power-on requested."
+            : "Base stations are not enabled in config; manual startup routine requested.";
+    }
+
+    private async Task<string> ManualPowerDownBaseStationsCommandAsync(CancellationToken token)
+    {
+        await ManualPowerDownBaseStationsAsync(token);
+        return _config.BaseStationsEnabled
+            ? "Base station power-off requested."
+            : "Base stations are not enabled in config; manual shutdown routine requested.";
+    }
+
+    private async Task<string> ReloadAutostartAppsCommandAsync(CancellationToken token)
+    {
+        await RunAfterLaunchAppsRoutineAsync(token);
+        return "Autostart app reload requested.";
     }
 
     private static string TruncateDebugValue(string value)
@@ -3160,23 +3167,24 @@ internal sealed class AppSupervisor
                 CommandDefinition(
                     "action-json",
                     "Structured Action JSON",
-                    "Executes a tiny allowlisted structured action request.",
+                    "Executes an allowlisted structured action request.",
                     "Actions",
                     "Json",
-                    "Backend-only structured action envelope. Phase 9 allowlist supports restart-osc-router only.",
+                    "Structured action envelope for audited regular console actions. The desktop TUI uses an explicit local allowlist.",
                     requiresConfirmation: true,
-                    actionSupported: true,
-                    actionSafetyCategory: "LowRisk",
-                    blockedReason: "Backend-only structured action envelope; not exposed by the desktop TUI yet."),
+                    blockedReason: "Envelope only; individual action commands advertise TUI execution support."),
                 CommandDefinition(
                     "restart-core-apps",
                     "Restart Core Apps",
                     "Restarts configured face-tracking applications.",
                     "CoreApps",
                     "ActionResult",
-                    "Disruptive: restarts configured face-tracking apps; future TUIs may choose to confirm.",
+                    "Disruptive: restarts configured face-tracking apps.",
+                    requiresConfirmation: true,
+                    actionSupported: true,
                     actionSafetyCategory: "Disruptive",
-                    blockedReason: "Deferred until confirmation and TUI action UX are reviewed."),
+                    tuiExecutable: true,
+                    blockedReason: null),
                 CommandDefinition(
                     "start-osc-goes-brrr",
                     "Start OSCGoesBrrr",
@@ -3184,8 +3192,11 @@ internal sealed class AppSupervisor
                     "Osc",
                     "ActionResult",
                     "May launch or repair Intiface/OscGoesBrrr workflow.",
+                    requiresConfirmation: true,
+                    actionSupported: true,
                     actionSafetyCategory: "Disruptive",
-                    blockedReason: "Deferred until confirmation and workflow launch effects are reviewed."),
+                    tuiExecutable: true,
+                    blockedReason: null),
                 CommandDefinition(
                     "base-stations-on",
                     "Base Stations On",
@@ -3193,17 +3204,23 @@ internal sealed class AppSupervisor
                     "BaseStations",
                     "ActionResult",
                     "Sends configured base-station power-on routine.",
+                    requiresConfirmation: true,
+                    actionSupported: true,
                     actionSafetyCategory: "Disruptive",
-                    blockedReason: "Deferred because base-station actions affect hardware state."),
+                    tuiExecutable: true,
+                    blockedReason: null),
                 CommandDefinition(
                     "base-stations-off",
                     "Base Stations Off",
                     "Runs the configured base-station power-off routine.",
                     "BaseStations",
                     "ActionResult",
-                    "Disruptive: powers off configured base stations; future TUIs should confirm.",
+                    "Disruptive: powers off configured base stations.",
+                    requiresConfirmation: true,
+                    actionSupported: true,
                     actionSafetyCategory: "Disruptive",
-                    blockedReason: "Deferred because base-station actions affect tracking hardware state."),
+                    tuiExecutable: true,
+                    blockedReason: null),
                 CommandDefinition(
                     "restart-osc-router",
                     "Restart OSC Router",
@@ -3214,6 +3231,18 @@ internal sealed class AppSupervisor
                     requiresConfirmation: true,
                     actionSupported: true,
                     actionSafetyCategory: "LowRisk",
+                    tuiExecutable: true,
+                    blockedReason: null),
+                CommandDefinition(
+                    "reload-autostart-apps",
+                    "Reload Autostart Apps",
+                    "Runs the configured Autostart apps reload/start routine.",
+                    "CoreApps",
+                    "ActionResult",
+                    "Disruptive: reloads or starts configured Autostart apps.",
+                    requiresConfirmation: true,
+                    actionSupported: true,
+                    actionSafetyCategory: "Disruptive",
                     tuiExecutable: true,
                     blockedReason: null),
                 CommandDefinition(
@@ -3418,12 +3447,17 @@ internal sealed class AppSupervisor
                 success: false,
                 message: "action-json request requires a command.",
                 data: null,
-                error: "Missing command. Phase 9 supported command: restart-osc-router.");
+                error: "Missing command. Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps.");
         }
 
         return canonicalCommand switch
         {
-            "restart-osc-router" => await ExecuteRestartOscRouterActionAsync(request.RequestId, request.Confirmed, cancellationToken),
+            "restart-core-apps" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, RestartCoreAppsCommandAsync, cancellationToken),
+            "start-osc-goes-brrr" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, StartOscGoesBrrrCommandAsync, cancellationToken),
+            "base-stations-on" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ManualPowerOnBaseStationsCommandAsync, cancellationToken),
+            "base-stations-off" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ManualPowerDownBaseStationsCommandAsync, cancellationToken),
+            "restart-osc-router" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, RestartOscRouterCommandAsync, cancellationToken),
+            "reload-autostart-apps" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ReloadAutostartAppsCommandAsync, cancellationToken),
             "force-stop-supervisor" => ActionJsonResult(
                 request.RequestId,
                 canonicalCommand,
@@ -3438,45 +3472,40 @@ internal sealed class AppSupervisor
                 message: $"{canonicalCommand} is read-only and cannot be executed through action-json.",
                 data: null,
                 error: "Use query-json or the existing read-only command surface."),
-            "restart-core-apps" or "start-osc-goes-brrr" or "base-stations-on" or "base-stations-off" => ActionJsonResult(
-                request.RequestId,
-                canonicalCommand,
-                success: false,
-                message: $"{canonicalCommand} is not in the Phase 9 action-json allowlist.",
-                data: null,
-                error: "Deferred action. Phase 9 supports restart-osc-router only."),
             _ => ActionJsonResult(
                 request.RequestId,
                 canonicalCommand,
                 success: false,
                 message: $"Unsupported action-json command: {canonicalCommand}.",
                 data: null,
-                error: "Phase 9 supported command: restart-osc-router.")
+                error: "Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps.")
         };
     }
 
-    private async Task<SupervisorCommandResult> ExecuteRestartOscRouterActionAsync(
+    private async Task<SupervisorCommandResult> ExecuteConfirmedActionAsync(
         string? requestId,
+        string canonicalCommand,
         bool? confirmed,
+        Func<CancellationToken, Task<string>> executeAsync,
         CancellationToken cancellationToken)
     {
         if (confirmed != true)
         {
             return ActionJsonResult(
                 requestId,
-                "restart-osc-router",
+                canonicalCommand,
                 success: false,
-                message: "restart-osc-router requires confirmed=true.",
+                message: $"{canonicalCommand} requires confirmed=true.",
                 data: null,
                 error: "Structured action requires JSON boolean confirmed=true.");
         }
 
         try
         {
-            var message = await RestartOscRouterCommandAsync(cancellationToken);
+            var message = await executeAsync(cancellationToken);
             return ActionJsonResult(
                 requestId,
-                "restart-osc-router",
+                canonicalCommand,
                 success: true,
                 message,
                 data: null,
@@ -3486,9 +3515,9 @@ internal sealed class AppSupervisor
         {
             return ActionJsonResult(
                 requestId,
-                "restart-osc-router",
+                canonicalCommand,
                 success: false,
-                message: "restart-osc-router action failed.",
+                message: $"{canonicalCommand} action failed.",
                 data: null,
                 error: ex.Message);
         }
@@ -5034,7 +5063,7 @@ internal sealed class AppSupervisor
         Console.WriteLine("5 = OSC Router launch/restart");
         Console.WriteLine("6 = Reload Autostart apps");
         Console.WriteLine("F1 = Show console shortcuts");
-        Console.WriteLine("Modern desktop TUI primary shortcuts: H help, F5 refresh, 1 restart OSC, Enter confirm, Esc cancel.");
+        Console.WriteLine("Modern desktop TUI primary shortcuts: H help, F5 refresh, 1-6 actions, Enter confirm, Esc cancel.");
     }
 
     private void RefreshOscGoesBrrrWorkflowState()

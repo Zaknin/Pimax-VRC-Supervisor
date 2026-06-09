@@ -5,7 +5,7 @@ use color_eyre::eyre::Result;
 use crate::{
     bridge::{SupervisorBridge, backend_endpoint},
     models::{
-        CommandResult, CommandSummary, LogLine, StatusSummary, commands_from_response,
+        CommandResult, CommandSummary, LogLine, StatusSummary, TuiAction, commands_from_response,
         logs_from_response, status_from_response,
     },
 };
@@ -18,11 +18,6 @@ pub const LOG_PAGE_SIZE: usize = 8;
 pub enum ConnectionState {
     Connected,
     Disconnected,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum ConfirmationModal {
-    RestartOscRouter,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -46,7 +41,7 @@ pub struct App {
     pub refresh_in_progress: bool,
     pub help_visible: bool,
     pub log_scroll: usize,
-    pub confirmation: Option<ConfirmationModal>,
+    pub confirmation: Option<TuiAction>,
     pub action_in_progress: bool,
     pub last_action_started_at: Option<Instant>,
     pub last_action_completed_at: Option<Instant>,
@@ -150,23 +145,31 @@ impl App {
         self.help_visible = false;
     }
 
-    pub fn restart_osc_router_executable(&self) -> bool {
+    pub fn action_metadata(&self, action: TuiAction) -> Option<&CommandSummary> {
+        self.commands
+            .iter()
+            .find(|command| command.name.eq_ignore_ascii_case(action.command_name()))
+    }
+
+    pub fn action_executable(&self, action: TuiAction) -> bool {
         self.last_success.is_some()
-            && self.commands.iter().any(|command| {
-                command.name.eq_ignore_ascii_case("restart-osc-router")
-                    && command.action_supported
+            && self.action_metadata(action).is_some_and(|command| {
+                command.action_supported
                     && command.tui_executable
                     && command.requires_confirmation
-                    && command
+                    && !command
                         .action_safety_category
-                        .eq_ignore_ascii_case("LowRisk")
+                        .eq_ignore_ascii_case("Blocked")
+                    && !command
+                        .action_safety_category
+                        .eq_ignore_ascii_case("Dangerous")
             })
     }
 
-    pub fn request_restart_osc_router_confirmation(&mut self, now: Instant) {
+    pub fn request_action_confirmation(&mut self, action: TuiAction, now: Instant) {
         if self.action_in_progress {
             self.record_action_error(
-                "restart-osc-router",
+                action.command_name(),
                 ActionOutcome::Rejected,
                 "Action already in progress.".to_string(),
                 now,
@@ -174,38 +177,45 @@ impl App {
             return;
         }
 
-        if self.restart_osc_router_executable() {
+        if self.action_executable(action) {
             self.help_visible = false;
-            self.confirmation = Some(ConfirmationModal::RestartOscRouter);
+            self.confirmation = Some(action);
             return;
         }
 
         self.record_action_error(
-            "restart-osc-router",
+            action.command_name(),
             ActionOutcome::Rejected,
-            "restart-osc-router is not executable from this TUI yet.".to_string(),
+            format!(
+                "{} is not executable from this TUI yet.",
+                action.command_name()
+            ),
             now,
         );
     }
 
     pub fn cancel_confirmation(&mut self, now: Instant) {
+        let command = self
+            .confirmation
+            .map(TuiAction::command_name)
+            .unwrap_or("action");
         self.confirmation = None;
         self.record_action_result(
-            "restart-osc-router",
+            command,
             ActionOutcome::Cancelled,
             "Action cancelled.".to_string(),
             now,
         );
     }
 
-    pub fn confirm_restart_osc_router(&mut self, now: Instant) {
-        if self.confirmation != Some(ConfirmationModal::RestartOscRouter) {
+    pub fn confirm_action(&mut self, now: Instant) {
+        let Some(action) = self.confirmation else {
             return;
-        }
+        };
 
         if self.action_in_progress {
             self.record_action_error(
-                "restart-osc-router",
+                action.command_name(),
                 ActionOutcome::Rejected,
                 "Action already in progress.".to_string(),
                 now,
@@ -216,19 +226,19 @@ impl App {
         self.confirmation = None;
         self.action_in_progress = true;
         self.last_action_started_at = Some(now);
-        self.last_action_command = Some("restart-osc-router".to_string());
+        self.last_action_command = Some(action.command_name().to_string());
         self.last_action_outcome = None;
         self.last_action_result = None;
         self.last_action_error = None;
 
         let bridge = SupervisorBridge::default();
 
-        match bridge.execute_restart_osc_router() {
+        match bridge.execute_tui_action(action) {
             Ok(result) => {
                 let completed = Instant::now();
                 self.action_in_progress = false;
                 self.record_action_result(
-                    "restart-osc-router",
+                    action.command_name(),
                     ActionOutcome::Succeeded,
                     format_action_result(&result),
                     completed,
@@ -239,7 +249,7 @@ impl App {
                 let completed = Instant::now();
                 self.action_in_progress = false;
                 self.record_action_error(
-                    "restart-osc-router",
+                    action.command_name(),
                     ActionOutcome::Failed,
                     error.to_string(),
                     completed,
@@ -337,7 +347,7 @@ fn format_action_result(result: &CommandResult) -> String {
         .command
         .as_deref()
         .filter(|value| !value.is_empty())
-        .unwrap_or("restart-osc-router");
+        .unwrap_or("action");
     let message = result
         .message
         .as_deref()
