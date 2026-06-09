@@ -38,6 +38,14 @@ The TUI opens confirmation with `o` only when backend metadata reports `actionSu
 
 No generic TUI action executor is added. The TUI does not send legacy action commands. `force-stop-supervisor`, base-station actions, core-app restart, and OSCGoesBrrr startup remain unavailable from the TUI.
 
+## Phase 12 Implementation Status
+
+Phase 12 hardens the Phase 11 action UX without adding actions or changing the backend allowlist.
+
+The TUI processes only key press events and ignores key repeat/release events, which stabilizes help overlay toggling. Input priority is explicit: confirmation modal first, help overlay second, normal dashboard last. Confirmation consumes input while visible, so help and dashboard actions cannot leak through it.
+
+The TUI tracks action in-progress state and rejects duplicate action attempts with `Action already in progress.` The latest action success, failure, cancellation, or rejection is shown in the backend/status area with command, outcome, relative time, and message.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:
@@ -91,6 +99,7 @@ For the Phase 11 `restart-osc-router` action:
 - No action runs from a single accidental keypress.
 - Confirmation shows command name, safety category, expected effect, and backend warning.
 - `Esc`, `n`, and modal `q` cancel confirmation.
+- `h`, `?`, and dashboard keys are ignored while confirmation is visible.
 - Action results appear in the backend/status area.
 - Blocked commands should not be executable and should explain why when selected or inspected.
 

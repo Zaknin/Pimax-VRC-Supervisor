@@ -8,7 +8,7 @@ use std::{io, time::Instant};
 use app::{App, LOG_PAGE_SIZE};
 use color_eyre::eyre::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -46,6 +46,10 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 
         if event::poll(app.poll_timeout(Instant::now()))? {
             if let Event::Key(key) = event::read()? {
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+
                 if handle_key(&mut app, key) {
                     break;
                 }
@@ -68,7 +72,22 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
             | KeyCode::Char('q')
             | KeyCode::Char('Q')
             | KeyCode::Esc => {
-                app.cancel_confirmation();
+                app.cancel_confirmation(Instant::now());
+                return false;
+            }
+            _ => return false,
+        }
+    }
+
+    if app.help_visible {
+        match key.code {
+            KeyCode::Char('h')
+            | KeyCode::Char('H')
+            | KeyCode::Char('?')
+            | KeyCode::Char('q')
+            | KeyCode::Char('Q')
+            | KeyCode::Esc => {
+                app.close_help();
                 return false;
             }
             _ => return false,
@@ -77,14 +96,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
 
     match key.code {
         KeyCode::Char('q') | KeyCode::Char('Q') => true,
-        KeyCode::Esc => {
-            if app.help_visible {
-                app.close_help();
-                false
-            } else {
-                true
-            }
-        }
+        KeyCode::Esc => true,
         KeyCode::Char('r') | KeyCode::Char('R') => {
             app.refresh(Instant::now());
             false

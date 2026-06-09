@@ -180,6 +180,10 @@ Phase 11 - Confirmed TUI action for restart-osc-router
 
 Status: Completed
 
+Phase 12 - TUI action UX hardening and input overlay cleanup
+
+Status: Completed
+
 ## Known Risks
 
 - `PimaxVrcSupervisor/Program.cs` is a large monolithic file, so small UI/event refactors can accidentally touch unrelated lifecycle or cleanup logic.
@@ -1261,14 +1265,99 @@ Runtime validation:
 - No legacy action command was sent from the TUI.
 - No base-station, core-app, OscGoesBrrr, or force-stop action was exposed.
 
+### Phase 12 - TUI action UX hardening and input overlay cleanup
+
+Status: Completed
+
+Summary:
+
+- Hardened Rust TUI input and action UX after the Phase 11 runtime validation.
+- Fixed the help overlay key-repeat/toggle instability by processing only key press events and ignoring repeat/release events.
+- Made overlay input priority explicit: confirmation modal first, help overlay second, normal dashboard last.
+- Added duplicate action protection and clearer last-action status display.
+- Kept `restart-osc-router` as the only executable TUI action.
+- No backend allowlist, SteamVR host behavior, classic console behavior, cleanup/lifecycle behavior, config semantics, base-station action, core-app action, OSCGoesBrrr action, or `force-stop-supervisor` exposure changed.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Input behavior:
+
+- `main.rs` now handles only `KeyEventKind::Press`.
+- `KeyEventKind::Repeat` and `KeyEventKind::Release` are ignored, so holding `h` or `?` should no longer rapidly toggle help.
+- Confirmation modal input owns the keyboard while visible: `y` confirms, `n`/`Esc`/`q` cancel, and help/dashboard keys are ignored.
+- Help overlay input owns the keyboard while visible: `h`/`?`/`Esc`/`q` close help, and a second `q` from the normal dashboard quits.
+- Normal dashboard input remains: `o` opens restart OSC router confirmation, `r` refreshes, log scroll keys scroll logs, `h`/`?` toggle help, and `q` quits.
+
+Action behavior:
+
+- Added `action_in_progress`, `last_action_started_at`, and `last_action_completed_at` state.
+- Duplicate action attempts while an action is in progress are rejected with `Action already in progress.`.
+- Cancellations are recorded as `Action cancelled.`.
+- Latest action status now includes command, outcome, relative time, and message in the backend/status area.
+- No persistent action history was added in Phase 12 to keep the layout compact.
+
+Bridge/backend status:
+
+- `PimaxVrcSupervisor.Tui/src/bridge.rs` remains limited to read-only `query-json` helpers plus the narrow `execute_restart_osc_router()` helper.
+- `action-json` appears only inside `execute_restart_osc_router()`.
+- No generic action executor was added.
+- No legacy action command strings were added for `force-stop-supervisor`, `restart-core-apps`, `start-osc-goes-brrr`, `base-stations-on`, or `base-stations-off`.
+- `PimaxVrcSupervisor/Program.cs` was not changed in Phase 12.
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- Rust formatting completed successfully.
+- Rust debug build succeeded.
+- Rust release build succeeded.
+- Main supervisor Release build succeeded with 0 warnings and 0 errors.
+- ConfigEditor Release build succeeded with 0 warnings and 0 errors.
+- SteamVrHost Release build succeeded with 0 warnings and 0 errors.
+
+Release copy result:
+
+- Copied updated `PimaxVrcSupervisor.Tui\target\release\PimaxVrcSupervisorTui.exe` into `release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe`.
+- C# publish was not rerun because no C# files changed in Phase 12.
+
+Generated output status:
+
+- `git status --short release` reported no staged or unstaged tracked release changes.
+- `git status --ignored --short release` reported `!! release/`, confirming generated release output is ignored.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported ignored Rust build output under `PimaxVrcSupervisor.Tui/target/`.
+
+Runtime testing:
+
+- Runtime testing was not performed in this phase because no explicitly safe running supervisor session was provided.
+- Verification was by code inspection, bridge string inspection, successful builds, and release-folder TUI copy.
+
+Known risks:
+
+- Help-repeat and overlay-priority behavior should be validated manually in an interactive terminal against a safe supervisor session.
+- Duplicate action protection is implemented around the current synchronous action call; future async/background action execution would need another review.
+- No additional actions should be added until the OSC router restart UX is manually hardened.
+
 ## Next Prompt Handling
 
 Full phase prompts are prepared manually outside this file and pasted into Codex when needed.
 
-Short Phase 12 direction:
+Short Phase 13 direction:
 
-- Harden the `restart-osc-router` action UX with clearer result display, better failure handling, and optional action history.
-- Do not add more actions until the OSC router restart flow is proven safe.
-
+- Build a manual/runtime test matrix for the confirmed OSC router restart flow and failure paths.
+- Polish action result history or disabled-action detail views only after the current action flow is proven stable.
 
 

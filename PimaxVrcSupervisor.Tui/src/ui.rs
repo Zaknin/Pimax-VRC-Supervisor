@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 
-use crate::app::{App, ConnectionState, REFRESH_INTERVAL};
+use crate::app::{ActionOutcome, App, ConnectionState, REFRESH_INTERVAL};
 
 const MIN_WIDTH: u16 = 72;
 const MIN_HEIGHT: u16 = 20;
@@ -177,18 +177,16 @@ fn render_backend(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         Span::raw("only confirmed restart-osc-router uses action-json."),
     ])];
 
+    let mut backend_line = vec![Span::styled("Backend: ", label_style())];
     match app.connection {
         ConnectionState::Connected => {
-            lines.push(Line::from(vec![
-                Span::styled("Backend: ", label_style()),
-                Span::styled("available", Style::default().fg(Color::Green)),
-            ]));
+            backend_line.push(Span::styled("available", Style::default().fg(Color::Green)));
         }
         ConnectionState::Disconnected => {
-            lines.push(Line::from(vec![Span::styled(
+            backend_line.push(Span::styled(
                 format!("Backend unavailable at {}", app.backend_endpoint),
                 Style::default().fg(Color::Red),
-            )]));
+            ));
         }
     }
 
@@ -196,29 +194,54 @@ fn render_backend(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         let when = app
             .last_error_label(now)
             .unwrap_or_else(|| "unknown time".to_string());
-        lines.push(Line::from(vec![
-            Span::styled(format!("Last error ({when}): "), label_style()),
-            Span::raw(error.as_str()),
-        ]));
+        backend_line.push(Span::raw("  "));
+        backend_line.push(Span::styled(
+            format!("Last error ({when}): "),
+            label_style(),
+        ));
+        backend_line.push(Span::raw(error.as_str()));
     } else {
-        lines.push(Line::from("No connection or parse errors recorded."));
+        backend_line.push(Span::raw("  No connection or parse errors recorded."));
     }
 
-    if let Some(result) = &app.last_action_result {
+    lines.push(Line::from(backend_line));
+
+    if app.action_in_progress {
+        let command = app
+            .last_action_command
+            .as_deref()
+            .unwrap_or("restart-osc-router");
         let when = app
-            .last_action_label(now)
+            .last_action_started_label(now)
             .unwrap_or_else(|| "unknown time".to_string());
         lines.push(Line::from(vec![
-            Span::styled(format!("Last action ({when}): "), label_style()),
-            Span::styled(result.as_str(), Style::default().fg(Color::Green)),
+            Span::styled("Action: ", label_style()),
+            Span::styled(
+                format!("{command} in progress, started {when}"),
+                Style::default().fg(Color::Yellow),
+            ),
         ]));
-    } else if let Some(error) = &app.last_action_error {
+    } else if let Some(outcome) = app.last_action_outcome {
+        let command = app
+            .last_action_command
+            .as_deref()
+            .unwrap_or("restart-osc-router");
         let when = app
-            .last_action_label(now)
+            .last_action_completed_label(now)
             .unwrap_or_else(|| "unknown time".to_string());
+        let (status, color) = action_outcome_style(outcome);
+        let message = app
+            .last_action_result
+            .as_deref()
+            .or(app.last_action_error.as_deref())
+            .unwrap_or("-");
         lines.push(Line::from(vec![
-            Span::styled(format!("Last action error ({when}): "), label_style()),
-            Span::styled(error.as_str(), Style::default().fg(Color::Red)),
+            Span::styled("Last action: ", label_style()),
+            Span::styled(
+                format!("{command} {status} {when} - "),
+                Style::default().fg(color),
+            ),
+            Span::raw(message),
         ]));
     }
 
@@ -279,7 +302,9 @@ fn render_logs(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(
-        Paragraph::new("query-json monitor   o confirmed OSC restart via action-json   h/? help"),
+        Paragraph::new(
+            "query-json monitor   o confirmed OSC restart   h/? help   q closes help first",
+        ),
         area,
     );
 }
@@ -289,8 +314,8 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
     let lines = vec![
         Line::from(Span::styled("Keybindings", title_style())),
         Line::from("r       refresh now"),
-        Line::from("q       quit"),
-        Line::from("Esc     close help, otherwise quit"),
+        Line::from("q       close help first, otherwise quit"),
+        Line::from("Esc     close help, cancel confirmation, otherwise quit"),
         Line::from("h / ?   toggle help"),
         Line::from("o       open restart OSC router confirmation"),
         Line::from("Up/Down scroll logs one line"),
@@ -299,6 +324,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from(""),
         Line::from("Only restart-osc-router is currently executable."),
         Line::from("It requires confirmation and uses backend action-json."),
+        Line::from("Confirmation owns input; help and dashboard keys are ignored there."),
         Line::from("No legacy action commands or other actions are exposed."),
     ];
 
@@ -395,4 +421,13 @@ fn command_is_read_only(command: &crate::models::CommandSummary) -> bool {
     command
         .action_safety_category
         .eq_ignore_ascii_case("ReadOnly")
+}
+
+fn action_outcome_style(outcome: ActionOutcome) -> (&'static str, Color) {
+    match outcome {
+        ActionOutcome::Succeeded => ("succeeded", Color::Green),
+        ActionOutcome::Failed => ("failed", Color::Red),
+        ActionOutcome::Cancelled => ("cancelled", Color::Yellow),
+        ActionOutcome::Rejected => ("rejected", Color::Yellow),
+    }
 }

@@ -62,7 +62,7 @@ During the migration work, a manual runtime check confirmed the TUI can connect 
 - `Up` / `Down`: scroll logs
 - `PageUp` / `PageDown`: scroll logs by page
 - `Home` / `End`: jump logs
-- `q`: quit
+- `q`: close help first, otherwise quit; cancel confirmation when confirmation is open
 - `Esc`: close help, cancel confirmation, or quit
 
 ## Build
@@ -109,6 +109,8 @@ Phase 9 starts backend-only structured `action-json` support for the `restart-os
 Phase 10 displays backend action metadata in the command capability panel for planning and review. The metadata is informational only: the TUI still sends only read-only `query-json` requests and does not call `action-json` or legacy action commands.
 
 Phase 11 enables the first controlled TUI action for `restart-osc-router` only. Pressing `o` opens a confirmation modal; only `y` inside that modal sends `action-json {"command":"restart-osc-router","confirmed":true}`. All other actions remain unavailable, and `force-stop-supervisor` remains blocked.
+
+Phase 12 hardens overlay input handling and action result display. The TUI ignores repeated/released key events, confirmation input takes priority over help and dashboard input, help closes before `q` quits, duplicate action attempts are rejected while an action is in progress, and the latest action result is shown in the backend/status area.
 
 ## Future Direction
 

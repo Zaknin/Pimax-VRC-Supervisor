@@ -25,6 +25,14 @@ pub enum ConfirmationModal {
     RestartOscRouter,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ActionOutcome {
+    Succeeded,
+    Failed,
+    Cancelled,
+    Rejected,
+}
+
 pub struct App {
     pub connection: ConnectionState,
     pub status: StatusSummary,
@@ -39,7 +47,11 @@ pub struct App {
     pub help_visible: bool,
     pub log_scroll: usize,
     pub confirmation: Option<ConfirmationModal>,
-    pub last_action_at: Option<Instant>,
+    pub action_in_progress: bool,
+    pub last_action_started_at: Option<Instant>,
+    pub last_action_completed_at: Option<Instant>,
+    pub last_action_command: Option<String>,
+    pub last_action_outcome: Option<ActionOutcome>,
     pub last_action_result: Option<String>,
     pub last_action_error: Option<String>,
 }
@@ -60,7 +72,11 @@ impl App {
             help_visible: false,
             log_scroll: 0,
             confirmation: None,
-            last_action_at: None,
+            action_in_progress: false,
+            last_action_started_at: None,
+            last_action_completed_at: None,
+            last_action_command: None,
+            last_action_outcome: None,
             last_action_result: None,
             last_action_error: None,
         }
@@ -148,6 +164,16 @@ impl App {
     }
 
     pub fn request_restart_osc_router_confirmation(&mut self, now: Instant) {
+        if self.action_in_progress {
+            self.record_action_error(
+                "restart-osc-router",
+                ActionOutcome::Rejected,
+                "Action already in progress.".to_string(),
+                now,
+            );
+            return;
+        }
+
         if self.restart_osc_router_executable() {
             self.help_visible = false;
             self.confirmation = Some(ConfirmationModal::RestartOscRouter);
@@ -155,13 +181,21 @@ impl App {
         }
 
         self.record_action_error(
+            "restart-osc-router",
+            ActionOutcome::Rejected,
             "restart-osc-router is not executable from this TUI yet.".to_string(),
             now,
         );
     }
 
-    pub fn cancel_confirmation(&mut self) {
+    pub fn cancel_confirmation(&mut self, now: Instant) {
         self.confirmation = None;
+        self.record_action_result(
+            "restart-osc-router",
+            ActionOutcome::Cancelled,
+            "Action cancelled.".to_string(),
+            now,
+        );
     }
 
     pub fn confirm_restart_osc_router(&mut self, now: Instant) {
@@ -169,16 +203,47 @@ impl App {
             return;
         }
 
+        if self.action_in_progress {
+            self.record_action_error(
+                "restart-osc-router",
+                ActionOutcome::Rejected,
+                "Action already in progress.".to_string(),
+                now,
+            );
+            return;
+        }
+
         self.confirmation = None;
+        self.action_in_progress = true;
+        self.last_action_started_at = Some(now);
+        self.last_action_command = Some("restart-osc-router".to_string());
+        self.last_action_outcome = None;
+        self.last_action_result = None;
+        self.last_action_error = None;
+
         let bridge = SupervisorBridge::default();
 
         match bridge.execute_restart_osc_router() {
             Ok(result) => {
-                self.record_action_result(format_action_result(&result), now);
-                self.refresh(now);
+                let completed = Instant::now();
+                self.action_in_progress = false;
+                self.record_action_result(
+                    "restart-osc-router",
+                    ActionOutcome::Succeeded,
+                    format_action_result(&result),
+                    completed,
+                );
+                self.refresh(completed);
             }
             Err(error) => {
-                self.record_action_error(error.to_string(), now);
+                let completed = Instant::now();
+                self.action_in_progress = false;
+                self.record_action_error(
+                    "restart-osc-router",
+                    ActionOutcome::Failed,
+                    error.to_string(),
+                    completed,
+                );
             }
         }
     }
@@ -210,8 +275,13 @@ impl App {
             .map(|at| format!("{} ago", format_duration(now.duration_since(at))))
     }
 
-    pub fn last_action_label(&self, now: Instant) -> Option<String> {
-        self.last_action_at
+    pub fn last_action_completed_label(&self, now: Instant) -> Option<String> {
+        self.last_action_completed_at
+            .map(|at| format!("{} ago", format_duration(now.duration_since(at))))
+    }
+
+    pub fn last_action_started_label(&self, now: Instant) -> Option<String> {
+        self.last_action_started_at
             .map(|at| format!("{} ago", format_duration(now.duration_since(at))))
     }
 
@@ -233,16 +303,32 @@ impl App {
         self.log_scroll = self.log_scroll.min(self.logs.len().saturating_sub(1));
     }
 
-    fn record_action_result(&mut self, message: String, now: Instant) {
+    fn record_action_result(
+        &mut self,
+        command: &str,
+        outcome: ActionOutcome,
+        message: String,
+        now: Instant,
+    ) {
+        self.last_action_command = Some(command.to_string());
+        self.last_action_outcome = Some(outcome);
         self.last_action_result = Some(message);
         self.last_action_error = None;
-        self.last_action_at = Some(now);
+        self.last_action_completed_at = Some(now);
     }
 
-    fn record_action_error(&mut self, message: String, now: Instant) {
+    fn record_action_error(
+        &mut self,
+        command: &str,
+        outcome: ActionOutcome,
+        message: String,
+        now: Instant,
+    ) {
+        self.last_action_command = Some(command.to_string());
+        self.last_action_outcome = Some(outcome);
         self.last_action_error = Some(message);
         self.last_action_result = None;
-        self.last_action_at = Some(now);
+        self.last_action_completed_at = Some(now);
     }
 }
 
