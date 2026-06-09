@@ -57,6 +57,24 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> bool {
+    if app.confirmation.is_some() {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                app.confirm_restart_osc_router(Instant::now());
+                return false;
+            }
+            KeyCode::Char('n')
+            | KeyCode::Char('N')
+            | KeyCode::Char('q')
+            | KeyCode::Char('Q')
+            | KeyCode::Esc => {
+                app.cancel_confirmation();
+                return false;
+            }
+            _ => return false,
+        }
+    }
+
     match key.code {
         KeyCode::Char('q') | KeyCode::Char('Q') => true,
         KeyCode::Esc => {
@@ -73,6 +91,10 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
         }
         KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Char('?') => {
             app.toggle_help();
+            false
+        }
+        KeyCode::Char('o') | KeyCode::Char('O') => {
+            app.request_restart_osc_router_confirmation(Instant::now());
             false
         }
         KeyCode::Up => {

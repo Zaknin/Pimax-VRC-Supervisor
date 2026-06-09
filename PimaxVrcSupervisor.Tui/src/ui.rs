@@ -48,6 +48,10 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     if app.help_visible {
         render_help(frame, area);
     }
+
+    if app.confirmation.is_some() {
+        render_restart_osc_router_confirmation(frame, area);
+    }
 }
 
 fn render_small_terminal(frame: &mut Frame<'_>, area: Rect) {
@@ -59,7 +63,7 @@ fn render_small_terminal(frame: &mut Frame<'_>, area: Rect) {
         Line::from("Terminal is too small for the dashboard."),
         Line::from(format!("Minimum: {MIN_WIDTH}x{MIN_HEIGHT}")),
         Line::from("Resize the terminal, or press q / Esc to quit."),
-        Line::from("Read-only mode: no action commands are executed."),
+        Line::from("OSC router restart requires confirmation."),
     ];
 
     frame.render_widget(
@@ -89,7 +93,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         Span::raw(format!("  auto refresh {}s", REFRESH_INTERVAL.as_secs())),
     ]);
 
-    let help = Line::from("r refresh   h/? help   q quit   Esc quit/close help");
+    let help = Line::from("r refresh   o restart OSC router   h/? help   q quit   Esc cancel/quit");
 
     frame.render_widget(
         Paragraph::new(vec![line, help])
@@ -161,7 +165,7 @@ fn render_commands(frame: &mut Frame<'_>, area: Rect, app: &App) {
         List::new(items).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Command Capabilities (informational only)"),
+                .title("Command Capabilities (metadata only)"),
         ),
         area,
     );
@@ -169,8 +173,8 @@ fn render_commands(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn render_backend(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     let mut lines = vec![Line::from(vec![
-        Span::styled("Read-only mode: ", label_style()),
-        Span::raw("no action commands are executed by this TUI."),
+        Span::styled("Action safety: ", label_style()),
+        Span::raw("only confirmed restart-osc-router uses action-json."),
     ])];
 
     match app.connection {
@@ -198,6 +202,24 @@ fn render_backend(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         ]));
     } else {
         lines.push(Line::from("No connection or parse errors recorded."));
+    }
+
+    if let Some(result) = &app.last_action_result {
+        let when = app
+            .last_action_label(now)
+            .unwrap_or_else(|| "unknown time".to_string());
+        lines.push(Line::from(vec![
+            Span::styled(format!("Last action ({when}): "), label_style()),
+            Span::styled(result.as_str(), Style::default().fg(Color::Green)),
+        ]));
+    } else if let Some(error) = &app.last_action_error {
+        let when = app
+            .last_action_label(now)
+            .unwrap_or_else(|| "unknown time".to_string());
+        lines.push(Line::from(vec![
+            Span::styled(format!("Last action error ({when}): "), label_style()),
+            Span::styled(error.as_str(), Style::default().fg(Color::Red)),
+        ]));
     }
 
     frame.render_widget(
@@ -257,9 +279,7 @@ fn render_logs(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(
-        Paragraph::new(
-            "Read-only query-json client   action metadata only; no action-json calls   h/? help",
-        ),
+        Paragraph::new("query-json monitor   o confirmed OSC restart via action-json   h/? help"),
         area,
     );
 }
@@ -272,19 +292,52 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("q       quit"),
         Line::from("Esc     close help, otherwise quit"),
         Line::from("h / ?   toggle help"),
+        Line::from("o       open restart OSC router confirmation"),
         Line::from("Up/Down scroll logs one line"),
         Line::from("PgUp/PgDn scroll logs one page"),
         Line::from("Home/End jump log scroll"),
         Line::from(""),
-        Line::from("Read-only mode: no action commands are executed by this TUI."),
-        Line::from("Action metadata is displayed for planning only."),
-        Line::from("Backend action-json exists, but this TUI does not call it."),
+        Line::from("Only restart-osc-router is currently executable."),
+        Line::from("It requires confirmation and uses backend action-json."),
+        Line::from("No legacy action commands or other actions are exposed."),
     ];
 
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(lines)
             .block(Block::default().borders(Borders::ALL).title("Help"))
+            .wrap(Wrap { trim: true }),
+        popup,
+    );
+}
+
+fn render_restart_osc_router_confirmation(frame: &mut Frame<'_>, area: Rect) {
+    let popup = centered_rect(64, 48, area);
+    let lines = vec![
+        Line::from(Span::styled("Confirm Action", title_style())),
+        Line::from(""),
+        labeled_line("Command: ", "restart-osc-router"),
+        labeled_line("Category: ", "LowRisk"),
+        Line::from(""),
+        Line::from("Expected effect: restarts or manually starts OSC routing."),
+        Line::from("This action will be sent to the supervisor backend."),
+        Line::from(""),
+        Line::from(Span::styled(
+            "y confirm   n/Esc cancel",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+    ];
+
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Restart OSC Router"),
+            )
             .wrap(Wrap { trim: true }),
         popup,
     );

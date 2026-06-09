@@ -1,10 +1,10 @@
 # TUI Action Execution Safety Design
 
-This document defines the safety model for future desktop Ratatui TUI action execution. It is design-only: no action execution, confirmation handling, or backend protocol changes are implemented in Phase 8.
+This document defines the safety model for desktop Ratatui TUI action execution. Phase 8 was design-only; Phase 11 enables the first narrow confirmed action for `restart-osc-router`.
 
 ## Current State
 
-The desktop TUI is read-only. It uses the existing loopback TCP bridge at `127.0.0.1:37957` and sends only read-only `query-json` requests:
+The desktop TUI primarily monitors the supervisor. It uses the existing loopback TCP bridge at `127.0.0.1:37957` and sends read-only `query-json` requests:
 
 ```text
 query-json {"resource":"status"}
@@ -12,7 +12,7 @@ query-json {"resource":"commands"}
 query-json {"resource":"log","maxLines":80}
 ```
 
-The backend also accepts legacy string action commands on the same bridge. The SteamVR dashboard host uses the legacy command protocol and must not be forced to change. The Ratatui TUI currently displays command capability metadata as informational data only.
+The backend also accepts legacy string action commands on the same bridge. The SteamVR dashboard host uses the legacy command protocol and must not be forced to change. The Ratatui TUI does not send legacy action commands.
 
 Important metadata distinction: `commands-json` currently uses `available=true` to mean "accepted by the current backend bridge." It does not mean a command is safe, supported by future JSON action execution, or executable from the desktop TUI.
 
@@ -29,6 +29,14 @@ All other action commands remain rejected by `action-json`, and `force-stop-supe
 Phase 10 displays action metadata from `commands-json` in the read-only desktop TUI. The TUI shows action safety category, backend action support, TUI-disabled state, confirmation metadata, danger markers, and blocked/deferred reasons as informational data only.
 
 The TUI still sends only read-only `query-json` requests for `status`, `commands`, and `log`. It does not call `action-json`, does not call legacy action commands, and does not expose action buttons, action keybindings, selection, or confirmation UI.
+
+## Phase 11 Implementation Status
+
+Phase 11 enables one confirmation-gated desktop TUI action: `restart-osc-router`.
+
+The TUI opens confirmation with `o` only when backend metadata reports `actionSupported=true`, `tuiExecutable=true`, and `requiresConfirmation=true` for `restart-osc-router`. Only `y` inside the confirmation modal sends `action-json {"command":"restart-osc-router","confirmed":true}`.
+
+No generic TUI action executor is added. The TUI does not send legacy action commands. `force-stop-supervisor`, base-station actions, core-app restart, and OSCGoesBrrr startup remain unavailable from the TUI.
 
 ## Future Action Metadata
 
@@ -64,7 +72,7 @@ The backend remains the final authority. TUI-side metadata is not sufficient by 
 | `log` | `ReadOnly` | no action surface | Legacy recent log array for SteamVR dashboard. |
 | `log-json` | `ReadOnly` | no action surface | Structured recent log snapshot. |
 | `query-json` | `ReadOnly` | no action surface | Read-only request envelope. |
-| `restart-osc-router` | `LowRisk` | first candidate | Restarts or manually starts OSC routing; does not power hardware or bypass cleanup. |
+| `restart-osc-router` | `LowRisk` | enabled with confirmation | Restarts or manually starts OSC routing; does not power hardware or bypass cleanup. |
 | `start-osc-goes-brrr` | `Disruptive` | possible second candidate | May launch or repair Intiface/OscGoesBrrr workflow. |
 | `restart-core-apps` | `Disruptive` | deferred | Restarts configured face-tracking apps during the session. |
 | `base-stations-on` | `Disruptive` | deferred | Powers configured base stations and touches hardware state. |
@@ -75,21 +83,20 @@ The backend remains the final authority. TUI-side metadata is not sufficient by 
 
 ## Future TUI UX
 
-The command list remains informational until structured backend action support exists.
+The command list remains metadata-oriented; it is not a generic action picker.
 
-When action support is implemented in a later phase:
+For the Phase 11 `restart-osc-router` action:
 
-- The TUI should show a separate selectable action list or clearly mark executable rows.
-- A command may be selectable only when `actionSupported=true` and `tuiExecutable=true`.
-- No action should run from a single accidental keypress.
-- Confirmation must show command name, safety category, risk warning, expected effect, and blocked reason when applicable.
-- `Esc` cancels confirmation.
-- Action results should appear in a popup, status area, or recent activity line.
+- The `o` key opens confirmation only.
+- No action runs from a single accidental keypress.
+- Confirmation shows command name, safety category, expected effect, and backend warning.
+- `Esc`, `n`, and modal `q` cancel confirmation.
+- Action results appear in the backend/status area.
 - Blocked commands should not be executable and should explain why when selected or inspected.
 
 ## Future Backend Protocol
 
-Phase 9 starts a structured `action-json` command for a tiny backend-only allowlist. Do not repurpose `query-json`; it remains read-only.
+Phase 9 starts a structured `action-json` command for a tiny allowlist. Phase 11 exposes only `restart-osc-router` from the desktop TUI. Do not repurpose `query-json`; it remains read-only.
 
 Example request:
 
@@ -135,7 +142,7 @@ TUI confirmation is only a user-experience layer. Backend validation must enforc
 
 ## Recommended Implementation Order
 
-Phase 9 implements backend-only structured `action-json` support for a tiny allowlist, currently only `restart-osc-router`, with no TUI action buttons yet.
+Phase 11 implements the first confirmed TUI execution path for `restart-osc-router`.
 
 Possible later candidate:
 

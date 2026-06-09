@@ -176,6 +176,10 @@ Phase 10 - Display action metadata in read-only Ratatui TUI
 
 Status: Completed
 
+Phase 11 - Confirmed TUI action for restart-osc-router
+
+Status: Completed
+
 ## Known Risks
 
 - `PimaxVrcSupervisor/Program.cs` is a large monolithic file, so small UI/event refactors can accidentally touch unrelated lifecycle or cleanup logic.
@@ -1147,11 +1151,104 @@ Runtime validation:
 - Confirmed footer states action metadata only and no `action-json` calls.
 - No action commands were executed.
 
+### Phase 11 - Confirmed TUI action for `restart-osc-router`
+
+Status: Completed
+
+Summary:
+
+- Enabled the first controlled desktop TUI action execution path for exactly one command: `restart-osc-router`.
+- Kept action execution confirmation-gated: pressing `o` only opens confirmation, and only `y` inside the modal sends the action request.
+- Kept the backend `action-json` allowlist unchanged; it still supports only `restart-osc-router`.
+- SteamVR host behavior, old console behavior, legacy command behavior, base-station handling, core-app restart, OSCGoesBrrr startup, `force-stop-supervisor`, cleanup, lifecycle, monitor, scheduled-task, manifest, config, and packaging behavior were not changed.
+
+Files changed:
+
+- `PimaxVrcSupervisor/Program.cs`
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/bridge.rs`
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `PimaxVrcSupervisor.Tui/src/models.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Backend metadata:
+
+- `restart-osc-router` now reports `actionSupported=true`, `actionSafetyCategory="LowRisk"`, `tuiExecutable=true`, and `requiresConfirmation=true`.
+- `restart-osc-router` no longer reports a blocked reason.
+- `force-stop-supervisor` remains blocked.
+- Base-station, core-app restart, and OSCGoesBrrr actions remain deferred and not TUI-executable.
+
+TUI behavior:
+
+- Added a narrow `execute_restart_osc_router()` bridge helper.
+- The helper sends only `action-json {"command":"restart-osc-router","confirmed":true}`.
+- No generic action executor was added.
+- Added confirmation state for `restart-osc-router`.
+- Added `o` to open the confirmation modal only when backend command metadata permits TUI execution.
+- Added modal handling: `y` confirms and executes, while `n`, `Esc`, and modal `q` cancel without execution.
+- Added action result/error display in the backend/status area.
+- After a successful action response, the TUI refreshes status, command metadata, and logs once.
+
+Bridge inspection:
+
+- `PimaxVrcSupervisor.Tui/src/bridge.rs` was inspected with `rg`.
+- `action-json` appears only inside `execute_restart_osc_router()`.
+- `restart-osc-router` appears only in that narrow structured helper payload.
+- No generic action/command executor was added.
+- No legacy action command strings were found for `force-stop-supervisor`, `restart-core-apps`, `start-osc-goes-brrr`, `base-stations-on`, or `base-stations-off`.
+- Existing read-only `query-json {request_json}` behavior remains for status, commands, and log.
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- Rust formatting completed successfully.
+- Rust debug build succeeded.
+- Rust release build succeeded.
+- Main supervisor Release build succeeded with 0 warnings and 0 errors.
+- ConfigEditor Release build succeeded with 0 warnings and 0 errors.
+- SteamVrHost Release build succeeded with 0 warnings and 0 errors.
+
+Publish/copy result:
+
+- Published updated `PimaxVrcSupervisor` output to `release\PimaxVrcSupervisor-v1.3.0-test`.
+- Published updated `PimaxVrcSupervisor.ConfigEditor` output to `release\PimaxVrcSupervisor-v1.3.0-test`.
+- Published updated `PimaxVrcSupervisor.SteamVrHost` output to `release\PimaxVrcSupervisor-v1.3.0-test`.
+- Copied updated `PimaxVrcSupervisor.Tui\target\release\PimaxVrcSupervisorTui.exe` into `release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe`.
+- Release-folder runtime testing, if performed later, should use these updated binaries.
+
+Generated output status:
+
+- `git status --short release` reported no staged or unstaged tracked release changes.
+- `git status --ignored --short release` reported `!! release/`, confirming generated release output is ignored.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported ignored Rust build output under `PimaxVrcSupervisor.Tui/target/`.
+
+Runtime testing:
+
+- Runtime action testing was not performed because no explicitly safe running supervisor session was provided for this phase.
+- Verification was by code inspection, bridge string inspection, successful builds, and publish/copy verification.
+
+Known risks:
+
+- The first action UX should be exercised manually in a known-safe active session before adding more actions.
+- Action result display is intentionally simple; Phase 12 should harden failure display and action history.
+- No additional actions should be added until `restart-osc-router` is proven safe.
+
 ## Next Prompt Handling
 
 Full phase prompts are prepared manually outside this file and pasted into Codex when needed.
 
-Short Phase 11 direction:
+Short Phase 12 direction:
 
-- Prepare a reviewed confirmation UX for `restart-osc-router` without enabling accidental single-key execution.
-- Keep backend validation authoritative and keep `force-stop-supervisor` blocked from desktop TUI execution.
+- Harden the `restart-osc-router` action UX with clearer result display, better failure handling, and optional action history.
+- Do not add more actions until the OSC router restart flow is proven safe.

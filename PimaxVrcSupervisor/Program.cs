@@ -3214,7 +3214,8 @@ internal sealed class AppSupervisor
                     requiresConfirmation: true,
                     actionSupported: true,
                     actionSafetyCategory: "LowRisk",
-                    blockedReason: "Structured backend action is supported, but desktop TUI execution is not exposed yet."),
+                    tuiExecutable: true,
+                    blockedReason: null),
                 CommandDefinition(
                     "force-stop-supervisor",
                     "Force Stop Supervisor",

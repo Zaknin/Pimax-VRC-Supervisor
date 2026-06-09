@@ -14,6 +14,19 @@ pub struct QueryResponse {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CommandResult {
+    pub timestamp: Option<String>,
+    pub request_id: Option<String>,
+    pub command: Option<String>,
+    pub success: bool,
+    pub message: Option<String>,
+    pub result_type: Option<String>,
+    pub data: Option<Value>,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct StatusSummary {
     pub app_version: String,

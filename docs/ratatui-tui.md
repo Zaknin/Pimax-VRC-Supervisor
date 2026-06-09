@@ -1,17 +1,18 @@
-# Read-only Desktop TUI
+# Desktop TUI
 
-`PimaxVrcSupervisorTui.exe` is a separate Rust/Ratatui desktop terminal UI for monitoring a running Pimax VRC Supervisor backend.
+`PimaxVrcSupervisorTui.exe` is a separate Rust/Ratatui desktop terminal UI for monitoring a running Pimax VRC Supervisor backend and, starting in Phase 11, confirming one narrow OSC router restart action.
 
 The TUI is part of the `cli-ui2` / `1.3.0-test` migration work. It is not a replacement for the SteamVR dashboard overlay or the classic supervisor console.
 
 ## Purpose
 
-The TUI gives a desktop/operator view of the supervisor without adding backend control behavior. It displays:
+The TUI gives a desktop/operator view of the supervisor with tightly limited control behavior. It displays:
 
 - supervisor status
 - command capability metadata
 - recent console-log lines
 - disconnected/backend unavailable state
+- a confirmation-gated OSC router restart action
 
 The TUI can be closed without stopping the supervisor.
 
@@ -26,6 +27,14 @@ query-json {"resource":"status"}
 query-json {"resource":"commands"}
 query-json {"resource":"log","maxLines":80}
 ```
+
+For the single Phase 11 action, it uses the structured backend action envelope:
+
+```text
+action-json {"command":"restart-osc-router","confirmed":true}
+```
+
+No legacy action command strings are sent by the TUI.
 
 The C# supervisor remains the backend and keeps ownership of Windows, VR, SteamVR, VRChat, cleanup, monitor, OSC, base-station, scheduled-task, and SteamVR manifest behavior.
 
@@ -48,12 +57,13 @@ During the migration work, a manual runtime check confirmed the TUI can connect 
 ## Keybindings
 
 - `r`: refresh
+- `o`: open restart OSC router confirmation
 - `h` or `?`: help
 - `Up` / `Down`: scroll logs
 - `PageUp` / `PageDown`: scroll logs by page
 - `Home` / `End`: jump logs
 - `q`: quit
-- `Esc`: close help or quit
+- `Esc`: close help, cancel confirmation, or quit
 
 ## Build
 
@@ -78,9 +88,10 @@ Do not commit generated `target/` or `release/` output. Keep `PimaxVrcSupervisor
 
 ## Current Limitations
 
-- Read-only only.
-- No action command execution.
-- No confirmation handling.
+- Only `restart-osc-router` is executable from the TUI.
+- `restart-osc-router` requires explicit confirmation and uses backend `action-json`.
+- No legacy action commands are sent by the TUI.
+- No base-station, core-app restart, OSCGoesBrrr startup, or force-stop actions are exposed.
 - No backend auto-start.
 - No named-pipe IPC.
 - No streaming events.
@@ -89,13 +100,15 @@ Do not commit generated `target/` or `release/` output. Keep `PimaxVrcSupervisor
 
 ## Action Safety Design
 
-Action execution is planned but not implemented. The current TUI remains read-only and does not execute legacy bridge action commands.
+Action execution is intentionally narrow. The current TUI exposes only a confirmation-gated `restart-osc-router` action through backend `action-json` and does not execute legacy bridge action commands.
 
 The safety and confirmation model for future action execution is documented separately in [TUI Action Execution Safety Design](ratatui-action-execution-design.md).
 
 Phase 9 starts backend-only structured `action-json` support for the `restart-osc-router` allowlist entry. The desktop TUI still does not expose action execution, action buttons, action keybindings, or confirmation UI.
 
 Phase 10 displays backend action metadata in the command capability panel for planning and review. The metadata is informational only: the TUI still sends only read-only `query-json` requests and does not call `action-json` or legacy action commands.
+
+Phase 11 enables the first controlled TUI action for `restart-osc-router` only. Pressing `o` opens a confirmation modal; only `y` inside that modal sends `action-json {"command":"restart-osc-router","confirmed":true}`. All other actions remain unavailable, and `force-stop-supervisor` remains blocked.
 
 ## Future Direction
 

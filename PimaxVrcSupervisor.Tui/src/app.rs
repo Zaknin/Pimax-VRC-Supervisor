@@ -5,8 +5,8 @@ use color_eyre::eyre::Result;
 use crate::{
     bridge::{SupervisorBridge, backend_endpoint},
     models::{
-        CommandSummary, LogLine, StatusSummary, commands_from_response, logs_from_response,
-        status_from_response,
+        CommandResult, CommandSummary, LogLine, StatusSummary, commands_from_response,
+        logs_from_response, status_from_response,
     },
 };
 
@@ -18,6 +18,11 @@ pub const LOG_PAGE_SIZE: usize = 8;
 pub enum ConnectionState {
     Connected,
     Disconnected,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ConfirmationModal {
+    RestartOscRouter,
 }
 
 pub struct App {
@@ -33,6 +38,10 @@ pub struct App {
     pub refresh_in_progress: bool,
     pub help_visible: bool,
     pub log_scroll: usize,
+    pub confirmation: Option<ConfirmationModal>,
+    pub last_action_at: Option<Instant>,
+    pub last_action_result: Option<String>,
+    pub last_action_error: Option<String>,
 }
 
 impl App {
@@ -50,6 +59,10 @@ impl App {
             refresh_in_progress: false,
             help_visible: false,
             log_scroll: 0,
+            confirmation: None,
+            last_action_at: None,
+            last_action_result: None,
+            last_action_error: None,
         }
     }
 
@@ -121,6 +134,55 @@ impl App {
         self.help_visible = false;
     }
 
+    pub fn restart_osc_router_executable(&self) -> bool {
+        self.last_success.is_some()
+            && self.commands.iter().any(|command| {
+                command.name.eq_ignore_ascii_case("restart-osc-router")
+                    && command.action_supported
+                    && command.tui_executable
+                    && command.requires_confirmation
+                    && command
+                        .action_safety_category
+                        .eq_ignore_ascii_case("LowRisk")
+            })
+    }
+
+    pub fn request_restart_osc_router_confirmation(&mut self, now: Instant) {
+        if self.restart_osc_router_executable() {
+            self.help_visible = false;
+            self.confirmation = Some(ConfirmationModal::RestartOscRouter);
+            return;
+        }
+
+        self.record_action_error(
+            "restart-osc-router is not executable from this TUI yet.".to_string(),
+            now,
+        );
+    }
+
+    pub fn cancel_confirmation(&mut self) {
+        self.confirmation = None;
+    }
+
+    pub fn confirm_restart_osc_router(&mut self, now: Instant) {
+        if self.confirmation != Some(ConfirmationModal::RestartOscRouter) {
+            return;
+        }
+
+        self.confirmation = None;
+        let bridge = SupervisorBridge::default();
+
+        match bridge.execute_restart_osc_router() {
+            Ok(result) => {
+                self.record_action_result(format_action_result(&result), now);
+                self.refresh(now);
+            }
+            Err(error) => {
+                self.record_action_error(error.to_string(), now);
+            }
+        }
+    }
+
     pub fn scroll_logs_up(&mut self, amount: usize) {
         self.log_scroll = self.log_scroll.saturating_sub(amount);
     }
@@ -148,6 +210,11 @@ impl App {
             .map(|at| format!("{} ago", format_duration(now.duration_since(at))))
     }
 
+    pub fn last_action_label(&self, now: Instant) -> Option<String> {
+        self.last_action_at
+            .map(|at| format!("{} ago", format_duration(now.duration_since(at))))
+    }
+
     fn load(
         bridge: &SupervisorBridge,
     ) -> Result<(StatusSummary, Vec<CommandSummary>, Vec<LogLine>)> {
@@ -165,6 +232,33 @@ impl App {
     fn clamp_log_scroll(&mut self) {
         self.log_scroll = self.log_scroll.min(self.logs.len().saturating_sub(1));
     }
+
+    fn record_action_result(&mut self, message: String, now: Instant) {
+        self.last_action_result = Some(message);
+        self.last_action_error = None;
+        self.last_action_at = Some(now);
+    }
+
+    fn record_action_error(&mut self, message: String, now: Instant) {
+        self.last_action_error = Some(message);
+        self.last_action_result = None;
+        self.last_action_at = Some(now);
+    }
+}
+
+fn format_action_result(result: &CommandResult) -> String {
+    let command = result
+        .command
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("restart-osc-router");
+    let message = result
+        .message
+        .as_deref()
+        .or(result.error.as_deref())
+        .unwrap_or("Action completed.");
+
+    format!("{command}: {message}")
 }
 
 fn elapsed_label(instant: Option<Instant>, now: Instant, empty: &str) -> String {
