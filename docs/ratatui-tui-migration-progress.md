@@ -629,6 +629,55 @@ Known issues:
 - Runtime bridge behavior should be tested in a safe supervisor session before relying on the TUI operationally.
 - Release output is generated locally and ignored; it must not be committed unless release policy changes.
 
+### Phase 5 build/toolchain verification
+
+Status: Completed
+
+Summary:
+
+- Verified and built the Phase 5 Rust TUI before starting Phase 6.
+- Rustup was installed through `winget install --id Rustlang.Rustup -e`.
+- The current PowerShell PATH was refreshed with `$env:Path += ";$env:USERPROFILE\.cargo\bin"`.
+- The active Rust toolchain was set explicitly to `stable-x86_64-pc-windows-msvc`.
+- No C# backend behavior, SteamVR host behavior, action commands, tags, branches, or history were changed.
+
+Toolchain status:
+
+- `rustup toolchain install stable-x86_64-pc-windows-msvc` completed with the toolchain already available after installation.
+- `rustup default stable-x86_64-pc-windows-msvc` set the default toolchain.
+- `rustup show` reported default host `x86_64-pc-windows-msvc` and active default toolchain `stable-x86_64-pc-windows-msvc`.
+- `rustc -Vv` reported `rustc 1.96.0 (ac68faa20 2026-05-25)`, host `x86_64-pc-windows-msvc`, LLVM `22.1.2`.
+- `cargo -V` reported `cargo 1.96.0 (30a34c682 2026-05-25)`.
+- `where.exe cl` did not find `cl.exe` in the normal shell, which is expected outside a Visual Studio developer environment.
+- `vswhere` reported Visual Studio 2022 Build Tools with C++ tools at `C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`.
+
+Build commands run:
+
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+
+Build result:
+
+- Debug Cargo build succeeded.
+- Release Cargo build succeeded.
+- The normal shell build succeeded, so `vcvars64.bat` fallback was not needed.
+- Cargo accepted Rust edition `2024`; no edition downgrade was needed.
+- Ratatui `0.30.1` and Crossterm `0.29.0` built successfully.
+- No source or dependency compatibility fixes were needed.
+- `PimaxVrcSupervisor.Tui/Cargo.lock` was generated and should remain tracked because the TUI is an application binary crate.
+
+Release copy result:
+
+- Copied `PimaxVrcSupervisor.Tui\target\release\PimaxVrcSupervisorTui.exe` into `release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe`.
+- `git status --short release` reported no staged or unstaged tracked release changes.
+- `git status --ignored --short release` reported `!! release/`, confirming generated release output is ignored.
+- `git status --short PimaxVrcSupervisor.Tui` reported `?? PimaxVrcSupervisor.Tui/Cargo.lock`.
+
+Runtime test:
+
+- The optional runtime TUI check was not run because it requires an attached interactive terminal to verify the disconnected screen and quit with `q` or `Esc`.
+- The supervisor was not started and no elevated VR/SteamVR/Pimax workflow was triggered.
+
 ## Next Prompt Handling
 
 Full phase prompts are prepared manually outside this file and pasted into Codex when needed.
