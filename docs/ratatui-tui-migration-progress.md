@@ -1244,6 +1244,23 @@ Known risks:
 - Action result display is intentionally simple; Phase 12 should harden failure display and action history.
 - No additional actions should be added until `restart-osc-router` is proven safe.
 
+
+Runtime validation:
+
+- Ran the updated Phase 11 release binaries.
+- Started the supervisor backend without launching SteamVR or VRChat.
+- TUI connected successfully to `127.0.0.1:37957`.
+- Pressed `o` to open the restart OSC router confirmation modal.
+- Confirmed with `y`.
+- TUI sent the confirmed action through backend `action-json`.
+- Backend executed the OSC router restart/start path.
+- TUI closed the confirmation modal after execution.
+- TUI displayed action result text: confirmed OSC restart via `action-json`.
+- Status refreshed and showed `OSC router: running`.
+- Supervisor remained running.
+- No legacy action command was sent from the TUI.
+- No base-station, core-app, OscGoesBrrr, or force-stop action was exposed.
+
 ## Next Prompt Handling
 
 Full phase prompts are prepared manually outside this file and pasted into Codex when needed.
@@ -1252,3 +1269,6 @@ Short Phase 12 direction:
 
 - Harden the `restart-osc-router` action UX with clearer result display, better failure handling, and optional action history.
 - Do not add more actions until the OSC router restart flow is proven safe.
+
+
+
