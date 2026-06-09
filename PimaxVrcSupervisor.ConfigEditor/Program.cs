@@ -56,7 +56,8 @@ internal sealed class ConfigEditorForm : Form
         "4 = Turn off all controlled base stations",
         "5 = OSC Router launch/restart",
         "6 = Reload Autostart apps",
-        "F1 = Show console shortcuts"
+        "F1 = Show console shortcuts",
+        "Modern desktop TUI primary keys: F1 help, F5 refresh, 1 restart OSC, Enter confirm, Esc cancel"
     ];
     private static readonly string[] EditorShortcutLines =
     [

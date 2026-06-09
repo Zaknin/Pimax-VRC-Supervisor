@@ -189,23 +189,27 @@ SteamVR manifest startup exits with SteamVR. When `vrserver.exe` exits, the supe
 
 The SteamVR host dashboard includes buttons for restarting Broken Eye/VRCFaceTracking, turning base stations on or off, and restarting the OSC router.
 
-## Read-only desktop TUI
+## Desktop TUI
 
-The `cli-ui2` / `1.3.0-test` work adds `PimaxVrcSupervisorTui.exe`, a separate Rust/Ratatui desktop terminal UI for monitoring a running supervisor.
+The `cli-ui2` / `1.3.0-test` work adds `PimaxVrcSupervisorTui.exe`, a separate Rust/Ratatui desktop terminal UI for monitoring a running supervisor and confirming one narrow OSC router restart action.
 
-The TUI connects to the existing supervisor backend at `127.0.0.1:37957` and uses the structured `query-json` bridge to display supervisor status, command capabilities, and recent logs. It is currently read-only: it does not start or stop the supervisor, does not execute action commands, does not replace the SteamVR dashboard overlay, and does not replace the classic console yet.
+The TUI connects to the existing supervisor backend at `127.0.0.1:37957` and uses the structured `query-json` bridge to display supervisor status, command capabilities, and recent logs. The only executable TUI action is confirmed OSC router restart through `action-json`; it does not start or stop the supervisor, does not send legacy action commands, does not replace the SteamVR dashboard overlay, and does not replace the classic console.
 
 You can close the TUI without stopping the supervisor. If the backend is not running, the TUI opens in a disconnected/backend unavailable state.
 
 Keybindings:
 
-- `r`: refresh
-- `h` or `?`: help
+- `F1`: help
+- `F5`: refresh
+- `1`: open Restart OSC Router confirmation
+- `Enter`: confirm inside the confirmation modal
+- `Esc`: close help, cancel confirmation, or quit
 - `Up` / `Down`: scroll logs
 - `PageUp` / `PageDown`: scroll logs by page
 - `Home` / `End`: jump logs
-- `q`: quit
-- `Esc`: close help or quit
+- `Q` / `q`: close help first, otherwise quit; cancel confirmation when confirmation is open
+
+Letter shortcuts such as `?`, `H`, `R`, and `O` remain convenience aliases. Use the number/function/Enter/Esc shortcuts when keyboard layout or IME behavior makes letters unreliable.
 
 ## Key Configuration
 

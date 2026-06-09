@@ -46,6 +46,12 @@ The TUI processes only key press events and ignores key repeat/release events, w
 
 The TUI tracks action in-progress state and rejects duplicate action attempts with `Action already in progress.` The latest action success, failure, cancellation, or rejection is shown in the backend/status area with command, outcome, relative time, and message.
 
+## Phase 13 Implementation Status
+
+Phase 13 makes layout-independent keys the primary desktop TUI shortcuts. `1` opens the Restart OSC Router confirmation, `Enter` confirms inside that modal, `Esc` cancels, `F1` opens help, and `F5` refreshes. Letter shortcuts and simple Russian-layout mappings are convenience aliases only.
+
+The classic console behavior remains unchanged and continues to use `1`-`6` plus `F1`. The backend action allowlist is unchanged, and `restart-osc-router` remains the only executable desktop TUI action.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:
@@ -95,11 +101,12 @@ The command list remains metadata-oriented; it is not a generic action picker.
 
 For the Phase 11 `restart-osc-router` action:
 
-- The `o` key opens confirmation only.
+- The `1` key opens confirmation only.
 - No action runs from a single accidental keypress.
+- `Enter` confirms inside the confirmation modal.
 - Confirmation shows command name, safety category, expected effect, and backend warning.
 - `Esc`, `n`, and modal `q` cancel confirmation.
-- `h`, `?`, and dashboard keys are ignored while confirmation is visible.
+- `1`, `F1`, help aliases, and dashboard keys are ignored while confirmation is visible.
 - Action results appear in the backend/status area.
 - Blocked commands should not be executable and should explain why when selected or inspected.
 

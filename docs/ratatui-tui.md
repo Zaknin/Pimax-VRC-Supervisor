@@ -56,14 +56,27 @@ During the migration work, a manual runtime check confirmed the TUI can connect 
 
 ## Keybindings
 
-- `r`: refresh
-- `o`: open restart OSC router confirmation
-- `h` or `?`: help
+Primary layout-independent shortcuts:
+
+- `F1`: help
+- `F5`: refresh
+- `1`: open Restart OSC Router confirmation
+- `Enter`: confirm inside the confirmation modal
+- `Esc`: close help, cancel confirmation, or quit
 - `Up` / `Down`: scroll logs
 - `PageUp` / `PageDown`: scroll logs by page
 - `Home` / `End`: jump logs
-- `q`: close help first, otherwise quit; cancel confirmation when confirmation is open
-- `Esc`: close help, cancel confirmation, or quit
+- `Q` / `q`: close help first, otherwise quit; cancel confirmation when confirmation is open
+
+Convenience aliases:
+
+- `?` / `H` / `h`: help
+- `R` / `r`: refresh
+- `O` / `o`: open Restart OSC Router confirmation
+- `Y` / `y`: confirm inside the confirmation modal
+- `N` / `n`: cancel inside the confirmation modal
+
+Simple Russian-layout aliases are accepted for the same physical keys where terminal input provides them. Other layouts and IMEs should use the primary number/function/Enter/Esc shortcuts.
 
 ## Build
 
@@ -111,6 +124,8 @@ Phase 10 displays backend action metadata in the command capability panel for pl
 Phase 11 enables the first controlled TUI action for `restart-osc-router` only. Pressing `o` opens a confirmation modal; only `y` inside that modal sends `action-json {"command":"restart-osc-router","confirmed":true}`. All other actions remain unavailable, and `force-stop-supervisor` remains blocked.
 
 Phase 12 hardens overlay input handling and action result display. The TUI ignores repeated/released key events, confirmation input takes priority over help and dashboard input, help closes before `q` quits, duplicate action attempts are rejected while an action is in progress, and the latest action result is shown in the backend/status area.
+
+Phase 13 makes layout-independent shortcuts primary. `F1`, `F5`, `1`, `Enter`, and `Esc` are the preferred controls; letter and Russian-layout mappings are convenience aliases only. The classic console keeps its existing `1`-`6` and `F1` hotkeys.
 
 ## Future Direction
 

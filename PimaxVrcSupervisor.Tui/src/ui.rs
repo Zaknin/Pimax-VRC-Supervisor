@@ -93,7 +93,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         Span::raw(format!("  auto refresh {}s", REFRESH_INTERVAL.as_secs())),
     ]);
 
-    let help = Line::from("r refresh   o restart OSC router   h/? help   q quit   Esc cancel/quit");
+    let help = Line::from("F1 Help   F5 Refresh   1 Restart OSC   Q Quit   Esc Cancel/Quit");
 
     frame.render_widget(
         Paragraph::new(vec![line, help])
@@ -302,9 +302,7 @@ fn render_logs(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(
-        Paragraph::new(
-            "query-json monitor   o confirmed OSC restart   h/? help   q closes help first",
-        ),
+        Paragraph::new("F1 Help   F5 Refresh   1 Restart OSC   Q Quit   aliases: ?/H/R/O"),
         area,
     );
 }
@@ -313,14 +311,17 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
     let popup = centered_rect(62, 54, area);
     let lines = vec![
         Line::from(Span::styled("Keybindings", title_style())),
-        Line::from("r       refresh now"),
-        Line::from("q       close help first, otherwise quit"),
+        Line::from("F1      help"),
+        Line::from("F5      refresh now"),
+        Line::from("1       open Restart OSC Router confirmation"),
+        Line::from("Q       close help first, otherwise quit"),
         Line::from("Esc     close help, cancel confirmation, otherwise quit"),
-        Line::from("h / ?   toggle help"),
-        Line::from("o       open restart OSC router confirmation"),
         Line::from("Up/Down scroll logs one line"),
         Line::from("PgUp/PgDn scroll logs one page"),
         Line::from("Home/End jump log scroll"),
+        Line::from(""),
+        Line::from("?/H help, R refresh, O restart OSC are convenience aliases."),
+        Line::from("Russian layout aliases are accepted where terminal input provides them."),
         Line::from(""),
         Line::from("Only restart-osc-router is currently executable."),
         Line::from("It requires confirmation and uses backend action-json."),
@@ -349,11 +350,12 @@ fn render_restart_osc_router_confirmation(frame: &mut Frame<'_>, area: Rect) {
         Line::from("This action will be sent to the supervisor backend."),
         Line::from(""),
         Line::from(Span::styled(
-            "y confirm   n/Esc cancel",
+            "ENTER Confirm   ESC Cancel",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )),
+        Line::from("Y also confirms, N/Q cancel."),
     ];
 
     frame.render_widget(Clear, popup);

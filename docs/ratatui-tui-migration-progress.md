@@ -184,6 +184,10 @@ Phase 12 - TUI action UX hardening and input overlay cleanup
 
 Status: Completed
 
+Phase 13 - Unified layout-independent shortcut UX and help alignment
+
+Status: Completed
+
 ## Known Risks
 
 - `PimaxVrcSupervisor/Program.cs` is a large monolithic file, so small UI/event refactors can accidentally touch unrelated lifecycle or cleanup logic.
@@ -1351,13 +1355,116 @@ Known risks:
 - Duplicate action protection is implemented around the current synchronous action call; future async/background action execution would need another review.
 - No additional actions should be added until the OSC router restart UX is manually hardened.
 
+### Phase 13 - Unified layout-independent shortcut UX and help alignment
+
+Status: Completed
+
+Summary:
+
+- Moved the Rust desktop TUI toward layout-independent primary shortcuts.
+- Kept `restart-osc-router` as the only executable TUI action.
+- Kept execution confirmation-gated through the existing narrow backend `action-json` path.
+- Added simple Russian-layout aliases for common physical shortcut keys where terminal character input provides them.
+- Confirmed classic console behavior already uses `1`-`6` plus `F1`; behavior was left unchanged.
+- Added only safe explanatory classic console and Configurator help text about modern TUI primary keys.
+- No backend action allowlist, SteamVR host behavior, SteamVR overlay rendering, cleanup/lifecycle/monitor/base-station/scheduled-task/manifest behavior, config semantics, or executable action set changed.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `PimaxVrcSupervisor/Program.cs`
+- `PimaxVrcSupervisor.ConfigEditor/Program.cs`
+- `README.md`
+- `RELEASE_PACKAGING.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+TUI shortcut behavior:
+
+- Added a `Shortcut` normalization layer in `main.rs`.
+- Primary shortcuts are now `F1` for help, `F5` for refresh, `1` for Restart OSC Router confirmation, `Enter` for modal confirmation, `Esc` for cancel/close/quit, and `Q`/`q` for quit/cancel.
+- `?`, `H`/`h`, `R`/`r`, `O`/`o`, `Y`/`y`, and `N`/`n` remain convenience aliases.
+- Simple Russian-layout aliases are mapped for physical `O`, `H`, `R`, `Q`, `Y`, and `N`.
+- Top-row and numpad `1` are treated the same where Crossterm exposes them as `KeyCode::Char('1')`.
+- `?` is documented as an alias only, not the primary help key.
+- The help-toggle guard is `200 ms`. Runtime testing was not performed in this phase, so the guard was not increased to `400 ms`.
+
+Overlay behavior:
+
+- Confirmation modal still owns input first.
+- `Enter` confirms in the confirmation modal.
+- `Esc`, `Q`/`q`, and `N`/`n` cancel in the confirmation modal.
+- `Y`/`y` remains a secondary confirm alias.
+- `1` does not confirm inside the modal.
+- Help overlay owns input second; `F1`, help aliases, `Esc`, and `Q`/`q` close help.
+- Dashboard input owns normal shortcuts only when no overlay is visible.
+
+Classic console and Configurator:
+
+- Classic console behavior was inspected and confirmed as `1`-`6` plus `F1`.
+- Classic console behavior was not changed.
+- Added one classic console help line describing modern desktop TUI primary shortcuts.
+- Configurator already had a console hotkeys panel; added one matching informational line for modern desktop TUI primary keys.
+- Updated release packaging wording from read-only desktop TUI to desktop TUI without changing packaging behavior.
+- No Configurator settings or `Desktop console mode` behavior were added.
+
+Bridge/backend status:
+
+- `PimaxVrcSupervisor.Tui/src/bridge.rs` remains limited to read-only `query-json` helpers plus `execute_restart_osc_router()`.
+- `action-json` appears only inside `execute_restart_osc_router()`.
+- No generic action executor was added.
+- No legacy action command strings were added.
+- Backend `action-json` allowlist remains `restart-osc-router` only.
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- Rust formatting completed successfully.
+- Rust debug build succeeded.
+- Rust release build succeeded.
+- Main supervisor Release build succeeded with 0 warnings and 0 errors.
+- ConfigEditor Release build succeeded with 0 warnings and 0 errors.
+- SteamVrHost Release build succeeded with 0 warnings and 0 errors.
+
+Release copy result:
+
+- Attempted to copy updated `PimaxVrcSupervisor.Tui\target\release\PimaxVrcSupervisorTui.exe` into `release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe`.
+- Copy failed because the release-folder `PimaxVrcSupervisorTui.exe` was in use by another process.
+- The process was not terminated automatically.
+
+Generated output status:
+
+- `git status --short release` reported no staged or unstaged tracked release changes.
+- `git status --ignored --short release` reported `!! release/`, confirming generated release output is ignored.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported ignored Rust build output under `PimaxVrcSupervisor.Tui/target/`.
+
+Runtime testing:
+
+- Runtime shortcut testing was not performed in this phase.
+- Verification was by code inspection, bridge string inspection, classic console shortcut inspection, and successful builds.
+
+Known risks:
+
+- The `200 ms` help-toggle guard should be validated in an interactive terminal. If held `F1`, `H`, or `?` still flickers, increase the guard to `400 ms` and document that change.
+- Russian-layout aliases depend on terminal character delivery and may not work through every IME.
+- Other layouts and IMEs should use primary number/function/Enter/Esc shortcuts.
+
 ## Next Prompt Handling
 
 Full phase prompts are prepared manually outside this file and pasted into Codex when needed.
 
-Short Phase 13 direction:
+Short Phase 14 direction:
 
-- Build a manual/runtime test matrix for the confirmed OSC router restart flow and failure paths.
-- Polish action result history or disabled-action detail views only after the current action flow is proven stable.
-
-
+- Build and run a manual/runtime shortcut test matrix across keyboard layouts.
+- Continue polishing action confirmation safety and failure paths without adding new executable actions.

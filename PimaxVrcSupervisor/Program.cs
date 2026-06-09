@@ -5034,6 +5034,7 @@ internal sealed class AppSupervisor
         Console.WriteLine("5 = OSC Router launch/restart");
         Console.WriteLine("6 = Reload Autostart apps");
         Console.WriteLine("F1 = Show console shortcuts");
+        Console.WriteLine("Modern desktop TUI primary shortcuts: F1 help, F5 refresh, 1 restart OSC, Enter confirm, Esc cancel.");
     }
 
     private void RefreshOscGoesBrrrWorkflowState()

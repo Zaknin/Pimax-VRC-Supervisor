@@ -14,6 +14,16 @@ use crossterm::{
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum Shortcut {
+    Help,
+    Refresh,
+    Quit,
+    OpenRestartOscRouter,
+    Confirm,
+    Cancel,
+}
+
 fn main() -> Result<()> {
     color_eyre::install()?;
 
@@ -61,18 +71,17 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> bool {
+    let now = Instant::now();
+    let shortcut = Shortcut::from_key(key);
+
     if app.confirmation.is_some() {
-        match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                app.confirm_restart_osc_router(Instant::now());
+        match shortcut {
+            Some(Shortcut::Confirm) => {
+                app.confirm_restart_osc_router(now);
                 return false;
             }
-            KeyCode::Char('n')
-            | KeyCode::Char('N')
-            | KeyCode::Char('q')
-            | KeyCode::Char('Q')
-            | KeyCode::Esc => {
-                app.cancel_confirmation(Instant::now());
+            Some(Shortcut::Cancel | Shortcut::Quit) => {
+                app.cancel_confirmation(now);
                 return false;
             }
             _ => return false,
@@ -80,35 +89,41 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     }
 
     if app.help_visible {
-        match key.code {
-            KeyCode::Char('h')
-            | KeyCode::Char('H')
-            | KeyCode::Char('?')
-            | KeyCode::Char('q')
-            | KeyCode::Char('Q')
-            | KeyCode::Esc => {
-                app.close_help();
-                return false;
+        match shortcut {
+            Some(Shortcut::Help) => {
+                app.toggle_help_guarded(now);
+                false
             }
-            _ => return false,
+            Some(Shortcut::Cancel | Shortcut::Quit) => {
+                app.close_help();
+                false
+            }
+            _ => false,
+        }
+    } else {
+        match shortcut {
+            Some(Shortcut::Quit) => true,
+            Some(Shortcut::Cancel) => true,
+            Some(Shortcut::Refresh) => {
+                app.refresh(now);
+                false
+            }
+            Some(Shortcut::Help) => {
+                app.toggle_help_guarded(now);
+                false
+            }
+            Some(Shortcut::OpenRestartOscRouter) => {
+                app.request_restart_osc_router_confirmation(now);
+                false
+            }
+            Some(Shortcut::Confirm) => false,
+            None => handle_navigation_key(app, key),
         }
     }
+}
 
+fn handle_navigation_key(app: &mut App, key: KeyEvent) -> bool {
     match key.code {
-        KeyCode::Char('q') | KeyCode::Char('Q') => true,
-        KeyCode::Esc => true,
-        KeyCode::Char('r') | KeyCode::Char('R') => {
-            app.refresh(Instant::now());
-            false
-        }
-        KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Char('?') => {
-            app.toggle_help();
-            false
-        }
-        KeyCode::Char('o') | KeyCode::Char('O') => {
-            app.request_restart_osc_router_confirmation(Instant::now());
-            false
-        }
         KeyCode::Up => {
             app.scroll_logs_up(1);
             false
@@ -134,5 +149,31 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
             false
         }
         _ => false,
+    }
+}
+
+impl Shortcut {
+    fn from_key(key: KeyEvent) -> Option<Self> {
+        match key.code {
+            KeyCode::F(1) => Some(Self::Help),
+            KeyCode::F(5) => Some(Self::Refresh),
+            KeyCode::Enter => Some(Self::Confirm),
+            KeyCode::Esc => Some(Self::Cancel),
+            KeyCode::Char(value) => Self::from_char(value),
+            _ => None,
+        }
+    }
+
+    fn from_char(value: char) -> Option<Self> {
+        match value {
+            '1' => Some(Self::OpenRestartOscRouter),
+            '?' | 'h' | 'H' | 'р' | 'Р' => Some(Self::Help),
+            'r' | 'R' | 'к' | 'К' => Some(Self::Refresh),
+            'q' | 'Q' | 'й' | 'Й' => Some(Self::Quit),
+            'o' | 'O' | 'щ' | 'Щ' => Some(Self::OpenRestartOscRouter),
+            'y' | 'Y' | 'н' | 'Н' => Some(Self::Confirm),
+            'n' | 'N' | 'т' | 'Т' => Some(Self::Cancel),
+            _ => None,
+        }
     }
 }

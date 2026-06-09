@@ -144,7 +144,7 @@ The language folders are .NET/Windows Forms satellite resources. They are not re
 
 ## Rust Desktop TUI Packaging
 
-For the `cli-ui2` / `1.3.0-test` line, include the read-only desktop TUI executable:
+For the `cli-ui2` / `1.3.0-test` line, include the desktop TUI executable:
 
 ```text
 PimaxVrcSupervisorTui.exe
