@@ -64,6 +64,14 @@ Phase 15C keeps the Phase 15 backend allowlist unchanged and fixes desktop TUI r
 
 `0` is the primary Help shortcut because it is layout-independent in the terminal. `H`/`h` remain English-layout aliases. `F1`, `?`, and Russian Help aliases remain unmapped. Help closes on any key press and consumes that key. Dashboard `Q` quits only the Rust TUI process and never sends `force-stop-supervisor`, shutdown, cleanup, SteamVR, VRChat, or lifecycle commands.
 
+## Phase 16 Implementation Status
+
+Phase 16 runs confirmed TUI actions in background workers while keeping the same six-command backend allowlist. Actions are tracked by canonical command name. The TUI blocks duplicate same-command starts and blocks Base Stations On/Off overlap, but otherwise allows safe non-conflicting actions to run concurrently.
+
+Action completion, timeout, bridge failure, or worker panic records a failed or successful result and removes the matching canonical command from the running list. If the user quits the TUI while actions are running, `Q` still quits only the TUI; it does not cancel backend work or send any backend command.
+
+Phase 16 also protects against duplicated core app launches: the Configurator refuses to save Broken Eye or VRCFaceTracking as Autostart apps, and the supervisor warns and skips manually configured duplicate Autostart entries at runtime.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:
@@ -117,11 +125,14 @@ For Phase 15 actions:
 - Number keys `1`-`6` open confirmation only.
 - No action runs from a single accidental keypress.
 - `Enter` confirms inside the confirmation modal.
+- Confirmation closes immediately after confirmation; action execution continues in the background.
 - Confirmation shows command name, safety category, expected effect, and backend warning.
 - `Esc`, `n`, and modal `q` cancel confirmation.
 - Number keys, `0`, `H`, `F1`, `?`, removed help aliases, and dashboard keys are ignored while confirmation is visible.
 - Help closes on any key press and consumes the key instead of passing it through to dashboard shortcuts.
 - Action results appear in the backend/status area.
+- Duplicate same-command starts are rejected while that command is running.
+- `base-stations-on` and `base-stations-off` are mutually exclusive while running.
 - Blocked commands should not be executable and should explain why when selected or inspected.
 
 ## Future Backend Protocol

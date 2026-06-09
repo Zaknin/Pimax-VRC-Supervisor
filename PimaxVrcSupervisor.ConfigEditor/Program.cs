@@ -3225,6 +3225,19 @@ internal sealed class ConfigEditorForm : Form
             CommitAutoLaunchAppsGridEdits();
             CommitBaseStationsGridEdits();
             CommitOscRoutesGridEdits();
+            var duplicateCoreAutostartErrors = GetCoreAutostartDuplicateMessages();
+            if (duplicateCoreAutostartErrors.Length > 0)
+            {
+                UpdateGridWarnings();
+                ShowThemedMessageBox(
+                    string.Join("\r\n\r\n", duplicateCoreAutostartErrors),
+                    "Could not save config",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                SetStatus("Save failed.");
+                return false;
+            }
+
             var json = BuildCurrentJson();
             ParseJson(json);
             var shouldApplyStartupIntegration = forceApplyStartupIntegration || StartupIntegrationSelectionChanged(_loadedJson, json);
@@ -3821,6 +3834,50 @@ internal sealed class ConfigEditorForm : Form
         {
             return null;
         }
+    }
+
+    private static ExecutableIdentity? CreateExecutableIdentity(string path, string label)
+    {
+        var normalized = TrimExecutablePath(path);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        var expanded = ExpandPath(normalized);
+        var fullPath = TryGetFullPath(expanded);
+        var fileName = Path.GetFileName(fullPath ?? expanded);
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            fileName = Path.GetFileName(normalized);
+        }
+
+        return string.IsNullOrWhiteSpace(fileName)
+            ? null
+            : new ExecutableIdentity(label, normalized, fullPath, fileName);
+    }
+
+    private static string TrimExecutablePath(string path)
+    {
+        var trimmed = path.Trim();
+        if (trimmed.Length >= 2 && trimmed[0] == '"' && trimmed[^1] == '"')
+        {
+            trimmed = trimmed[1..^1].Trim();
+        }
+
+        return trimmed;
+    }
+
+    private static bool ExecutableIdentitiesMatch(ExecutableIdentity first, ExecutableIdentity second)
+    {
+        if (!string.IsNullOrWhiteSpace(first.FullPath)
+            && !string.IsNullOrWhiteSpace(second.FullPath)
+            && string.Equals(first.FullPath, second.FullPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return string.Equals(first.FileName, second.FileName, StringComparison.OrdinalIgnoreCase);
     }
 
     private string ApplyControlValues(string baseJson)
@@ -5583,6 +5640,11 @@ internal sealed class ConfigEditorForm : Form
 
     private void ValidateAutoLaunchApps(ValidationResult result)
     {
+        foreach (var duplicate in GetCoreAutostartDuplicateMessages())
+        {
+            result.Errors.Add(duplicate);
+        }
+
         foreach (DataGridViewRow row in _autoLaunchAppsGrid.Rows)
         {
             if (row.IsNewRow)
@@ -5608,6 +5670,62 @@ internal sealed class ConfigEditorForm : Form
 
             ValidatePath(result, label, path, required: enabled);
         }
+    }
+
+    private string[] GetCoreAutostartDuplicateMessages()
+    {
+        var duplicates = FindCoreAutostartDuplicateRows();
+        return duplicates
+            .Select(duplicate =>
+                "Core app executable is also listed as an Autostart app. Remove it from Autostart apps before saving.\r\nDuplicate: "
+                + duplicate.Value.Description)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private Dictionary<int, CoreAutostartDuplicate> FindCoreAutostartDuplicateRows()
+    {
+        var coreApps = new[]
+            {
+                CreateExecutableIdentity(_brokenEyePathTextBox.Text, "Broken Eye"),
+                CreateExecutableIdentity(_vrcFaceTrackingPathTextBox.Text, "VRCFaceTracking")
+            }
+            .Where(identity => identity is not null)
+            .Cast<ExecutableIdentity>()
+            .ToArray();
+        var duplicates = new Dictionary<int, CoreAutostartDuplicate>();
+
+        if (coreApps.Length == 0)
+        {
+            return duplicates;
+        }
+
+        foreach (DataGridViewRow row in _autoLaunchAppsGrid.Rows)
+        {
+            if (row.IsNewRow)
+            {
+                continue;
+            }
+
+            var path = GetGridString(row, "Path");
+            var autoLaunchIdentity = CreateExecutableIdentity(path, $"Autostart row {row.Index + 1}");
+            if (autoLaunchIdentity is null)
+            {
+                continue;
+            }
+
+            var matchingCore = coreApps.FirstOrDefault(core => ExecutableIdentitiesMatch(core, autoLaunchIdentity));
+            if (matchingCore is null)
+            {
+                continue;
+            }
+
+            duplicates[row.Index] = new CoreAutostartDuplicate(
+                row.Index,
+                $"{matchingCore.Label} ({matchingCore.Original}) matches Autostart app '{GetGridString(row, "Name")}' ({autoLaunchIdentity.Original})");
+        }
+
+        return duplicates;
     }
 
     private static void ValidateProcessList(ValidationResult result, string label, string text)
@@ -5985,6 +6103,7 @@ internal sealed class ConfigEditorForm : Form
 
     private void UpdateAutoLaunchRowWarnings()
     {
+        var duplicateRows = FindCoreAutostartDuplicateRows();
         foreach (DataGridViewRow row in _autoLaunchAppsGrid.Rows)
         {
             row.ErrorText = "";
@@ -6005,6 +6124,11 @@ internal sealed class ConfigEditorForm : Form
             {
                 row.ErrorText = "Executable path does not exist.";
                 row.Cells["Path"].ErrorText = row.ErrorText;
+            }
+            else if (duplicateRows.TryGetValue(row.Index, out var duplicate))
+            {
+                row.ErrorText = "Core app executable is also listed as an Autostart app.";
+                row.Cells["Path"].ErrorText = duplicate.Description;
             }
         }
     }
@@ -6721,6 +6845,10 @@ internal static class AppVersion
 }
 
 internal sealed record AutoLaunchAppEditorRow(string Name, string Path, bool Enabled, bool RestartOnPimaxReconnect, bool RunAsAdmin, bool StartMinimized);
+
+internal sealed record ExecutableIdentity(string Label, string Original, string? FullPath, string FileName);
+
+internal sealed record CoreAutostartDuplicate(int RowIndex, string Description);
 
 internal sealed record OscRouteEditorRow(string Name, int AppReceivePort, bool Enabled);
 

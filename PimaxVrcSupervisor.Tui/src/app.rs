@@ -1,4 +1,9 @@
-use std::time::{Duration, Instant};
+use std::{
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::mpsc::{Receiver, Sender, channel},
+    thread,
+    time::{Duration, Instant},
+};
 
 use color_eyre::eyre::Result;
 
@@ -28,6 +33,21 @@ pub enum ActionOutcome {
     Rejected,
 }
 
+#[derive(Debug, Clone)]
+pub struct RunningAction {
+    pub action: TuiAction,
+    pub command: String,
+    pub started_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompletedActionResult {
+    pub command: String,
+    pub completed_at: Instant,
+    pub outcome: ActionOutcome,
+    pub message: String,
+}
+
 pub struct App {
     pub connection: ConnectionState,
     pub status: StatusSummary,
@@ -42,17 +62,26 @@ pub struct App {
     pub help_visible: bool,
     pub log_scroll: usize,
     pub confirmation: Option<TuiAction>,
-    pub action_in_progress: bool,
-    pub last_action_started_at: Option<Instant>,
+    pub running_actions: Vec<RunningAction>,
     pub last_action_completed_at: Option<Instant>,
     pub last_action_command: Option<String>,
     pub last_action_outcome: Option<ActionOutcome>,
     pub last_action_result: Option<String>,
     pub last_action_error: Option<String>,
+    action_result_tx: Sender<CompletedActionResult>,
+    action_result_rx: Receiver<CompletedActionResult>,
 }
 
 impl App {
     pub fn new() -> Self {
+        let (action_result_tx, action_result_rx) = channel();
+        Self::with_action_channel(action_result_tx, action_result_rx)
+    }
+
+    fn with_action_channel(
+        action_result_tx: Sender<CompletedActionResult>,
+        action_result_rx: Receiver<CompletedActionResult>,
+    ) -> Self {
         Self {
             connection: ConnectionState::Disconnected,
             status: StatusSummary::default(),
@@ -67,13 +96,14 @@ impl App {
             help_visible: false,
             log_scroll: 0,
             confirmation: None,
-            action_in_progress: false,
-            last_action_started_at: None,
+            running_actions: Vec::new(),
             last_action_completed_at: None,
             last_action_command: None,
             last_action_outcome: None,
             last_action_result: None,
             last_action_error: None,
+            action_result_tx,
+            action_result_rx,
         }
     }
 
@@ -106,6 +136,34 @@ impl App {
 
         self.refresh_in_progress = false;
         self.clamp_log_scroll();
+    }
+
+    pub fn drain_action_results(&mut self) {
+        let mut completed_results = Vec::new();
+        while let Ok(result) = self.action_result_rx.try_recv() {
+            completed_results.push(result);
+        }
+
+        if completed_results.is_empty() {
+            return;
+        }
+
+        let mut should_refresh = false;
+        for result in completed_results {
+            self.running_actions
+                .retain(|running| !running.command.eq_ignore_ascii_case(&result.command));
+            self.record_action_result(
+                result.command.as_str(),
+                result.outcome,
+                result.message,
+                result.completed_at,
+            );
+            should_refresh = true;
+        }
+
+        if should_refresh {
+            self.refresh(Instant::now());
+        }
     }
 
     pub fn should_auto_refresh(&self, now: Instant) -> bool {
@@ -167,13 +225,8 @@ impl App {
     }
 
     pub fn request_action_confirmation(&mut self, action: TuiAction, now: Instant) {
-        if self.action_in_progress {
-            self.record_action_error(
-                action.command_name(),
-                ActionOutcome::Rejected,
-                "Action already in progress.".to_string(),
-                now,
-            );
+        if let Some(message) = self.action_conflict_message(action) {
+            self.record_action_error(action.command_name(), ActionOutcome::Rejected, message, now);
             return;
         }
 
@@ -213,49 +266,23 @@ impl App {
             return;
         };
 
-        if self.action_in_progress {
-            self.record_action_error(
-                action.command_name(),
-                ActionOutcome::Rejected,
-                "Action already in progress.".to_string(),
-                now,
-            );
+        if let Some(message) = self.action_conflict_message(action) {
+            self.confirmation = None;
+            self.record_action_error(action.command_name(), ActionOutcome::Rejected, message, now);
             return;
         }
 
         self.confirmation = None;
-        self.action_in_progress = true;
-        self.last_action_started_at = Some(now);
         self.last_action_command = Some(action.command_name().to_string());
         self.last_action_outcome = None;
-        self.last_action_result = None;
+        self.last_action_result = Some(format!("{} started.", action.command_name()));
         self.last_action_error = None;
-
-        let bridge = SupervisorBridge::default();
-
-        match bridge.execute_tui_action(action) {
-            Ok(result) => {
-                let completed = Instant::now();
-                self.action_in_progress = false;
-                self.record_action_result(
-                    action.command_name(),
-                    ActionOutcome::Succeeded,
-                    format_action_result(&result),
-                    completed,
-                );
-                self.refresh(completed);
-            }
-            Err(error) => {
-                let completed = Instant::now();
-                self.action_in_progress = false;
-                self.record_action_error(
-                    action.command_name(),
-                    ActionOutcome::Failed,
-                    error.to_string(),
-                    completed,
-                );
-            }
-        }
+        self.running_actions.push(RunningAction {
+            action,
+            command: action.command_name().to_string(),
+            started_at: now,
+        });
+        self.spawn_action_worker(action);
     }
 
     pub fn scroll_logs_up(&mut self, amount: usize) {
@@ -290,9 +317,12 @@ impl App {
             .map(|at| format!("{} ago", format_duration(now.duration_since(at))))
     }
 
-    pub fn last_action_started_label(&self, now: Instant) -> Option<String> {
-        self.last_action_started_at
-            .map(|at| format!("{} ago", format_duration(now.duration_since(at))))
+    pub fn running_action_label(&self, action: &RunningAction, now: Instant) -> String {
+        format!(
+            "{} running {}",
+            action.command,
+            format_duration(now.duration_since(action.started_at))
+        )
     }
 
     fn load(
@@ -311,6 +341,70 @@ impl App {
 
     fn clamp_log_scroll(&mut self) {
         self.log_scroll = self.log_scroll.min(self.logs.len().saturating_sub(1));
+    }
+
+    fn action_conflict_message(&self, candidate: TuiAction) -> Option<String> {
+        let candidate_command = candidate.command_name();
+        if self
+            .running_actions
+            .iter()
+            .any(|running| running.command.eq_ignore_ascii_case(candidate_command))
+        {
+            return Some(format!("Action already running: {candidate_command}"));
+        }
+
+        let base_station_power_conflict = matches!(
+            candidate,
+            TuiAction::BaseStationsOn | TuiAction::BaseStationsOff
+        ) && self.running_actions.iter().any(|running| {
+            matches!(
+                running.action,
+                TuiAction::BaseStationsOn | TuiAction::BaseStationsOff
+            )
+        });
+
+        if base_station_power_conflict {
+            return Some(
+                "Base station power action already running: base-stations-on/base-stations-off"
+                    .to_string(),
+            );
+        }
+
+        None
+    }
+
+    fn spawn_action_worker(&self, action: TuiAction) {
+        let sender = self.action_result_tx.clone();
+        thread::spawn(move || {
+            let command = action.command_name().to_string();
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                let bridge = SupervisorBridge::default();
+                bridge.execute_tui_action(action)
+            }));
+
+            let completed = match result {
+                Ok(Ok(command_result)) => CompletedActionResult {
+                    command,
+                    completed_at: Instant::now(),
+                    outcome: ActionOutcome::Succeeded,
+                    message: format_action_result(&command_result),
+                },
+                Ok(Err(error)) => CompletedActionResult {
+                    command,
+                    completed_at: Instant::now(),
+                    outcome: ActionOutcome::Failed,
+                    message: error.to_string(),
+                },
+                Err(_) => CompletedActionResult {
+                    command,
+                    completed_at: Instant::now(),
+                    outcome: ActionOutcome::Failed,
+                    message: "Action worker panicked.".to_string(),
+                },
+            };
+
+            let _ = sender.send(completed);
+        });
     }
 
     fn record_action_result(

@@ -1174,6 +1174,7 @@ internal static class SupervisorConsoleLog
 internal sealed record ResolvedExecutablePath(string Path, bool WasSelected);
 
 internal sealed record ManagedAutoLaunchApp(string DisplayName, string Path, string[] ProcessNames, bool RestartOnPimaxReconnect, bool RunAsAdmin, bool StartMinimized);
+internal sealed record AutoLaunchExecutableIdentity(string Label, string Original, string? FullPath, string FileName);
 
 internal sealed record PimaxServiceReconnect(DateTimeOffset RemoveAt, DateTimeOffset AddAt);
 
@@ -5270,7 +5271,7 @@ internal sealed class AppSupervisor
 
     private async Task StartAutoLaunchAppsAsync(CancellationToken cancellationToken)
     {
-        var apps = GetEnabledAutoLaunchApps();
+        var apps = GetEnabledAutoLaunchApps(skipCoreAppDuplicates: true);
         if (apps.Length == 0)
         {
             return;
@@ -5293,7 +5294,7 @@ internal sealed class AppSupervisor
 
         try
         {
-            var apps = GetEnabledAutoLaunchApps();
+            var apps = GetEnabledAutoLaunchApps(skipCoreAppDuplicates: true);
             if (apps.Length == 0)
             {
                 Console.WriteLine("No enabled Autostart apps configured.");
@@ -5378,13 +5379,46 @@ internal sealed class AppSupervisor
         }
     }
 
-    private ManagedAutoLaunchApp[] GetEnabledAutoLaunchApps()
+    private ManagedAutoLaunchApp[] GetEnabledAutoLaunchApps(bool skipCoreAppDuplicates = false)
     {
         return _config.AutoLaunchApps
             .Where(app => app.Enabled && !string.IsNullOrWhiteSpace(app.Path))
             .Select(CreateManagedAutoLaunchApp)
             .Where(app => app is not null)
             .Cast<ManagedAutoLaunchApp>()
+            .Where(app => !skipCoreAppDuplicates || !ShouldSkipDuplicateCoreAutoLaunchApp(app))
+            .ToArray();
+    }
+
+    private bool ShouldSkipDuplicateCoreAutoLaunchApp(ManagedAutoLaunchApp app)
+    {
+        var appIdentity = CreateAutoLaunchExecutableIdentity(app.Path, app.DisplayName);
+        if (appIdentity is null)
+        {
+            return false;
+        }
+
+        var matchingCoreApp = GetCoreAppExecutableIdentities()
+            .FirstOrDefault(coreIdentity => AutoLaunchExecutableIdentitiesMatch(coreIdentity, appIdentity));
+        if (matchingCoreApp is null)
+        {
+            return false;
+        }
+
+        Console.WriteLine(
+            $"Warning: Autostart app '{app.Path}' matches configured core app '{matchingCoreApp.Label}' and will be skipped. Remove it from Autostart apps in the Configurator.");
+        return true;
+    }
+
+    private AutoLaunchExecutableIdentity[] GetCoreAppExecutableIdentities()
+    {
+        return new[]
+            {
+                CreateAutoLaunchExecutableIdentity(_config.BrokenEyePath, "Broken Eye"),
+                CreateAutoLaunchExecutableIdentity(_config.VrcFaceTrackingPath, "VRCFaceTracking")
+            }
+            .Where(identity => identity is not null)
+            .Cast<AutoLaunchExecutableIdentity>()
             .ToArray();
     }
 
@@ -5425,6 +5459,79 @@ internal sealed class AppSupervisor
             ?? app.CloseOnPimaxDisconnect
             ?? true;
         return new ManagedAutoLaunchApp(displayName, path, processNames, restartOnPimaxReconnect, app.RunAsAdmin, app.StartMinimized);
+    }
+
+    private static AutoLaunchExecutableIdentity? CreateAutoLaunchExecutableIdentity(string path, string label)
+    {
+        var normalized = TrimExecutablePath(path);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        var expanded = ExpandExecutablePath(normalized);
+        var fullPath = TryGetExecutableFullPath(expanded);
+        var fileName = Path.GetFileName(fullPath ?? expanded);
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            fileName = Path.GetFileName(normalized);
+        }
+
+        return string.IsNullOrWhiteSpace(fileName)
+            ? null
+            : new AutoLaunchExecutableIdentity(label, normalized, fullPath, fileName);
+    }
+
+    private static string TrimExecutablePath(string path)
+    {
+        var trimmed = path.Trim();
+        if (trimmed.Length >= 2 && trimmed[0] == '"' && trimmed[^1] == '"')
+        {
+            trimmed = trimmed[1..^1].Trim();
+        }
+
+        return trimmed;
+    }
+
+    private static string ExpandExecutablePath(string path)
+    {
+        try
+        {
+            return Environment.ExpandEnvironmentVariables(path.Trim());
+        }
+        catch
+        {
+            return path.Trim();
+        }
+    }
+
+    private static string? TryGetExecutableFullPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool AutoLaunchExecutableIdentitiesMatch(AutoLaunchExecutableIdentity first, AutoLaunchExecutableIdentity second)
+    {
+        if (!string.IsNullOrWhiteSpace(first.FullPath)
+            && !string.IsNullOrWhiteSpace(second.FullPath)
+            && string.Equals(first.FullPath, second.FullPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return string.Equals(first.FileName, second.FileName, StringComparison.OrdinalIgnoreCase);
     }
 
     private bool StartOrAttach(

@@ -208,6 +208,10 @@ Phase 15C - TUI action parity runtime UX fixes
 
 Status: Completed
 
+Phase 16 - TUI background actions and Autostart duplicate protection
+
+Status: Completed
+
 ## Known Risks
 
 - `PimaxVrcSupervisor/Program.cs` is a large monolithic file, so small UI/event refactors can accidentally touch unrelated lifecycle or cleanup logic.
@@ -1801,6 +1805,88 @@ Short Phase 16 direction:
 
 - Build and run a manual/runtime shortcut test matrix across keyboard layouts.
 - Continue polishing action confirmation safety and failure paths without expanding beyond the Phase 15 parity action set.
+
+### Phase 16 - TUI background actions and Autostart duplicate protection
+
+Status: Completed
+
+Summary:
+
+- Added background TUI action execution for the existing six classic-console parity actions.
+- Kept the backend `action-json` allowlist unchanged.
+- Kept `force-stop-supervisor` blocked and not TUI-executable.
+- Kept classic console behavior, SteamVR overlay behavior, cleanup/lifecycle behavior, and config semantics unchanged except for explicit duplicate validation/warnings.
+- Did not perform release-preparation work.
+
+Rust TUI changes:
+
+- Confirmation modals close immediately after `Enter` or `Y`; the action continues in a background worker.
+- Running actions are tracked by canonical backend command name.
+- Duplicate same-command starts are blocked with `Action already running: <command>`.
+- `base-stations-on` and `base-stations-off` are mutually exclusive while running.
+- Other different actions can run concurrently.
+- Action completion, bridge failure, timeout, or worker panic records a result and removes the canonical command from the running list.
+- If the TUI exits while actions are running, `Q` quits only the TUI and does not cancel backend work or send any backend command.
+- Pending action results may be lost after TUI exit.
+
+Configurator and supervisor changes:
+
+- Configurator save validation now refuses Autostart app rows that duplicate the configured Broken Eye or VRCFaceTracking executable.
+- Duplicate detection trims whitespace, removes surrounding quotes, compares full paths case-insensitively where possible, and falls back to executable filename comparison.
+- Configurator does not silently remove or mutate duplicate Autostart rows.
+- Supervisor Autostart startup/reload now warns and skips manually configured Autostart entries that match configured core app executables.
+- Remaining Autostart apps continue processing and the config file is not automatically modified.
+
+Files changed:
+
+- `PimaxVrcSupervisor/Program.cs`
+- `PimaxVrcSupervisor.ConfigEditor/Program.cs`
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `README.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- `cargo fmt` completed successfully.
+- Rust debug and release builds completed successfully with no warnings.
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release` completed successfully with 0 warnings and 0 errors.
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release` initially failed on a dictionary enumeration mistake in the new duplicate message helper; that was fixed.
+- Re-run `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release` completed successfully with 0 warnings and 0 errors.
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release` completed successfully with 0 warnings and 0 errors.
+- Bridge/source inspection confirmed the TUI sends `action-json` only through `execute_tui_action(TuiAction)`, has no generic arbitrary command executor, and sends no legacy action command strings directly.
+- Backend inspection confirmed the `action-json` allowlist remains the six Phase 15 classic-console parity actions and `force-stop-supervisor` remains blocked/not TUI-executable.
+- Configurator inspection confirmed save-path duplicate validation is present.
+- Supervisor inspection confirmed runtime Autostart duplicate-core skipping is present.
+
+Generated output status:
+
+- `git status --short release` produced no staged/tracked release output.
+- `git status --ignored --short release` reported `!! release/`.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
+- Generated `release/` and Rust `target/` output remain ignored and were not staged.
+
+Runtime testing:
+
+- Runtime shortcut/action testing was not performed during implementation.
+- If testing from `release\PimaxVrcSupervisor-v1.3.0-test`, copy the rebuilt TUI exe and publish the supervisor/config editor only if those projects changed.
+- If a release-folder executable is locked during runtime-test preparation, kill locked processes automatically per user instruction before retrying the copy/publish.
+
+Short Phase 17 direction:
+
+- Run a manual VR-session test matrix for concurrent TUI actions, duplicate blocking, Base Stations On/Off mutual exclusion, and duplicate Autostart validation/runtime skipping.
 
 ### Phase 15C - TUI action parity runtime UX fixes
 

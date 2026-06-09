@@ -48,6 +48,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     app.refresh(Instant::now());
 
     loop {
+        app.drain_action_results();
         let now = Instant::now();
         if app.should_auto_refresh(now) {
             app.refresh(now);

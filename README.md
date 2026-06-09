@@ -197,6 +197,8 @@ The TUI connects to the existing supervisor backend at `127.0.0.1:37957` and use
 
 You can close the TUI without stopping the supervisor. If the backend is not running, the TUI opens in a disconnected/backend unavailable state.
 
+Confirmed actions run in the background so the TUI stays responsive. Different safe actions may run at the same time, but the same command cannot be started twice while running and Base Stations On/Off are mutually exclusive. `Q` quits only the Rust TUI; it never cancels backend work, stops the supervisor, sends `force-stop-supervisor`, or runs cleanup routines.
+
 Keybindings:
 
 - `0`: help
@@ -216,6 +218,8 @@ Keybindings:
 - `Q` / `q`: quit only the Rust TUI from the dashboard; close Help or cancel confirmation in overlays
 
 Help closes on any key press and consumes that key, so pressing `1` while Help is visible closes Help without opening an action confirmation. Letter shortcuts are displayed uppercase, but lowercase input is also accepted. Selected Russian-layout aliases remain limited to non-help keys. `F1`, `?`, and Russian help aliases do not open TUI help; the main Help overlay keeps those alias details out of the shortcut list. `Q` never stops the supervisor backend, sends shutdown commands, or runs cleanup routines. `force-stop-supervisor` remains blocked from the TUI.
+
+The Configurator refuses to save an Autostart app that duplicates the configured Broken Eye or VRCFaceTracking executable. If a user manually creates that duplicate in JSON, the supervisor warns and skips that Autostart entry at runtime instead of launching the core app twice.
 
 ## Key Configuration
 

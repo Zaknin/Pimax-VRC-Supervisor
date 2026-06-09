@@ -202,19 +202,38 @@ fn render_backend(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         ]));
     }
 
-    if app.action_in_progress {
-        let command = app.last_action_command.as_deref().unwrap_or("action");
-        let when = app
-            .last_action_started_label(now)
-            .unwrap_or_else(|| "unknown time".to_string());
+    if !app.running_actions.is_empty() {
+        let running_count = app.running_actions.len();
+        let first_action = app
+            .running_actions
+            .first()
+            .map(|action| app.running_action_label(action, now))
+            .unwrap_or_else(|| "unknown action".to_string());
         lines.push(Line::from(vec![
-            Span::styled("Last action: ", label_style()),
+            Span::styled("Running actions: ", label_style()),
             Span::styled(
-                format!("{command} in progress, started {when}"),
+                format!("{running_count} active"),
                 Style::default().fg(Color::Yellow),
             ),
+            Span::raw(format!(" - {first_action}")),
         ]));
-    } else if let Some(outcome) = app.last_action_outcome {
+
+        for running in app.running_actions.iter().skip(1).take(2) {
+            lines.push(Line::from(vec![
+                Span::styled("  - ", label_style()),
+                Span::raw(app.running_action_label(running, now)),
+            ]));
+        }
+
+        if app.running_actions.len() > 3 {
+            lines.push(Line::from(vec![
+                Span::styled("  - ", label_style()),
+                Span::raw(format!("{} more running", app.running_actions.len() - 3)),
+            ]));
+        }
+    }
+
+    if let Some(outcome) = app.last_action_outcome {
         let command = app.last_action_command.as_deref().unwrap_or("action");
         let when = app
             .last_action_completed_label(now)
@@ -226,12 +245,19 @@ fn render_backend(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
             .or(app.last_action_error.as_deref())
             .unwrap_or("-");
         lines.push(Line::from(vec![
-            Span::styled("Last action: ", label_style()),
+            Span::styled("Last result: ", label_style()),
             Span::styled(
                 format!("{command} {status} {when} - "),
                 Style::default().fg(color),
             ),
             Span::raw(message),
+        ]));
+    } else if let Some(result) = app.last_action_result.as_deref() {
+        let command = app.last_action_command.as_deref().unwrap_or("action");
+        lines.push(Line::from(vec![
+            Span::styled("Last action: ", label_style()),
+            Span::styled(format!("{command} - "), Style::default().fg(Color::Yellow)),
+            Span::raw(result),
         ]));
     }
 
