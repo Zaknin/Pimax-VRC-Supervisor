@@ -322,7 +322,6 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from(""),
         Line::from("Letters are shown uppercase; lowercase input is also accepted."),
         Line::from("R refresh and O restart OSC are convenience aliases."),
-        Line::from("Russian layout aliases are limited to selected non-help keys."),
         Line::from(""),
         Line::from("Only restart-osc-router is currently executable."),
         Line::from("It requires confirmation and uses backend action-json."),

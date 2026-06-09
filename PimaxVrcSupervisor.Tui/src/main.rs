@@ -57,10 +57,6 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         if event::poll(app.poll_timeout(Instant::now()))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press {
-                    if Shortcut::is_help_key(key) {
-                        app.note_help_key_event(Instant::now());
-                    }
-
                     continue;
                 }
 
@@ -157,10 +153,6 @@ fn handle_navigation_key(app: &mut App, key: KeyEvent) -> bool {
 }
 
 impl Shortcut {
-    fn is_help_key(key: KeyEvent) -> bool {
-        matches!(key.code, KeyCode::Char('h' | 'H'))
-    }
-
     fn from_key(key: KeyEvent) -> Option<Self> {
         match key.code {
             KeyCode::F(5) => Some(Self::Refresh),

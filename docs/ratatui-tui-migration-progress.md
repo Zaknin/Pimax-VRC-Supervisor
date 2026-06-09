@@ -192,6 +192,10 @@ Phase 14 - TUI help shortcut polish
 
 Status: Completed
 
+Phase 14B - TUI help debounce and alias text cleanup
+
+Status: Completed
+
 ## Known Risks
 
 - `PimaxVrcSupervisor/Program.cs` is a large monolithic file, so small UI/event refactors can accidentally touch unrelated lifecycle or cleanup logic.
@@ -1556,6 +1560,78 @@ Known risks:
 
 - Russian-layout aliases depend on terminal character delivery and may not work through every IME.
 - Runtime shortcut testing should still be done across keyboard layouts and terminals.
+
+### Phase 14B - TUI help debounce and alias text cleanup
+
+Status: Completed
+
+Summary:
+
+- Replaced the Phase 14 `400 ms` quiet-interval H-key guard with a fixed `250 ms` debounce.
+- Debounce is based on the last successful Help toggle.
+- Ignored `H`/`h` events no longer update the debounce timestamp.
+- Kept `H`/`h` as the only Help trigger.
+- Kept `F1`, `?`, and Russian help aliases disabled for Help.
+- Removed the Russian-layout alias line from the main Help overlay.
+- Kept Russian-layout aliases working for selected non-help shortcuts.
+- Kept `restart-osc-router` as the only executable TUI action.
+- No backend action allowlist, SteamVR host behavior, classic console behavior, Configurator behavior, config semantics, or release packaging changed.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `README.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+TUI behavior:
+
+- Dashboard `1` still opens the Restart OSC Router confirmation.
+- Modal `1` still does not confirm.
+- Modal `Enter` and `Y`/`y` still confirm.
+- Modal `Esc`, `Q`/`q`, and `N`/`n` still cancel.
+- Help overlay still consumes input before dashboard shortcuts.
+- Help opens/closes through `H`/`h`, `Esc`, and `Q`/`q`; `F1`, `?`, and Russian help aliases do not open Help.
+
+Bridge/backend status:
+
+- `PimaxVrcSupervisor.Tui/src/bridge.rs` remains limited to read-only `query-json` helpers plus `execute_restart_osc_router()`.
+- `action-json` appears only inside `execute_restart_osc_router()`.
+- No generic action executor was added.
+- No legacy action command strings were added.
+- Backend `action-json` allowlist remains `restart-osc-router` only.
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- Rust formatting completed successfully.
+- Rust debug build succeeded.
+- Rust release build succeeded.
+- Main supervisor Release build succeeded with 0 warnings and 0 errors.
+- ConfigEditor Release build succeeded with 0 warnings and 0 errors.
+- SteamVrHost Release build succeeded with 0 warnings and 0 errors.
+
+Generated output status:
+
+- `git status --short release` reported no staged or unstaged tracked release changes.
+- `git status --ignored --short release` reported `!! release/`, confirming generated release output is ignored.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`, confirming Rust build output is ignored.
+
+Runtime testing:
+
+- Runtime shortcut testing was not performed during implementation unless explicitly recorded later.
+- Expected runtime acceptance: normal `H` presses feel more responsive than Phase 14, held `H` does not flicker badly, Help no longer lists Russian aliases, and only confirmed `restart-osc-router` can execute.
 
 Short Phase 15 direction:
 

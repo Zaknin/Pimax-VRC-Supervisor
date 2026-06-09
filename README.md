@@ -209,7 +209,7 @@ Keybindings:
 - `Home` / `End`: jump logs
 - `Q` / `q`: close help first, otherwise quit; cancel confirmation when confirmation is open
 
-Letter shortcuts are displayed uppercase, but lowercase input is also accepted. `R` refreshes, `O` opens the Restart OSC Router confirmation, and selected Russian-layout aliases remain limited to non-help keys. `F1`, `?`, and Russian help aliases do not open TUI help.
+Letter shortcuts are displayed uppercase, but lowercase input is also accepted. `R` refreshes, `O` opens the Restart OSC Router confirmation, and selected Russian-layout aliases remain limited to non-help keys. `F1`, `?`, and Russian help aliases do not open TUI help; the main Help overlay keeps those alias details out of the shortcut list.
 
 ## Key Configuration
 

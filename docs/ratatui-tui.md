@@ -75,7 +75,7 @@ Convenience aliases:
 - `Y` / `y`: confirm inside the confirmation modal
 - `N` / `n`: cancel inside the confirmation modal
 
-Letter shortcuts are displayed uppercase, but lowercase input is also accepted. `F1`, `?`, and Russian help aliases do not open TUI help. Selected Russian-layout aliases remain limited to non-help refresh, restart, quit, confirm, and cancel keys.
+Letter shortcuts are displayed uppercase, but lowercase input is also accepted. `F1`, `?`, and Russian help aliases do not open TUI help. Selected Russian-layout aliases remain limited to non-help refresh, restart, quit, confirm, and cancel keys, but are not listed in the main Help overlay.
 
 Simple Russian-layout aliases are accepted for the same physical keys where terminal input provides them. Other layouts and IMEs should use the primary number/function/Enter/Esc shortcuts.
 
@@ -126,7 +126,7 @@ Phase 11 enables the first controlled TUI action for `restart-osc-router` only. 
 
 Phase 12 hardens overlay input handling and action result display. The TUI ignores repeated/released key events, confirmation input takes priority over help and dashboard input, help closes before `q` quits, duplicate action attempts are rejected while an action is in progress, and the latest action result is shown in the backend/status area.
 
-Phase 13 made layout-independent shortcuts primary with `F1` help. Phase 14 changes TUI help to `H` only, removes `F1`, `?`, and Russian help aliases, and adds a `400 ms` quiet-interval H-key guard so a held `H` does not repeatedly toggle help. The classic console keeps its existing `1`-`6` and `F1` hotkeys.
+Phase 13 made layout-independent shortcuts primary with `F1` help. Phase 14 changed TUI help to `H` only, removed `F1`, `?`, and Russian help aliases, and added a `400 ms` quiet-interval H-key guard. Phase 14B tunes that to a fixed `250 ms` debounce based on the last successful Help toggle, making normal `H` presses more responsive while still ignoring repeat/release events. The classic console keeps its existing `1`-`6` and `F1` hotkeys.
 
 ## Future Direction
 
