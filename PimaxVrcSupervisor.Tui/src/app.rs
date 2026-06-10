@@ -6,6 +6,7 @@ use std::{
 };
 
 use color_eyre::eyre::Result;
+use ratatui::layout::Rect;
 
 use crate::{
     bridge::{SupervisorBridge, backend_endpoint},
@@ -48,6 +49,22 @@ pub struct CompletedActionResult {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ClickAction {
+    OpenHelp,
+    Refresh,
+    QuitTui,
+    SelectAction(TuiAction),
+    ConfirmModal,
+    CancelModal,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct ClickRegion {
+    pub area: Rect,
+    pub action: ClickAction,
+}
+
 pub struct App {
     pub connection: ConnectionState,
     pub status: StatusSummary,
@@ -68,6 +85,9 @@ pub struct App {
     pub last_action_outcome: Option<ActionOutcome>,
     pub last_action_result: Option<String>,
     pub last_action_error: Option<String>,
+    pub click_regions: Vec<ClickRegion>,
+    pub mouse_enabled: bool,
+    pub mouse_notice: Option<String>,
     action_result_tx: Sender<CompletedActionResult>,
     action_result_rx: Receiver<CompletedActionResult>,
 }
@@ -102,6 +122,9 @@ impl App {
             last_action_outcome: None,
             last_action_result: None,
             last_action_error: None,
+            click_regions: Vec::new(),
+            mouse_enabled: false,
+            mouse_notice: None,
             action_result_tx,
             action_result_rx,
         }
@@ -201,6 +224,31 @@ impl App {
 
     pub fn close_help(&mut self) {
         self.help_visible = false;
+    }
+
+    pub fn set_mouse_status(&mut self, enabled: bool, notice: Option<String>) {
+        self.mouse_enabled = enabled;
+        self.mouse_notice = notice;
+    }
+
+    pub fn clear_click_regions(&mut self) {
+        self.click_regions.clear();
+    }
+
+    pub fn add_click_region(&mut self, area: Rect, action: ClickAction) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        self.click_regions.push(ClickRegion { area, action });
+    }
+
+    pub fn click_action_at(&self, column: u16, row: u16) -> Option<ClickAction> {
+        self.click_regions
+            .iter()
+            .rev()
+            .find(|region| rect_contains(region.area, column, row))
+            .map(|region| region.action)
     }
 
     pub fn action_metadata(&self, action: TuiAction) -> Option<&CommandSummary> {
@@ -317,14 +365,6 @@ impl App {
             .map(|at| format!("{} ago", format_duration(now.duration_since(at))))
     }
 
-    pub fn running_action_label(&self, action: &RunningAction, now: Instant) -> String {
-        format!(
-            "{} running {}",
-            action.command,
-            format_duration(now.duration_since(action.started_at))
-        )
-    }
-
     fn load(
         bridge: &SupervisorBridge,
     ) -> Result<(StatusSummary, Vec<CommandSummary>, Vec<LogLine>)> {
@@ -434,6 +474,13 @@ impl App {
         self.last_action_result = None;
         self.last_action_completed_at = Some(now);
     }
+}
+
+fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x
+        && column < area.x.saturating_add(area.width)
+        && row >= area.y
+        && row < area.y.saturating_add(area.height)
 }
 
 fn format_action_result(result: &CommandResult) -> String {

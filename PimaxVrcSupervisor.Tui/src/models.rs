@@ -113,17 +113,6 @@ impl TuiAction {
             Self::ReloadAutostartApps => "Reloads or starts configured Autostart apps.",
         }
     }
-
-    pub fn warning(self) -> &'static str {
-        match self {
-            Self::RestartOscRouter => {
-                "Low-risk routing action; confirm before sending it to the supervisor backend."
-            }
-            _ => {
-                "Disruptive action: may restart apps, launch workflows, or affect hardware/session state."
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default)]

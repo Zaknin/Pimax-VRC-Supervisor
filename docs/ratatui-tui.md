@@ -111,6 +111,10 @@ Phase 17 gives the TUI a Pimax-inspired dark terminal theme with green healthy/a
 
 The dashboard now emphasizes a top backend status bar, a supervisor status card, action cards for the six confirmed actions, running-action/latest-result panels, a quieter backend/errors panel, clearer logs, a stronger confirmation modal, and an accurate small-terminal fallback. The visual polish does not change backend behavior, action allowlists, SteamVR overlay behavior, classic console behavior, or action safety semantics.
 
+Phase 17B reduces normal operator UI noise by hiding risk-category wording from the dashboard and confirmation modal while keeping safety enforcement internal. Ready action cards use muted borders with green `READY` badges; running and blocked states carry the stronger visual emphasis. Status rows and action cards use more stable alignment.
+
+Phase 17B also adds original mouse-click support. Clicking an action card opens confirmation only, clicking Confirm in the modal behaves like `Enter`, clicking Cancel behaves like `Esc`, and clicks while Help is visible close Help only. Clicks outside a confirmation modal are ignored so dashboard controls underneath cannot fire. If mouse capture is unavailable, the TUI continues keyboard-only.
+
 ## Build
 
 Windows builds require the Rust stable MSVC toolchain. Visual Studio Build Tools with the C++ workload may be required.
@@ -171,6 +175,8 @@ Phase 16 moves confirmed TUI actions into background workers and allows safe con
 Phase 16B adds the matching backend-local manual base-station action guard, so Base Stations On/Off overlap is rejected by the supervisor even when the request comes from classic console input, a legacy bridge client, structured `action-json`, or a future UI client.
 
 Phase 17 improves visibility and operator usability with a Pimax-inspired dark/green theme, action cards, status badges, clearer running-action/latest-result panels, improved Help and confirmation overlays, less noisy logs, and a small-terminal fallback. It is a UI-only pass and does not change backend action behavior.
+
+Phase 17B adds original mouse-click support and further reduces operator-screen noise. The dashboard no longer shows routine risk-category wording, the confirmation modal focuses on action/effect/command, and mouse clicks reuse the same confirmation-gated action flow as keyboard shortcuts.
 
 ## Future Direction
 

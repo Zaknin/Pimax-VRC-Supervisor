@@ -223,6 +223,8 @@ The Configurator refuses to save an Autostart app that duplicates the configured
 
 Phase 17 adds a Pimax-inspired dark terminal theme for the TUI with green status accents, clearer action cards, stronger confirmation panels, a cleaner Help overlay, improved running-action/latest-result display, and a more accurate small-terminal fallback. This is visual/operator polish only: no Pimax assets are copied, no backend action behavior changes, and the SteamVR overlay and classic console remain unchanged.
 
+Phase 17B reduces normal operator-screen noise and adds original mouse support. Clicking an action card opens the same confirmation modal as pressing `1`-`6`; it never executes immediately. Help, refresh, quit, confirm, and cancel have simple click regions. If mouse capture is unavailable, the TUI continues in keyboard-only mode and still cleans up mouse capture with terminal shutdown.
+
 ## Key Configuration
 
 The release includes a commented `supervisor.config.json`. Important settings:

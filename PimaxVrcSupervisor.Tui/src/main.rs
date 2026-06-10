@@ -7,10 +7,13 @@ mod ui;
 use std::{io, time::Instant};
 
 use crate::models::TuiAction;
-use app::{App, LOG_PAGE_SIZE};
+use app::{App, ClickAction, LOG_PAGE_SIZE};
 use color_eyre::eyre::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+        MouseButton, MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -32,20 +35,40 @@ fn main() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
+    let mouse_capture_error = match execute!(stdout, EnableMouseCapture) {
+        Ok(()) => None,
+        Err(error) => Some(error.to_string()),
+    };
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    let result = run(&mut terminal);
+    let result = run(&mut terminal, mouse_capture_error);
 
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    restore_terminal(&mut terminal)?;
 
     result
 }
 
-fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
+    terminal.show_cursor()?;
+    Ok(())
+}
+
+fn run(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    mouse_capture_error: Option<String>,
+) -> Result<()> {
     let mut app = App::new();
+    app.set_mouse_status(
+        mouse_capture_error.is_none(),
+        mouse_capture_error.map(|error| format!("Mouse disabled; keyboard-only mode: {error}")),
+    );
     app.refresh(Instant::now());
 
     loop {
@@ -55,17 +78,25 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             app.refresh(now);
         }
 
-        terminal.draw(|frame| ui::render(frame, &app))?;
+        terminal.draw(|frame| ui::render(frame, &mut app))?;
 
         if event::poll(app.poll_timeout(Instant::now()))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
 
-                if handle_key(&mut app, key) {
-                    break;
+                    if handle_key(&mut app, key) {
+                        break;
+                    }
                 }
+                Event::Mouse(mouse) => {
+                    if handle_mouse(&mut app, mouse) {
+                        break;
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -113,6 +144,63 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
             Some(Shortcut::Confirm) => false,
             None => handle_navigation_key(app, key),
         }
+    }
+}
+
+fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
+    if app.help_visible {
+        if matches!(mouse.kind, MouseEventKind::Down(_)) {
+            app.close_help();
+        }
+        return false;
+    }
+
+    if !matches!(
+        mouse.kind,
+        MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+    ) {
+        return false;
+    }
+
+    if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+        return false;
+    }
+
+    let now = Instant::now();
+
+    let Some(action) = app.click_action_at(mouse.column, mouse.row) else {
+        return false;
+    };
+
+    if app.confirmation.is_some() {
+        match action {
+            ClickAction::ConfirmModal => {
+                app.confirm_action(now);
+                return false;
+            }
+            ClickAction::CancelModal => {
+                app.cancel_confirmation(now);
+                return false;
+            }
+            _ => return false,
+        }
+    }
+
+    match action {
+        ClickAction::OpenHelp => {
+            app.toggle_help();
+            false
+        }
+        ClickAction::Refresh => {
+            app.refresh(now);
+            false
+        }
+        ClickAction::QuitTui => true,
+        ClickAction::SelectAction(action) => {
+            app.request_action_confirmation(action, now);
+            false
+        }
+        ClickAction::ConfirmModal | ClickAction::CancelModal => false,
     }
 }
 

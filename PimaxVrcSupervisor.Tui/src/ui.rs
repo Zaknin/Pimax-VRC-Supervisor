@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{borrow::Cow, time::Instant};
 
 use ratatui::{
     Frame,
@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{ActionOutcome, App, ConnectionState, REFRESH_INTERVAL},
+    app::{ActionOutcome, App, ClickAction, ConnectionState, REFRESH_INTERVAL},
     models::{CommandSummary, TuiAction},
     theme,
 };
@@ -17,12 +17,14 @@ use crate::{
 const MIN_WIDTH: u16 = 72;
 const MIN_HEIGHT: u16 = 24;
 
-pub fn render(frame: &mut Frame<'_>, app: &App) {
+pub fn render(frame: &mut Frame<'_>, app: &mut App) {
+    app.clear_click_regions();
+
     let area = frame.area();
     frame.render_widget(Block::default().style(theme::app_style()), area);
 
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
-        render_small_terminal(frame, area);
+        render_small_terminal(frame, area, app);
         return;
     }
 
@@ -53,10 +55,10 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
         .split(root[2]);
     render_action_activity(frame, middle[0], app, now);
-    render_backend(frame, middle[1], app, now);
+    render_system(frame, middle[1], app, now);
 
     render_logs(frame, root[3], app);
-    render_footer(frame, root[4]);
+    render_footer(frame, root[4], app);
 
     if app.help_visible {
         render_help(frame, area);
@@ -67,7 +69,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     }
 }
 
-fn render_small_terminal(frame: &mut Frame<'_>, area: Rect) {
+fn render_small_terminal(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let lines = vec![
         Line::from(Span::styled(
             "Pimax VRC Supervisor TUI",
@@ -82,6 +84,13 @@ fn render_small_terminal(frame: &mut Frame<'_>, area: Rect) {
             Span::styled("Q Quit TUI", theme::warning_style()),
         ]),
     ];
+
+    let regions = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+    app.add_click_region(regions[0], ClickAction::OpenHelp);
+    app.add_click_region(regions[1], ClickAction::QuitTui);
 
     frame.render_widget(
         Paragraph::new(lines)
@@ -116,7 +125,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     if !app.running_actions.is_empty() {
         line.push(Span::styled(
             format!("   Running {}", app.running_actions.len()),
-            theme::warning_style(),
+            theme::success_style(),
         ));
     }
 
@@ -129,12 +138,13 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         }
     }
 
-    let help = Line::from(shortcut_line(area.width));
-
     frame.render_widget(
-        Paragraph::new(vec![Line::from(line), help])
-            .block(theme::accent_panel_block("Dashboard"))
-            .wrap(Wrap { trim: true }),
+        Paragraph::new(vec![
+            Line::from(line),
+            Line::from(shortcut_line(area.width)),
+        ])
+        .block(theme::accent_panel_block("Dashboard"))
+        .wrap(Wrap { trim: true }),
         area,
     );
 }
@@ -142,8 +152,8 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
 fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let status = &app.status;
     let lines = vec![
-        labeled_line("Version", status.app_version.as_str()),
-        labeled_line("Mode", status.mode.as_str()),
+        simple_status_line("Version", status.app_version.as_str()),
+        simple_status_line("Mode", status.mode.as_str()),
         status_line(
             "Lifecycle",
             status.lifecycle.as_str(),
@@ -184,7 +194,7 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     );
 }
 
-fn render_actions(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
+fn render_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: Instant) {
     let block = theme::panel_block("Actions");
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -192,8 +202,17 @@ fn render_actions(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     if inner.height < 6 || inner.width < 48 {
         let lines = TuiAction::ALL
             .iter()
-            .map(|action| action_card_line(app, *action, now))
+            .map(|action| action_card_line(app, *action, now, inner.width.saturating_sub(1)))
             .collect::<Vec<_>>();
+        for (index, action) in TuiAction::ALL.iter().copied().enumerate() {
+            let row = inner.y.saturating_add(index as u16);
+            if row < inner.y.saturating_add(inner.height) {
+                app.add_click_region(
+                    Rect::new(inner.x, row, inner.width, 1),
+                    ClickAction::SelectAction(action),
+                );
+            }
+        }
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
         return;
     }
@@ -226,25 +245,26 @@ fn render_actions(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
 fn render_action_card(
     frame: &mut Frame<'_>,
     area: Rect,
-    app: &App,
+    app: &mut App,
     action: TuiAction,
     now: Instant,
 ) {
     let state = action_state(app, action, now);
-    let title = format!("{} {}", action.digit(), action.short_label());
+    app.add_click_region(area, ClickAction::SelectAction(action));
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(ratatui::widgets::BorderType::Rounded)
-        .border_style(Style::default().fg(state.color))
+        .border_style(Style::default().fg(state.border_color))
         .style(
             Style::default()
                 .fg(theme::TEXT_PRIMARY)
                 .bg(theme::PANEL_ELEVATED),
-        )
-        .title(Span::styled(title, theme::title_style()));
+        );
 
+    let inner_width = area.width.saturating_sub(2);
     let mut lines = vec![
-        Line::from(theme::badge(state.label, state.style)),
+        action_card_line(app, action, now, inner_width),
         Line::from(Span::styled(action.display_name(), theme::primary_style())),
     ];
 
@@ -262,10 +282,7 @@ fn render_action_card(
 }
 
 fn render_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
-    let mut lines = vec![Line::from(Span::styled(
-        "Running actions",
-        theme::title_style(),
-    ))];
+    let mut lines = vec![Line::from(Span::styled("Running", theme::title_style()))];
 
     if app.running_actions.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -275,18 +292,14 @@ fn render_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Ins
     } else {
         for running in app.running_actions.iter().take(3) {
             lines.push(Line::from(vec![
-                Span::styled("- ", theme::dim_style()),
                 Span::styled(running.command.clone(), theme::primary_style()),
                 Span::raw("  "),
                 Span::styled(
                     format!(
                         "RUNNING {}",
-                        app.running_action_label(running, now)
-                            .split_whitespace()
-                            .last()
-                            .unwrap_or("")
+                        format_duration(now.duration_since(running.started_at))
                     ),
-                    theme::warning_style(),
+                    theme::success_style(),
                 ),
             ]));
         }
@@ -309,26 +322,26 @@ fn render_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Ins
             .last_action_completed_label(now)
             .unwrap_or_else(|| "unknown time".to_string());
         let (status, style) = action_outcome_style(outcome);
-        let message = app
-            .last_action_result
-            .as_deref()
-            .or(app.last_action_error.as_deref())
-            .unwrap_or("-");
         lines.push(Line::from(vec![
-            Span::styled("- ", theme::dim_style()),
             Span::styled(command.to_string(), theme::primary_style()),
             Span::raw("  "),
             Span::styled(status, style),
-            Span::styled(format!(" {when} - "), theme::secondary_style()),
-            Span::raw(truncate(message, 90)),
+            Span::styled(format!(" {when}"), theme::secondary_style()),
         ]));
+
+        if let Some(message) = app
+            .last_action_result
+            .as_deref()
+            .or(app.last_action_error.as_deref())
+        {
+            lines.push(Line::from(Span::raw(truncate(message, 92))));
+        }
     } else if let Some(result) = app.last_action_result.as_deref() {
         let command = app.last_action_command.as_deref().unwrap_or("action");
         lines.push(Line::from(vec![
-            Span::styled("- ", theme::dim_style()),
             Span::styled(command.to_string(), theme::warning_style()),
             Span::raw("  "),
-            Span::raw(truncate(result, 90)),
+            Span::raw(truncate(result, 92)),
         ]));
     } else {
         lines.push(Line::from(Span::styled(
@@ -345,19 +358,15 @@ fn render_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Ins
     );
 }
 
-fn render_backend(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
-    let mut lines = vec![Line::from(vec![
-        Span::styled("Action safety: ", theme::label_style()),
-        Span::raw("confirmed 1-6 actions use action-json."),
-    ])];
-
+fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
+    let mut lines = Vec::new();
     match app.connection {
         ConnectionState::Connected => lines.push(Line::from(vec![
-            Span::styled("Backend: ", theme::label_style()),
+            Span::styled(format!("{:<8}", "Backend"), theme::label_style()),
             theme::badge("OK", theme::success_style()),
         ])),
         ConnectionState::Disconnected => lines.push(Line::from(vec![
-            Span::styled("Backend: ", theme::label_style()),
+            Span::styled(format!("{:<8}", "Backend"), theme::label_style()),
             theme::badge("ERROR", theme::error_style()),
             Span::raw(format!(" {}", app.backend_endpoint)),
         ])),
@@ -368,19 +377,40 @@ fn render_backend(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
             .last_error_label(now)
             .unwrap_or_else(|| "unknown time".to_string());
         lines.push(Line::from(vec![
-            Span::styled(format!("Last error ({when}): "), theme::label_style()),
-            Span::raw(truncate(error, 90)),
+            Span::styled(format!("{:<8}", "Errors"), theme::label_style()),
+            theme::badge("ERROR", theme::error_style()),
+            Span::raw(format!(" {when}: ")),
+            Span::raw(truncate(error, 84)),
         ]));
     } else {
         lines.push(Line::from(vec![
-            Span::styled("Last error: ", theme::label_style()),
+            Span::styled(format!("{:<8}", "Errors"), theme::label_style()),
             Span::styled("none", theme::secondary_style()),
+        ]));
+    }
+
+    if let Some(notice) = &app.mouse_notice {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<8}", "Mouse"), theme::label_style()),
+            Span::styled(truncate(notice, 84), theme::warning_style()),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<8}", "Mouse"), theme::label_style()),
+            Span::styled(
+                if app.mouse_enabled {
+                    "enabled"
+                } else {
+                    "keyboard only"
+                },
+                theme::secondary_style(),
+            ),
         ]));
     }
 
     frame.render_widget(
         Paragraph::new(lines)
-            .block(theme::panel_block("Backend / Errors"))
+            .block(theme::panel_block("System"))
             .wrap(Wrap { trim: true }),
         area,
     );
@@ -409,7 +439,7 @@ fn render_logs(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
                 match &line.timestamp {
                     Some(timestamp) => ListItem::new(Line::from(vec![
-                        Span::styled(timestamp.as_str(), theme::dim_style()),
+                        Span::styled(format!("{timestamp:<8}"), theme::dim_style()),
                         Span::raw("  "),
                         Span::styled(message.to_string(), theme::primary_style()),
                     ])),
@@ -423,10 +453,10 @@ fn render_logs(frame: &mut Frame<'_>, area: Rect, app: &App) {
     };
 
     let title = if app.logs.is_empty() {
-        "Recent Logs".to_string()
+        "Recent Logs - Up/Down scroll".to_string()
     } else {
         format!(
-            "Recent Logs ({}/{}, offset {})",
+            "Recent Logs ({}/{}, offset {}) - Up/Down scroll",
             visible_count,
             app.logs.len(),
             app.log_scroll
@@ -447,7 +477,8 @@ fn render_logs(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(List::new(items).block(block), area);
 }
 
-fn render_footer(frame: &mut Frame<'_>, area: Rect) {
+fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
+    register_footer_clicks(app, area);
     frame.render_widget(
         Paragraph::new(shortcut_line(area.width)).style(Style::default().fg(theme::TEXT_SECONDARY)),
         area,
@@ -473,14 +504,14 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         help_line("ENTER", "Confirm modal action"),
         help_line("ESC", "Cancel / close modal"),
         help_line("Q", "Quit TUI on dashboard, cancel modal, close Help"),
+        help_line("MOUSE", "Click action cards; confirm in modal"),
         help_line("ARROWS", "Scroll logs"),
-        help_line("PG/HOME", "Page or jump log scroll"),
         Line::from(""),
         Line::from(Span::styled(
-            "While Help is open, any key closes Help only.",
+            "While Help is open, any key or mouse click closes Help only.",
             theme::warning_style(),
         )),
-        Line::from("All actions require confirmation and use backend action-json."),
+        Line::from("Mouse action clicks open confirmation only."),
         Line::from("Q never stops the supervisor backend."),
         Line::from("F1, ?, and Russian help aliases are not mapped."),
         Line::from("force-stop-supervisor is not exposed."),
@@ -495,32 +526,21 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
     );
 }
 
-fn render_action_confirmation(frame: &mut Frame<'_>, area: Rect, app: &App) {
+fn render_action_confirmation(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let Some(action) = app.confirmation else {
         return;
     };
 
-    let popup = centered_rect(62, 46, area);
-    let safety_category = app
-        .action_metadata(action)
-        .map(|command| command.action_safety_category.as_str())
-        .unwrap_or("-");
+    let popup = centered_rect(62, 42, area);
     let lines = vec![
         Line::from(Span::styled("Confirm Action", theme::title_style())),
         Line::from(""),
-        labeled_line("Action", action.display_name()),
+        Line::from(Span::styled(action.display_name(), theme::title_style())),
         labeled_line("Command", action.command_name()),
-        Line::from(vec![
-            Span::styled("Safety: ", theme::label_style()),
-            safety_badge(safety_category),
-        ]),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Effect: ", theme::label_style()),
-            Span::raw(action.expected_effect()),
-        ]),
-        Line::from(Span::styled(action.warning(), theme::warning_style())),
-        Line::from("This action will be sent to the supervisor backend."),
+        Line::from(action.expected_effect()),
+        Line::from(operator_warning(action)),
+        Line::from("This will send the request to the supervisor backend."),
         Line::from(""),
         Line::from(vec![
             Span::styled("ENTER Confirm", theme::success_style()),
@@ -531,6 +551,7 @@ fn render_action_confirmation(frame: &mut Frame<'_>, area: Rect, app: &App) {
     ];
 
     frame.render_widget(Clear, popup);
+    register_modal_clicks(app, popup);
     frame.render_widget(
         Paragraph::new(lines)
             .block(theme::accent_panel_block(action.display_name()))
@@ -539,28 +560,34 @@ fn render_action_confirmation(frame: &mut Frame<'_>, area: Rect, app: &App) {
     );
 }
 
-fn action_card_line(app: &App, action: TuiAction, now: Instant) -> Line<'static> {
+fn action_card_line(app: &App, action: TuiAction, now: Instant, width: u16) -> Line<'static> {
     let state = action_state(app, action, now);
-    Line::from(vec![
-        Span::styled(
-            format!("{} {:<9}", action.digit(), action.short_label()),
-            theme::title_style(),
-        ),
-        theme::badge(state.label, state.style),
-        Span::raw(
-            state
-                .detail
-                .map(|detail| format!(" {detail}"))
-                .unwrap_or_default(),
-        ),
-    ])
+    let left = format!("{} {}", action.digit(), action.short_label());
+    aligned_line(
+        &left,
+        state.label_text().as_ref(),
+        width as usize,
+        state.style,
+    )
 }
 
+#[derive(Debug)]
 struct ActionState {
     label: &'static str,
     detail: Option<String>,
-    color: Color,
+    border_color: Color,
     style: Style,
+}
+
+impl ActionState {
+    fn label_text(&self) -> Cow<'static, str> {
+        match &self.detail {
+            Some(detail) if self.label == "RUNNING" => {
+                Cow::Owned(format!("{} {}", self.label, detail))
+            }
+            _ => Cow::Borrowed(self.label),
+        }
+    }
 }
 
 fn action_state(app: &App, action: TuiAction, now: Instant) -> ActionState {
@@ -572,8 +599,8 @@ fn action_state(app: &App, action: TuiAction, now: Instant) -> ActionState {
         return ActionState {
             label: "RUNNING",
             detail: Some(format_duration(now.duration_since(running.started_at))),
-            color: theme::WARNING_ORANGE,
-            style: theme::warning_style(),
+            border_color: theme::ACCENT_GREEN,
+            style: theme::success_style(),
         };
     }
 
@@ -589,7 +616,7 @@ fn action_state(app: &App, action: TuiAction, now: Instant) -> ActionState {
         return ActionState {
             label: "BLOCKED",
             detail: Some("base-station action running".to_string()),
-            color: theme::WARNING_ORANGE,
+            border_color: theme::WARNING_ORANGE,
             style: theme::warning_style(),
         };
     }
@@ -601,8 +628,8 @@ fn action_state(app: &App, action: TuiAction, now: Instant) -> ActionState {
             detail: metadata
                 .map(|command| command.blocked_reason.clone())
                 .filter(|reason| !reason.trim().is_empty()),
-            color: theme::ERROR_RED,
-            style: theme::error_style(),
+            border_color: theme::WARNING_ORANGE,
+            style: theme::warning_style(),
         };
     }
 
@@ -612,22 +639,73 @@ fn action_state(app: &App, action: TuiAction, now: Instant) -> ActionState {
             detail: metadata
                 .map(|command| command.blocked_reason.clone())
                 .filter(|reason| !reason.trim().is_empty()),
-            color: theme::TEXT_DIM,
-            style: theme::secondary_style(),
+            border_color: theme::ERROR_RED,
+            style: theme::error_style(),
         };
     }
 
     ActionState {
         label: "READY",
         detail: None,
-        color: theme::ACCENT_GREEN,
+        border_color: theme::BORDER_MUTED,
         style: theme::success_style(),
     }
 }
 
+fn register_footer_clicks(app: &mut App, area: Rect) {
+    if area.width < 3 {
+        return;
+    }
+
+    app.add_click_region(
+        Rect::new(area.x, area.y, area.width.min(8), area.height),
+        ClickAction::OpenHelp,
+    );
+
+    if area.width > 12 {
+        app.add_click_region(
+            Rect::new(area.x.saturating_add(9), area.y, 12, area.height),
+            ClickAction::Refresh,
+        );
+    }
+
+    if area.width > 16 {
+        app.add_click_region(
+            Rect::new(
+                area.x.saturating_add(area.width.saturating_sub(12)),
+                area.y,
+                12,
+                area.height,
+            ),
+            ClickAction::QuitTui,
+        );
+    }
+}
+
+fn register_modal_clicks(app: &mut App, popup: Rect) {
+    let button_row = popup.y.saturating_add(popup.height.saturating_sub(4));
+    let confirm = Rect::new(
+        popup.x.saturating_add(2),
+        button_row,
+        popup.width.saturating_sub(4) / 2,
+        2,
+    );
+    let cancel = Rect::new(
+        popup.x.saturating_add(popup.width / 2),
+        button_row,
+        popup
+            .width
+            .saturating_sub(popup.width / 2)
+            .saturating_sub(2),
+        2,
+    );
+    app.add_click_region(confirm, ClickAction::ConfirmModal);
+    app.add_click_region(cancel, ClickAction::CancelModal);
+}
+
 fn shortcut_line(width: u16) -> &'static str {
     if width >= 100 {
-        "0 Help  F5 Refresh  1 Core  2 OGB  3 BS On  4 BS Off  5 OSC  6 Autostart  Q Quit TUI"
+        "0 Help  F5 Refresh  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  Q Quit TUI"
     } else {
         "0 Help  F5 Refresh  1-6 Actions  Q Quit TUI"
     }
@@ -653,6 +731,14 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         .split(vertical[1])[1]
 }
 
+fn simple_status_line<'a>(label: &'a str, value: &'a str) -> Line<'a> {
+    Line::from(vec![
+        Span::styled(format!("{label:<14}"), theme::label_style()),
+        Span::raw(format!("{:<9}", "")),
+        Span::raw(value),
+    ])
+}
+
 fn labeled_line<'a>(label: &'a str, value: &'a str) -> Line<'a> {
     Line::from(vec![
         Span::styled(format!("{label}: "), theme::label_style()),
@@ -662,7 +748,7 @@ fn labeled_line<'a>(label: &'a str, value: &'a str) -> Line<'a> {
 
 fn status_line<'a>(label: &'a str, value: &'a str, badge: Span<'static>) -> Line<'a> {
     Line::from(vec![
-        Span::styled(format!("{label:<13}"), theme::label_style()),
+        Span::styled(format!("{label:<14}"), theme::label_style()),
         badge,
         Span::raw(" "),
         Span::raw(value),
@@ -676,39 +762,42 @@ fn help_line<'a>(key: &'static str, value: &'a str) -> Line<'a> {
     ])
 }
 
+fn aligned_line(left: &str, right: &str, width: usize, right_style: Style) -> Line<'static> {
+    let left_width = left.chars().count();
+    let right_width = right.chars().count();
+    let padding = width.saturating_sub(left_width + right_width).max(1);
+    Line::from(vec![
+        Span::styled(left.to_string(), theme::title_style()),
+        Span::raw(" ".repeat(padding)),
+        Span::styled(right.to_string(), right_style),
+    ])
+}
+
 fn status_badge(kind: &str, value: &str) -> Span<'static> {
     let lower = value.to_lowercase();
     match kind {
-        "steamvr" if lower.contains("running") => theme::badge("OK", theme::success_style()),
-        "steamvr" => theme::badge("OFF", theme::warning_style()),
-        "core" if lower.contains("running") => theme::badge("OK", theme::success_style()),
-        "core" if lower.contains("incomplete") => theme::badge("WARN", theme::warning_style()),
-        "core" => theme::badge("OFF", theme::warning_style()),
-        "osc" if lower.contains("running") => theme::badge("OK", theme::success_style()),
-        "osc" => theme::badge("STOPPED", theme::warning_style()),
-        "ogb" if lower.contains("running") => theme::badge("OK", theme::success_style()),
-        "ogb" if lower.contains("disabled") => theme::badge("DISABLED", theme::warning_style()),
-        "ogb" => theme::badge("WARN", theme::warning_style()),
-        "base" if lower.contains("disabled") => theme::badge("OFF", theme::warning_style()),
-        "base" if lower.contains("powered=true") => theme::badge("OK", theme::success_style()),
-        "base" if lower.contains("powered=false") => theme::badge("OFF", theme::warning_style()),
-        "base" => theme::badge("UNKNOWN", theme::warning_style()),
-        "lifecycle" if lower.contains("running") => theme::badge("RUNNING", theme::success_style()),
-        "lifecycle" => theme::badge("READY", theme::info_style()),
-        _ => theme::badge("INFO", theme::info_style()),
+        "steamvr" if lower.contains("running") => fixed_badge("OK", theme::success_style()),
+        "steamvr" => fixed_badge("OFF", theme::warning_style()),
+        "core" if lower.contains("running") => fixed_badge("OK", theme::success_style()),
+        "core" if lower.contains("incomplete") => fixed_badge("WARN", theme::warning_style()),
+        "core" => fixed_badge("OFF", theme::warning_style()),
+        "osc" if lower.contains("running") => fixed_badge("OK", theme::success_style()),
+        "osc" => fixed_badge("STOPPED", theme::warning_style()),
+        "ogb" if lower.contains("running") => fixed_badge("OK", theme::success_style()),
+        "ogb" if lower.contains("disabled") => fixed_badge("OFF", theme::warning_style()),
+        "ogb" => fixed_badge("WARN", theme::warning_style()),
+        "base" if lower.contains("disabled") => fixed_badge("OFF", theme::warning_style()),
+        "base" if lower.contains("powered=true") => fixed_badge("OK", theme::success_style()),
+        "base" if lower.contains("powered=false") => fixed_badge("OFF", theme::warning_style()),
+        "base" => fixed_badge("UNKNOWN", theme::warning_style()),
+        "lifecycle" if lower.contains("running") => fixed_badge("RUNNING", theme::success_style()),
+        "lifecycle" => fixed_badge("READY", theme::info_style()),
+        _ => fixed_badge("INFO", theme::info_style()),
     }
 }
 
-fn safety_badge(value: &str) -> Span<'static> {
-    if value.eq_ignore_ascii_case("LowRisk") {
-        theme::badge("LowRisk", theme::info_style())
-    } else if value.eq_ignore_ascii_case("Disruptive") {
-        theme::badge("Disruptive", theme::warning_style())
-    } else if value.eq_ignore_ascii_case("Blocked") {
-        theme::badge("Blocked", theme::error_style())
-    } else {
-        theme::badge(value.to_string(), theme::secondary_style())
-    }
+fn fixed_badge(label: &str, style: Style) -> Span<'static> {
+    Span::styled(format!("{label:<8}"), style)
 }
 
 fn action_is_executable(command: &CommandSummary) -> bool {
@@ -732,6 +821,17 @@ fn action_outcome_style(outcome: ActionOutcome) -> (&'static str, Style) {
         ActionOutcome::Failed => ("ERROR", theme::error_style()),
         ActionOutcome::Cancelled => ("CANCELLED", theme::warning_style()),
         ActionOutcome::Rejected => ("BLOCKED", theme::warning_style()),
+    }
+}
+
+fn operator_warning(action: TuiAction) -> &'static str {
+    match action {
+        TuiAction::RestartCoreApps => "This may restart running face-tracking applications.",
+        TuiAction::StartOscGoesBrrr => "This may restart Intiface or OSCGoesBrrr.",
+        TuiAction::BaseStationsOn => "This may affect tracking hardware power state.",
+        TuiAction::BaseStationsOff => "This may affect tracking hardware power state.",
+        TuiAction::ReloadAutostartApps => "This may restart configured helper applications.",
+        TuiAction::RestartOscRouter => "",
     }
 }
 

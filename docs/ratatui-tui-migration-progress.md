@@ -2019,6 +2019,75 @@ Runtime testing:
 - Runtime visual testing was not performed during implementation.
 - Real-world VR testing remains the next recommended step after this UI pass.
 
+### Phase 17B - TUI operator usability and mouse interaction polish
+
+Status: Completed
+
+Summary:
+
+- Reduced normal operator UI noise after the Phase 17 visual polish.
+- Added original mouse-click support for action cards and basic controls.
+- Kept backend behavior, backend allowlist, bridge protocol, SteamVR host behavior, classic console behavior, Configurator behavior, Phase 16B base-station guard behavior, cleanup/lifecycle behavior, and action safety semantics unchanged.
+- Did not copy ShockingVRC/GPL code, function names, layout implementation, event-loop code, theme code, assets, or text.
+- Did not add new crates.
+
+Rust TUI changes:
+
+- Added an original click-region model using `ClickAction` and `ClickRegion`.
+- Rebuilt click regions during each render frame.
+- Enabled mouse capture with Crossterm; if mouse capture setup fails, the TUI continues keyboard-only and shows a nonfatal mouse status message.
+- Terminal cleanup disables mouse capture together with raw mode and alternate-screen cleanup.
+- Left-clicking action cards opens the existing confirmation modal only.
+- Help consumes mouse clicks the same way it consumes key presses: any click closes Help and does not trigger dashboard controls underneath.
+- Confirmation modal click handling is limited to Confirm and Cancel regions; clicks outside the modal are ignored.
+- Mouse Confirm mirrors `Enter`; mouse Cancel mirrors `Esc`.
+- Removed routine risk-category wording from normal dashboard and confirmation modal text.
+- Changed ready action cards to use muted borders with green `READY` badges, while running/blocked/unavailable states carry stronger emphasis.
+- Improved status label/badge/value alignment, action card alignment, the quieter `System` panel, action status layout, logs title/hint, and footer labels.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `PimaxVrcSupervisor.Tui/src/models.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `README.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- Initial Rust debug build caught an owned-string lifetime issue in the action-card header helper; that was fixed.
+- Intermediate Rust builds succeeded with two dead-code warnings; obsolete helper methods were removed.
+- Final `cargo fmt`, Rust debug build, and Rust release build completed successfully.
+- All three C# release builds completed successfully with 0 warnings and 0 errors.
+- Source inspection confirmed the TUI still sends `action-json` only through `execute_tui_action(TuiAction)` and has no generic arbitrary command executor.
+- Source inspection confirmed the TUI sends no legacy action command strings directly.
+- Source inspection confirmed `PimaxVrcSupervisor/Program.cs` has no Phase 17B diff.
+- Source inspection confirmed `force-stop-supervisor` remains blocked/not TUI-executable and `Q`/`q` sends no backend command.
+
+Generated output status:
+
+- `git status --short release` produced no staged/tracked release output.
+- `git status --ignored --short release` reported `!! release/`.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
+- Generated `release/` and Rust `target/` output remain ignored and were not staged.
+
+Runtime testing:
+
+- Runtime mouse testing was not performed during implementation.
+- When safe, verify action-card clicks open confirmation only, modal Confirm/Cancel clicks mirror keyboard behavior, Help clicks close Help only, and dashboard clicks do not pass through overlays.
+
 Short Phase 18 direction:
 
 - Run a manual VR-session test matrix for the polished TUI, concurrent actions, duplicate blocking, backend/TUI Base Stations On/Off mutual exclusion, and duplicate Autostart validation/runtime skipping.

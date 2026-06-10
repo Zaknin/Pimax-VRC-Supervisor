@@ -80,6 +80,10 @@ Phase 16B adds a backend-local manual base-station action guard. Base Stations O
 
 Phase 17 is a desktop TUI presentation-only pass. It adds a Pimax-inspired dark/green terminal theme, action cards, status badges, clearer running-action/latest-result display, and stronger Help/confirmation panels without changing the backend action allowlist, `action-json` semantics, TUI shortcut behavior, SteamVR overlay behavior, classic console behavior, or the Phase 16B backend base-station guard.
 
+## Phase 17B Implementation Status
+
+Phase 17B keeps the same action safety model but removes routine risk-category wording from the normal operator UI. Mouse-click support is implemented with original project code and maps only to existing `TuiAction` values and overlay controls. Action-card clicks open confirmation only, modal Confirm/Cancel clicks mirror keyboard behavior, and no backend command is sent without the existing confirmation step.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:
