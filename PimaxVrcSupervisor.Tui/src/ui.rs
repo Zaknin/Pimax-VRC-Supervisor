@@ -416,8 +416,8 @@ fn render_small_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
 fn render_small_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let status = &app.status;
     let lines = vec![
-        status_line(
-            "Lifecycle",
+        small_status_line(
+            "Life",
             status.lifecycle.as_str(),
             status_badge("lifecycle", &status.lifecycle),
         ),
@@ -961,13 +961,16 @@ fn compact_action_line(app: &App, action: TuiAction, now: Instant, width: u16) -
 
 fn small_action_cell_line(app: &App, action: TuiAction, now: Instant, width: u16) -> Line<'static> {
     let state = action_state(app, action, now);
-    let left = format!("{} {}", action.digit(), small_action_label(action));
-    aligned_line(
-        &left,
-        state.label_text().as_ref(),
-        width as usize,
-        state.style,
-    )
+    let left = format!("{} {:<4} ", action.digit(), small_action_label(action));
+    let badge = format!("[{}]", state.label_text());
+    let used_width = left.chars().count() + badge.chars().count();
+    let padding = (width as usize).saturating_sub(used_width).max(1);
+
+    Line::from(vec![
+        Span::styled(left, theme::title_style()),
+        Span::styled(badge, state.style),
+        Span::raw(" ".repeat(padding)),
+    ])
 }
 
 fn small_action_label(action: TuiAction) -> &'static str {
@@ -1208,6 +1211,15 @@ fn status_line<'a>(label: &'a str, value: &'a str, badge: Span<'static>) -> Line
     ])
 }
 
+fn small_status_line<'a>(label: &'a str, value: &'a str, badge: Span<'static>) -> Line<'a> {
+    Line::from(vec![
+        Span::styled(format!("{label:<5}"), theme::label_style()),
+        badge,
+        Span::raw(" "),
+        Span::raw(value),
+    ])
+}
+
 fn core_apps_status_line(app: &App) -> Line<'_> {
     let lifecycle = app.status.lifecycle.to_lowercase();
     let core_apps = app.status.core_apps.to_lowercase();
@@ -1292,7 +1304,7 @@ fn status_badge(kind: &str, value: &str) -> Span<'static> {
 }
 
 fn fixed_badge(label: &str, style: Style) -> Span<'static> {
-    Span::styled(format!("{label:<8}"), style)
+    Span::styled(format!("[{label}]"), style)
 }
 
 fn foreground(color: Color) -> Style {

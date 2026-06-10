@@ -237,6 +237,8 @@ Phase 17F refines the adaptive priority model: full dashboard remains primary, c
 
 Phase 17G aligns the small `80x20` action grid so action labels and badges scan cleanly in two fixed rows. It is visual polish only: `Q` still quits only the TUI, no supervisor shutdown or tray behavior was added, and future TUI-as-primary lifecycle work remains a separate design phase.
 
+Phase 17H switches TUI status/action badges to bracket text such as `[OK]`, `[START]`, and `[BACKEND OFF]`, and keeps the small `80x20` labels closer to their badges. Normal labels, values, logs, footer text, and modal controls remain foreground-only. Supervisor shutdown, tray behavior, Configurator launch options, and graceful-stop actions remain future work.
+
 ## Key Configuration
 
 The release includes a commented `supervisor.config.json`. Important settings:

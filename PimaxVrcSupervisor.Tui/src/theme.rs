@@ -117,7 +117,7 @@ pub fn badge_muted_style() -> Style {
 
 pub fn badge(label: impl Into<String>, style: Style) -> Span<'static> {
     Span::styled(
-        format!(" {} ", label.into()),
+        format!("[{}]", label.into()),
         style.add_modifier(Modifier::BOLD),
     )
 }

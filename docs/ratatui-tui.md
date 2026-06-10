@@ -128,6 +128,8 @@ Phase 17F also tightens badge styling. Short state words such as `OK`, `START`, 
 
 Phase 17G aligns the small `80x20` action area as a fixed two-row, three-column grid. Small action labels use compact operator text (`Core`, `OGB`, `On`, `Off`, `OSC`, `Auto`) and keep the state badge aligned within each cell. No lifecycle behavior changes were made: dashboard `Q` still quits only the TUI.
 
+Phase 17H changes status/action badges to bracket text, for example `[OK]`, `[START]`, `[WAITING]`, and `[BACKEND OFF]`. The brackets are part of the colored badge span. Small action cells now compose label plus nearby badge first, then pad the rest of the cell, so `1 Core [START]` stays compact at `80x20`.
+
 ## Build
 
 Windows builds require the Rust stable MSVC toolchain. Visual Studio Build Tools with the C++ workload may be required.
@@ -202,6 +204,8 @@ Phase 17E adds adaptive full/compact/tiny layout tiers, cleans normal action-car
 Phase 17F extends the tiers to full/compact/small/tiny, makes backend-off state the first action-card and action-row priority in every layout, and centralizes badge-only background styling. It borrows only the adaptive resizing principle from ShockingVRC; no code, structure, assets, or GPL implementation are copied.
 
 Phase 17G keeps those semantics and only polishes the small layout alignment. Future TUI-as-primary lifecycle ideas such as hidden supervisor mode, tray minimize, or graceful supervisor shutdown from TUI close are intentionally deferred to a later design phase.
+
+Phase 17H keeps the same behavior while polishing bracket badge readability. Modal controls remain neutral text, and future TUI-as-primary lifecycle, tray minimize, Configurator launch, and graceful shutdown behavior remain separate future work.
 
 ## Future Direction
 

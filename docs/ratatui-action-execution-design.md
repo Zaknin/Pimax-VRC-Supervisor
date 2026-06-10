@@ -110,6 +110,10 @@ The adaptive layout borrows only the principle of graceful resizing from Shockin
 
 Phase 17G is a rendering-only polish pass. It aligns the small `80x20` action rows into a stable two-row, three-column grid while preserving the same `TuiAction` allowlist, badge styling, mouse behavior, keyboard confirmation behavior, and backend-off priority. It does not add supervisor shutdown, tray behavior, Configurator launch options, backend protocol changes, or new action semantics.
 
+## Phase 17H Implementation Status
+
+Phase 17H is also rendering-only. It changes status/action badges to bracket text such as `[START]`, `[OK]`, and `[BACKEND OFF]`, keeps small-layout badges close to their labels, and leaves modal controls neutral. It does not change `Q` semantics, supervisor lifecycle, backend action handling, bridge protocol, tray behavior, Configurator behavior, or action allowlists.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:
