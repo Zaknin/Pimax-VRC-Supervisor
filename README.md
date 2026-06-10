@@ -233,6 +233,8 @@ Phase 17D makes backend-off action-card state authoritative across all six cards
 
 Phase 17E adds adaptive layout tiers: full dashboard at `120x32` or larger, a useful compact dashboard at `100x26` or larger, and a tiny resize fallback below that. Full action cards keep consistent click/press hints with cleaner foreground-only text, compact mode still shows status/actions/latest result/logs, and mouse wheel scrolling works with the same Recent Logs live-follow behavior. No backend or C# behavior changed.
 
+Phase 17F refines the adaptive priority model: full dashboard remains primary, compact remains useful, a small essential dashboard appears at `80x20` or larger, and tiny fallback is used only below that. Status words such as `OK`, `START`, `WAITING`, and `BACKEND OFF` use colored badge backgrounds, while normal labels, values, action names, hints, modal text, and logs stay foreground-only. Backend-disconnected state still overrides every action card or row before cached metadata can show `START`, `BLOCKED`, or `UNAVAILABLE`.
+
 ## Key Configuration
 
 The release includes a commented `supervisor.config.json`. Important settings:

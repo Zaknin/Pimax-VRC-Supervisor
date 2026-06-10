@@ -122,6 +122,10 @@ Phase 17D tightens the same operator layout. Backend-off state is authoritative 
 
 Phase 17E adds adaptive layout tiers. Terminals at `120x32` or larger use the full dashboard; terminals at `100x26` or larger use a useful compact dashboard with backend state, key statuses, six compact action rows, latest action result, recent logs, and footer controls; smaller terminals show a tiny resize fallback. Full action cards keep equal-height hints, normal card text uses foreground-only styling while badges keep intentional backgrounds, and mouse wheel scrolling integrates with log follow mode.
 
+Phase 17F adds a priority small layout before the tiny fallback. Terminals at `80x20` or larger keep backend health, lifecycle, Core Apps, OSC Router, Base Stations, all six action states, latest activity, and a last-log line visible. Tiny fallback is now reserved for terminals below `80x20`.
+
+Phase 17F also tightens badge styling. Short state words such as `OK`, `START`, `WAITING`, `RUNNING`, `OFF`, `STOPPED`, `ERROR`, `BACKEND OFF`, `BLOCKED`, and `UNAVAILABLE` use colored badge backgrounds. Normal labels, values, action names, click hints, modal body text, and log lines remain foreground-only without background underlay.
+
 ## Build
 
 Windows builds require the Rust stable MSVC toolchain. Visual Studio Build Tools with the C++ workload may be required.
@@ -192,6 +196,8 @@ Phase 17C makes mouse action-card clicks direct-start actions after validation, 
 Phase 17D makes backend-off card rendering authoritative, neutralizes modal control styling, makes full-layout card hints consistent, and adds Recent Logs live-follow mode.
 
 Phase 17E adds adaptive full/compact/tiny layout tiers, cleans normal action-card text styling, keeps full-card action hints consistent, and adds mouse wheel log scrolling without backend or protocol changes.
+
+Phase 17F extends the tiers to full/compact/small/tiny, makes backend-off state the first action-card and action-row priority in every layout, and centralizes badge-only background styling. It borrows only the adaptive resizing principle from ShockingVRC; no code, structure, assets, or GPL implementation are copied.
 
 ## Future Direction
 

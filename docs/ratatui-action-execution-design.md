@@ -100,6 +100,12 @@ The modal controls remain clickable but render as neutral text. Recent Logs add 
 
 Phase 17E remains UI-only. It adds adaptive full, compact, and tiny layout tiers, cleaner action-card foreground text, consistent full-card action hints, and mouse wheel log scrolling. Compact and full action regions still map only to existing `TuiAction` values, and wheel scrolling affects only the local log viewport/follow state. No backend allowlist, bridge protocol, SteamVR host, classic console, Configurator, or Phase 16B base-station guard behavior changed.
 
+## Phase 17F Implementation Status
+
+Phase 17F remains UI-only and keeps the same action safety model. It adds a small essential dashboard tier between compact and tiny fallback, preserves backend/supervisor health and action states longer during terminal resize, and centralizes badge-only state styling. Backend disconnected state is still the first action-state check for every full card, compact row, and small row, so cached metadata cannot make a disconnected action look startable or conflict-blocked.
+
+The adaptive layout borrows only the principle of graceful resizing from ShockingVRC. No ShockingVRC code, UI structure, event code, assets, or GPL implementation are copied.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:

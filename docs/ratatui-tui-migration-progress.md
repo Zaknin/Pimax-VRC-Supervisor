@@ -2103,6 +2103,86 @@ Runtime testing:
 - Runtime base-station overlap testing was not performed during implementation.
 - When safe, test Base Stations On/Off overlap from separate entry points and verify the overlapping request logs/returns the busy message while the supervisor continues running.
 
+### Phase 17F - Priority adaptive TUI layout, badge styling, and log controls
+
+Status: Completed
+
+Summary:
+
+- Refined only the Rust desktop TUI UI/interaction layer after Phase 17E runtime feedback.
+- Kept backend behavior, bridge protocol, SteamVR host behavior, classic console behavior, Configurator behavior, cleanup/lifecycle behavior, and the Phase 16B base-station guard unchanged.
+- Did not modify `PimaxVrcSupervisor/Program.cs`.
+- Borrowed only the adaptive-layout principle from ShockingVRC; no ShockingVRC code, UI structure, event code, assets, or GPL implementation were copied.
+
+Rust TUI changes:
+
+- Kept full dashboard at `120x32` or larger.
+- Kept compact useful dashboard at `100x26` or larger.
+- Added a small essential dashboard at `80x20` or larger.
+- Reserved tiny fallback for terminals below `80x20`.
+- Small layout keeps backend state, lifecycle, Core Apps, OSC Router, Base Stations, six action states, latest activity, a last-log line, and Help/Quit controls visible.
+- Centralized badge-only state styling in `theme.rs`.
+- Status/state words such as `OK`, `START`, `WAITING`, `RUNNING`, `OFF`, `STOPPED`, `ERROR`, `BACKEND OFF`, `BLOCKED`, and `UNAVAILABLE` use colored badge backgrounds.
+- Normal labels, values, action names, click hints, modal body text, and log lines use foreground-only styles with no background underlay.
+- Preserved the action-state priority for every full card, compact row, and small row: backend disconnected, running, Base Stations On/Off conflict, blocked metadata, unavailable metadata, executable START.
+- Backend disconnected still short-circuits before cached metadata, so disconnected cards/rows cannot show stale `START`, conflict `BLOCKED`, or metadata `UNAVAILABLE`.
+- Full action cards remain a 2x3 grid with equal-height cards and `click or press <number>` hints.
+- Compact/small action rows reuse only the existing `TuiAction` values and the same click-region model.
+- Log titles keep follow controls visible, including `Wheel` scrolling and `End/F` follow.
+
+Documentation changes:
+
+- Updated README and Ratatui docs to record the full/compact/small/tiny adaptive tiers, badge-only background rule, backend-off priority, and mouse/log-control visibility.
+- Updated the action safety design to record Phase 17F as UI-only and to document the ShockingVRC principle-only distinction.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/theme.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `README.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- `cargo fmt` completed successfully.
+- Rust debug and release builds completed successfully.
+- All three C# release builds completed successfully with 0 warnings and 0 errors.
+- Source inspection confirmed `PimaxVrcSupervisor/Program.cs` has no Phase 17F diff.
+- Source inspection confirmed `bridge.rs` still has no generic arbitrary command executor and sends `action-json` only through `execute_tui_action(TuiAction)`.
+- Source inspection confirmed the TUI sends no legacy action command strings directly, `force-stop-supervisor` remains unexposed, and `Q`/`q` sends no backend command.
+
+Release/copy result:
+
+- Rebuilt `PimaxVrcSupervisorTui.exe` was copied to `release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe`.
+- No C# publish was performed because no C# files changed.
+
+Generated output status:
+
+- `git status --short release` produced no staged/tracked release output.
+- `git status --ignored --short release` reported `!! release/`.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
+- Generated `release/` and Rust `target/` output remain ignored and were not staged.
+
+Runtime testing:
+
+- Runtime visual/mouse testing was not performed during implementation.
+- When safe, verify `130x34` uses the full dashboard, `100x26` uses the compact dashboard, `80x20` uses the small essential dashboard, tiny terminals show resize fallback, badge backgrounds appear only on state words, normal text has no background underlay, and backend-off cards/rows always override cached metadata.
+
+Short Phase 18 direction:
+
+- Run a manual VR-session test matrix for the adaptive tiers, badge readability, backend-off/recovery states, mouse wheel log scrolling, and action-card/row click behavior before adding more UI behavior.
+
 ### Phase 17E - Adaptive TUI layout, cleaner action cards, and mouse log scrolling
 
 Status: Completed
