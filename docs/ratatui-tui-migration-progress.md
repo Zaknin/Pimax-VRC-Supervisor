@@ -2168,9 +2168,63 @@ Generated output status:
 - `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
 - Generated `release/` and Rust `target/` output remain ignored and were not staged.
 
-Short Phase 18B direction:
+### Phase 18B - Configurator Launch Desktop TUI button
 
-- Add a Configurator `Launch Desktop TUI` button that starts `PimaxVrcSupervisorTui.exe` from the release folder only; do not couple it to supervisor start/stop or change config schema.
+Status: Completed
+
+Summary:
+
+- Added a Configurator `Launch Desktop TUI` button beside the existing bottom-bar launch controls.
+- The button starts only `PimaxVrcSupervisorTui.exe` from the Configurator executable folder via `AppContext.BaseDirectory`.
+- The launch path is release-folder/local-folder based; it does not discover arbitrary TUI locations or add config schema.
+- Missing executable handling shows a clear expected-path message and sets status to `Desktop TUI executable was not found.`
+- Duplicate TUI handling detects an existing `PimaxVrcSupervisorTui` process, shows `Desktop TUI is already running.`, and does not start another copy.
+- Successful launch sets status to `Desktop TUI launched.`
+- Launch failures set status to `Desktop TUI launch failed.`
+- The button does not require the supervisor to be running, does not start the supervisor, does not stop the supervisor, does not save config, and does not change TUI `Q` semantics.
+
+Files changed:
+
+- `PimaxVrcSupervisor.ConfigEditor/Program.cs`
+- `docs/phase-18-tui-lifecycle-configurator-design.md`
+- `docs/ratatui-tui-migration-progress.md`
+- `docs/ratatui-tui.md`
+- `README.md`
+
+Behavior boundaries:
+
+- `PimaxVrcSupervisor/Program.cs` was not modified.
+- `PimaxVrcSupervisor.Tui/src/bridge.rs` was not modified.
+- Rust TUI behavior was not modified.
+- No backend actions, bridge commands, hidden supervisor mode, tray behavior, graceful shutdown command, config schema, SteamVR host behavior, classic console behavior, or `Q` semantics changed.
+
+Build/test commands run:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+
+Build/test result:
+
+- All three C# release builds completed successfully with 0 warnings and 0 errors.
+- `cargo fmt` completed successfully.
+- Rust debug build completed successfully.
+- Configurator publish completed successfully into `release/PimaxVrcSupervisor-v1.3.0-test`.
+- Runtime Configurator button testing was not performed during implementation; it should be tested from a release folder containing `PimaxVrcSupervisorConfigurator.exe` and `PimaxVrcSupervisorTui.exe`.
+
+Generated output status:
+
+- `git status --short release` produced no staged/tracked release output.
+- `git status --ignored --short release` reported `!! release/`.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
+- `release/` and Rust `target/` output remain generated/ignored and were not staged.
+
+Short Phase 18C direction:
+
+- If the launch-only button is not enough, design a hidden-supervisor plus TUI launch workflow separately; keep it distinct from graceful shutdown and tray/minimize work.
 
 ### Phase 17L - Compact and small TUI action click zones
 

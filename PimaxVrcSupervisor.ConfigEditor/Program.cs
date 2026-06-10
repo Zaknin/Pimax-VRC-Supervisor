@@ -1996,11 +1996,12 @@ internal sealed class ConfigEditorForm : Form
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Bottom,
-            ColumnCount = 6,
+            ColumnCount = 7,
             AutoSize = true,
             Padding = new Padding(0, 10, 0, 0)
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -2020,6 +2021,10 @@ internal sealed class ConfigEditorForm : Form
         launchSteamVrButton.Click += (_, _) => LaunchSteamVr();
         _toolTips.SetToolTip(launchSteamVrButton, "Starts SteamVR normally through Steam.");
 
+        var launchDesktopTuiButton = CreateButton("Launch Desktop TUI");
+        launchDesktopTuiButton.Click += (_, _) => LaunchDesktopTui();
+        _toolTips.SetToolTip(launchDesktopTuiButton, "Opens the Rust terminal dashboard. The supervisor must be running separately for live status and actions.");
+
         var saveButton = CreateButton("Save");
         saveButton.Tag = "Primary";
         saveButton.Click += (_, _) => SaveConfig();
@@ -2033,8 +2038,9 @@ internal sealed class ConfigEditorForm : Form
         layout.Controls.Add(validateButton, 1, 0);
         layout.Controls.Add(launchButton, 2, 0);
         layout.Controls.Add(launchSteamVrButton, 3, 0);
-        layout.Controls.Add(saveAsButton, 4, 0);
-        layout.Controls.Add(saveButton, 5, 0);
+        layout.Controls.Add(launchDesktopTuiButton, 4, 0);
+        layout.Controls.Add(saveAsButton, 5, 0);
+        layout.Controls.Add(saveButton, 6, 0);
         return layout;
     }
 
@@ -3049,6 +3055,53 @@ internal sealed class ConfigEditorForm : Form
         {
             ShowThemedMessageBox(ex.Message, "Could not launch SteamVR", MessageBoxButtons.OK, MessageBoxIcon.Error);
             SetStatus("SteamVR launch failed.");
+        }
+    }
+
+    private void LaunchDesktopTui()
+    {
+        var tuiPath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisorTui.exe");
+        if (!File.Exists(tuiPath))
+        {
+            ShowThemedMessageBox(
+                "PimaxVrcSupervisorTui.exe was not found next to the Configurator.\r\n\r\n"
+                + "Expected path:\r\n"
+                + tuiPath
+                + "\r\n\r\nBuild or copy the Rust TUI executable into the release folder and try again.",
+                "Could not launch Desktop TUI",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            SetStatus("Desktop TUI executable was not found.");
+            return;
+        }
+
+        if (Process.GetProcessesByName("PimaxVrcSupervisorTui").Any())
+        {
+            ShowThemedMessageBox(
+                "Desktop TUI is already running.",
+                "Desktop TUI already running",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            SetStatus("Desktop TUI is already running.");
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = tuiPath,
+                WorkingDirectory = AppContext.BaseDirectory,
+                UseShellExecute = true,
+                ErrorDialog = true,
+                ErrorDialogParentHandle = Handle
+            });
+            SetStatus("Desktop TUI launched.");
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessageBox(ex.Message, "Could not launch Desktop TUI", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus("Desktop TUI launch failed.");
         }
     }
 

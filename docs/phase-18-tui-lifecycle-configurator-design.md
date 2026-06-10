@@ -55,11 +55,18 @@ Phase 18A is an audit/design phase only. It does not change runtime behavior, ba
 
 ## Recommended Implementation Sequence
 
-1. Phase 18B: add a Configurator `Launch Desktop TUI` button. It starts `PimaxVrcSupervisorTui.exe` only, adds no config schema, and does not start/stop the supervisor.
+1. Phase 18B: add a Configurator `Launch Desktop TUI` button. It starts `PimaxVrcSupervisorTui.exe` only, adds no config schema, and does not start/stop the supervisor. Implemented as a release-local launch button with duplicate-process detection.
 2. Phase 18C: design and implement a hidden-supervisor plus TUI launch workflow if the launch-only button is not enough.
 3. Phase 18D: design and implement a backend graceful supervisor shutdown/lifecycle command. It must be distinct from `force-stop-supervisor`, cleanup-owned by the backend, and strongly confirmed.
 4. Phase 18E: decide TUI close/`Q` semantics. Preferred safe default is `Q` closes only the TUI; any supervisor shutdown should be a separate explicit command.
 5. Phase 18F: decide tray/minimize architecture after the lifecycle command and user-facing semantics are stable.
+
+## Phase 18B Implementation Status
+
+- The Configurator has a `Launch Desktop TUI` button near the existing launch controls.
+- The button launches `PimaxVrcSupervisorTui.exe` from the Configurator executable folder only.
+- Missing executable and already-running TUI cases show clear messages.
+- The button does not start the supervisor, stop the supervisor, launch hidden supervisor mode, add tray behavior, change config schema, change bridge commands, or change TUI `Q` semantics.
 
 ## Risks And Safety Constraints
 

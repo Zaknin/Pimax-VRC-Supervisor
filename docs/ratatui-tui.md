@@ -6,6 +6,8 @@ The TUI is part of the `cli-ui2` / `1.3.0-test` migration work. It is not a repl
 
 Phase 18 lifecycle and Configurator integration planning is tracked in [TUI Lifecycle And Configurator Integration Design](phase-18-tui-lifecycle-configurator-design.md).
 
+Phase 18B adds a Configurator **Launch Desktop TUI** button. It only starts `PimaxVrcSupervisorTui.exe` from the release folder; it does not start or stop the supervisor.
+
 ## Purpose
 
 The TUI gives a desktop/operator view of the supervisor with tightly limited control behavior. It displays:
