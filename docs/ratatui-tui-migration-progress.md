@@ -1806,6 +1806,84 @@ Short Phase 16 direction:
 - Build and run a manual/runtime shortcut test matrix across keyboard layouts.
 - Continue polishing action confirmation safety and failure paths without expanding beyond the Phase 15 parity action set.
 
+### Phase 17D - Backend-off consistency, neutral modal controls, action hints, and log follow
+
+Status: Completed
+
+Summary:
+
+- Refined only the Rust desktop TUI UI/interaction layer after Phase 17C runtime visual testing.
+- Kept backend behavior, bridge protocol, SteamVR host behavior, classic console behavior, Configurator behavior, supervisor cleanup/lifecycle behavior, and Phase 16B base-station guard behavior unchanged.
+- Did not modify `PimaxVrcSupervisor/Program.cs`.
+
+Rust TUI changes:
+
+- Added an explicit backend-off action outcome so backend-down rejections display `BACKEND OFF` instead of conflict `BLOCKED`.
+- Kept backend-disconnected state authoritative before action validation and action-card rendering.
+- Backend-down action cards show `BACKEND OFF` with muted borders and `backend unavailable`.
+- Confirm modal controls remain mouse-clickable but now render as neutral text instead of green/orange highlighted badges.
+- Increased the full operator layout minimum to `120x36`; smaller terminals show a resize fallback with the current terminal size.
+- Full-layout `START` action cards consistently show `click or press <number>` hints.
+- Added Recent Logs live-follow mode.
+- Logs follow newest entries by default.
+- `Up`/`PageUp` scroll older and pause live follow.
+- `Down`/`PageDown` scroll newer and resume live follow when the newest view is reached.
+- `End` and `F` resume latest log follow.
+- Help/footer text now includes log follow controls while keeping `Q Quit TUI` visible.
+
+Documentation changes:
+
+- Updated README and Ratatui docs to document backend-off consistency, neutral modal controls, full-layout action hints, the larger recommended operator size, and Recent Logs live-follow behavior.
+- Updated the action safety design to record that Phase 17D changes only TUI presentation/interaction and keeps mouse actions limited to existing `TuiAction` values.
+- Recorded that no backend/C# behavior changed in this phase.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `README.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- `cargo fmt` completed successfully.
+- Rust debug and release builds completed successfully.
+- All three explicit C# Release builds completed successfully with 0 warnings and 0 errors.
+- Source inspection confirmed `PimaxVrcSupervisor/Program.cs` has no Phase 17D diff.
+- Source inspection confirmed `bridge.rs` still has no generic arbitrary command executor and sends `action-json` only through `execute_tui_action(TuiAction)`.
+- Source inspection confirmed the TUI sends no legacy action command strings directly.
+- Source inspection confirmed `force-stop-supervisor` remains blocked/not TUI-executable and `Q`/`q` sends no backend command.
+- Copied the rebuilt Rust release TUI binary to `release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe` for local runtime testing.
+
+Runtime scenarios to verify when safe:
+
+- Start TUI without supervisor: all cards show muted-border `BACKEND OFF`; no card shows `START`, `READY`, or conflict `BLOCKED`.
+- Start supervisor after TUI: after refresh, permitted cards become `START` and clickable.
+- Close supervisor while TUI is open: after failed refresh, cards return to `BACKEND OFF`; cached metadata does not keep cards looking ready.
+- Confirm modal controls are neutral text while mouse Confirm/Cancel regions still work.
+- In a full operator-size terminal, all six `START` cards show `click or press <number>` hints.
+- Recent Logs follow latest by default, pause when scrolling older, and resume with `End` or `F`.
+
+Generated output status:
+
+- `release/` and `PimaxVrcSupervisor.Tui/target/` remain ignored generated output and must not be staged.
+
+Short Phase 18 direction:
+
+- Run a manual runtime matrix for backend-off/recovery/disconnect visuals, direct mouse actions, neutral modal controls, full-layout action hints, and Recent Logs live-follow behavior in a safe VR session.
+
 ### Phase 17C - TUI mouse actions and backend-unavailable state refinement
 
 Status: Completed

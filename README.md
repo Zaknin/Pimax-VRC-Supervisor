@@ -214,7 +214,8 @@ Keybindings:
 - `Esc`: cancel confirmation, close Help, or quit the TUI
 - `Up` / `Down`: scroll logs
 - `PageUp` / `PageDown`: scroll logs by page
-- `Home` / `End`: jump logs
+- `Home`: jump to older logs
+- `End` / `F`: resume latest log follow
 - `Q` / `q`: quit only the Rust TUI from the dashboard; close Help in the Help overlay
 
 Help closes on any key press and consumes that key, so pressing `1` while Help is visible closes Help without opening an action confirmation. Letter shortcuts are displayed uppercase, but lowercase input is also accepted. Selected Russian-layout aliases remain limited to non-help keys. `F1`, `?`, and Russian help aliases do not open TUI help; the main Help overlay keeps those alias details out of the shortcut list. `Q` never stops the supervisor backend, sends shutdown commands, or runs cleanup routines. `force-stop-supervisor` remains blocked from the TUI.
@@ -226,6 +227,8 @@ Phase 17 adds a Pimax-inspired dark terminal theme for the TUI with green status
 Phase 17B reduces normal operator-screen noise and adds original mouse support. Help, refresh, quit, confirm, and cancel have simple click regions. If mouse capture is unavailable, the TUI continues in keyboard-only mode and still cleans up mouse capture with terminal shutdown.
 
 Phase 17C refines mouse and backend-unavailable behavior. Keyboard `1`-`6` still opens confirmation, but clicking an action card starts that allowed action immediately after the same backend, metadata, duplicate, and Base Stations On/Off conflict checks. Confirmation now uses `Enter`, `Space`, or click Confirm; `Esc` or click Cancel cancels. Backend-unavailable cards show `BACKEND OFF` with muted borders and cannot start actions, even if cached metadata exists from a previous connection. Core Apps shows `WAITING` while the supervisor lifecycle is waiting for VRChat.
+
+Phase 17D makes backend-off action-card state authoritative across all six cards, keeps modal controls clickable but visually neutral, and uses a larger operator layout so full action cards consistently show `click or press N` hints. Recent Logs now follow the newest entries by default; scrolling up pauses live follow, and `End` or `F` resumes the latest log view.
 
 ## Key Configuration
 

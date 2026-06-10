@@ -90,6 +90,12 @@ Phase 17C keeps the backend action allowlist and bridge protocol unchanged, but 
 
 The confirmation modal now documents only `Enter`/`Space` or mouse Confirm for execution and `Esc` or mouse Cancel for cancellation. Backend-unavailable state overrides cached command metadata before action cards are rendered or actions are started, so cards show disabled `BACKEND OFF` state and cannot spawn workers while disconnected.
 
+## Phase 17D Implementation Status
+
+Phase 17D keeps the same action allowlist, bridge protocol, and backend guardrails. It makes backend-off card state authoritative across all six actions, keeps backend-down rejections as `BACKEND OFF` instead of conflict `BLOCKED`, and leaves mouse actions limited to existing `TuiAction` enum values.
+
+The modal controls remain clickable but render as neutral text. Recent Logs add live-follow mode; log navigation does not affect action safety or backend command execution.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:

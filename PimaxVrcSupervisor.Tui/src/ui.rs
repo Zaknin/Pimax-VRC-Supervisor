@@ -14,8 +14,8 @@ use crate::{
     theme,
 };
 
-const MIN_WIDTH: u16 = 72;
-const MIN_HEIGHT: u16 = 24;
+const MIN_WIDTH: u16 = 120;
+const MIN_HEIGHT: u16 = 36;
 
 pub fn render(frame: &mut Frame<'_>, app: &mut App) {
     app.clear_click_regions();
@@ -76,7 +76,10 @@ fn render_small_terminal(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
             theme::title_style(),
         )),
         Line::from("Terminal too small for full dashboard."),
-        Line::from("Resize window for action cards and logs."),
+        Line::from(format!(
+            "Resize to at least {MIN_WIDTH}x{MIN_HEIGHT}. Current: {}x{}.",
+            area.width, area.height
+        )),
         Line::from(""),
         Line::from(vec![
             Span::styled("0 Help", theme::success_style()),
@@ -426,10 +429,12 @@ fn render_logs(frame: &mut Frame<'_>, area: Rect, app: &App) {
             theme::secondary_style(),
         )))]
     } else {
+        let end = app.logs.len().saturating_sub(app.log_scroll);
+        let start = end.saturating_sub(visible_rows);
         app.logs
             .iter()
-            .skip(app.log_scroll)
-            .take(visible_rows)
+            .skip(start)
+            .take(end.saturating_sub(start))
             .inspect(|_| visible_count += 1)
             .map(|line| {
                 let message = if line.message == "-" {
@@ -454,10 +459,16 @@ fn render_logs(frame: &mut Frame<'_>, area: Rect, app: &App) {
     };
 
     let title = if app.logs.is_empty() {
-        "Recent Logs - Up/Down scroll".to_string()
+        "Recent Logs (live) - Waiting for logs...".to_string()
+    } else if app.log_follow {
+        format!(
+            "Recent Logs ({}/{}, live) - Up/PageUp pause",
+            visible_count,
+            app.logs.len()
+        )
     } else {
         format!(
-            "Recent Logs ({}/{}, offset {}) - Up/Down scroll",
+            "Recent Logs ({}/{}, offset {}, paused) - End/F to follow",
             visible_count,
             app.logs.len(),
             app.log_scroll
@@ -508,7 +519,9 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         help_line("SPACE", "Confirm modal action"),
         help_line("ESC", "Cancel modal"),
         help_line("Q", "Quit TUI on dashboard only"),
-        help_line("ARROWS", "Scroll logs"),
+        help_line("UP/PGUP", "Scroll logs older, pauses live follow"),
+        help_line("DOWN/PGDN", "Scroll logs newer"),
+        help_line("END/F", "Resume latest log follow"),
         Line::from(""),
         Line::from(Span::styled(
             "While Help is open, any key or mouse click closes Help only.",
@@ -545,9 +558,9 @@ fn render_action_confirmation(frame: &mut Frame<'_>, area: Rect, app: &mut App) 
         Line::from("This will send the request to the supervisor backend."),
         Line::from(""),
         Line::from(vec![
-            Span::styled("ENTER / SPACE Confirm", theme::success_style()),
+            Span::styled("ENTER / SPACE Confirm", theme::secondary_style()),
             Span::raw("    "),
-            Span::styled("ESC Cancel", theme::warning_style()),
+            Span::styled("ESC Cancel", theme::secondary_style()),
         ]),
     ];
 
@@ -715,9 +728,9 @@ fn register_modal_clicks(app: &mut App, popup: Rect) {
 
 fn shortcut_line(width: u16) -> &'static str {
     if width >= 100 {
-        "0 Help  F5 Refresh  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  Q Quit TUI"
+        "0 Help  F5 Refresh  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  End/F Follow  Q Quit TUI"
     } else {
-        "0 Help  F5 Refresh  1-6 Actions  Q Quit TUI"
+        "0 Help  F5 Refresh  1-6 Actions  End/F Logs  Q Quit TUI"
     }
 }
 
@@ -854,6 +867,7 @@ fn action_outcome_style(outcome: ActionOutcome) -> (&'static str, Style) {
         ActionOutcome::Failed => ("ERROR", theme::error_style()),
         ActionOutcome::Cancelled => ("CANCELLED", theme::warning_style()),
         ActionOutcome::Rejected => ("BLOCKED", theme::warning_style()),
+        ActionOutcome::BackendOff => ("BACKEND OFF", theme::error_style()),
     }
 }
 

@@ -23,6 +23,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 enum Shortcut {
     Help,
     Refresh,
+    FollowLogs,
     Quit,
     OpenAction(TuiAction),
     Confirm,
@@ -131,6 +132,10 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
             Some(Shortcut::Cancel) => true,
             Some(Shortcut::Refresh) => {
                 app.refresh(now);
+                false
+            }
+            Some(Shortcut::FollowLogs) => {
+                app.follow_latest_logs();
                 false
             }
             Some(Shortcut::Help) => {
@@ -250,6 +255,7 @@ impl Shortcut {
             '0' => Some(Self::Help),
             '1' | '2' | '3' | '4' | '5' | '6' => TuiAction::from_digit(value).map(Self::OpenAction),
             'h' | 'H' => Some(Self::Help),
+            'f' | 'F' => Some(Self::FollowLogs),
             'r' | 'R' | 'к' | 'К' => Some(Self::Refresh),
             'q' | 'Q' | 'й' | 'Й' => Some(Self::Quit),
             ' ' => Some(Self::Confirm),

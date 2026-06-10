@@ -32,6 +32,7 @@ pub enum ActionOutcome {
     Failed,
     Cancelled,
     Rejected,
+    BackendOff,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +79,7 @@ pub struct App {
     pub refresh_in_progress: bool,
     pub help_visible: bool,
     pub log_scroll: usize,
+    pub log_follow: bool,
     pub confirmation: Option<TuiAction>,
     pub running_actions: Vec<RunningAction>,
     pub last_action_completed_at: Option<Instant>,
@@ -115,6 +117,7 @@ impl App {
             refresh_in_progress: false,
             help_visible: false,
             log_scroll: 0,
+            log_follow: true,
             confirmation: None,
             running_actions: Vec::new(),
             last_action_completed_at: None,
@@ -273,6 +276,11 @@ impl App {
     }
 
     pub fn request_action_confirmation(&mut self, action: TuiAction, now: Instant) {
+        if self.connection != ConnectionState::Connected {
+            self.record_backend_off(action, now);
+            return;
+        }
+
         if self.validate_action_start(action).is_ok() {
             self.help_visible = false;
             self.confirmation = Some(action);
@@ -306,6 +314,11 @@ impl App {
     }
 
     pub fn request_action_start(&mut self, action: TuiAction, now: Instant) {
+        if self.connection != ConnectionState::Connected {
+            self.record_backend_off(action, now);
+            return;
+        }
+
         if let Err(message) = self.validate_action_start(action) {
             self.record_action_error(action.command_name(), ActionOutcome::Rejected, message, now);
             return;
@@ -324,20 +337,32 @@ impl App {
     }
 
     pub fn scroll_logs_up(&mut self, amount: usize) {
-        self.log_scroll = self.log_scroll.saturating_sub(amount);
-    }
-
-    pub fn scroll_logs_down(&mut self, amount: usize) {
+        self.log_follow = false;
         self.log_scroll = self.log_scroll.saturating_add(amount);
         self.clamp_log_scroll();
     }
 
+    pub fn scroll_logs_down(&mut self, amount: usize) {
+        self.log_scroll = self.log_scroll.saturating_sub(amount);
+        if self.log_scroll == 0 {
+            self.log_follow = true;
+        }
+        self.clamp_log_scroll();
+    }
+
     pub fn scroll_logs_home(&mut self) {
-        self.log_scroll = 0;
+        self.log_follow = false;
+        self.log_scroll = self.logs.len().saturating_sub(1);
+        self.clamp_log_scroll();
     }
 
     pub fn scroll_logs_end(&mut self) {
-        self.log_scroll = self.logs.len().saturating_sub(1);
+        self.follow_latest_logs();
+    }
+
+    pub fn follow_latest_logs(&mut self) {
+        self.log_follow = true;
+        self.log_scroll = 0;
         self.clamp_log_scroll();
     }
 
@@ -370,7 +395,14 @@ impl App {
     }
 
     fn clamp_log_scroll(&mut self) {
-        self.log_scroll = self.log_scroll.min(self.logs.len().saturating_sub(1));
+        if self.log_follow {
+            self.log_scroll = 0;
+        } else {
+            self.log_scroll = self.log_scroll.min(self.logs.len().saturating_sub(1));
+            if self.log_scroll == 0 {
+                self.log_follow = true;
+            }
+        }
     }
 
     fn action_conflict_message(&self, candidate: TuiAction) -> Option<String> {
@@ -433,6 +465,15 @@ impl App {
             )
         });
         self.record_action_error(action.command_name(), ActionOutcome::Rejected, message, now);
+    }
+
+    fn record_backend_off(&mut self, action: TuiAction, now: Instant) {
+        self.record_action_error(
+            action.command_name(),
+            ActionOutcome::BackendOff,
+            "backend unavailable".to_string(),
+            now,
+        );
     }
 
     fn spawn_action_worker(&self, action: TuiAction) {
