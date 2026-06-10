@@ -197,6 +197,8 @@ The TUI connects to the existing supervisor backend at `127.0.0.1:37957` and use
 
 You can close the TUI without stopping the supervisor. If the backend is not running, the TUI opens in a disconnected/backend unavailable state.
 
+Future TUI-primary lifecycle and Configurator integration are design-only in Phase 18A; `Q` still closes only the TUI and does not stop the supervisor.
+
 Confirmed actions run in the background so the TUI stays responsive. Different safe actions may run at the same time, but the same command cannot be started twice while running and Base Stations On/Off are mutually exclusive. `Q` quits only the Rust TUI; it never cancels backend work, stops the supervisor, sends `force-stop-supervisor`, or runs cleanup routines.
 
 Keybindings:

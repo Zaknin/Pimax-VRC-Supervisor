@@ -2103,6 +2103,75 @@ Runtime testing:
 - Runtime base-station overlap testing was not performed during implementation.
 - When safe, test Base Stations On/Off overlap from separate entry points and verify the overlapping request logs/returns the busy message while the supervisor continues running.
 
+### Phase 18A - TUI lifecycle and Configurator integration audit
+
+Status: Completed
+
+Summary:
+
+- Completed an audit/design-only phase for making the Rust TUI a future primary desktop operator surface.
+- Added `docs/phase-18-tui-lifecycle-configurator-design.md`.
+- Kept runtime behavior unchanged.
+- Did not change backend behavior, bridge behavior, Configurator behavior, SteamVR host behavior, classic console behavior, Rust TUI behavior, package output, action semantics, shutdown behavior, tray behavior, or `Q` semantics.
+- Did not modify `PimaxVrcSupervisor/Program.cs` or `PimaxVrcSupervisor.Tui/src/bridge.rs`.
+
+Audit evidence recorded:
+
+- Supervisor startup modes: manual console, hidden scheduled watcher via `--watch-vrchat-auto-launch`, SteamVR helper path via `--steamvr-start`, startup integration helper flags, and detached emergency base-station cleanup helper.
+- Shutdown/cleanup paths: watched-process and SteamVR-driven cleanup, Ctrl+C emergency cleanup, console-close cleanup, detached base-station cleanup, and blocked structured `force-stop-supervisor`.
+- Bridge/action model: line-oriented TCP bridge, `query-json`, `action-json`, the six allowlisted classic-console parity actions, no current graceful supervisor shutdown command, and `force-stop-supervisor` blocked from structured desktop TUI flow.
+- Configurator integration: current bottom-bar `Launch Supervisor` and `Launch SteamVR` buttons exist; no Desktop TUI launch button exists yet.
+- Packaging: flat release layout already includes `PimaxVrcSupervisorTui.exe`.
+
+Design decisions recorded:
+
+- Phase 18B should start with a low-risk Configurator `Launch Desktop TUI` button that starts only `PimaxVrcSupervisorTui.exe`.
+- Hidden supervisor plus TUI launch workflow is deferred to Phase 18C.
+- Graceful supervisor shutdown command design is deferred to Phase 18D and must remain distinct from `force-stop-supervisor`.
+- TUI close/`Q` shutdown semantics are deferred to Phase 18E; current `Q` continues to mean close TUI only.
+- Tray/minimize architecture is deferred to Phase 18F.
+
+Documentation changes:
+
+- Added the Phase 18 lifecycle/configurator design document to MkDocs Workflows navigation as `TUI Lifecycle Integration Design`.
+- Added small cross-links from README, Desktop TUI docs, and action safety design docs.
+
+Files changed:
+
+- `docs/phase-18-tui-lifecycle-configurator-design.md`
+- `docs/ratatui-tui-migration-progress.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-action-execution-design.md`
+- `README.md`
+- `mkdocs.yml`
+
+Build/test commands run:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+
+Build/test result:
+
+- All three C# release builds completed successfully with 0 warnings and 0 errors.
+- `cargo fmt` completed successfully.
+- Rust debug build completed successfully.
+- Source inspection confirmed `PimaxVrcSupervisor/Program.cs` has no Phase 18A diff.
+- Source inspection confirmed `bridge.rs` has no Phase 18A diff.
+
+Generated output status:
+
+- `git status --short release` produced no staged/tracked release output.
+- `git status --ignored --short release` reported `!! release/`.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
+- Generated `release/` and Rust `target/` output remain ignored and were not staged.
+
+Short Phase 18B direction:
+
+- Add a Configurator `Launch Desktop TUI` button that starts `PimaxVrcSupervisorTui.exe` from the release folder only; do not couple it to supervisor start/stop or change config schema.
+
 ### Phase 17L - Compact and small TUI action click zones
 
 Status: Completed

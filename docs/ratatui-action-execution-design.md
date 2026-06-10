@@ -2,6 +2,8 @@
 
 This document defines the safety model for desktop Ratatui TUI action execution. Phase 15 enables confirmed action parity for the regular classic-console actions while keeping `force-stop-supervisor` blocked.
 
+Lifecycle, Configurator launch, tray/minimize, and future graceful shutdown planning are tracked separately in [TUI Lifecycle And Configurator Integration Design](phase-18-tui-lifecycle-configurator-design.md).
+
 ## Current State
 
 The desktop TUI primarily monitors the supervisor. It uses the existing loopback TCP bridge at `127.0.0.1:37957` and sends read-only `query-json` requests:

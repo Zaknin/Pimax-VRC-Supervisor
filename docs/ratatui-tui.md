@@ -4,6 +4,8 @@
 
 The TUI is part of the `cli-ui2` / `1.3.0-test` migration work. It is not a replacement for the SteamVR dashboard overlay or the classic supervisor console.
 
+Phase 18 lifecycle and Configurator integration planning is tracked in [TUI Lifecycle And Configurator Integration Design](phase-18-tui-lifecycle-configurator-design.md).
+
 ## Purpose
 
 The TUI gives a desktop/operator view of the supervisor with tightly limited control behavior. It displays:
