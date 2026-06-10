@@ -239,6 +239,8 @@ Phase 17G aligns the small `80x20` action grid so action labels and badges scan 
 
 Phase 17H switches TUI status/action badges to bracket text such as `[OK]`, `[START]`, and `[BACKEND OFF]`, and keeps the small `80x20` labels closer to their badges. Normal labels, values, logs, footer text, and modal controls remain foreground-only. Supervisor shutdown, tray behavior, Configurator launch options, and graceful-stop actions remain future work.
 
+Phase 17I corrects that badge split: status badges such as `OK`, `READY`, `WAITING`, `OFF`, and `BACKEND OFF` keep colored backgrounds without brackets, while brackets are reserved for interactive action buttons such as `[START]`. Compact and small action rows keep `[START]` close to the action label. No backend, C#, shutdown, tray, lifecycle, or Configurator behavior changed.
+
 ## Key Configuration
 
 The release includes a commented `supervisor.config.json`. Important settings:

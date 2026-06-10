@@ -2103,6 +2103,83 @@ Runtime testing:
 - Runtime base-station overlap testing was not performed during implementation.
 - When safe, test Base Stations On/Off overlap from separate entry points and verify the overlapping request logs/returns the busy message while the supervisor continues running.
 
+### Phase 17I - Correct TUI bracket usage and compact action spacing
+
+Status: Completed
+
+Summary:
+
+- Refined only Rust TUI rendering/docs after Phase 17H.
+- Kept backend behavior, bridge protocol, SteamVR host behavior, classic console behavior, Configurator behavior, cleanup/lifecycle behavior, action semantics, and the Phase 16B base-station guard unchanged.
+- Did not modify `PimaxVrcSupervisor/Program.cs`.
+- Did not add supervisor shutdown, tray behavior, Configurator launch options, graceful stop actions, new backend actions, new crates, or copied GPL/reference code.
+
+Rust TUI changes:
+
+- Split status badge rendering from interactive action button rendering.
+- Changed `theme::badge(...)` back to unbracketed colored status text.
+- Added a separate bracketed action-button badge helper for interactive action controls such as `[START]`.
+- Updated normal status badges in the header, status panels, compact/small status lines, system area, and last-result display to render unbracketed words such as `OK`, `READY`, `WAITING`, `OFF`, and `BACKEND OFF`.
+- Kept interactive start controls bracketed as `[START]` in full action cards, compact action rows, and small action cells.
+- Kept non-startable action states unbracketed: `RUNNING`, `BACKEND OFF`, `BLOCKED`, and `UNAVAILABLE`.
+- Adjusted compact action rows so `1 Core [START]` stays close to the action label before the display name.
+- Preserved backend-off-first action state logic, click regions, keyboard behavior, mouse behavior, log follow behavior, dashboard `Q`, modal `Q`, and action validation behavior.
+
+Documentation changes:
+
+- Updated README and Ratatui docs to record that brackets are reserved for interactive action buttons such as `[START]`.
+- Updated the action safety design to record Phase 17I as rendering-only.
+- Recorded that normal status badges keep colored backgrounds without brackets.
+- Recorded that no backend/C# behavior, shutdown/tray/lifecycle behavior, Configurator behavior, or action semantics changed.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/theme.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `README.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- `cargo fmt` completed successfully.
+- Rust debug and release builds completed successfully.
+- All three C# release builds completed successfully with 0 warnings and 0 errors.
+- Source inspection confirmed `PimaxVrcSupervisor/Program.cs` has no Phase 17I diff.
+- Source inspection confirmed `bridge.rs` has no Phase 17I diff, no generic arbitrary command executor, and sends `action-json` only through `execute_tui_action(TuiAction)`.
+- Source inspection confirmed the TUI sends no legacy action command strings directly, `force-stop-supervisor` remains unexposed, and dashboard/modal `Q` sends no backend command.
+
+Release/copy result:
+
+- Rebuilt `PimaxVrcSupervisorTui.exe` was copied to `release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe`.
+- No C# publish was performed because no C# files changed.
+
+Generated output status:
+
+- `git status --short release` produced no staged/tracked release output.
+- `git status --ignored --short release` reported `!! release/`.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
+- Generated `release/` and Rust `target/` output remain ignored and were not staged.
+
+Runtime testing:
+
+- Runtime visual/mouse testing was not performed during implementation.
+- When safe, verify status badges render unbracketed, startable action buttons render as `[START]`, compact action rows keep `[START]` close to the label, small action cells stay compact, and no supervisor shutdown/tray/lifecycle behavior was introduced.
+
+Short Phase 18 direction:
+
+- Run a manual VR-session runtime matrix for the final adaptive TUI layouts and decide separately whether TUI-as-primary lifecycle, tray minimize, Configurator launch, or graceful supervisor shutdown should be designed in a later phase.
+
 ### Phase 17H - Bracket badge styling and small layout polish
 
 Status: Completed

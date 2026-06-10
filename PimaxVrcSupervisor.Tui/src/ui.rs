@@ -937,7 +937,7 @@ fn action_card_line(app: &App, action: TuiAction, now: Instant, width: u16) -> L
     let left = format!("{} {}", action.digit(), action.short_label());
     aligned_line(
         &left,
-        state.label_text().as_ref(),
+        action_state_text(&state).as_ref(),
         width as usize,
         state.style,
     )
@@ -945,30 +945,41 @@ fn action_card_line(app: &App, action: TuiAction, now: Instant, width: u16) -> L
 
 fn compact_action_line(app: &App, action: TuiAction, now: Instant, width: u16) -> Line<'static> {
     let state = action_state(app, action, now);
-    let left = format!(
-        "{} {:<9} {}",
+    let leading = format!(
+        "{} {} {}",
         action.digit(),
         action.short_label(),
-        action.display_name()
+        action_state_text(&state)
     );
-    aligned_line(
-        &truncate(&left, width.saturating_sub(12) as usize),
-        state.label_text().as_ref(),
-        width as usize,
-        state.style,
-    )
+    let display_name = action.display_name();
+    let max_leading_width = (width as usize).saturating_sub(display_name.chars().count() + 3);
+    let leading = truncate(&leading, max_leading_width.max(1));
+    let padding = (width as usize)
+        .saturating_sub(leading.chars().count() + display_name.chars().count())
+        .max(2);
+
+    Line::from(vec![
+        Span::styled(
+            format!("{} {}", action.digit(), action.short_label()),
+            theme::title_style(),
+        ),
+        Span::raw(" "),
+        action_state_span(&state),
+        Span::raw(" ".repeat(padding)),
+        Span::styled(display_name.to_string(), foreground(theme::TEXT_SECONDARY)),
+    ])
 }
 
 fn small_action_cell_line(app: &App, action: TuiAction, now: Instant, width: u16) -> Line<'static> {
     let state = action_state(app, action, now);
     let left = format!("{} {:<4} ", action.digit(), small_action_label(action));
-    let badge = format!("[{}]", state.label_text());
-    let used_width = left.chars().count() + badge.chars().count();
+    let state_text = action_state_text(&state);
+    let used_width = left.chars().count() + state_text.chars().count();
     let padding = (width as usize).saturating_sub(used_width).max(1);
 
     Line::from(vec![
         Span::styled(left, theme::title_style()),
-        Span::styled(badge, state.style),
+        action_state_span(&state),
         Span::raw(" ".repeat(padding)),
     ])
 }
@@ -1032,6 +1043,22 @@ struct ActionState {
 impl ActionState {
     fn label_text(&self) -> Cow<'static, str> {
         Cow::Borrowed(self.label)
+    }
+}
+
+fn action_state_text(state: &ActionState) -> Cow<'static, str> {
+    if state.label == "START" {
+        Cow::Owned(format!("[{}]", state.label))
+    } else {
+        state.label_text()
+    }
+}
+
+fn action_state_span(state: &ActionState) -> Span<'static> {
+    if state.label == "START" {
+        theme::action_button_badge(state.label, state.style)
+    } else {
+        Span::styled(state.label.to_string(), state.style)
     }
 }
 
@@ -1304,7 +1331,7 @@ fn status_badge(kind: &str, value: &str) -> Span<'static> {
 }
 
 fn fixed_badge(label: &str, style: Style) -> Span<'static> {
-    Span::styled(format!("[{label}]"), style)
+    Span::styled(label.to_string(), style)
 }
 
 fn foreground(color: Color) -> Style {

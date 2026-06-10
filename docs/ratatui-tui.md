@@ -130,6 +130,8 @@ Phase 17G aligns the small `80x20` action area as a fixed two-row, three-column 
 
 Phase 17H changes status/action badges to bracket text, for example `[OK]`, `[START]`, `[WAITING]`, and `[BACKEND OFF]`. The brackets are part of the colored badge span. Small action cells now compose label plus nearby badge first, then pad the rest of the cell, so `1 Core [START]` stays compact at `80x20`.
 
+Phase 17I corrects the badge semantics. Normal status badges now render as unbracketed colored words such as `OK`, `READY`, `WAITING`, `OFF`, and `BACKEND OFF`. Brackets are reserved for interactive action buttons such as `[START]`, while non-startable action states such as `RUNNING`, `BACKEND OFF`, `BLOCKED`, and `UNAVAILABLE` remain unbracketed. Compact and small action rows keep `[START]` close to the action label.
+
 ## Build
 
 Windows builds require the Rust stable MSVC toolchain. Visual Studio Build Tools with the C++ workload may be required.
@@ -206,6 +208,8 @@ Phase 17F extends the tiers to full/compact/small/tiny, makes backend-off state 
 Phase 17G keeps those semantics and only polishes the small layout alignment. Future TUI-as-primary lifecycle ideas such as hidden supervisor mode, tray minimize, or graceful supervisor shutdown from TUI close are intentionally deferred to a later design phase.
 
 Phase 17H keeps the same behavior while polishing bracket badge readability. Modal controls remain neutral text, and future TUI-as-primary lifecycle, tray minimize, Configurator launch, and graceful shutdown behavior remain separate future work.
+
+Phase 17I keeps the same behavior while splitting status and interactive badge rendering. Bracketed `[START]` marks a startable action button; normal status words stay unbracketed. No backend, C#, shutdown, tray, Configurator launch, or lifecycle behavior changed.
 
 ## Future Direction
 

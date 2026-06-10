@@ -114,6 +114,10 @@ Phase 17G is a rendering-only polish pass. It aligns the small `80x20` action ro
 
 Phase 17H is also rendering-only. It changes status/action badges to bracket text such as `[START]`, `[OK]`, and `[BACKEND OFF]`, keeps small-layout badges close to their labels, and leaves modal controls neutral. It does not change `Q` semantics, supervisor lifecycle, backend action handling, bridge protocol, tray behavior, Configurator behavior, or action allowlists.
 
+## Phase 17I Implementation Status
+
+Phase 17I is rendering-only and corrects badge semantics without changing action safety. Normal status badges render as colored words without brackets, while brackets are reserved for interactive action buttons such as `[START]`. Non-startable action states remain unbracketed, compact and small action rows keep `[START]` close to the label, and no backend, bridge, lifecycle, shutdown, tray, Configurator, or action allowlist behavior changed.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:
