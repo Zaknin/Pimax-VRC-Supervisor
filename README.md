@@ -235,6 +235,8 @@ Phase 17E adds adaptive layout tiers: full dashboard at `120x32` or larger, a us
 
 Phase 17F refines the adaptive priority model: full dashboard remains primary, compact remains useful, a small essential dashboard appears at `80x20` or larger, and tiny fallback is used only below that. Status words such as `OK`, `START`, `WAITING`, and `BACKEND OFF` use colored badge backgrounds, while normal labels, values, action names, hints, modal text, and logs stay foreground-only. Backend-disconnected state still overrides every action card or row before cached metadata can show `START`, `BLOCKED`, or `UNAVAILABLE`.
 
+Phase 17G aligns the small `80x20` action grid so action labels and badges scan cleanly in two fixed rows. It is visual polish only: `Q` still quits only the TUI, no supervisor shutdown or tray behavior was added, and future TUI-as-primary lifecycle work remains a separate design phase.
+
 ## Key Configuration
 
 The release includes a commented `supervisor.config.json`. Important settings:

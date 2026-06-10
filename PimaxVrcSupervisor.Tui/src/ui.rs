@@ -403,9 +403,12 @@ fn render_small_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
     ]);
 
     frame.render_widget(
-        Paragraph::new(vec![line, Line::from("0 Help  1-6 Actions  Q Quit TUI")])
-            .block(theme::accent_panel_block("Dashboard"))
-            .wrap(Wrap { trim: true }),
+        Paragraph::new(vec![
+            line,
+            Line::from("0 Help  F5 Refresh  1-6 Actions  Q Quit TUI"),
+        ])
+        .block(theme::accent_panel_block("Dashboard"))
+        .wrap(Wrap { trim: true }),
         area,
     );
 }
@@ -443,14 +446,12 @@ fn render_small_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: I
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(inner);
-
-    let mut lines = Vec::new();
     for row_index in 0..2 {
-        let mut spans = Vec::new();
+        let row_y = inner.y.saturating_add(row_index as u16);
+        if row_y >= inner.y.saturating_add(inner.height) {
+            continue;
+        }
+
         for column_index in 0..3 {
             let action_index = row_index * 3 + column_index;
             let Some(action) = TuiAction::ALL.get(action_index).copied() else {
@@ -466,26 +467,20 @@ fn render_small_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: I
             } else {
                 column_width
             };
-            let row_y = rows
-                .get(row_index)
-                .map(|row| row.y)
-                .unwrap_or(inner.y.saturating_add(row_index as u16));
-            app.add_click_region(
-                Rect::new(x, row_y, width, rows[row_index].height.max(1)),
-                ClickAction::SelectAction(action),
+
+            let cell = Rect::new(x, row_y, width, 1);
+            app.add_click_region(cell, ClickAction::SelectAction(action));
+            frame.render_widget(
+                Paragraph::new(small_action_cell_line(
+                    app,
+                    action,
+                    now,
+                    width.saturating_sub(1),
+                )),
+                cell,
             );
-
-            if column_index > 0 {
-                spans.push(Span::raw("  "));
-            }
-
-            spans.extend(small_action_spans(app, action, now));
         }
-
-        lines.push(Line::from(spans));
     }
-
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
 fn render_small_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
@@ -964,15 +959,26 @@ fn compact_action_line(app: &App, action: TuiAction, now: Instant, width: u16) -
     )
 }
 
-fn small_action_spans(app: &App, action: TuiAction, now: Instant) -> Vec<Span<'static>> {
+fn small_action_cell_line(app: &App, action: TuiAction, now: Instant, width: u16) -> Line<'static> {
     let state = action_state(app, action, now);
-    vec![
-        Span::styled(
-            format!("{} {} ", action.digit(), action.short_label()),
-            theme::title_style(),
-        ),
-        Span::styled(state.label.to_string(), state.style),
-    ]
+    let left = format!("{} {}", action.digit(), small_action_label(action));
+    aligned_line(
+        &left,
+        state.label_text().as_ref(),
+        width as usize,
+        state.style,
+    )
+}
+
+fn small_action_label(action: TuiAction) -> &'static str {
+    match action {
+        TuiAction::RestartCoreApps => "Core",
+        TuiAction::StartOscGoesBrrr => "OGB",
+        TuiAction::BaseStationsOn => "On",
+        TuiAction::BaseStationsOff => "Off",
+        TuiAction::RestartOscRouter => "OSC",
+        TuiAction::ReloadAutostartApps => "Auto",
+    }
 }
 
 fn last_action_line(app: &App, now: Instant, max_message: usize) -> Line<'static> {
@@ -1154,7 +1160,7 @@ fn shortcut_line(width: u16) -> &'static str {
     } else if width >= 100 {
         "0 Help  F5 Refresh  1-6 Actions  End/F Logs  Q Quit TUI"
     } else {
-        "0 Help  1-6 Actions  Q Quit TUI"
+        "0 Help  F5 Refresh  1-6 Actions  Q Quit TUI"
     }
 }
 

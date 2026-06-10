@@ -126,6 +126,8 @@ Phase 17F adds a priority small layout before the tiny fallback. Terminals at `8
 
 Phase 17F also tightens badge styling. Short state words such as `OK`, `START`, `WAITING`, `RUNNING`, `OFF`, `STOPPED`, `ERROR`, `BACKEND OFF`, `BLOCKED`, and `UNAVAILABLE` use colored badge backgrounds. Normal labels, values, action names, click hints, modal body text, and log lines remain foreground-only without background underlay.
 
+Phase 17G aligns the small `80x20` action area as a fixed two-row, three-column grid. Small action labels use compact operator text (`Core`, `OGB`, `On`, `Off`, `OSC`, `Auto`) and keep the state badge aligned within each cell. No lifecycle behavior changes were made: dashboard `Q` still quits only the TUI.
+
 ## Build
 
 Windows builds require the Rust stable MSVC toolchain. Visual Studio Build Tools with the C++ workload may be required.
@@ -198,6 +200,8 @@ Phase 17D makes backend-off card rendering authoritative, neutralizes modal cont
 Phase 17E adds adaptive full/compact/tiny layout tiers, cleans normal action-card text styling, keeps full-card action hints consistent, and adds mouse wheel log scrolling without backend or protocol changes.
 
 Phase 17F extends the tiers to full/compact/small/tiny, makes backend-off state the first action-card and action-row priority in every layout, and centralizes badge-only background styling. It borrows only the adaptive resizing principle from ShockingVRC; no code, structure, assets, or GPL implementation are copied.
+
+Phase 17G keeps those semantics and only polishes the small layout alignment. Future TUI-as-primary lifecycle ideas such as hidden supervisor mode, tray minimize, or graceful supervisor shutdown from TUI close are intentionally deferred to a later design phase.
 
 ## Future Direction
 

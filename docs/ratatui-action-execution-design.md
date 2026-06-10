@@ -106,6 +106,10 @@ Phase 17F remains UI-only and keeps the same action safety model. It adds a smal
 
 The adaptive layout borrows only the principle of graceful resizing from ShockingVRC. No ShockingVRC code, UI structure, event code, assets, or GPL implementation are copied.
 
+## Phase 17G Implementation Status
+
+Phase 17G is a rendering-only polish pass. It aligns the small `80x20` action rows into a stable two-row, three-column grid while preserving the same `TuiAction` allowlist, badge styling, mouse behavior, keyboard confirmation behavior, and backend-off priority. It does not add supervisor shutdown, tray behavior, Configurator launch options, backend protocol changes, or new action semantics.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:
