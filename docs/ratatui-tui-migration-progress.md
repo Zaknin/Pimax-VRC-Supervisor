@@ -1952,9 +1952,76 @@ Runtime testing:
 - Runtime base-station overlap testing was not performed during implementation.
 - When safe, test Base Stations On/Off overlap from separate entry points and verify the overlapping request logs/returns the busy message while the supervisor continues running.
 
-Short Phase 17 direction:
+### Phase 17 - Pimax-inspired TUI visibility and usability polish
 
-- Run a manual VR-session test matrix for concurrent TUI actions, duplicate blocking, backend/TUI Base Stations On/Off mutual exclusion, and duplicate Autostart validation/runtime skipping.
+Status: Completed
+
+Summary:
+
+- Improved the Rust desktop TUI visibility and operator usability with a Pimax-inspired dark/green terminal theme.
+- Added visual polish only; no backend action behavior, backend allowlist, SteamVR host behavior, classic console behavior, Phase 16B base-station guard behavior, or action safety semantics changed.
+- Did not copy Pimax assets, logos, images, icons, or proprietary UI resources.
+
+Rust TUI changes:
+
+- Added `PimaxVrcSupervisor.Tui/src/theme.rs` and registered it with `mod theme;`.
+- Added a centralized Ratatui RGB palette, shared panel blocks, badge styling, and rounded bordered panels.
+- Reworked the dashboard into a clearer top header, supervisor status card, six action cards, action status area, quieter backend/errors panel, logs panel, footer, Help overlay, confirmation modal, and small-terminal fallback.
+- Action cards show the existing six `TuiAction` entries with `READY`, `RUNNING`, `BLOCKED`, or `UNAVAILABLE` display states derived from existing metadata and running-action state.
+- Added `TuiAction` display helpers for all actions, number keys, and short labels.
+- Kept input behavior unchanged: `0`/`H` help, `F5` refresh, `1`-`6` confirmation, `Q` quits only the TUI, Help consumes any key, and confirmation owns input.
+- Kept bridge behavior unchanged: read-only `query-json` polling and allowlisted `action-json` through `execute_tui_action(TuiAction)` only.
+
+Documentation changes:
+
+- Updated README and Ratatui docs to record the Pimax-inspired theme, improved action cards/status badges, stronger confirmation/help overlays, improved running-action/latest-result display, cleaner logs, and small-terminal fallback.
+- Updated the action safety design to record Phase 17 as presentation-only.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `PimaxVrcSupervisor.Tui/src/models.rs`
+- `PimaxVrcSupervisor.Tui/src/theme.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `README.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- `cargo fmt` completed successfully.
+- Rust debug and release builds completed successfully.
+- All three C# release builds completed successfully with 0 warnings and 0 errors.
+- Source inspection confirmed the TUI still sends `action-json` only through `execute_tui_action(TuiAction)` and has no generic arbitrary command executor.
+- Source inspection confirmed the TUI sends no legacy action command strings directly.
+- Source inspection confirmed the backend `action-json` allowlist remains unchanged and `force-stop-supervisor` remains blocked/not TUI-executable.
+- Source inspection confirmed `PimaxVrcSupervisor/Program.cs` was not modified in Phase 17.
+
+Generated output status:
+
+- `git status --short release` produced no staged/tracked release output.
+- `git status --ignored --short release` reported `!! release/`.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
+- Generated `release/` and Rust `target/` output remain ignored and were not staged.
+
+Runtime testing:
+
+- Runtime visual testing was not performed during implementation.
+- Real-world VR testing remains the next recommended step after this UI pass.
+
+Short Phase 18 direction:
+
+- Run a manual VR-session test matrix for the polished TUI, concurrent actions, duplicate blocking, backend/TUI Base Stations On/Off mutual exclusion, and duplicate Autostart validation/runtime skipping.
 
 ### Phase 15C - TUI action parity runtime UX fixes
 

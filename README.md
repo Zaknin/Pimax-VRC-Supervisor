@@ -221,6 +221,8 @@ Help closes on any key press and consumes that key, so pressing `1` while Help i
 
 The Configurator refuses to save an Autostart app that duplicates the configured Broken Eye or VRCFaceTracking executable. If a user manually creates that duplicate in JSON, the supervisor warns and skips that Autostart entry at runtime instead of launching the core app twice.
 
+Phase 17 adds a Pimax-inspired dark terminal theme for the TUI with green status accents, clearer action cards, stronger confirmation panels, a cleaner Help overlay, improved running-action/latest-result display, and a more accurate small-terminal fallback. This is visual/operator polish only: no Pimax assets are copied, no backend action behavior changes, and the SteamVR overlay and classic console remain unchanged.
+
 ## Key Configuration
 
 The release includes a commented `supervisor.config.json`. Important settings:

@@ -76,6 +76,10 @@ Phase 16 also protects against duplicated core app launches: the Configurator re
 
 Phase 16B adds a backend-local manual base-station action guard. Base Stations On/Off overlap is now protected both by the TUI conflict model and by the supervisor backend itself, so classic console input, legacy bridge clients, structured `action-json`, and future clients cannot mutate base-station state concurrently.
 
+## Phase 17 Implementation Status
+
+Phase 17 is a desktop TUI presentation-only pass. It adds a Pimax-inspired dark/green terminal theme, action cards, status badges, clearer running-action/latest-result display, and stronger Help/confirmation panels without changing the backend action allowlist, `action-json` semantics, TUI shortcut behavior, SteamVR overlay behavior, classic console behavior, or the Phase 16B backend base-station guard.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:

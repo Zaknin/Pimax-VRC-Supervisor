@@ -38,6 +38,15 @@ pub enum TuiAction {
 }
 
 impl TuiAction {
+    pub const ALL: [Self; 6] = [
+        Self::RestartCoreApps,
+        Self::StartOscGoesBrrr,
+        Self::BaseStationsOn,
+        Self::BaseStationsOff,
+        Self::RestartOscRouter,
+        Self::ReloadAutostartApps,
+    ];
+
     pub fn from_digit(value: char) -> Option<Self> {
         match value {
             '1' => Some(Self::RestartCoreApps),
@@ -47,6 +56,28 @@ impl TuiAction {
             '5' => Some(Self::RestartOscRouter),
             '6' => Some(Self::ReloadAutostartApps),
             _ => None,
+        }
+    }
+
+    pub fn digit(self) -> char {
+        match self {
+            Self::RestartCoreApps => '1',
+            Self::StartOscGoesBrrr => '2',
+            Self::BaseStationsOn => '3',
+            Self::BaseStationsOff => '4',
+            Self::RestartOscRouter => '5',
+            Self::ReloadAutostartApps => '6',
+        }
+    }
+
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::RestartCoreApps => "Core",
+            Self::StartOscGoesBrrr => "OGB",
+            Self::BaseStationsOn => "BS On",
+            Self::BaseStationsOff => "BS Off",
+            Self::RestartOscRouter => "OSC",
+            Self::ReloadAutostartApps => "Autostart",
         }
     }
 

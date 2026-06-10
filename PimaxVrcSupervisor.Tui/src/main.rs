@@ -1,6 +1,7 @@
 mod app;
 mod bridge;
 mod models;
+mod theme;
 mod ui;
 
 use std::{io, time::Instant};

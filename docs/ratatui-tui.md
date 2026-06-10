@@ -105,6 +105,12 @@ The TUI tracks running actions by canonical backend command name:
 
 If `Q` is pressed while actions are running, only the Rust TUI exits. It does not cancel backend work, stop the supervisor, send `force-stop-supervisor`, or run cleanup routines. Pending action results may be lost after the TUI exits.
 
+## Visual Design
+
+Phase 17 gives the TUI a Pimax-inspired dark terminal theme with green healthy/active accents, orange warning/off states, red errors, grey borders, and card-like panels. The visual language is inspired by the official Pimax desktop app, but no Pimax assets, logos, images, icons, or proprietary resources are copied.
+
+The dashboard now emphasizes a top backend status bar, a supervisor status card, action cards for the six confirmed actions, running-action/latest-result panels, a quieter backend/errors panel, clearer logs, a stronger confirmation modal, and an accurate small-terminal fallback. The visual polish does not change backend behavior, action allowlists, SteamVR overlay behavior, classic console behavior, or action safety semantics.
+
 ## Build
 
 Windows builds require the Rust stable MSVC toolchain. Visual Studio Build Tools with the C++ workload may be required.
@@ -163,6 +169,8 @@ Phase 15C fixes runtime UX issues from parity testing. `0` is now primary Help, 
 Phase 16 moves confirmed TUI actions into background workers and allows safe concurrent actions. It blocks duplicate same-command starts and Base Stations On/Off overlap only. It also adds Configurator validation that refuses core app executables in Autostart apps, plus supervisor runtime protection that warns and skips manually configured duplicate Autostart entries.
 
 Phase 16B adds the matching backend-local manual base-station action guard, so Base Stations On/Off overlap is rejected by the supervisor even when the request comes from classic console input, a legacy bridge client, structured `action-json`, or a future UI client.
+
+Phase 17 improves visibility and operator usability with a Pimax-inspired dark/green theme, action cards, status badges, clearer running-action/latest-result panels, improved Help and confirmation overlays, less noisy logs, and a small-terminal fallback. It is a UI-only pass and does not change backend action behavior.
 
 ## Future Direction
 
