@@ -134,6 +134,8 @@ Phase 17I corrects the badge semantics. Normal status badges now render as unbra
 
 Phase 17J aligns compact dashboard action rows with fixed label and badge columns. Compact rows use `1 Core`, `2 OGB`, `3 BS On`, `4 BS Off`, `5 OSC`, and `6 Auto`, followed by a single aligned action-state column and the display name. Full cards and the small `80x20` grid keep their existing structure.
 
+Phase 17K fine-tunes that spacing. Compact rows keep their aligned label and `[START]` columns but use a tighter badge column so display names stay closer. The small action grid adds a fixed gutter between the three cells while keeping each cell composed as number, short label, and nearby `[START]`.
+
 ## Build
 
 Windows builds require the Rust stable MSVC toolchain. Visual Studio Build Tools with the C++ workload may be required.
@@ -214,6 +216,8 @@ Phase 17H keeps the same behavior while polishing bracket badge readability. Mod
 Phase 17I keeps the same behavior while splitting status and interactive badge rendering. Bracketed `[START]` marks a startable action button; normal status words stay unbracketed. No backend, C#, shutdown, tray, Configurator launch, or lifecycle behavior changed.
 
 Phase 17J keeps the same behavior while aligning compact action badge columns. It is rendering-only and does not change the bridge protocol, backend action allowlist, `Q` semantics, shutdown/tray behavior, or Configurator behavior.
+
+Phase 17K keeps the same behavior while tuning compact and small action spacing. Backend, bridge, action execution, `Q`, lifecycle, shutdown, tray, SteamVR host, classic console, and Configurator behavior remain unchanged.
 
 ## Future Direction
 

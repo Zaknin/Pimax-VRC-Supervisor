@@ -243,6 +243,8 @@ Phase 17I corrects that badge split: status badges such as `OK`, `READY`, `WAITI
 
 Phase 17J aligns the compact dashboard action rows so `[START]` and other action states appear in one stable badge column: `1 Core [START]`, `2 OGB [START]`, through `6 Auto [START]`. Status badges remain unbracketed, full and small layouts are unchanged, and no backend, shutdown, tray, lifecycle, or Configurator behavior changed.
 
+Phase 17K fine-tunes compact and small action spacing. Compact rows keep aligned label and `[START]` columns without pushing display names too far right, and the small `80x20` action grid adds a fixed gutter between cells while keeping `[START]` close to each label. This is rendering-only; backend, bridge, action, `Q`, and lifecycle behavior are unchanged.
+
 ## Key Configuration
 
 The release includes a commented `supervisor.config.json`. Important settings:

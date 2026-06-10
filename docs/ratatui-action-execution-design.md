@@ -122,6 +122,10 @@ Phase 17I is rendering-only and corrects badge semantics without changing action
 
 Phase 17J is rendering-only and aligns the compact dashboard action rows with fixed label and badge columns. It preserves the Phase 17I badge rule: interactive `[START]` stays bracketed, non-startable action states and normal status badges remain unbracketed, and no backend, bridge protocol, lifecycle, shutdown, tray, Configurator, SteamVR host, classic console, or action allowlist behavior changed.
 
+## Phase 17K Implementation Status
+
+Phase 17K is rendering-only and fine-tunes compact/small action spacing. Compact rows keep aligned label and action-state columns without pushing display names too far right, and the small layout adds a fixed gutter between action cells while keeping `[START]` close to each label. It preserves the same `TuiAction` allowlist, badge rules, bridge behavior, `Q` semantics, and backend safety model.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:

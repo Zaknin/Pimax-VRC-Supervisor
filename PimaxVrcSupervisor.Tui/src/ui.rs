@@ -446,6 +446,8 @@ fn render_small_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: I
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    const CELL_GUTTER: u16 = 2;
+
     for row_index in 0..2 {
         let row_y = inner.y.saturating_add(row_index as u16);
         if row_y >= inner.y.saturating_add(inner.height) {
@@ -458,10 +460,14 @@ fn render_small_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: I
                 continue;
             };
 
-            let column_width = inner.width / 3;
-            let x = inner
-                .x
-                .saturating_add(column_width.saturating_mul(column_index as u16));
+            let total_gutter = CELL_GUTTER.saturating_mul(2);
+            let available_width = inner.width.saturating_sub(total_gutter);
+            let column_width = available_width / 3;
+            let x = inner.x.saturating_add(
+                column_width
+                    .saturating_add(CELL_GUTTER)
+                    .saturating_mul(column_index as u16),
+            );
             let width = if column_index == 2 {
                 inner.x.saturating_add(inner.width).saturating_sub(x)
             } else {
@@ -946,7 +952,7 @@ fn action_card_line(app: &App, action: TuiAction, now: Instant, width: u16) -> L
 fn compact_action_line(app: &App, action: TuiAction, now: Instant, width: u16) -> Line<'static> {
     let state = action_state(app, action, now);
     const LABEL_WIDTH: usize = 11;
-    const BADGE_WIDTH: usize = 13;
+    const BADGE_WIDTH: usize = 11;
 
     let label = format!("{} {}", action.digit(), compact_action_label(action));
     let display_name = action.display_name();
