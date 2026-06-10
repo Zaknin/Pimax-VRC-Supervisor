@@ -69,6 +69,32 @@ impl SupervisorBridge {
         }
     }
 
+    pub fn request_graceful_shutdown(&self) -> Result<CommandResult> {
+        let request_json = serde_json::to_string(
+            &json!({ "action": "request-graceful-shutdown", "source": "Desktop TUI" }),
+        )?;
+        let response_line = self.send_line(
+            &format!("lifecycle-json {request_json}"),
+            ACTION_READ_WRITE_TIMEOUT,
+        )?;
+        let response = serde_json::from_str::<CommandResult>(&response_line).map_err(|error| {
+            eyre!(
+                "could not parse supervisor lifecycle response: {error}; response={response_line}"
+            )
+        })?;
+
+        if response.success {
+            Ok(response)
+        } else {
+            let message = response
+                .message
+                .clone()
+                .or_else(|| response.error.clone())
+                .unwrap_or_else(|| "supervisor lifecycle request failed".to_string());
+            Err(eyre!(message))
+        }
+    }
+
     fn query(&self, request: Value) -> Result<QueryResponse> {
         let request_json = serde_json::to_string(&request)?;
         let response_line =

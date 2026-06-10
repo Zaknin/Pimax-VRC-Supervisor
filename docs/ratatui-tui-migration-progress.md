@@ -2222,9 +2222,98 @@ Generated output status:
 - `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
 - `release/` and Rust `target/` output remain generated/ignored and were not staged.
 
-Short Phase 18C direction:
+### Phase 18C - Primary TUI lifecycle with Ctrl+C-equivalent shutdown
 
-- If the launch-only button is not enough, design a hidden-supervisor plus TUI launch workflow separately; keep it distinct from graceful shutdown and tray/minimize work.
+Status: Completed
+
+Summary:
+
+- Added a dedicated `lifecycle-json` bridge verb for `request-graceful-shutdown`.
+- Refactored the Ctrl+C cleanup sequence into a shared supervisor graceful-shutdown request path.
+- Dashboard `Q` in the Rust TUI now opens `Stop supervisor and exit TUI?` confirmation instead of closing only the TUI.
+- Confirming shutdown sends `lifecycle-json {"action":"request-graceful-shutdown","source":"Desktop TUI"}`.
+- The supervisor logs the Desktop TUI shutdown source, runs Ctrl+C-equivalent emergency cleanup, cancels the supervisor token, and exits through the existing `RunAsync` unwind path.
+- The TUI exits after accepted/already-in-progress shutdown plus backend disconnect, or after the 60 second post-accepted timeout.
+- If the backend is not running, dashboard `Q` exits the TUI without starting or stopping anything.
+- Added Configurator `Launch Supervisor + Desktop TUI`; it uses the normal supervisor launch path, skips duplicate supervisor launch, then opens the Desktop TUI.
+
+Files changed:
+
+- `PimaxVrcSupervisor/Program.cs`
+- `PimaxVrcSupervisor.ConfigEditor/Program.cs`
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/bridge.rs`
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `README.md`
+- `docs/phase-18-tui-lifecycle-configurator-design.md`
+- `docs/ratatui-tui-migration-progress.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-action-execution-design.md`
+
+Backend details:
+
+- `lifecycle-json` is explicit and narrow; it supports only `request-graceful-shutdown`.
+- Lifecycle responses use compact camelCase `SupervisorCommandResult` JSON with `resultType="lifecycle"` and data fields `accepted`, `alreadyInProgress`, and `status`.
+- Malformed, non-object, missing-action, and unknown lifecycle requests return structured failures without unhandled TCP exceptions.
+- Repeated shutdown requests return `already_in_progress`.
+- Regular `action-json` requests are rejected while graceful shutdown is in progress.
+- `force-stop-supervisor` remains the legacy hard-stop command and remains blocked/unexposed from structured TUI action flow.
+
+Configurator details:
+
+- Existing `Launch Desktop TUI` remains unchanged and starts only `PimaxVrcSupervisorTui.exe`.
+- New `Launch Supervisor + Desktop TUI` reuses the existing validation, unsaved-change, config path, UAC, and normal supervisor launch behavior.
+- If `PimaxVrcSupervisor.exe` is already running, the combined launch skips starting another supervisor and proceeds to Desktop TUI launch.
+- Hidden/non-interactive supervisor launch was deferred because the only current hidden supervisor mode, `--steamvr-start`, changes SteamVR lifecycle semantics.
+
+TUI details:
+
+- Dashboard `Q` and footer Quit click now open graceful shutdown confirmation.
+- Shutdown confirmation uses `Enter`/`Space` to confirm and `Esc` to cancel.
+- Normal action starts are disabled while shutdown is in progress.
+- The TUI has no close-TUI-only dashboard shortcut in Phase 18C.
+- The lifecycle client is a narrow `request_graceful_shutdown()` bridge helper; no generic command executor was added.
+
+Deferred:
+
+- Tray/minimize behavior.
+- Terminal window X-close shutdown guarantee.
+- Auto-start settings and config schema changes.
+- General hidden supervisor mode.
+- Graceful shutdown controls outside the confirmed TUI `Q` flow.
+
+Build/test commands run:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `dotnet publish .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `Copy-Item .\PimaxVrcSupervisor.Tui\target\release\PimaxVrcSupervisorTui.exe .\release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe -Force`
+
+Build/test result:
+
+- All three C# release builds completed successfully with 0 warnings and 0 errors.
+- `cargo fmt` completed successfully.
+- Rust debug and release builds completed successfully.
+- Publish/copy to `release/PimaxVrcSupervisor-v1.3.0-test` completed successfully.
+- Runtime lifecycle testing was not performed during implementation because it can trigger local supervisor cleanup, VR/SteamVR/VRChat workflows, and base-station behavior.
+
+Generated output status:
+
+- `git status --short release` produced no staged/tracked release output.
+- `git status --ignored --short release` reported `!! release/`.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
+- `release/` and Rust `target/` output remain generated/ignored and were not staged.
+
+Short Phase 18D direction:
+
+- Run a real-world lifecycle runtime matrix for Configurator combined launch, TUI shutdown cancel/confirm, backend-off `Q`, duplicate launch behavior, and post-shutdown timeout behavior before adding hidden supervisor or tray/minimize behavior.
 
 ### Phase 17L - Compact and small TUI action click zones
 

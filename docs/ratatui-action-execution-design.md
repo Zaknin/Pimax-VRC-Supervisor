@@ -2,7 +2,7 @@
 
 This document defines the safety model for desktop Ratatui TUI action execution. Phase 15 enables confirmed action parity for the regular classic-console actions while keeping `force-stop-supervisor` blocked.
 
-Lifecycle, Configurator launch, tray/minimize, and future graceful shutdown planning are tracked separately in [TUI Lifecycle And Configurator Integration Design](phase-18-tui-lifecycle-configurator-design.md).
+Lifecycle, Configurator launch, tray/minimize, and graceful shutdown planning are tracked separately in [TUI Lifecycle And Configurator Integration Design](phase-18-tui-lifecycle-configurator-design.md).
 
 ## Current State
 
@@ -64,13 +64,13 @@ Every TUI action requires confirmation and sends `action-json` with `confirmed=t
 
 Phase 15C keeps the Phase 15 backend allowlist unchanged and fixes desktop TUI runtime UX. Read-only `query-json` polling keeps its short timeout, while confirmed `action-json` requests use a separate 30 second response timeout so longer successful actions are not shown as short polling timeouts.
 
-`0` is the primary Help shortcut because it is layout-independent in the terminal. `H`/`h` remain English-layout aliases. `F1`, `?`, and Russian Help aliases remain unmapped. Help closes on any key press and consumes that key. Dashboard `Q` quits only the Rust TUI process and never sends `force-stop-supervisor`, shutdown, cleanup, SteamVR, VRChat, or lifecycle commands.
+`0` is the primary Help shortcut because it is layout-independent in the terminal. `H`/`h` remain English-layout aliases. `F1`, `?`, and Russian Help aliases remain unmapped. Help closes on any key press and consumes that key.
 
 ## Phase 16 Implementation Status
 
 Phase 16 runs confirmed TUI actions in background workers while keeping the same six-command backend allowlist. Actions are tracked by canonical command name. The TUI blocks duplicate same-command starts and blocks Base Stations On/Off overlap, but otherwise allows safe non-conflicting actions to run concurrently.
 
-Action completion, timeout, bridge failure, or worker panic records a failed or successful result and removes the matching canonical command from the running list. If the user quits the TUI while actions are running, `Q` still quits only the TUI; it does not cancel backend work or send any backend command.
+Action completion, timeout, bridge failure, or worker panic records a failed or successful result and removes the matching canonical command from the running list.
 
 Phase 16 also protects against duplicated core app launches: the Configurator refuses to save Broken Eye or VRCFaceTracking as Autostart apps, and the supervisor warns and skips manually configured duplicate Autostart entries at runtime.
 
@@ -81,6 +81,12 @@ Phase 16B adds a backend-local manual base-station action guard. Base Stations O
 ## Phase 17 Implementation Status
 
 Phase 17 is a desktop TUI presentation-only pass. It adds a Pimax-inspired dark/green terminal theme, action cards, status badges, clearer running-action/latest-result display, and stronger Help/confirmation panels without changing the backend action allowlist, `action-json` semantics, TUI shortcut behavior, SteamVR overlay behavior, classic console behavior, or the Phase 16B backend base-station guard.
+
+## Phase 18C Lifecycle Boundary
+
+Phase 18C adds confirmed supervisor shutdown from the TUI, but it is intentionally not a regular `action-json` action. Dashboard `Q` opens a shutdown confirmation and sends the dedicated lifecycle request `lifecycle-json {"action":"request-graceful-shutdown","source":"Desktop TUI"}`. The backend runs the Ctrl+C-equivalent cleanup path and the TUI exits after shutdown is accepted and the backend exits/disconnects or times out.
+
+The six regular `action-json` actions remain unchanged. `force-stop-supervisor` remains blocked and is not used by the shutdown flow.
 
 ## Phase 17B Implementation Status
 

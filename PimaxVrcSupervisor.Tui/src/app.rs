@@ -19,6 +19,7 @@ use crate::{
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
 pub const MAX_LOG_LINES: usize = 80;
 pub const LOG_PAGE_SIZE: usize = 8;
+pub const SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ConnectionState {
@@ -47,6 +48,13 @@ pub struct CompletedActionResult {
     pub command: String,
     pub completed_at: Instant,
     pub outcome: ActionOutcome,
+    pub message: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ShutdownRequestResult {
+    pub completed_at: Instant,
+    pub accepted: bool,
     pub message: String,
 }
 
@@ -81,6 +89,12 @@ pub struct App {
     pub log_scroll: usize,
     pub log_follow: bool,
     pub confirmation: Option<TuiAction>,
+    pub shutdown_confirmation: bool,
+    pub shutdown_in_progress: bool,
+    pub shutdown_accepted: bool,
+    pub shutdown_started_at: Option<Instant>,
+    pub shutdown_message: Option<String>,
+    pub shutdown_error: Option<String>,
     pub running_actions: Vec<RunningAction>,
     pub last_action_completed_at: Option<Instant>,
     pub last_action_command: Option<String>,
@@ -92,17 +106,27 @@ pub struct App {
     pub mouse_notice: Option<String>,
     action_result_tx: Sender<CompletedActionResult>,
     action_result_rx: Receiver<CompletedActionResult>,
+    shutdown_result_tx: Sender<ShutdownRequestResult>,
+    shutdown_result_rx: Receiver<ShutdownRequestResult>,
 }
 
 impl App {
     pub fn new() -> Self {
         let (action_result_tx, action_result_rx) = channel();
-        Self::with_action_channel(action_result_tx, action_result_rx)
+        let (shutdown_result_tx, shutdown_result_rx) = channel();
+        Self::with_channels(
+            action_result_tx,
+            action_result_rx,
+            shutdown_result_tx,
+            shutdown_result_rx,
+        )
     }
 
-    fn with_action_channel(
+    fn with_channels(
         action_result_tx: Sender<CompletedActionResult>,
         action_result_rx: Receiver<CompletedActionResult>,
+        shutdown_result_tx: Sender<ShutdownRequestResult>,
+        shutdown_result_rx: Receiver<ShutdownRequestResult>,
     ) -> Self {
         Self {
             connection: ConnectionState::Disconnected,
@@ -119,6 +143,12 @@ impl App {
             log_scroll: 0,
             log_follow: true,
             confirmation: None,
+            shutdown_confirmation: false,
+            shutdown_in_progress: false,
+            shutdown_accepted: false,
+            shutdown_started_at: None,
+            shutdown_message: None,
+            shutdown_error: None,
             running_actions: Vec::new(),
             last_action_completed_at: None,
             last_action_command: None,
@@ -130,6 +160,8 @@ impl App {
             mouse_notice: None,
             action_result_tx,
             action_result_rx,
+            shutdown_result_tx,
+            shutdown_result_rx,
         }
     }
 
@@ -189,6 +221,35 @@ impl App {
 
         if should_refresh {
             self.refresh(Instant::now());
+        }
+    }
+
+    pub fn drain_shutdown_result(&mut self) {
+        let mut latest = None;
+        while let Ok(result) = self.shutdown_result_rx.try_recv() {
+            latest = Some(result);
+        }
+
+        let Some(result) = latest else {
+            return;
+        };
+
+        if result.accepted {
+            self.shutdown_accepted = true;
+            self.shutdown_in_progress = true;
+            self.shutdown_message = Some(result.message);
+            self.shutdown_error = None;
+        } else {
+            self.shutdown_in_progress = false;
+            self.shutdown_accepted = false;
+            self.shutdown_message = None;
+            self.shutdown_error = Some(result.message);
+            self.record_action_error(
+                "request-graceful-shutdown",
+                ActionOutcome::Failed,
+                "Supervisor shutdown request failed.".to_string(),
+                result.completed_at,
+            );
         }
     }
 
@@ -276,6 +337,16 @@ impl App {
     }
 
     pub fn request_action_confirmation(&mut self, action: TuiAction, now: Instant) {
+        if self.shutdown_in_progress {
+            self.record_action_error(
+                action.command_name(),
+                ActionOutcome::Rejected,
+                "Supervisor shutdown is in progress; actions are disabled.".to_string(),
+                now,
+            );
+            return;
+        }
+
         if self.connection != ConnectionState::Connected {
             self.record_backend_off(action, now);
             return;
@@ -314,6 +385,16 @@ impl App {
     }
 
     pub fn request_action_start(&mut self, action: TuiAction, now: Instant) {
+        if self.shutdown_in_progress {
+            self.record_action_error(
+                action.command_name(),
+                ActionOutcome::Rejected,
+                "Supervisor shutdown is in progress; actions are disabled.".to_string(),
+                now,
+            );
+            return;
+        }
+
         if self.connection != ConnectionState::Connected {
             self.record_backend_off(action, now);
             return;
@@ -334,6 +415,66 @@ impl App {
             started_at: now,
         });
         self.spawn_action_worker(action);
+    }
+
+    pub fn request_shutdown_confirmation(&mut self, now: Instant) -> bool {
+        if self.connection != ConnectionState::Connected {
+            self.shutdown_message = Some("Backend is not running. Exiting TUI.".to_string());
+            self.last_action_completed_at = Some(now);
+            return true;
+        }
+
+        if self.shutdown_in_progress {
+            return false;
+        }
+
+        self.help_visible = false;
+        self.confirmation = None;
+        self.shutdown_confirmation = true;
+        false
+    }
+
+    pub fn cancel_shutdown_confirmation(&mut self) {
+        self.shutdown_confirmation = false;
+    }
+
+    pub fn confirm_shutdown(&mut self, now: Instant) {
+        if self.shutdown_in_progress {
+            return;
+        }
+
+        self.shutdown_confirmation = false;
+        self.confirmation = None;
+        self.shutdown_in_progress = true;
+        self.shutdown_accepted = false;
+        self.shutdown_started_at = Some(now);
+        self.shutdown_message =
+            Some("Supervisor shutdown requested. Waiting for cleanup...".to_string());
+        self.shutdown_error = None;
+        self.spawn_shutdown_worker();
+    }
+
+    pub fn should_exit_after_shutdown(&mut self, now: Instant) -> bool {
+        if !self.shutdown_in_progress || !self.shutdown_accepted {
+            return false;
+        }
+
+        if self.connection == ConnectionState::Disconnected {
+            return true;
+        }
+
+        if self
+            .shutdown_started_at
+            .is_some_and(|started| now.duration_since(started) >= SHUTDOWN_WAIT_TIMEOUT)
+        {
+            self.shutdown_message = Some(
+                "Shutdown was requested, but the supervisor is still reachable. Check the supervisor logs."
+                    .to_string(),
+            );
+            return true;
+        }
+
+        false
     }
 
     pub fn scroll_logs_up(&mut self, amount: usize) {
@@ -436,6 +577,10 @@ impl App {
     }
 
     fn validate_action_start(&self, action: TuiAction) -> std::result::Result<(), String> {
+        if self.shutdown_in_progress {
+            return Err("Supervisor shutdown is in progress; actions are disabled.".to_string());
+        }
+
         if self.connection != ConnectionState::Connected {
             return Err(format!(
                 "Backend unavailable; cannot start {}.",
@@ -503,6 +648,36 @@ impl App {
                     completed_at: Instant::now(),
                     outcome: ActionOutcome::Failed,
                     message: "Action worker panicked.".to_string(),
+                },
+            };
+
+            let _ = sender.send(completed);
+        });
+    }
+
+    fn spawn_shutdown_worker(&self) {
+        let sender = self.shutdown_result_tx.clone();
+        thread::spawn(move || {
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                let bridge = SupervisorBridge::default();
+                bridge.request_graceful_shutdown()
+            }));
+
+            let completed = match result {
+                Ok(Ok(command_result)) => ShutdownRequestResult {
+                    completed_at: Instant::now(),
+                    accepted: true,
+                    message: format_action_result(&command_result),
+                },
+                Ok(Err(error)) => ShutdownRequestResult {
+                    completed_at: Instant::now(),
+                    accepted: false,
+                    message: error.to_string(),
+                },
+                Err(_) => ShutdownRequestResult {
+                    completed_at: Instant::now(),
+                    accepted: false,
+                    message: "Shutdown request worker panicked.".to_string(),
                 },
             };
 

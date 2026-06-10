@@ -121,12 +121,12 @@ if (steamVrStart)
 
 var diagnosticsOptions = DiagnosticsOptions.ForSupervisor(config, commandLineArgs);
 using var diagnostics = SupervisorDiagnosticsSession.Start(diagnosticsOptions);
-var supervisor = new AppSupervisor(config, steamVrStart, diagnostics);
+var supervisor = new AppSupervisor(config, steamVrStart, diagnostics, shutdown);
 var supervisorStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 Console.CancelKeyPress += (_, eventArgs) =>
 {
     eventArgs.Cancel = true;
-    RunBlockingEmergencyShutdown("Ctrl+C requested. Restoring monitors and closing managed apps.", shutdown, supervisorStopped.Task, supervisor.RunEmergencyCloseCleanupAsync);
+    RunBlockingGracefulShutdown(supervisor, supervisorStopped.Task);
 };
 using var consoleCloseHandler = ConsoleCloseHandler.Register(
     shutdown,
@@ -143,17 +143,11 @@ finally
     supervisorStopped.TrySetResult();
 }
 
-static void RunBlockingEmergencyShutdown(
-    string message,
-    CancellationTokenSource shutdown,
-    Task supervisorStopped,
-    Func<Task> emergencyCleanupAsync)
+static void RunBlockingGracefulShutdown(AppSupervisor supervisor, Task supervisorStopped)
 {
     try
     {
-        Console.WriteLine(message);
-        emergencyCleanupAsync().GetAwaiter().GetResult();
-        shutdown.Cancel();
+        supervisor.RequestGracefulShutdownAsync("Ctrl+C", startInBackground: false).GetAwaiter().GetResult();
         supervisorStopped.Wait(TimeSpan.FromSeconds(60));
     }
     catch
@@ -1291,6 +1285,22 @@ internal sealed record SupervisorActionJsonRequest(
     string? Command,
     bool? Confirmed);
 
+internal sealed record SupervisorLifecycleJsonRequest(
+    string? RequestId,
+    string? Action,
+    string? Source);
+
+internal sealed record SupervisorLifecycleResultData(
+    bool Accepted,
+    bool AlreadyInProgress,
+    string Status);
+
+internal sealed record SupervisorGracefulShutdownRequestResult(
+    bool Accepted,
+    bool AlreadyInProgress,
+    string Status,
+    string Message);
+
 internal sealed record SupervisorLogLine(
     int Index,
     DateTimeOffset? Timestamp,
@@ -1326,6 +1336,7 @@ internal sealed class AppSupervisor
     private readonly MonitorLayoutController _monitorLayout = new();
     private readonly TimeSpan _pollInterval;
     private readonly SupervisorDiagnosticsSession _diagnostics;
+    private readonly CancellationTokenSource _shutdown;
     private readonly Dictionary<int, Process> _watchedProcessHandles = new();
     private readonly SemaphoreSlim _oscGoesBrrrLaunchLock = new(1, 1);
     private readonly SemaphoreSlim _oscRouterLaunchLock = new(1, 1);
@@ -1374,12 +1385,14 @@ internal sealed class AppSupervisor
     private bool _mouthTrackerPnPEventWarningShown;
     private volatile bool _forcedManualReloadRequested;
     private SupervisorLifecyclePhase _lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChat;
+    private int _gracefulShutdownRequested;
 
-    public AppSupervisor(SupervisorConfig config, bool steamVrStart, SupervisorDiagnosticsSession diagnostics)
+    public AppSupervisor(SupervisorConfig config, bool steamVrStart, SupervisorDiagnosticsSession diagnostics, CancellationTokenSource shutdown)
     {
         _config = config;
         _steamVrStart = steamVrStart;
         _diagnostics = diagnostics;
+        _shutdown = shutdown;
         _pollInterval = TimeSpan.FromSeconds(Math.Max(1, config.PollIntervalSeconds));
     }
 
@@ -2938,6 +2951,7 @@ internal sealed class AppSupervisor
         var commandVerb = GetCommandVerb(rawCommand).ToLowerInvariant();
         var commandName = string.Equals(commandVerb, "query-json", StringComparison.Ordinal)
             || string.Equals(commandVerb, "action-json", StringComparison.Ordinal)
+            || string.Equals(commandVerb, "lifecycle-json", StringComparison.Ordinal)
             ? commandVerb
             : rawCommand.ToLowerInvariant();
         var startedAt = Stopwatch.GetTimestamp();
@@ -2961,6 +2975,14 @@ internal sealed class AppSupervisor
             if (string.Equals(commandVerb, "action-json", StringComparison.Ordinal))
             {
                 var result = await ExecuteActionJsonAsync(GetCommandPayload(rawCommand), cancellationToken);
+                response = JsonSerializer.Serialize(result, CommandBridgeJsonOptions);
+                success = result.Success;
+                return response;
+            }
+
+            if (string.Equals(commandVerb, "lifecycle-json", StringComparison.Ordinal))
+            {
+                var result = await ExecuteLifecycleJsonAsync(GetCommandPayload(rawCommand));
                 response = JsonSerializer.Serialize(result, CommandBridgeJsonOptions);
                 success = result.Success;
                 return response;
@@ -3167,6 +3189,18 @@ internal sealed class AppSupervisor
                     "Structured action envelope for audited regular console actions. The desktop TUI uses an explicit local allowlist.",
                     requiresConfirmation: true,
                     blockedReason: "Envelope only; individual action commands advertise TUI execution support."),
+                CommandDefinition(
+                    "lifecycle-json",
+                    "Lifecycle JSON",
+                    "Executes a narrow structured lifecycle request.",
+                    "Lifecycle",
+                    "Json",
+                    "Confirmed Desktop TUI shutdown flow only. Not a regular action card.",
+                    requiresConfirmation: true,
+                    actionSupported: false,
+                    actionSafetyCategory: "Disruptive",
+                    tuiExecutable: false,
+                    blockedReason: "Lifecycle control is exposed only through the confirmed Desktop TUI shutdown flow."),
                 CommandDefinition(
                     "restart-core-apps",
                     "Restart Core Apps",
@@ -3444,6 +3478,17 @@ internal sealed class AppSupervisor
                 error: "Missing command. Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps.");
         }
 
+        if (Volatile.Read(ref _gracefulShutdownRequested) == 1)
+        {
+            return ActionJsonResult(
+                request.RequestId,
+                canonicalCommand,
+                success: false,
+                message: "Supervisor shutdown is in progress; action requests are disabled.",
+                data: null,
+                error: "Shutdown in progress.");
+        }
+
         return canonicalCommand switch
         {
             "restart-core-apps" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, RestartCoreAppsCommandAsync, cancellationToken),
@@ -3473,6 +3518,110 @@ internal sealed class AppSupervisor
                 message: $"Unsupported action-json command: {canonicalCommand}.",
                 data: null,
                 error: "Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps.")
+        };
+    }
+
+    private async Task<SupervisorCommandResult> ExecuteLifecycleJsonAsync(string payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+        {
+            return LifecycleJsonResult(
+                requestId: null,
+                command: "lifecycle-json",
+                success: false,
+                message: "lifecycle-json requires a JSON request payload.",
+                accepted: false,
+                alreadyInProgress: false,
+                status: "rejected",
+                error: "Missing JSON request payload.");
+        }
+
+        SupervisorLifecycleJsonRequest request;
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return LifecycleJsonResult(
+                    requestId: null,
+                    command: "lifecycle-json",
+                    success: false,
+                    message: "lifecycle-json request must be a JSON object.",
+                    accepted: false,
+                    alreadyInProgress: false,
+                    status: "rejected",
+                    error: "Request root was not an object.");
+            }
+
+            request = new SupervisorLifecycleJsonRequest(
+                TryReadStringProperty(document.RootElement, "requestId"),
+                TryReadStringProperty(document.RootElement, "action"),
+                TryReadStringProperty(document.RootElement, "source"));
+        }
+        catch (JsonException ex)
+        {
+            return LifecycleJsonResult(
+                requestId: null,
+                command: "lifecycle-json",
+                success: false,
+                message: "lifecycle-json request payload is not valid JSON.",
+                accepted: false,
+                alreadyInProgress: false,
+                status: "rejected",
+                error: ex.Message);
+        }
+
+        var canonicalAction = request.Action?.Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(canonicalAction))
+        {
+            return LifecycleJsonResult(
+                request.RequestId,
+                "lifecycle-json",
+                success: false,
+                message: "lifecycle-json request requires an action.",
+                accepted: false,
+                alreadyInProgress: false,
+                status: "rejected",
+                error: "Missing action. Supported action: request-graceful-shutdown.");
+        }
+
+        if (!string.Equals(canonicalAction, "request-graceful-shutdown", StringComparison.Ordinal))
+        {
+            return LifecycleJsonResult(
+                request.RequestId,
+                canonicalAction,
+                success: false,
+                message: $"Unsupported lifecycle-json action: {canonicalAction}.",
+                accepted: false,
+                alreadyInProgress: false,
+                status: "rejected",
+                error: "Supported action: request-graceful-shutdown.");
+        }
+
+        var source = NormalizeShutdownSource(request.Source);
+        var result = await RequestGracefulShutdownAsync(source, startInBackground: true);
+        return LifecycleJsonResult(
+            request.RequestId,
+            canonicalAction,
+            success: true,
+            message: result.Message,
+            accepted: result.Accepted,
+            alreadyInProgress: result.AlreadyInProgress,
+            status: result.Status,
+            error: null);
+    }
+
+    private static string NormalizeShutdownSource(string? source)
+    {
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return "Desktop TUI";
+        }
+
+        return source.Trim() switch
+        {
+            var value when value.Equals("desktop-tui", StringComparison.OrdinalIgnoreCase) => "Desktop TUI",
+            var value => value
         };
     }
 
@@ -3573,6 +3722,25 @@ internal sealed class AppSupervisor
             message,
             "action",
             data,
+            error);
+
+    private static SupervisorCommandResult LifecycleJsonResult(
+        string? requestId,
+        string command,
+        bool success,
+        string message,
+        bool accepted,
+        bool alreadyInProgress,
+        string status,
+        string? error)
+        => new(
+            DateTimeOffset.UtcNow,
+            requestId,
+            command,
+            success,
+            message,
+            "lifecycle",
+            new SupervisorLifecycleResultData(accepted, alreadyInProgress, status),
             error);
 
     private static string? TryReadStringProperty(JsonElement element, string propertyName)
@@ -4309,6 +4477,61 @@ internal sealed class AppSupervisor
     public async Task RunEmergencyCloseCleanupAsync()
     {
         await TryEmergencyCloseCleanupAsync();
+    }
+
+    internal async Task<SupervisorGracefulShutdownRequestResult> RequestGracefulShutdownAsync(string source, bool startInBackground)
+    {
+        if (_shutdown.IsCancellationRequested
+            || Interlocked.Exchange(ref _gracefulShutdownRequested, 1) == 1)
+        {
+            return new SupervisorGracefulShutdownRequestResult(
+                Accepted: true,
+                AlreadyInProgress: true,
+                Status: "already_in_progress",
+                Message: "Graceful supervisor shutdown is already in progress.");
+        }
+
+        var message = string.Equals(source, "Ctrl+C", StringComparison.OrdinalIgnoreCase)
+            ? "Ctrl+C requested. Restoring monitors and closing managed apps."
+            : $"{source} requested graceful shutdown. Running Ctrl+C-equivalent cleanup.";
+
+        Console.WriteLine(message);
+        WriteDiagnosticEvent("shutdown; graceful request; source=" + source);
+        _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
+        _shutdownBlockedBySteamVrSince = null;
+        SetShutdownProgress("graceful shutdown requested by " + source);
+
+        if (startInBackground)
+        {
+            _ = Task.Run(() => RunGracefulShutdownCleanupAndCancelAsync(source), CancellationToken.None);
+        }
+        else
+        {
+            await RunGracefulShutdownCleanupAndCancelAsync(source);
+        }
+
+        return new SupervisorGracefulShutdownRequestResult(
+            Accepted: true,
+            AlreadyInProgress: false,
+            Status: "accepted",
+            Message: "Graceful supervisor shutdown accepted.");
+    }
+
+    private async Task RunGracefulShutdownCleanupAndCancelAsync(string source)
+    {
+        try
+        {
+            await RunEmergencyCloseCleanupAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not complete graceful shutdown cleanup requested by {source}: {ex.Message}");
+            WriteDiagnosticEvent($"shutdown; graceful cleanup failed; source={source}; error={ex.Message}");
+        }
+        finally
+        {
+            _shutdown.Cancel();
+        }
     }
 
     private async Task TryEmergencyCloseCleanupAsync()

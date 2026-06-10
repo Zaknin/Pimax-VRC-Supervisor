@@ -1996,11 +1996,12 @@ internal sealed class ConfigEditorForm : Form
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Bottom,
-            ColumnCount = 7,
+            ColumnCount = 8,
             AutoSize = true,
             Padding = new Padding(0, 10, 0, 0)
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -2025,6 +2026,10 @@ internal sealed class ConfigEditorForm : Form
         launchDesktopTuiButton.Click += (_, _) => LaunchDesktopTui();
         _toolTips.SetToolTip(launchDesktopTuiButton, "Opens the Rust terminal dashboard. The supervisor must be running separately for live status and actions.");
 
+        var launchSupervisorAndDesktopTuiButton = CreateButton("Launch Supervisor + Desktop TUI");
+        launchSupervisorAndDesktopTuiButton.Click += (_, _) => LaunchSupervisorAndDesktopTui();
+        _toolTips.SetToolTip(launchSupervisorAndDesktopTuiButton, "Starts the supervisor and opens the Rust terminal dashboard. Press Q in the TUI to run supervisor cleanup and exit.");
+
         var saveButton = CreateButton("Save");
         saveButton.Tag = "Primary";
         saveButton.Click += (_, _) => SaveConfig();
@@ -2039,8 +2044,9 @@ internal sealed class ConfigEditorForm : Form
         layout.Controls.Add(launchButton, 2, 0);
         layout.Controls.Add(launchSteamVrButton, 3, 0);
         layout.Controls.Add(launchDesktopTuiButton, 4, 0);
-        layout.Controls.Add(saveAsButton, 5, 0);
-        layout.Controls.Add(saveButton, 6, 0);
+        layout.Controls.Add(launchSupervisorAndDesktopTuiButton, 5, 0);
+        layout.Controls.Add(saveAsButton, 6, 0);
+        layout.Controls.Add(saveButton, 7, 0);
         return layout;
     }
 
@@ -2975,9 +2981,42 @@ internal sealed class ConfigEditorForm : Form
 
     private void LaunchSupervisor()
     {
-        if (!ValidateForLaunch())
+        if (!TryPrepareSupervisorLaunch(out var supervisorPath, out var configPath))
         {
             return;
+        }
+
+        LaunchSupervisorProcess(supervisorPath, configPath);
+    }
+
+    private void LaunchSupervisorAndDesktopTui()
+    {
+        if (!TryPrepareSupervisorLaunch(out var supervisorPath, out var configPath))
+        {
+            return;
+        }
+
+        if (Process.GetProcessesByName("PimaxVrcSupervisor").Any())
+        {
+            SetStatus("Supervisor is already running. Launching Desktop TUI.");
+            LaunchDesktopTui();
+            return;
+        }
+
+        if (LaunchSupervisorProcess(supervisorPath, configPath))
+        {
+            LaunchDesktopTui();
+        }
+    }
+
+    private bool TryPrepareSupervisorLaunch(out string supervisorPath, out string configPath)
+    {
+        supervisorPath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.exe");
+        configPath = string.Empty;
+
+        if (!ValidateForLaunch())
+        {
+            return false;
         }
 
         if (_hasUnsavedChanges)
@@ -2985,25 +3024,29 @@ internal sealed class ConfigEditorForm : Form
             var result = ShowLaunchUnsavedChangesDialog();
             if (result == LaunchUnsavedChoice.Cancel)
             {
-                return;
+                return false;
             }
 
             if (result == LaunchUnsavedChoice.SaveAndLaunch && !SaveConfig())
             {
-                return;
+                return false;
             }
         }
 
-        var supervisorPath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.exe");
         if (!File.Exists(supervisorPath))
         {
             ShowThemedMessageBox($"Could not find {supervisorPath}.", "Could not launch supervisor", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return;
+            return false;
         }
 
+        configPath = Path.GetFullPath(_configPathTextBox.Text.Trim());
+        return true;
+    }
+
+    private bool LaunchSupervisorProcess(string supervisorPath, string configPath)
+    {
         try
         {
-            var configPath = Path.GetFullPath(_configPathTextBox.Text.Trim());
             var startInfo = new ProcessStartInfo
             {
                 FileName = supervisorPath,
@@ -3021,6 +3064,7 @@ internal sealed class ConfigEditorForm : Form
 
             Process.Start(startInfo);
             SetStatus("Launched Supervisor using " + Path.GetFileName(configPath) + ".");
+            return true;
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
         {
@@ -3030,11 +3074,13 @@ internal sealed class ConfigEditorForm : Form
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
             SetStatus("Launch cancelled.");
+            return false;
         }
         catch (Exception ex)
         {
             ShowThemedMessageBox(ex.Message, "Could not launch supervisor", MessageBoxButtons.OK, MessageBoxIcon.Error);
             SetStatus("Launch failed.");
+            return false;
         }
     }
 

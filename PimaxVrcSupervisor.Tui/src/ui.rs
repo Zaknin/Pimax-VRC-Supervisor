@@ -46,6 +46,10 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App) {
         render_help(frame, area);
     }
 
+    if app.shutdown_confirmation {
+        render_shutdown_confirmation(frame, area, app);
+    }
+
     if app.confirmation.is_some() {
         render_action_confirmation(frame, area, app);
     }
@@ -149,7 +153,7 @@ fn render_tiny_fallback(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         Line::from(vec![
             Span::styled("0 Help", theme::success_style()),
             Span::raw("   "),
-            Span::styled("Q Quit TUI", theme::warning_style()),
+            Span::styled("Q Stop Supervisor", theme::warning_style()),
         ]),
     ];
 
@@ -420,7 +424,7 @@ fn render_small_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(
         Paragraph::new(vec![
             line,
-            Line::from("0 Help  F5 Refresh  1-6 Actions  Q Quit TUI"),
+            Line::from("0 Help  F5 Refresh  1-6 Actions  Q Stop"),
         ])
         .block(theme::accent_panel_block("Dashboard"))
         .wrap(Wrap { trim: true }),
@@ -787,6 +791,26 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         ]));
     }
 
+    if app.shutdown_in_progress {
+        let message = app
+            .shutdown_message
+            .as_deref()
+            .unwrap_or("Supervisor shutdown requested. Waiting for cleanup...");
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<8}", "Shutdown"), theme::label_style()),
+            theme::badge("RUNNING", theme::badge_warning_style()),
+            Span::raw(" "),
+            Span::raw(truncate(message, 84)),
+        ]));
+    } else if let Some(error) = &app.shutdown_error {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<8}", "Shutdown"), theme::label_style()),
+            theme::badge("ERROR", theme::badge_error_style()),
+            Span::raw(" "),
+            Span::raw(truncate(error, 84)),
+        ]));
+    }
+
     frame.render_widget(
         Paragraph::new(lines)
             .block(theme::panel_block("System"))
@@ -901,7 +925,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         help_line("ENTER", "Confirm modal action"),
         help_line("SPACE", "Confirm modal action"),
         help_line("ESC", "Cancel modal"),
-        help_line("Q", "Quit TUI on dashboard only"),
+        help_line("Q", "Stop supervisor and exit TUI after confirmation"),
         help_line("UP/PGUP", "Scroll logs older, pauses live follow"),
         help_line("DOWN/PGDN", "Scroll logs newer"),
         help_line("WHEEL", "Scroll logs older/newer"),
@@ -912,7 +936,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
             theme::warning_style(),
         )),
         Line::from("Mouse actions use the same allowed action list and conflict checks."),
-        Line::from("Q never stops the supervisor backend."),
+        Line::from("Q requests Ctrl+C-equivalent supervisor cleanup after confirmation."),
         Line::from("F1, ?, and Russian help aliases are not mapped."),
         Line::from("force-stop-supervisor is not exposed."),
     ];
@@ -921,6 +945,34 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(
         Paragraph::new(lines)
             .block(theme::accent_panel_block("Help"))
+            .wrap(Wrap { trim: true }),
+        popup,
+    );
+}
+
+fn render_shutdown_confirmation(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
+    let popup = centered_rect(62, 38, area);
+    let lines = vec![
+        Line::from(Span::styled(
+            "Stop supervisor and exit TUI?",
+            theme::title_style(),
+        )),
+        Line::from(""),
+        Line::from("This runs the same cleanup routine as Ctrl+C in the supervisor."),
+        Line::from("Managed apps, monitor restore, and base-station cleanup remain backend-owned."),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("ENTER / SPACE Confirm", theme::secondary_style()),
+            Span::raw("    "),
+            Span::styled("ESC Cancel", theme::secondary_style()),
+        ]),
+    ];
+
+    frame.render_widget(Clear, popup);
+    register_modal_clicks(app, popup);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(theme::accent_panel_block("Graceful Shutdown"))
             .wrap(Wrap { trim: true }),
         popup,
     );
@@ -1122,6 +1174,15 @@ fn action_state_span(state: &ActionState) -> Span<'static> {
 }
 
 fn action_state(app: &App, action: TuiAction, now: Instant) -> ActionState {
+    if app.shutdown_in_progress {
+        return ActionState {
+            label: "BLOCKED",
+            detail: Some("shutdown in progress".to_string()),
+            border_color: theme::WARNING_ORANGE,
+            style: theme::badge_warning_style(),
+        };
+    }
+
     if app.connection == ConnectionState::Disconnected {
         return ActionState {
             label: "BACKEND OFF",
@@ -1245,11 +1306,11 @@ fn register_modal_clicks(app: &mut App, popup: Rect) {
 
 fn shortcut_line(width: u16) -> &'static str {
     if width >= 120 {
-        "0 Help  F5 Refresh  Wheel Logs  End/F Follow  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  Q Quit TUI"
+        "0 Help  F5 Refresh  Wheel Logs  End/F Follow  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  Q Stop"
     } else if width >= 100 {
-        "0 Help  F5 Refresh  1-6 Actions  End/F Logs  Q Quit TUI"
+        "0 Help  F5 Refresh  1-6 Actions  End/F Logs  Q Stop"
     } else {
-        "0 Help  F5 Refresh  1-6 Actions  Q Quit TUI"
+        "0 Help  F5 Refresh  1-6 Actions  Q Stop"
     }
 }
 

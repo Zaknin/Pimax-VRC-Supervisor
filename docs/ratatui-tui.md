@@ -8,6 +8,8 @@ Phase 18 lifecycle and Configurator integration planning is tracked in [TUI Life
 
 Phase 18B adds a Configurator **Launch Desktop TUI** button. It only starts `PimaxVrcSupervisorTui.exe` from the release folder; it does not start or stop the supervisor.
 
+Phase 18C adds **Launch Supervisor + Desktop TUI** and a confirmed graceful shutdown workflow. Dashboard `Q` now asks the supervisor to run the same cleanup routine as Ctrl+C, then the TUI exits after cleanup is accepted and the backend exits/disconnects or a timeout is reached.
+
 ## Purpose
 
 The TUI gives a desktop/operator view of the supervisor with tightly limited control behavior. It displays:
@@ -18,7 +20,7 @@ The TUI gives a desktop/operator view of the supervisor with tightly limited con
 - disconnected/backend unavailable state
 - validated classic-console actions in the same `1`-`6` order
 
-The TUI can be closed without stopping the supervisor.
+The primary workflow no longer has a dashboard close-only shortcut. Use `Q` to request confirmed supervisor cleanup and exit the TUI after the backend exits or disconnects.
 
 ## Architecture
 
@@ -45,13 +47,21 @@ action-json {"command":"reload-autostart-apps","confirmed":true}
 
 No legacy action command strings are sent by the TUI.
 
+For confirmed supervisor shutdown, it uses a separate lifecycle envelope:
+
+```text
+lifecycle-json {"action":"request-graceful-shutdown","source":"Desktop TUI"}
+```
+
+The lifecycle command is not a regular action card and does not use `force-stop-supervisor`.
+
 The C# supervisor remains the backend and keeps ownership of Windows, VR, SteamVR, VRChat, cleanup, monitor, OSC, base-station, scheduled-task, and SteamVR manifest behavior.
 
 The SteamVR overlay remains unchanged. The TUI does not replace VR status/log rendering, dashboard button layout, texture rendering, or OpenVR/D3D paths.
 
 ## Launch Requirements
 
-The supervisor backend must already be running for live data. The TUI does not start the supervisor, does not elevate, and does not start SteamVR or VRChat.
+The supervisor backend must already be running for live data. The TUI does not start the supervisor, does not elevate, and does not start SteamVR or VRChat. The Configurator can launch the supervisor and TUI together with **Launch Supervisor + Desktop TUI**.
 
 From a release folder that contains `PimaxVrcSupervisorTui.exe`:
 
@@ -77,20 +87,20 @@ Primary shortcuts:
 - `5`: open Restart OSC Router confirmation
 - `6`: open Reload Autostart Apps confirmation
 - `Enter` / `Space`: confirm inside the confirmation modal
-- `Esc`: close Help, cancel confirmation, or quit the TUI
+- `Esc`: close Help or cancel confirmation
 - `Up` / `Down`: scroll logs
 - `PageUp` / `PageDown`: scroll logs by page
 - Mouse wheel: scroll logs
 - `Home`: jump to older logs
 - `End` / `F`: resume latest log follow
-- `Q` / `q`: quit only the Rust TUI from the dashboard; close Help in the Help overlay
+- `Q` / `q`: open supervisor shutdown confirmation from the dashboard; close Help in the Help overlay
 
 Convenience aliases:
 
 - `R` / `r`: refresh
 - `F` / `f`: resume latest log follow
 
-The footer lists direct action mappings on wide terminals: `0 Help`, `F5 Refresh`, `1 Core`, `2 OGB`, `3 BS On`, `4 BS Off`, `5 OSC`, `6 Autostart`, and `Q Quit TUI`. Compact terminals may use the shorter `1-6 Actions` label.
+The footer lists direct action mappings on wide terminals: `0 Help`, `F5 Refresh`, `1 Core`, `2 OGB`, `3 BS On`, `4 BS Off`, `5 OSC`, `6 Autostart`, and `Q Stop`. Compact terminals may use the shorter `1-6 Actions` label.
 
 Help closes on any key press and consumes that key. For example, pressing `1`, `Enter`, `Q`, or `F5` while Help is visible closes Help only and does not trigger the dashboard action underneath.
 
@@ -108,7 +118,7 @@ The TUI tracks running actions by canonical backend command name:
 - `base-stations-on` and `base-stations-off` cannot run at the same time; the supervisor backend also rejects overlapping manual base-station power actions from other entry points.
 - Other different actions may run concurrently.
 
-If `Q` is pressed while actions are running, only the Rust TUI exits. It does not cancel backend work, stop the supervisor, send `force-stop-supervisor`, or run cleanup routines. Pending action results may be lost after the TUI exits.
+If `Q` is pressed while actions are running, the TUI opens the same shutdown confirmation. Confirming requests backend cleanup through `lifecycle-json`; it does not cancel backend work directly and does not send `force-stop-supervisor`. Normal action starts are disabled after shutdown is requested.
 
 ## Visual Design
 

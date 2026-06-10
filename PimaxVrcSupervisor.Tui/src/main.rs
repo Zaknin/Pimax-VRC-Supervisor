@@ -76,9 +76,14 @@ fn run(
 
     loop {
         app.drain_action_results();
+        app.drain_shutdown_result();
         let now = Instant::now();
         if app.should_auto_refresh(now) {
             app.refresh(now);
+        }
+
+        if app.should_exit_after_shutdown(now) {
+            break;
         }
 
         terminal.draw(|frame| ui::render(frame, &mut app))?;
@@ -111,6 +116,20 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     let now = Instant::now();
     let shortcut = Shortcut::from_key(key);
 
+    if app.shutdown_confirmation {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                app.confirm_shutdown(now);
+                return false;
+            }
+            KeyCode::Esc => {
+                app.cancel_shutdown_confirmation();
+                return false;
+            }
+            _ => return false,
+        }
+    }
+
     if app.confirmation.is_some() {
         match key.code {
             KeyCode::Enter | KeyCode::Char(' ') => {
@@ -130,8 +149,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
         return false;
     } else {
         match shortcut {
-            Some(Shortcut::Quit) => true,
-            Some(Shortcut::Cancel) => true,
+            Some(Shortcut::Quit) => app.request_shutdown_confirmation(now),
+            Some(Shortcut::Cancel) => false,
             Some(Shortcut::Refresh) => {
                 app.refresh(now);
                 false
@@ -158,6 +177,29 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
     if app.help_visible {
         app.close_help();
         return false;
+    }
+
+    if app.shutdown_confirmation {
+        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return false;
+        }
+
+        let now = Instant::now();
+        let Some(action) = app.click_action_at(mouse.column, mouse.row) else {
+            return false;
+        };
+
+        match action {
+            ClickAction::ConfirmModal => {
+                app.confirm_shutdown(now);
+                return false;
+            }
+            ClickAction::CancelModal => {
+                app.cancel_shutdown_confirmation();
+                return false;
+            }
+            _ => return false,
+        }
     }
 
     if app.confirmation.is_some() {
@@ -221,7 +263,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
             app.refresh(now);
             false
         }
-        ClickAction::QuitTui => true,
+        ClickAction::QuitTui => app.request_shutdown_confirmation(now),
         ClickAction::SelectAction(action) => {
             app.request_action_start(action, now);
             false

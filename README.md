@@ -195,13 +195,11 @@ The `cli-ui2` / `1.3.0-test` work adds `PimaxVrcSupervisorTui.exe`, a separate R
 
 The TUI connects to the existing supervisor backend at `127.0.0.1:37957` and uses the structured `query-json` bridge to display supervisor status, command capabilities, and recent logs. Its executable actions use confirmed `action-json` requests only; it does not send legacy action commands, does not replace the SteamVR dashboard overlay, and does not replace the classic console.
 
-You can close the TUI without stopping the supervisor. If the backend is not running, the TUI opens in a disconnected/backend unavailable state.
-
-Future TUI-primary lifecycle and Configurator integration are design-only in Phase 18A; `Q` still closes only the TUI and does not stop the supervisor.
-
 Phase 18B adds a Configurator **Launch Desktop TUI** button. It launches only `PimaxVrcSupervisorTui.exe` from the release folder and does not start or stop the supervisor.
 
-Confirmed actions run in the background so the TUI stays responsive. Different safe actions may run at the same time, but the same command cannot be started twice while running and Base Stations On/Off are mutually exclusive. `Q` quits only the Rust TUI; it never cancels backend work, stops the supervisor, sends `force-stop-supervisor`, or runs cleanup routines.
+Phase 18C adds a Configurator **Launch Supervisor + Desktop TUI** button and a dedicated `lifecycle-json` shutdown request. Dashboard `Q` now opens a shutdown confirmation; confirming requests the same cleanup path used by Ctrl+C in the supervisor, waits for backend exit/disconnect or a timeout, then exits the TUI. There is no close-TUI-only dashboard option in this primary workflow. If the backend is not running, `Q` exits the TUI without starting or stopping anything.
+
+Confirmed actions run in the background so the TUI stays responsive. Different safe actions may run at the same time, but the same command cannot be started twice while running and Base Stations On/Off are mutually exclusive. Once shutdown is requested, normal action execution is disabled. `force-stop-supervisor` remains blocked from the TUI.
 
 Keybindings:
 
@@ -215,15 +213,15 @@ Keybindings:
 - `5`: open Restart OSC Router confirmation
 - `6`: open Reload Autostart Apps confirmation
 - `Enter` / `Space`: confirm inside the confirmation modal
-- `Esc`: cancel confirmation, close Help, or quit the TUI
+- `Esc`: cancel confirmation or close Help
 - `Up` / `Down`: scroll logs
 - `PageUp` / `PageDown`: scroll logs by page
 - Mouse wheel: scroll logs
 - `Home`: jump to older logs
 - `End` / `F`: resume latest log follow
-- `Q` / `q`: quit only the Rust TUI from the dashboard; close Help in the Help overlay
+- `Q` / `q`: open supervisor shutdown confirmation from the dashboard; close Help in the Help overlay
 
-Help closes on any key press and consumes that key, so pressing `1` while Help is visible closes Help without opening an action confirmation. Letter shortcuts are displayed uppercase, but lowercase input is also accepted. Selected Russian-layout aliases remain limited to non-help keys. `F1`, `?`, and Russian help aliases do not open TUI help; the main Help overlay keeps those alias details out of the shortcut list. `Q` never stops the supervisor backend, sends shutdown commands, or runs cleanup routines. `force-stop-supervisor` remains blocked from the TUI.
+Help closes on any key press and consumes that key, so pressing `1` while Help is visible closes Help without opening an action confirmation. Letter shortcuts are displayed uppercase, but lowercase input is also accepted. Selected Russian-layout aliases remain limited to non-help keys. `F1`, `?`, and Russian help aliases do not open TUI help; the main Help overlay keeps those alias details out of the shortcut list. `Q` does not use `force-stop-supervisor`; it sends only the confirmed `lifecycle-json` graceful shutdown request.
 
 The Configurator refuses to save an Autostart app that duplicates the configured Broken Eye or VRCFaceTracking executable. If a user manually creates that duplicate in JSON, the supervisor warns and skips that Autostart entry at runtime instead of launching the core app twice.
 

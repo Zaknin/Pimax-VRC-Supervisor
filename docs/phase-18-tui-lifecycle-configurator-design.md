@@ -1,12 +1,12 @@
 # Phase 18 TUI Lifecycle And Configurator Integration Design
 
-Phase 18A is an audit/design phase only. It does not change runtime behavior, backend commands, Configurator behavior, SteamVR host behavior, Rust TUI behavior, packaging output, or `Q` semantics.
+Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurator launcher. Phase 18C makes the Desktop TUI the primary operator lifecycle surface by adding a confirmed Ctrl+C-equivalent shutdown request.
 
 ## Current Architecture Summary
 
 - `PimaxVrcSupervisor.exe` is the C# safety-critical backend. It owns startup, Windows elevation-sensitive operations, SteamVR/VRChat/Pimax monitoring, cleanup, monitor layout, base-station power, OSC routing, managed app lifecycle, diagnostics, the classic console UI, and the loopback TCP command bridge.
 - `PimaxVrcSupervisorTui.exe` is a separate Rust/Ratatui desktop terminal UI. It connects to the already-running supervisor on `127.0.0.1:37957`, reads `query-json`, and executes only the audited regular `TuiAction` set through `action-json`.
-- `PimaxVrcSupervisorConfigurator.exe` is the WinForms editor/launcher for `supervisor.config.json`. It currently has Launch Supervisor and Launch SteamVR buttons, but no TUI launch button.
+- `PimaxVrcSupervisorConfigurator.exe` is the WinForms editor/launcher for `supervisor.config.json`. It has Launch Supervisor, Launch SteamVR, Launch Desktop TUI, and Launch Supervisor + Desktop TUI buttons.
 - `PimaxVrcSupervisorSteamVrHost.exe` is the SteamVR dashboard overlay host. It remains on the existing SteamVR overlay and legacy bridge workflow.
 - Release packaging uses a flat folder layout that already includes the Rust TUI executable beside the C# executables.
 
@@ -17,17 +17,17 @@ Phase 18A is an audit/design phase only. It does not change runtime behavior, ba
 - `--steamvr-start` is the SteamVR manifest/helper path. The supervisor hides its console window, is treated as SteamVR-started, and exits/cleans up with SteamVR lifecycle conditions.
 - `--apply-startup-integration` and `--install-auto-launch-task` are setup/helper modes for installing or repairing scheduled task and SteamVR manifest integration.
 - `--emergency-base-station-cleanup` is a detached helper path for best-effort base-station power-down after console close.
-- Future TUI-primary workflow should start with an already-running supervisor or a Configurator-launched supervisor, without changing `Q` semantics or cleanup behavior in the first implementation phase.
+- Phase 18C TUI-primary workflow starts with an already-running supervisor or a Configurator-launched supervisor. Dashboard `Q` now requires confirmation and requests supervisor cleanup through `lifecycle-json`.
 
 ## Current Shutdown And Cleanup Paths
 
 - Normal session cleanup is driven by watched shutdown process state, normally VRChat exit, with crash/relaunch grace behavior before cleanup.
 - SteamVR-bound modes also observe SteamVR server process exit and run cleanup when SteamVR exits.
-- Ctrl+C triggers `Console.CancelKeyPress`, cancels the shutdown token, and runs best-effort emergency cleanup.
+- Ctrl+C triggers `Console.CancelKeyPress`, runs best-effort emergency cleanup, cancels the shutdown token, and waits for supervisor exit.
 - Console close/logoff/shutdown uses `SetConsoleCtrlHandler`; it runs emergency cleanup and can launch the detached base-station cleanup helper.
 - Cleanup restores monitors, stops managed apps and Lovense workflow apps, waits for SteamVR where appropriate, stops OSC routing, and powers down base stations.
 - `force-stop-supervisor` exists as a legacy bridge command but is blocked from structured desktop TUI action flow because it bypasses cleanup.
-- There is not yet a dedicated external graceful lifecycle command for "user intentionally asked supervisor to end the VR session."
+- Phase 18C adds a dedicated external graceful lifecycle command for "user intentionally asked supervisor to end the VR session."
 
 ## Current Bridge And Action Model
 
@@ -36,12 +36,12 @@ Phase 18A is an audit/design phase only. It does not change runtime behavior, ba
 - Structured actions use `action-json` with real JSON `confirmed=true`.
 - The current structured TUI allowlist is exactly the six regular classic-console actions: `restart-core-apps`, `start-osc-goes-brrr`, `base-stations-on`, `base-stations-off`, `restart-osc-router`, and `reload-autostart-apps`.
 - `force-stop-supervisor` remains blocked and not TUI-executable.
-- No graceful shutdown command exists. It should not be conflated with `force-stop-supervisor`.
+- `lifecycle-json {"action":"request-graceful-shutdown","source":"Desktop TUI"}` requests Ctrl+C-equivalent cleanup. It is not a regular action card and is not conflated with `force-stop-supervisor`.
 
 ## Configurator Integration Options
 
 - Low-risk launch-only option: add a `Launch Desktop TUI` button near the existing Launch Supervisor / Launch SteamVR buttons. It should locate `PimaxVrcSupervisorTui.exe` beside the Configurator executable or in the current release folder, start it normally, and not alter supervisor lifecycle or config schema.
-- Medium-risk workflow option: add `Start supervisor hidden and open Desktop TUI`. This should be deferred until the supervisor hidden launch path is explicitly designed and tested.
+- Primary workflow option: add `Launch Supervisor + Desktop TUI`. Phase 18C uses the existing normal supervisor launch path plus the TUI launcher. Hidden/non-interactive supervisor launch is deferred because `--steamvr-start` hides the console but changes SteamVR lifecycle semantics.
 - Config option ideas such as `Desktop console mode` with `Classic console`, `Modern console`, and `Hidden` remain future work. They require schema, Configurator, launch, and migration design.
 - User-facing wording should keep the three surfaces distinct: classic console, Desktop TUI, and SteamVR overlay.
 
@@ -51,15 +51,15 @@ Phase 18A is an audit/design phase only. It does not change runtime behavior, ba
 - A C# Configurator/launcher wrapper could provide tray behavior and launch/monitor the supervisor/TUI, but that is a separate lifecycle host and raises shutdown semantics questions.
 - A separate small tray host is feasible but should be designed as a new component with clear ownership and IPC boundaries.
 - A future Rust GUI/tray companion is possible but would add a different UI stack and packaging surface.
-- No-tray remains a valid near-term option: Desktop TUI is a terminal UI, and users close/reopen it without affecting the supervisor.
+- No-tray remains the current option. Desktop TUI is a terminal UI; Phase 18C does not add tray/minimize behavior.
 
 ## Recommended Implementation Sequence
 
 1. Phase 18B: add a Configurator `Launch Desktop TUI` button. It starts `PimaxVrcSupervisorTui.exe` only, adds no config schema, and does not start/stop the supervisor. Implemented as a release-local launch button with duplicate-process detection.
-2. Phase 18C: design and implement a hidden-supervisor plus TUI launch workflow if the launch-only button is not enough.
-3. Phase 18D: design and implement a backend graceful supervisor shutdown/lifecycle command. It must be distinct from `force-stop-supervisor`, cleanup-owned by the backend, and strongly confirmed.
-4. Phase 18E: decide TUI close/`Q` semantics. Preferred safe default is `Q` closes only the TUI; any supervisor shutdown should be a separate explicit command.
-5. Phase 18F: decide tray/minimize architecture after the lifecycle command and user-facing semantics are stable.
+2. Phase 18C: add `Launch Supervisor + Desktop TUI`, `lifecycle-json`, and confirmed TUI `Q` shutdown semantics.
+3. Phase 18D: harden/manual-test the primary TUI lifecycle workflow and decide whether a general hidden supervisor mode is safe.
+4. Phase 18E: design terminal close/X-close behavior if needed; do not assume it is equivalent to confirmed `Q`.
+5. Phase 18F: decide tray/minimize architecture after lifecycle semantics are stable.
 
 ## Phase 18B Implementation Status
 
@@ -68,9 +68,18 @@ Phase 18A is an audit/design phase only. It does not change runtime behavior, ba
 - Missing executable and already-running TUI cases show clear messages.
 - The button does not start the supervisor, stop the supervisor, launch hidden supervisor mode, add tray behavior, change config schema, change bridge commands, or change TUI `Q` semantics.
 
+## Phase 18C Implementation Status
+
+- The Configurator has a `Launch Supervisor + Desktop TUI` button. It reuses the existing supervisor validation, unsaved-change, config path, and UAC launch behavior, skips launching a duplicate supervisor, and then starts the Desktop TUI.
+- The supervisor bridge has a dedicated `lifecycle-json` command for `request-graceful-shutdown`. It returns structured lifecycle results and starts the same cleanup sequence used by Ctrl+C.
+- The Desktop TUI dashboard `Q` opens a shutdown confirmation. `Enter` or `Space` sends the lifecycle request; `Esc` cancels.
+- After an accepted or already-in-progress shutdown response, the TUI waits for backend disconnect or a 60 second timeout, then exits.
+- Hidden supervisor launch is deferred because the only current hidden supervisor path, `--steamvr-start`, changes supervisor lifecycle behavior.
+- No tray/minimize behavior, config schema, auto-start setting, terminal X-close guarantee, generic command executor, or `force-stop-supervisor` exposure was added.
+
 ## Risks And Safety Constraints
 
-- Do not make terminal close or `Q` implicitly stop the supervisor until a graceful shutdown command and confirmation UX exist.
+- Do not make terminal close/X-close implicitly stop the supervisor until a separate design exists.
 - Do not expose `force-stop-supervisor` through the TUI.
 - Do not make the Configurator launch hidden supervisor workflows until elevation, duplicate-instance, first-run prompt, and cleanup behavior are designed.
 - Do not break SteamVR overlay compatibility or legacy bridge commands.
@@ -79,15 +88,15 @@ Phase 18A is an audit/design phase only. It does not change runtime behavior, ba
 ## Proposed User-Facing Wording
 
 - `Launch Desktop TUI`: opens the terminal dashboard. It does not start or stop the supervisor.
+- `Launch Supervisor + Desktop TUI`: starts the normal supervisor workflow if needed, then opens the terminal dashboard.
 - `Launch Supervisor`: starts the classic supervisor console using the current config.
 - `Launch SteamVR`: starts SteamVR normally through Steam.
-- `Q Quit TUI`: closes only the Desktop TUI. The supervisor keeps running.
-- Future wording for shutdown should be explicit, for example `Stop supervisor and run cleanup`, not `Quit`.
+- `Q`: opens `Stop supervisor and exit TUI?` confirmation. Confirming runs Ctrl+C-equivalent supervisor cleanup.
 
 ## Proposed Future Phase Breakdown
 
 - Phase 18B: Configurator `Launch Desktop TUI` button.
-- Phase 18C: hidden supervisor plus TUI launch workflow.
-- Phase 18D: backend graceful shutdown command design and implementation.
-- Phase 18E: TUI close/`Q` shutdown semantics.
+- Phase 18C: primary TUI lifecycle with Ctrl+C-equivalent shutdown.
+- Phase 18D: lifecycle runtime hardening and hidden supervisor mode review.
+- Phase 18E: terminal close/X-close behavior design.
 - Phase 18F: tray/minimize architecture decision.
