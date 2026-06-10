@@ -945,28 +945,22 @@ fn action_card_line(app: &App, action: TuiAction, now: Instant, width: u16) -> L
 
 fn compact_action_line(app: &App, action: TuiAction, now: Instant, width: u16) -> Line<'static> {
     let state = action_state(app, action, now);
-    let leading = format!(
-        "{} {} {}",
-        action.digit(),
-        action.short_label(),
-        action_state_text(&state)
-    );
+    const LABEL_WIDTH: usize = 11;
+    const BADGE_WIDTH: usize = 13;
+
+    let label = format!("{} {}", action.digit(), compact_action_label(action));
     let display_name = action.display_name();
-    let max_leading_width = (width as usize).saturating_sub(display_name.chars().count() + 3);
-    let leading = truncate(&leading, max_leading_width.max(1));
-    let padding = (width as usize)
-        .saturating_sub(leading.chars().count() + display_name.chars().count())
-        .max(2);
+    let reserved_width = LABEL_WIDTH + BADGE_WIDTH + 1;
+    let display_width = (width as usize).saturating_sub(reserved_width);
+    let display_name = truncate(display_name, display_width);
 
     Line::from(vec![
-        Span::styled(
-            format!("{} {}", action.digit(), action.short_label()),
-            theme::title_style(),
-        ),
-        Span::raw(" "),
+        Span::styled(format!("{label:<LABEL_WIDTH$}"), theme::title_style()),
         action_state_span(&state),
-        Span::raw(" ".repeat(padding)),
-        Span::styled(display_name.to_string(), foreground(theme::TEXT_SECONDARY)),
+        Span::raw(
+            " ".repeat(BADGE_WIDTH.saturating_sub(action_state_text(&state).chars().count()) + 1),
+        ),
+        Span::styled(display_name, foreground(theme::TEXT_SECONDARY)),
     ])
 }
 
@@ -992,6 +986,13 @@ fn small_action_label(action: TuiAction) -> &'static str {
         TuiAction::BaseStationsOff => "Off",
         TuiAction::RestartOscRouter => "OSC",
         TuiAction::ReloadAutostartApps => "Auto",
+    }
+}
+
+fn compact_action_label(action: TuiAction) -> &'static str {
+    match action {
+        TuiAction::ReloadAutostartApps => "Auto",
+        _ => action.short_label(),
     }
 }
 

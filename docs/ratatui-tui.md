@@ -132,6 +132,8 @@ Phase 17H changes status/action badges to bracket text, for example `[OK]`, `[ST
 
 Phase 17I corrects the badge semantics. Normal status badges now render as unbracketed colored words such as `OK`, `READY`, `WAITING`, `OFF`, and `BACKEND OFF`. Brackets are reserved for interactive action buttons such as `[START]`, while non-startable action states such as `RUNNING`, `BACKEND OFF`, `BLOCKED`, and `UNAVAILABLE` remain unbracketed. Compact and small action rows keep `[START]` close to the action label.
 
+Phase 17J aligns compact dashboard action rows with fixed label and badge columns. Compact rows use `1 Core`, `2 OGB`, `3 BS On`, `4 BS Off`, `5 OSC`, and `6 Auto`, followed by a single aligned action-state column and the display name. Full cards and the small `80x20` grid keep their existing structure.
+
 ## Build
 
 Windows builds require the Rust stable MSVC toolchain. Visual Studio Build Tools with the C++ workload may be required.
@@ -210,6 +212,8 @@ Phase 17G keeps those semantics and only polishes the small layout alignment. Fu
 Phase 17H keeps the same behavior while polishing bracket badge readability. Modal controls remain neutral text, and future TUI-as-primary lifecycle, tray minimize, Configurator launch, and graceful shutdown behavior remain separate future work.
 
 Phase 17I keeps the same behavior while splitting status and interactive badge rendering. Bracketed `[START]` marks a startable action button; normal status words stay unbracketed. No backend, C#, shutdown, tray, Configurator launch, or lifecycle behavior changed.
+
+Phase 17J keeps the same behavior while aligning compact action badge columns. It is rendering-only and does not change the bridge protocol, backend action allowlist, `Q` semantics, shutdown/tray behavior, or Configurator behavior.
 
 ## Future Direction
 

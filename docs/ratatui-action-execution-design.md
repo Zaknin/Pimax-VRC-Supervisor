@@ -118,6 +118,10 @@ Phase 17H is also rendering-only. It changes status/action badges to bracket tex
 
 Phase 17I is rendering-only and corrects badge semantics without changing action safety. Normal status badges render as colored words without brackets, while brackets are reserved for interactive action buttons such as `[START]`. Non-startable action states remain unbracketed, compact and small action rows keep `[START]` close to the label, and no backend, bridge, lifecycle, shutdown, tray, Configurator, or action allowlist behavior changed.
 
+## Phase 17J Implementation Status
+
+Phase 17J is rendering-only and aligns the compact dashboard action rows with fixed label and badge columns. It preserves the Phase 17I badge rule: interactive `[START]` stays bracketed, non-startable action states and normal status badges remain unbracketed, and no backend, bridge protocol, lifecycle, shutdown, tray, Configurator, SteamVR host, classic console, or action allowlist behavior changed.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:

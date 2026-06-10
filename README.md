@@ -241,6 +241,8 @@ Phase 17H switches TUI status/action badges to bracket text such as `[OK]`, `[ST
 
 Phase 17I corrects that badge split: status badges such as `OK`, `READY`, `WAITING`, `OFF`, and `BACKEND OFF` keep colored backgrounds without brackets, while brackets are reserved for interactive action buttons such as `[START]`. Compact and small action rows keep `[START]` close to the action label. No backend, C#, shutdown, tray, lifecycle, or Configurator behavior changed.
 
+Phase 17J aligns the compact dashboard action rows so `[START]` and other action states appear in one stable badge column: `1 Core [START]`, `2 OGB [START]`, through `6 Auto [START]`. Status badges remain unbracketed, full and small layouts are unchanged, and no backend, shutdown, tray, lifecycle, or Configurator behavior changed.
+
 ## Key Configuration
 
 The release includes a commented `supervisor.config.json`. Important settings:
