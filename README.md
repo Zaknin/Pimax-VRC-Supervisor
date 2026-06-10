@@ -247,6 +247,8 @@ Phase 17K fine-tunes compact and small action spacing. Compact rows keep aligned
 
 Phase 17L restricts compact and small mouse action zones to the interactive `[START]` badge only. Full 2x3 action cards remain whole-card clickable, but compact row labels, display names, backgrounds, small-cell labels, and gutters no longer start actions. Keyboard `1`-`6` still opens confirmation; backend, bridge, `Q`, shutdown, tray, and lifecycle behavior are unchanged.
 
+Phase 17L follow-up keeps the compact layout as a one-column action list and adds vertical row spacing only when the action panel has spare height. Small layout keeps the current 3-column grid with no vertical gaps and `[START]`-only click zones.
+
 ## Key Configuration
 
 The release includes a commented `supervisor.config.json`. Important settings:

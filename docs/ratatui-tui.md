@@ -138,6 +138,8 @@ Phase 17K fine-tunes that spacing. Compact rows keep their aligned label and `[S
 
 Phase 17L restricts compact and small mouse action regions to `[START]` only. Full cards still behave as whole-card action buttons, but compact labels, display names, row backgrounds, small labels, and gutters are no longer clickable. Keyboard shortcuts continue to open confirmation.
 
+Phase 17L follow-up keeps compact actions as a one-column list with optional vertical row spacing when the panel height allows. Small actions keep the current 3-column grid with no vertical gaps, and only `[START]` remains clickable in compact/small layouts.
+
 ## Build
 
 Windows builds require the Rust stable MSVC toolchain. Visual Studio Build Tools with the C++ workload may be required.
@@ -222,6 +224,8 @@ Phase 17J keeps the same behavior while aligning compact action badge columns. I
 Phase 17K keeps the same behavior while tuning compact and small action spacing. Backend, bridge, action execution, `Q`, lifecycle, shutdown, tray, SteamVR host, classic console, and Configurator behavior remain unchanged.
 
 Phase 17L keeps the same behavior while narrowing compact/small click regions to interactive `[START]` badges. It does not change the bridge protocol, backend action allowlist, `Q` semantics, shutdown/tray behavior, SteamVR host, classic console, or Configurator behavior.
+
+The Phase 17L spacing follow-up is rendering-only: compact rows may gain vertical breathing room when space allows, while full and small layout behavior remains unchanged.
 
 ## Future Direction
 

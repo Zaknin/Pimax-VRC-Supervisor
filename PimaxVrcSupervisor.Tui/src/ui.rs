@@ -299,12 +299,16 @@ fn render_compact_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now:
     frame.render_widget(block, area);
 
     let mut lines = Vec::new();
-    for action in TuiAction::ALL {
-        if lines.len() >= inner.height as usize {
+    let spaced_rows = inner.height as usize >= TuiAction::ALL.len().saturating_mul(2) - 1;
+    let row_step = if spaced_rows { 2 } else { 1 };
+
+    for (index, action) in TuiAction::ALL.iter().copied().enumerate() {
+        let row_offset = index * row_step;
+        if row_offset >= inner.height as usize {
             break;
         }
 
-        let row = inner.y.saturating_add(lines.len() as u16);
+        let row = inner.y.saturating_add(row_offset as u16);
         let state = action_state(app, action, now);
         register_start_badge_click_region(
             app,
@@ -320,6 +324,10 @@ fn render_compact_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now:
             now,
             inner.width.saturating_sub(1),
         ));
+
+        if spaced_rows && index + 1 < TuiAction::ALL.len() && lines.len() < inner.height as usize {
+            lines.push(Line::from(""));
+        }
     }
 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);

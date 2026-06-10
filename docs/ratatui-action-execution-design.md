@@ -130,6 +130,8 @@ Phase 17K is rendering-only and fine-tunes compact/small action spacing. Compact
 
 Phase 17L is rendering/click-region-only. Full action cards remain whole-card clickable, while compact and small layouts register action click regions only over the visible `[START]` badge. Labels, descriptions, row backgrounds, gutters, and non-startable states are not action click targets. It preserves the same `TuiAction` allowlist, keyboard confirmation flow, bridge behavior, `Q` semantics, and backend safety model.
 
+Phase 17L follow-up keeps compact actions as a one-column list and adds optional vertical row spacing only when the compact action panel has enough height. Small layout keeps the current 3-column action grid with no vertical gaps. Click behavior and backend safety are unchanged.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:

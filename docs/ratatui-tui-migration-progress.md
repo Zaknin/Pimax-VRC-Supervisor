@@ -2173,6 +2173,15 @@ Runtime testing:
 - Runtime visual/mouse testing was not performed during implementation.
 - When safe, verify full cards remain whole-card clickable, compact/small `[START]` clicks start actions, compact/small labels/descriptions/background/gutters do nothing, keyboard `1`-`6` still opens confirmation, and no supervisor shutdown/tray/lifecycle behavior was introduced.
 
+Follow-up spacing adjustment:
+
+- Kept compact actions as a one-column list.
+- Added optional vertical spacing between compact action rows only when the compact action panel height can fit six actions plus five spacer rows.
+- Kept compact `[START]` column alignment and `[START]`-only click regions.
+- Kept the small layout as the current 3-column action grid with no vertical gaps and `[START]`-only click regions.
+- Full layout remained unchanged.
+- No backend, bridge, action behavior, `Q` behavior, lifecycle, shutdown, tray, SteamVR host, classic console, or Configurator behavior changed.
+
 Short Phase 18 direction:
 
 - Run a manual VR-session runtime matrix for the final adaptive TUI layouts and decide separately whether TUI-as-primary lifecycle, tray minimize, Configurator launch, or graceful supervisor shutdown should be designed in a later phase.
