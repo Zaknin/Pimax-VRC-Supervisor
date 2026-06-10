@@ -126,6 +126,10 @@ Phase 17J is rendering-only and aligns the compact dashboard action rows with fi
 
 Phase 17K is rendering-only and fine-tunes compact/small action spacing. Compact rows keep aligned label and action-state columns without pushing display names too far right, and the small layout adds a fixed gutter between action cells while keeping `[START]` close to each label. It preserves the same `TuiAction` allowlist, badge rules, bridge behavior, `Q` semantics, and backend safety model.
 
+## Phase 17L Implementation Status
+
+Phase 17L is rendering/click-region-only. Full action cards remain whole-card clickable, while compact and small layouts register action click regions only over the visible `[START]` badge. Labels, descriptions, row backgrounds, gutters, and non-startable states are not action click targets. It preserves the same `TuiAction` allowlist, keyboard confirmation flow, bridge behavior, `Q` semantics, and backend safety model.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:

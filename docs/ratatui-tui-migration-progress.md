@@ -2103,6 +2103,80 @@ Runtime testing:
 - Runtime base-station overlap testing was not performed during implementation.
 - When safe, test Base Stations On/Off overlap from separate entry points and verify the overlapping request logs/returns the busy message while the supervisor continues running.
 
+### Phase 17L - Compact and small TUI action click zones
+
+Status: Completed
+
+Summary:
+
+- Refined only Rust TUI rendering/click-region behavior and docs after Phase 17K.
+- Kept backend behavior, bridge protocol, SteamVR host behavior, classic console behavior, Configurator behavior, cleanup/lifecycle behavior, action semantics, `Q` behavior, and the Phase 16B base-station guard unchanged.
+- Did not modify `PimaxVrcSupervisor/Program.cs` or `PimaxVrcSupervisor.Tui/src/bridge.rs`.
+- Did not add supervisor shutdown, tray behavior, Configurator launch options, graceful stop actions, new backend actions, new crates, or copied GPL/reference code.
+
+Rust TUI changes:
+
+- Kept full-layout 2x3 action cards whole-card clickable.
+- Replaced compact whole-row action click regions with `[START]`-badge-only click regions.
+- Replaced small whole-cell action click regions with `[START]`-badge-only click regions.
+- Registered compact/small action click regions only when the rendered action state is `START`.
+- Left labels, display names, row backgrounds, small-cell labels, gutters, empty panel space, and non-startable states non-clickable in compact/small layouts.
+- Preserved the Phase 17I badge rule: interactive `[START]` remains bracketed, while normal status badges and non-startable action states remain unbracketed.
+- Preserved keyboard `1`-`6` confirmation behavior, mouse wheel logs, Help/modal mouse consumption, dashboard `Q`, modal `Q`, and action validation behavior.
+
+Documentation changes:
+
+- Updated README and Ratatui docs to record compact/small `[START]`-only click zones.
+- Updated the action safety design to record Phase 17L as rendering/click-region-only.
+- Recorded that no backend/C# behavior, bridge behavior, shutdown/tray/lifecycle behavior, Configurator behavior, or action semantics changed.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `README.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- `cargo fmt` completed successfully.
+- Rust debug and release builds completed successfully.
+- All three C# release builds completed successfully with 0 warnings and 0 errors.
+- Source inspection confirmed `PimaxVrcSupervisor/Program.cs` has no Phase 17L diff.
+- Source inspection confirmed `bridge.rs` has no Phase 17L diff, no generic arbitrary command executor, and sends `action-json` only through `execute_tui_action(TuiAction)`.
+- Source inspection confirmed the TUI sends no legacy action command strings directly, `force-stop-supervisor` remains unexposed, and dashboard/modal `Q` sends no backend command.
+
+Release/copy result:
+
+- Rebuilt `PimaxVrcSupervisorTui.exe` was copied to `release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe`.
+- No C# publish was performed because no C# files changed.
+
+Generated output status:
+
+- `git status --short release` produced no staged/tracked release output.
+- `git status --ignored --short release` reported `!! release/`.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
+- Generated `release/` and Rust `target/` output remain ignored and were not staged.
+
+Runtime testing:
+
+- Runtime visual/mouse testing was not performed during implementation.
+- When safe, verify full cards remain whole-card clickable, compact/small `[START]` clicks start actions, compact/small labels/descriptions/background/gutters do nothing, keyboard `1`-`6` still opens confirmation, and no supervisor shutdown/tray/lifecycle behavior was introduced.
+
+Short Phase 18 direction:
+
+- Run a manual VR-session runtime matrix for the final adaptive TUI layouts and decide separately whether TUI-as-primary lifecycle, tray minimize, Configurator launch, or graceful supervisor shutdown should be designed in a later phase.
+
 ### Phase 17K - Compact and small TUI action spacing
 
 Status: Completed

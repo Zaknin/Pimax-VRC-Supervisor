@@ -20,6 +20,9 @@ const COMPACT_MIN_WIDTH: u16 = 100;
 const COMPACT_MIN_HEIGHT: u16 = 26;
 const SMALL_MIN_WIDTH: u16 = 80;
 const SMALL_MIN_HEIGHT: u16 = 20;
+const COMPACT_ACTION_LABEL_WIDTH: usize = 11;
+const COMPACT_ACTION_BADGE_WIDTH: usize = 11;
+const SMALL_ACTION_CELL_GUTTER: u16 = 2;
 
 pub fn render(frame: &mut Frame<'_>, app: &mut App) {
     app.clear_click_regions();
@@ -302,9 +305,13 @@ fn render_compact_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now:
         }
 
         let row = inner.y.saturating_add(lines.len() as u16);
-        app.add_click_region(
+        let state = action_state(app, action, now);
+        register_start_badge_click_region(
+            app,
             Rect::new(inner.x, row, inner.width, 1),
-            ClickAction::SelectAction(action),
+            COMPACT_ACTION_LABEL_WIDTH as u16,
+            &state,
+            action,
         );
 
         lines.push(compact_action_line(
@@ -446,8 +453,6 @@ fn render_small_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: I
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    const CELL_GUTTER: u16 = 2;
-
     for row_index in 0..2 {
         let row_y = inner.y.saturating_add(row_index as u16);
         if row_y >= inner.y.saturating_add(inner.height) {
@@ -460,12 +465,12 @@ fn render_small_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: I
                 continue;
             };
 
-            let total_gutter = CELL_GUTTER.saturating_mul(2);
+            let total_gutter = SMALL_ACTION_CELL_GUTTER.saturating_mul(2);
             let available_width = inner.width.saturating_sub(total_gutter);
             let column_width = available_width / 3;
             let x = inner.x.saturating_add(
                 column_width
-                    .saturating_add(CELL_GUTTER)
+                    .saturating_add(SMALL_ACTION_CELL_GUTTER)
                     .saturating_mul(column_index as u16),
             );
             let width = if column_index == 2 {
@@ -475,7 +480,14 @@ fn render_small_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: I
             };
 
             let cell = Rect::new(x, row_y, width, 1);
-            app.add_click_region(cell, ClickAction::SelectAction(action));
+            let state = action_state(app, action, now);
+            register_start_badge_click_region(
+                app,
+                cell,
+                small_action_badge_offset(action),
+                &state,
+                action,
+            );
             frame.render_widget(
                 Paragraph::new(small_action_cell_line(
                     app,
@@ -951,21 +963,23 @@ fn action_card_line(app: &App, action: TuiAction, now: Instant, width: u16) -> L
 
 fn compact_action_line(app: &App, action: TuiAction, now: Instant, width: u16) -> Line<'static> {
     let state = action_state(app, action, now);
-    const LABEL_WIDTH: usize = 11;
-    const BADGE_WIDTH: usize = 11;
 
     let label = format!("{} {}", action.digit(), compact_action_label(action));
     let display_name = action.display_name();
-    let reserved_width = LABEL_WIDTH + BADGE_WIDTH + 1;
+    let reserved_width = COMPACT_ACTION_LABEL_WIDTH + COMPACT_ACTION_BADGE_WIDTH + 1;
     let display_width = (width as usize).saturating_sub(reserved_width);
     let display_name = truncate(display_name, display_width);
 
     Line::from(vec![
-        Span::styled(format!("{label:<LABEL_WIDTH$}"), theme::title_style()),
-        action_state_span(&state),
-        Span::raw(
-            " ".repeat(BADGE_WIDTH.saturating_sub(action_state_text(&state).chars().count()) + 1),
+        Span::styled(
+            format!("{label:<COMPACT_ACTION_LABEL_WIDTH$}"),
+            theme::title_style(),
         ),
+        action_state_span(&state),
+        Span::raw(" ".repeat(
+            COMPACT_ACTION_BADGE_WIDTH.saturating_sub(action_state_text(&state).chars().count())
+                + 1,
+        )),
         Span::styled(display_name, foreground(theme::TEXT_SECONDARY)),
     ])
 }
@@ -1000,6 +1014,36 @@ fn compact_action_label(action: TuiAction) -> &'static str {
         TuiAction::ReloadAutostartApps => "Auto",
         _ => action.short_label(),
     }
+}
+
+fn small_action_badge_offset(action: TuiAction) -> u16 {
+    format!("{} {:<4} ", action.digit(), small_action_label(action))
+        .chars()
+        .count() as u16
+}
+
+fn register_start_badge_click_region(
+    app: &mut App,
+    area: Rect,
+    badge_offset: u16,
+    state: &ActionState,
+    action: TuiAction,
+) {
+    if state.label != "START" {
+        return;
+    }
+
+    let badge_x = area.x.saturating_add(badge_offset);
+    let area_right = area.x.saturating_add(area.width);
+    if badge_x >= area_right {
+        return;
+    }
+
+    let badge_width = (action_state_text(state).chars().count() as u16).min(area_right - badge_x);
+    app.add_click_region(
+        Rect::new(badge_x, area.y, badge_width, area.height),
+        ClickAction::SelectAction(action),
+    );
 }
 
 fn last_action_line(app: &App, now: Instant, max_message: usize) -> Line<'static> {

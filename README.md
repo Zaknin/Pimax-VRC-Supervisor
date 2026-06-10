@@ -245,6 +245,8 @@ Phase 17J aligns the compact dashboard action rows so `[START]` and other action
 
 Phase 17K fine-tunes compact and small action spacing. Compact rows keep aligned label and `[START]` columns without pushing display names too far right, and the small `80x20` action grid adds a fixed gutter between cells while keeping `[START]` close to each label. This is rendering-only; backend, bridge, action, `Q`, and lifecycle behavior are unchanged.
 
+Phase 17L restricts compact and small mouse action zones to the interactive `[START]` badge only. Full 2x3 action cards remain whole-card clickable, but compact row labels, display names, backgrounds, small-cell labels, and gutters no longer start actions. Keyboard `1`-`6` still opens confirmation; backend, bridge, `Q`, shutdown, tray, and lifecycle behavior are unchanged.
+
 ## Key Configuration
 
 The release includes a commented `supervisor.config.json`. Important settings:

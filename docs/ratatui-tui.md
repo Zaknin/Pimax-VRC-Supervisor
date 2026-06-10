@@ -136,6 +136,8 @@ Phase 17J aligns compact dashboard action rows with fixed label and badge column
 
 Phase 17K fine-tunes that spacing. Compact rows keep their aligned label and `[START]` columns but use a tighter badge column so display names stay closer. The small action grid adds a fixed gutter between the three cells while keeping each cell composed as number, short label, and nearby `[START]`.
 
+Phase 17L restricts compact and small mouse action regions to `[START]` only. Full cards still behave as whole-card action buttons, but compact labels, display names, row backgrounds, small labels, and gutters are no longer clickable. Keyboard shortcuts continue to open confirmation.
+
 ## Build
 
 Windows builds require the Rust stable MSVC toolchain. Visual Studio Build Tools with the C++ workload may be required.
@@ -218,6 +220,8 @@ Phase 17I keeps the same behavior while splitting status and interactive badge r
 Phase 17J keeps the same behavior while aligning compact action badge columns. It is rendering-only and does not change the bridge protocol, backend action allowlist, `Q` semantics, shutdown/tray behavior, or Configurator behavior.
 
 Phase 17K keeps the same behavior while tuning compact and small action spacing. Backend, bridge, action execution, `Q`, lifecycle, shutdown, tray, SteamVR host, classic console, and Configurator behavior remain unchanged.
+
+Phase 17L keeps the same behavior while narrowing compact/small click regions to interactive `[START]` badges. It does not change the bridge protocol, backend action allowlist, `Q` semantics, shutdown/tray behavior, SteamVR host, classic console, or Configurator behavior.
 
 ## Future Direction
 
