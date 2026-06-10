@@ -96,6 +96,10 @@ Phase 17D keeps the same action allowlist, bridge protocol, and backend guardrai
 
 The modal controls remain clickable but render as neutral text. Recent Logs add live-follow mode; log navigation does not affect action safety or backend command execution.
 
+## Phase 17E Implementation Status
+
+Phase 17E remains UI-only. It adds adaptive full, compact, and tiny layout tiers, cleaner action-card foreground text, consistent full-card action hints, and mouse wheel log scrolling. Compact and full action regions still map only to existing `TuiAction` values, and wheel scrolling affects only the local log viewport/follow state. No backend allowlist, bridge protocol, SteamVR host, classic console, Configurator, or Phase 16B base-station guard behavior changed.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:

@@ -14,8 +14,10 @@ use crate::{
     theme,
 };
 
-const MIN_WIDTH: u16 = 120;
-const MIN_HEIGHT: u16 = 36;
+const FULL_MIN_WIDTH: u16 = 120;
+const FULL_MIN_HEIGHT: u16 = 32;
+const COMPACT_MIN_WIDTH: u16 = 100;
+const COMPACT_MIN_HEIGHT: u16 = 26;
 
 pub fn render(frame: &mut Frame<'_>, app: &mut App) {
     app.clear_click_regions();
@@ -23,19 +25,33 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
     frame.render_widget(Block::default().style(theme::app_style()), area);
 
-    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
-        render_small_terminal(frame, area, app);
+    let now = Instant::now();
+    if area.width >= FULL_MIN_WIDTH && area.height >= FULL_MIN_HEIGHT {
+        render_full_dashboard(frame, area, app, now);
+    } else if area.width >= COMPACT_MIN_WIDTH && area.height >= COMPACT_MIN_HEIGHT {
+        render_compact_dashboard(frame, area, app, now);
+    } else {
+        render_tiny_fallback(frame, area, app);
         return;
     }
 
-    let now = Instant::now();
+    if app.help_visible {
+        render_help(frame, area);
+    }
+
+    if app.confirmation.is_some() {
+        render_action_confirmation(frame, area, app);
+    }
+}
+
+fn render_full_dashboard(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: Instant) {
     let root = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Min(11),
-            Constraint::Length(7),
-            Constraint::Min(7),
+            Constraint::Length(12),
+            Constraint::Length(6),
+            Constraint::Min(8),
             Constraint::Length(1),
         ])
         .split(area);
@@ -59,27 +75,45 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App) {
 
     render_logs(frame, root[3], app);
     render_footer(frame, root[4], app);
-
-    if app.help_visible {
-        render_help(frame, area);
-    }
-
-    if app.confirmation.is_some() {
-        render_action_confirmation(frame, area, app);
-    }
 }
 
-fn render_small_terminal(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
+fn render_compact_dashboard(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: Instant) {
+    let root = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(11),
+            Constraint::Length(4),
+            Constraint::Min(7),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    render_header(frame, root[0], app, now);
+
+    let main = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(44), Constraint::Percentage(56)])
+        .split(root[1]);
+
+    render_compact_status(frame, main[0], app);
+    render_compact_actions(frame, main[1], app, now);
+    render_compact_action_activity(frame, root[2], app, now);
+    render_logs(frame, root[3], app);
+    render_footer(frame, root[4], app);
+}
+
+fn render_tiny_fallback(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let lines = vec![
         Line::from(Span::styled(
             "Pimax VRC Supervisor TUI",
             theme::title_style(),
         )),
-        Line::from("Terminal too small for full dashboard."),
+        Line::from("Terminal too small for dashboard."),
         Line::from(format!(
-            "Resize to at least {MIN_WIDTH}x{MIN_HEIGHT}. Current: {}x{}.",
-            area.width, area.height
+            "Compact starts at {COMPACT_MIN_WIDTH}x{COMPACT_MIN_HEIGHT}; full starts at {FULL_MIN_WIDTH}x{FULL_MIN_HEIGHT}.",
         )),
+        Line::from(format!("Current terminal: {}x{}.", area.width, area.height)),
         Line::from(""),
         Line::from(vec![
             Span::styled("0 Help", theme::success_style()),
@@ -193,6 +227,141 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     );
 }
 
+fn render_compact_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let status = &app.status;
+    let lines = vec![
+        simple_status_line("Mode", status.mode.as_str()),
+        status_line(
+            "Lifecycle",
+            status.lifecycle.as_str(),
+            status_badge("lifecycle", &status.lifecycle),
+        ),
+        status_line(
+            "SteamVR",
+            status.steam_vr.as_str(),
+            status_badge("steamvr", &status.steam_vr),
+        ),
+        core_apps_status_line(app),
+        status_line(
+            "OSC",
+            status.osc_router.as_str(),
+            status_badge("osc", &status.osc_router),
+        ),
+        status_line(
+            "Base",
+            status.base_stations.as_str(),
+            status_badge("base", &status.base_stations),
+        ),
+    ];
+
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(theme::panel_block("Status"))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn render_compact_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: Instant) {
+    let block = theme::panel_block("Actions");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines = Vec::new();
+    for action in TuiAction::ALL {
+        if lines.len() >= inner.height as usize {
+            break;
+        }
+
+        let row = inner.y.saturating_add(lines.len() as u16);
+        app.add_click_region(
+            Rect::new(inner.x, row, inner.width, 1),
+            ClickAction::SelectAction(action),
+        );
+
+        lines.push(compact_action_line(
+            app,
+            action,
+            now,
+            inner.width.saturating_sub(1),
+        ));
+    }
+
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+}
+
+fn render_compact_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
+    let mut lines = Vec::new();
+
+    if app.running_actions.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("Running ", theme::label_style()),
+            Span::styled("none", foreground(theme::TEXT_SECONDARY)),
+        ]));
+    } else {
+        let running = app.running_actions.first().expect("running action exists");
+        lines.push(Line::from(vec![
+            Span::styled("Running ", theme::label_style()),
+            Span::styled(
+                format!(
+                    "{} {}",
+                    running.action.short_label(),
+                    format_duration(now.duration_since(running.started_at))
+                ),
+                theme::success_style(),
+            ),
+        ]));
+    }
+
+    if let Some(outcome) = app.last_action_outcome {
+        let command = app.last_action_command.as_deref().unwrap_or("action");
+        let when = app
+            .last_action_completed_label(now)
+            .unwrap_or_else(|| "unknown time".to_string());
+        let (status, style) = action_outcome_style(outcome);
+        let message = app
+            .last_action_result
+            .as_deref()
+            .or(app.last_action_error.as_deref())
+            .unwrap_or("");
+        lines.push(Line::from(vec![
+            Span::styled("Last ", theme::label_style()),
+            Span::styled(status, style),
+            Span::styled(format!(" {when} "), foreground(theme::TEXT_SECONDARY)),
+            Span::styled(command.to_string(), foreground(theme::TEXT_PRIMARY)),
+            Span::raw(" - "),
+            Span::raw(truncate(message, 80)),
+        ]));
+    } else if let Some(error) = app.last_error.as_deref() {
+        lines.push(Line::from(vec![
+            Span::styled("Backend ", theme::label_style()),
+            Span::styled("ERROR", theme::error_style()),
+            Span::raw(" "),
+            Span::raw(truncate(error, 96)),
+        ]));
+    } else {
+        let backend = match app.connection {
+            ConnectionState::Connected => ("OK", theme::success_style()),
+            ConnectionState::Disconnected => ("OFF", theme::error_style()),
+        };
+        lines.push(Line::from(vec![
+            Span::styled("Backend ", theme::label_style()),
+            Span::styled(backend.0, backend.1),
+            Span::styled(
+                format!(" {}", app.backend_endpoint),
+                foreground(theme::TEXT_SECONDARY),
+            ),
+        ]));
+    }
+
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(theme::panel_block("Activity"))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
 fn render_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: Instant) {
     let block = theme::panel_block("Actions");
     let inner = block.inner(area);
@@ -264,15 +433,21 @@ fn render_action_card(
     let inner_width = area.width.saturating_sub(2);
     let mut lines = vec![
         action_card_line(app, action, now, inner_width),
-        Line::from(Span::styled(action.display_name(), theme::primary_style())),
+        Line::from(Span::styled(
+            action.display_name(),
+            foreground(theme::TEXT_PRIMARY),
+        )),
     ];
 
     if let Some(detail) = state.detail {
-        lines.push(Line::from(Span::styled(detail, theme::secondary_style())));
-    } else if state.label == "START" && area.height >= 5 {
+        lines.push(Line::from(Span::styled(
+            detail,
+            foreground(theme::TEXT_SECONDARY),
+        )));
+    } else if state.label == "START" {
         lines.push(Line::from(Span::styled(
             format!("click or press {}", action.digit()),
-            theme::dim_style(),
+            foreground(theme::TEXT_DIM),
         )));
     }
 
@@ -521,6 +696,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         help_line("Q", "Quit TUI on dashboard only"),
         help_line("UP/PGUP", "Scroll logs older, pauses live follow"),
         help_line("DOWN/PGDN", "Scroll logs newer"),
+        help_line("WHEEL", "Scroll logs older/newer"),
         help_line("END/F", "Resume latest log follow"),
         Line::from(""),
         Line::from(Span::styled(
@@ -579,6 +755,22 @@ fn action_card_line(app: &App, action: TuiAction, now: Instant, width: u16) -> L
     let left = format!("{} {}", action.digit(), action.short_label());
     aligned_line(
         &left,
+        state.label_text().as_ref(),
+        width as usize,
+        state.style,
+    )
+}
+
+fn compact_action_line(app: &App, action: TuiAction, now: Instant, width: u16) -> Line<'static> {
+    let state = action_state(app, action, now);
+    let left = format!(
+        "{} {:<9} {}",
+        action.digit(),
+        action.short_label(),
+        action.display_name()
+    );
+    aligned_line(
+        &truncate(&left, width.saturating_sub(12) as usize),
         state.label_text().as_ref(),
         width as usize,
         state.style,
@@ -728,9 +920,9 @@ fn register_modal_clicks(app: &mut App, popup: Rect) {
 
 fn shortcut_line(width: u16) -> &'static str {
     if width >= 100 {
-        "0 Help  F5 Refresh  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  End/F Follow  Q Quit TUI"
+        "0 Help  F5 Refresh  Wheel Logs  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  Q Quit TUI"
     } else {
-        "0 Help  F5 Refresh  1-6 Actions  End/F Logs  Q Quit TUI"
+        "0 Help  F5 Refresh  1-6 Actions  Wheel Logs  Q Quit TUI"
     }
 }
 
@@ -844,6 +1036,10 @@ fn status_badge(kind: &str, value: &str) -> Span<'static> {
 
 fn fixed_badge(label: &str, style: Style) -> Span<'static> {
     Span::styled(format!("{label:<8}"), style)
+}
+
+fn foreground(color: Color) -> Style {
+    Style::default().fg(color)
 }
 
 fn action_is_executable(command: &CommandSummary) -> bool {

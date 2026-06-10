@@ -2103,6 +2103,84 @@ Runtime testing:
 - Runtime base-station overlap testing was not performed during implementation.
 - When safe, test Base Stations On/Off overlap from separate entry points and verify the overlapping request logs/returns the busy message while the supervisor continues running.
 
+### Phase 17E - Adaptive TUI layout, cleaner action cards, and mouse log scrolling
+
+Status: Completed
+
+Summary:
+
+- Refined only the Rust desktop TUI UI/interaction layer after Phase 17D.
+- Kept backend behavior, bridge protocol, SteamVR host behavior, classic console behavior, Configurator behavior, cleanup/lifecycle behavior, and the Phase 16B base-station guard unchanged.
+- Did not modify `PimaxVrcSupervisor/Program.cs`.
+
+Rust TUI changes:
+
+- Replaced the single `120x36` full-layout gate with adaptive tiers:
+  - full dashboard at `120x32` or larger
+  - compact dashboard at `100x26` or larger
+  - tiny resize fallback below compact size
+- Added a useful compact dashboard with backend state, key supervisor statuses, six compact action rows, latest action/backend result, recent logs, and footer controls.
+- Kept compact action rows backed only by existing `TuiAction` values; compact row clicks use the same action click-region model.
+- Adjusted the full dashboard spacing so `130x34` fits the full dashboard path.
+- Kept full action cards equal-height and consistently showing `click or press <number>` hints.
+- Removed unintended background styling from normal action-card names and hints while preserving intentional badge backgrounds for `START`, `RUNNING`, `BACKEND OFF`, `BLOCKED`, and `UNAVAILABLE`.
+- Added mouse wheel log scrolling: wheel up scrolls older and pauses live follow; wheel down scrolls newer and resumes follow when the latest entries are reached.
+- Help overlay now consumes any mouse event and closes Help; the confirmation modal consumes mouse events and does not allow wheel scrolling through to logs.
+- Preserved Phase 17D log-follow semantics: live by default, `Up`/`PageUp` pause, `Down`/`PageDown` move newer, and `End`/`F` resume latest.
+
+Documentation changes:
+
+- Updated README and Ratatui docs to document adaptive layout tiers, compact dashboard behavior, cleaner action-card text, consistent full-card hints, and mouse wheel log scrolling.
+- Updated the action safety design to record Phase 17E as UI-only with no backend, protocol, allowlist, SteamVR host, classic console, Configurator, or Phase 16B guard changes.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `README.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- `cargo fmt` completed successfully.
+- Rust debug and release builds completed successfully.
+- All three C# release builds completed successfully with 0 warnings and 0 errors.
+- Source inspection confirmed `PimaxVrcSupervisor/Program.cs` has no Phase 17E diff.
+- Source inspection confirmed `bridge.rs` still has no generic arbitrary command executor and sends `action-json` only through `execute_tui_action(TuiAction)`.
+- Source inspection confirmed the TUI sends no legacy action command strings directly, `force-stop-supervisor` remains unexposed, and `Q`/`q` sends no backend command.
+
+Release/copy result:
+
+- Rebuilt `PimaxVrcSupervisorTui.exe` was copied to `release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe`.
+- No C# publish was performed because no C# files changed.
+
+Generated output status:
+
+- `git status --short release` produced no staged/tracked release output.
+- `git status --ignored --short release` reported `!! release/`.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
+- Generated `release/` and Rust `target/` output remain ignored and were not staged.
+
+Runtime testing:
+
+- Runtime visual/mouse testing was not performed during implementation.
+- When safe, verify `130x34` uses the full dashboard, compact sizes show useful status/actions/logs, tiny sizes show the resize fallback, full cards show hints, normal action-card text has no background underlay, and mouse wheel scrolling integrates with log follow mode.
+
+Short Phase 18 direction:
+
+- Run a manual VR-session test matrix for the adaptive full/compact/tiny layouts, mouse wheel log scrolling, backend-off/recovery states, and action-card click behavior before adding more UI behavior.
+
 ### Phase 17 - Pimax-inspired TUI visibility and usability polish
 
 Status: Completed

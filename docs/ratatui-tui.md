@@ -76,6 +76,7 @@ Primary shortcuts:
 - `Esc`: close Help, cancel confirmation, or quit the TUI
 - `Up` / `Down`: scroll logs
 - `PageUp` / `PageDown`: scroll logs by page
+- Mouse wheel: scroll logs
 - `Home`: jump to older logs
 - `End` / `F`: resume latest log follow
 - `Q` / `q`: quit only the Rust TUI from the dashboard; close Help in the Help overlay
@@ -85,7 +86,7 @@ Convenience aliases:
 - `R` / `r`: refresh
 - `F` / `f`: resume latest log follow
 
-The footer lists direct action mappings on wide terminals: `0 Help`, `F5 Refresh`, `1 Core`, `2 OGB`, `3 BS On`, `4 BS Off`, `5 OSC`, `6 Autostart`, `End/F Follow`, and `Q Quit TUI`. Narrow terminals may use the compact `1-6 Actions` label.
+The footer lists direct action mappings on wide terminals: `0 Help`, `F5 Refresh`, `1 Core`, `2 OGB`, `3 BS On`, `4 BS Off`, `5 OSC`, `6 Autostart`, and `Q Quit TUI`. Compact terminals may use the shorter `1-6 Actions` label.
 
 Help closes on any key press and consumes that key. For example, pressing `1`, `Enter`, `Q`, or `F5` while Help is visible closes Help only and does not trigger the dashboard action underneath.
 
@@ -117,7 +118,9 @@ Phase 17B also adds original mouse-click support. Clicking Confirm in the modal 
 
 Phase 17C refines action-card and backend-unavailable behavior. Keyboard `1`-`6` still opens confirmation, while mouse clicks on action cards start the selected allowed action immediately after the same backend, metadata, duplicate-command, and Base Stations On/Off conflict checks. Ready cards show `START`; disconnected cards show `BACKEND OFF` with muted borders and cannot start workers, even when cached command metadata exists from an earlier connection. The Core Apps status row shows `WAITING` while lifecycle is `waiting-vrchat` instead of warning that helper apps are incomplete.
 
-Phase 17D tightens the same operator layout. Backend-off state is authoritative across all six action cards, so disconnected cards never mix in conflict `BLOCKED` states. Modal controls remain mouse-clickable but render as neutral text. The full operator layout targets at least `120x36` so all normal action cards can show `click or press N` hints; smaller terminals show a resize fallback with the current size. Recent Logs follow the newest entries by default, scrolling older pauses live follow, and `End` or `F` resumes latest log follow.
+Phase 17D tightens the same operator layout. Backend-off state is authoritative across all six action cards, so disconnected cards never mix in conflict `BLOCKED` states. Modal controls remain mouse-clickable but render as neutral text. Recent Logs follow the newest entries by default, scrolling older pauses live follow, and `End` or `F` resumes latest log follow.
+
+Phase 17E adds adaptive layout tiers. Terminals at `120x32` or larger use the full dashboard; terminals at `100x26` or larger use a useful compact dashboard with backend state, key statuses, six compact action rows, latest action result, recent logs, and footer controls; smaller terminals show a tiny resize fallback. Full action cards keep equal-height hints, normal card text uses foreground-only styling while badges keep intentional backgrounds, and mouse wheel scrolling integrates with log follow mode.
 
 ## Build
 
@@ -147,6 +150,7 @@ Do not commit generated `target/` or `release/` output. Keep `PimaxVrcSupervisor
 - Read-only `query-json` polling keeps short timeouts; confirmed `action-json` requests use a separate longer timeout so successful backend work is not reported as a short polling timeout.
 - Confirmed actions run in the background; duplicate commands are blocked in the TUI, and Base Stations On/Off overlap is blocked by both the TUI and supervisor backend.
 - Recent Logs use live follow mode by default; manual upward scrolling pauses follow until `End` or `F` resumes it.
+- Mouse wheel scrolling uses the same log follow model: wheel up scrolls older and pauses follow, while wheel down scrolls newer and resumes live follow at the latest entry.
 - No legacy action commands are sent by the TUI.
 - `force-stop-supervisor` remains blocked and is not exposed.
 - No backend auto-start.
@@ -186,6 +190,8 @@ Phase 17B adds original mouse-click support and further reduces operator-screen 
 Phase 17C makes mouse action-card clicks direct-start actions after validation, while keyboard shortcuts remain confirmation-gated. It also makes backend-off action cards consistently disabled and display-only, simplifies modal controls to `Enter`/`Space` confirm and `Esc` cancel, and adds the display-only Core Apps waiting state for `waiting-vrchat`.
 
 Phase 17D makes backend-off card rendering authoritative, neutralizes modal control styling, makes full-layout card hints consistent, and adds Recent Logs live-follow mode.
+
+Phase 17E adds adaptive full/compact/tiny layout tiers, cleans normal action-card text styling, keeps full-card action hints consistent, and adds mouse wheel log scrolling without backend or protocol changes.
 
 ## Future Direction
 

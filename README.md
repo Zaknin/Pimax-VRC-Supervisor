@@ -214,6 +214,7 @@ Keybindings:
 - `Esc`: cancel confirmation, close Help, or quit the TUI
 - `Up` / `Down`: scroll logs
 - `PageUp` / `PageDown`: scroll logs by page
+- Mouse wheel: scroll logs
 - `Home`: jump to older logs
 - `End` / `F`: resume latest log follow
 - `Q` / `q`: quit only the Rust TUI from the dashboard; close Help in the Help overlay
@@ -229,6 +230,8 @@ Phase 17B reduces normal operator-screen noise and adds original mouse support. 
 Phase 17C refines mouse and backend-unavailable behavior. Keyboard `1`-`6` still opens confirmation, but clicking an action card starts that allowed action immediately after the same backend, metadata, duplicate, and Base Stations On/Off conflict checks. Confirmation now uses `Enter`, `Space`, or click Confirm; `Esc` or click Cancel cancels. Backend-unavailable cards show `BACKEND OFF` with muted borders and cannot start actions, even if cached metadata exists from a previous connection. Core Apps shows `WAITING` while the supervisor lifecycle is waiting for VRChat.
 
 Phase 17D makes backend-off action-card state authoritative across all six cards, keeps modal controls clickable but visually neutral, and uses a larger operator layout so full action cards consistently show `click or press N` hints. Recent Logs now follow the newest entries by default; scrolling up pauses live follow, and `End` or `F` resumes the latest log view.
+
+Phase 17E adds adaptive layout tiers: full dashboard at `120x32` or larger, a useful compact dashboard at `100x26` or larger, and a tiny resize fallback below that. Full action cards keep consistent click/press hints with cleaner foreground-only text, compact mode still shows status/actions/latest result/logs, and mouse wheel scrolling works with the same Recent Logs live-follow behavior. No backend or C# behavior changed.
 
 ## Key Configuration
 

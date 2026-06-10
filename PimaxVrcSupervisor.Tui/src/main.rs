@@ -19,6 +19,8 @@ use crossterm::{
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 
+const MOUSE_WHEEL_LOG_LINES: usize = 3;
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum Shortcut {
     Help,
@@ -154,10 +156,43 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
 
 fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
     if app.help_visible {
-        if matches!(mouse.kind, MouseEventKind::Down(_)) {
-            app.close_help();
-        }
+        app.close_help();
         return false;
+    }
+
+    if app.confirmation.is_some() {
+        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return false;
+        }
+
+        let now = Instant::now();
+        let Some(action) = app.click_action_at(mouse.column, mouse.row) else {
+            return false;
+        };
+
+        match action {
+            ClickAction::ConfirmModal => {
+                app.confirm_action(now);
+                return false;
+            }
+            ClickAction::CancelModal => {
+                app.cancel_confirmation(now);
+                return false;
+            }
+            _ => return false,
+        }
+    }
+
+    match mouse.kind {
+        MouseEventKind::ScrollUp => {
+            app.scroll_logs_up(MOUSE_WHEEL_LOG_LINES);
+            return false;
+        }
+        MouseEventKind::ScrollDown => {
+            app.scroll_logs_down(MOUSE_WHEEL_LOG_LINES);
+            return false;
+        }
+        _ => {}
     }
 
     if !matches!(
@@ -176,20 +211,6 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
     let Some(action) = app.click_action_at(mouse.column, mouse.row) else {
         return false;
     };
-
-    if app.confirmation.is_some() {
-        match action {
-            ClickAction::ConfirmModal => {
-                app.confirm_action(now);
-                return false;
-            }
-            ClickAction::CancelModal => {
-                app.cancel_confirmation(now);
-                return false;
-            }
-            _ => return false,
-        }
-    }
 
     match action {
         ClickAction::OpenHelp => {
