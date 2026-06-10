@@ -164,11 +164,7 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
             status.steam_vr.as_str(),
             status_badge("steamvr", &status.steam_vr),
         ),
-        status_line(
-            "Core Apps",
-            status.core_apps.as_str(),
-            status_badge("core", &status.core_apps),
-        ),
+        core_apps_status_line(app),
         status_line(
             "OSC Router",
             status.osc_router.as_str(),
@@ -270,6 +266,11 @@ fn render_action_card(
 
     if let Some(detail) = state.detail {
         lines.push(Line::from(Span::styled(detail, theme::secondary_style())));
+    } else if state.label == "START" && area.height >= 5 {
+        lines.push(Line::from(Span::styled(
+            format!("click or press {}", action.digit()),
+            theme::dim_style(),
+        )));
     }
 
     frame.render_widget(
@@ -501,17 +502,19 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         help_line("5", "Restart OSC Router"),
         help_line("6", "Reload Autostart Apps"),
         Line::from(""),
+        help_line("1-6", "Open confirmation from keyboard"),
+        help_line("MOUSE", "Click action card to start immediately"),
         help_line("ENTER", "Confirm modal action"),
-        help_line("ESC", "Cancel / close modal"),
-        help_line("Q", "Quit TUI on dashboard, cancel modal, close Help"),
-        help_line("MOUSE", "Click action cards; confirm in modal"),
+        help_line("SPACE", "Confirm modal action"),
+        help_line("ESC", "Cancel modal"),
+        help_line("Q", "Quit TUI on dashboard only"),
         help_line("ARROWS", "Scroll logs"),
         Line::from(""),
         Line::from(Span::styled(
             "While Help is open, any key or mouse click closes Help only.",
             theme::warning_style(),
         )),
-        Line::from("Mouse action clicks open confirmation only."),
+        Line::from("Mouse actions use the same allowed action list and conflict checks."),
         Line::from("Q never stops the supervisor backend."),
         Line::from("F1, ?, and Russian help aliases are not mapped."),
         Line::from("force-stop-supervisor is not exposed."),
@@ -539,15 +542,13 @@ fn render_action_confirmation(frame: &mut Frame<'_>, area: Rect, app: &mut App) 
         labeled_line("Command", action.command_name()),
         Line::from(""),
         Line::from(action.expected_effect()),
-        Line::from(operator_warning(action)),
         Line::from("This will send the request to the supervisor backend."),
         Line::from(""),
         Line::from(vec![
-            Span::styled("ENTER Confirm", theme::success_style()),
+            Span::styled("ENTER / SPACE Confirm", theme::success_style()),
             Span::raw("    "),
             Span::styled("ESC Cancel", theme::warning_style()),
         ]),
-        Line::from("Y also confirms, N/Q cancel."),
     ];
 
     frame.render_widget(Clear, popup);
@@ -591,6 +592,15 @@ impl ActionState {
 }
 
 fn action_state(app: &App, action: TuiAction, now: Instant) -> ActionState {
+    if app.connection == ConnectionState::Disconnected {
+        return ActionState {
+            label: "BACKEND OFF",
+            detail: Some("backend unavailable".to_string()),
+            border_color: theme::BORDER_MUTED,
+            style: theme::error_style(),
+        };
+    }
+
     if let Some(running) = app
         .running_actions
         .iter()
@@ -639,13 +649,13 @@ fn action_state(app: &App, action: TuiAction, now: Instant) -> ActionState {
             detail: metadata
                 .map(|command| command.blocked_reason.clone())
                 .filter(|reason| !reason.trim().is_empty()),
-            border_color: theme::ERROR_RED,
+            border_color: theme::BORDER_MUTED,
             style: theme::error_style(),
         };
     }
 
     ActionState {
-        label: "READY",
+        label: "START",
         detail: None,
         border_color: theme::BORDER_MUTED,
         style: theme::success_style(),
@@ -755,6 +765,29 @@ fn status_line<'a>(label: &'a str, value: &'a str, badge: Span<'static>) -> Line
     ])
 }
 
+fn core_apps_status_line(app: &App) -> Line<'_> {
+    let lifecycle = app.status.lifecycle.to_lowercase();
+    let core_apps = app.status.core_apps.to_lowercase();
+    if lifecycle.contains("waiting-vrchat")
+        && (core_apps.contains("incomplete")
+            || core_apps.contains("not running")
+            || core_apps.contains("waiting")
+            || core_apps == "-")
+    {
+        return status_line(
+            "Core Apps",
+            "waiting for VRChat",
+            fixed_badge("WAITING", theme::info_style()),
+        );
+    }
+
+    status_line(
+        "Core Apps",
+        app.status.core_apps.as_str(),
+        status_badge("core", &app.status.core_apps),
+    )
+}
+
 fn help_line<'a>(key: &'static str, value: &'a str) -> Line<'a> {
     Line::from(vec![
         Span::styled(format!("{key:<7}"), theme::success_style()),
@@ -821,17 +854,6 @@ fn action_outcome_style(outcome: ActionOutcome) -> (&'static str, Style) {
         ActionOutcome::Failed => ("ERROR", theme::error_style()),
         ActionOutcome::Cancelled => ("CANCELLED", theme::warning_style()),
         ActionOutcome::Rejected => ("BLOCKED", theme::warning_style()),
-    }
-}
-
-fn operator_warning(action: TuiAction) -> &'static str {
-    match action {
-        TuiAction::RestartCoreApps => "This may restart running face-tracking applications.",
-        TuiAction::StartOscGoesBrrr => "This may restart Intiface or OSCGoesBrrr.",
-        TuiAction::BaseStationsOn => "This may affect tracking hardware power state.",
-        TuiAction::BaseStationsOff => "This may affect tracking hardware power state.",
-        TuiAction::ReloadAutostartApps => "This may restart configured helper applications.",
-        TuiAction::RestartOscRouter => "",
     }
 }
 

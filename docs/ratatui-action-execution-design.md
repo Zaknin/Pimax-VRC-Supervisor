@@ -84,6 +84,12 @@ Phase 17 is a desktop TUI presentation-only pass. It adds a Pimax-inspired dark/
 
 Phase 17B keeps the same action safety model but removes routine risk-category wording from the normal operator UI. Mouse-click support is implemented with original project code and maps only to existing `TuiAction` values and overlay controls. Action-card clicks open confirmation only, modal Confirm/Cancel clicks mirror keyboard behavior, and no backend command is sent without the existing confirmation step.
 
+## Phase 17C Implementation Status
+
+Phase 17C keeps the backend action allowlist and bridge protocol unchanged, but refines desktop TUI interaction. Keyboard `1`-`6` actions remain confirmation-gated. Mouse action-card clicks start only existing `TuiAction` values immediately after the same backend connection, metadata, duplicate-command, and Base Stations On/Off conflict checks used by keyboard-confirmed actions.
+
+The confirmation modal now documents only `Enter`/`Space` or mouse Confirm for execution and `Esc` or mouse Cancel for cancellation. Backend-unavailable state overrides cached command metadata before action cards are rendered or actions are started, so cards show disabled `BACKEND OFF` state and cannot spawn workers while disconnected.
+
 ## Future Action Metadata
 
 Future command metadata should add action-specific fields instead of overloading `available`:
@@ -135,11 +141,12 @@ The command list remains metadata-oriented; it is not a generic action picker.
 For Phase 15 actions:
 
 - Number keys `1`-`6` open confirmation only.
+- Mouse action-card clicks start allowed actions directly after validation.
 - No action runs from a single accidental keypress.
-- `Enter` confirms inside the confirmation modal.
+- `Enter` and `Space` confirm inside the confirmation modal.
 - Confirmation closes immediately after confirmation; action execution continues in the background.
-- Confirmation shows command name, safety category, expected effect, and backend warning.
-- `Esc`, `n`, and modal `q` cancel confirmation.
+- Confirmation shows command name, expected effect, and backend-send note.
+- `Esc` cancels confirmation.
 - Number keys, `0`, `H`, `F1`, `?`, removed help aliases, and dashboard keys are ignored while confirmation is visible.
 - Help closes on any key press and consumes the key instead of passing it through to dashboard shortcuts.
 - Action results appear in the backend/status area.

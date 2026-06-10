@@ -191,7 +191,7 @@ The SteamVR host dashboard includes buttons for restarting Broken Eye/VRCFaceTra
 
 ## Desktop TUI
 
-The `cli-ui2` / `1.3.0-test` work adds `PimaxVrcSupervisorTui.exe`, a separate Rust/Ratatui desktop terminal UI for monitoring a running supervisor and confirming regular classic-console actions.
+The `cli-ui2` / `1.3.0-test` work adds `PimaxVrcSupervisorTui.exe`, a separate Rust/Ratatui desktop terminal UI for monitoring a running supervisor and running validated regular classic-console actions.
 
 The TUI connects to the existing supervisor backend at `127.0.0.1:37957` and uses the structured `query-json` bridge to display supervisor status, command capabilities, and recent logs. Its executable actions use confirmed `action-json` requests only; it does not send legacy action commands, does not replace the SteamVR dashboard overlay, and does not replace the classic console.
 
@@ -210,12 +210,12 @@ Keybindings:
 - `4`: open Base Stations Off confirmation
 - `5`: open Restart OSC Router confirmation
 - `6`: open Reload Autostart Apps confirmation
-- `Enter`: confirm inside the confirmation modal
+- `Enter` / `Space`: confirm inside the confirmation modal
 - `Esc`: cancel confirmation, close Help, or quit the TUI
 - `Up` / `Down`: scroll logs
 - `PageUp` / `PageDown`: scroll logs by page
 - `Home` / `End`: jump logs
-- `Q` / `q`: quit only the Rust TUI from the dashboard; close Help or cancel confirmation in overlays
+- `Q` / `q`: quit only the Rust TUI from the dashboard; close Help in the Help overlay
 
 Help closes on any key press and consumes that key, so pressing `1` while Help is visible closes Help without opening an action confirmation. Letter shortcuts are displayed uppercase, but lowercase input is also accepted. Selected Russian-layout aliases remain limited to non-help keys. `F1`, `?`, and Russian help aliases do not open TUI help; the main Help overlay keeps those alias details out of the shortcut list. `Q` never stops the supervisor backend, sends shutdown commands, or runs cleanup routines. `force-stop-supervisor` remains blocked from the TUI.
 
@@ -223,7 +223,9 @@ The Configurator refuses to save an Autostart app that duplicates the configured
 
 Phase 17 adds a Pimax-inspired dark terminal theme for the TUI with green status accents, clearer action cards, stronger confirmation panels, a cleaner Help overlay, improved running-action/latest-result display, and a more accurate small-terminal fallback. This is visual/operator polish only: no Pimax assets are copied, no backend action behavior changes, and the SteamVR overlay and classic console remain unchanged.
 
-Phase 17B reduces normal operator-screen noise and adds original mouse support. Clicking an action card opens the same confirmation modal as pressing `1`-`6`; it never executes immediately. Help, refresh, quit, confirm, and cancel have simple click regions. If mouse capture is unavailable, the TUI continues in keyboard-only mode and still cleans up mouse capture with terminal shutdown.
+Phase 17B reduces normal operator-screen noise and adds original mouse support. Help, refresh, quit, confirm, and cancel have simple click regions. If mouse capture is unavailable, the TUI continues in keyboard-only mode and still cleans up mouse capture with terminal shutdown.
+
+Phase 17C refines mouse and backend-unavailable behavior. Keyboard `1`-`6` still opens confirmation, but clicking an action card starts that allowed action immediately after the same backend, metadata, duplicate, and Base Stations On/Off conflict checks. Confirmation now uses `Enter`, `Space`, or click Confirm; `Esc` or click Cancel cancels. Backend-unavailable cards show `BACKEND OFF` with muted borders and cannot start actions, even if cached metadata exists from a previous connection. Core Apps shows `WAITING` while the supervisor lifecycle is waiting for VRChat.
 
 ## Key Configuration
 

@@ -258,7 +258,7 @@ impl App {
     }
 
     pub fn action_executable(&self, action: TuiAction) -> bool {
-        self.last_success.is_some()
+        self.connection == ConnectionState::Connected
             && self.action_metadata(action).is_some_and(|command| {
                 command.action_supported
                     && command.tui_executable
@@ -273,26 +273,13 @@ impl App {
     }
 
     pub fn request_action_confirmation(&mut self, action: TuiAction, now: Instant) {
-        if let Some(message) = self.action_conflict_message(action) {
-            self.record_action_error(action.command_name(), ActionOutcome::Rejected, message, now);
-            return;
-        }
-
-        if self.action_executable(action) {
+        if self.validate_action_start(action).is_ok() {
             self.help_visible = false;
             self.confirmation = Some(action);
             return;
         }
 
-        self.record_action_error(
-            action.command_name(),
-            ActionOutcome::Rejected,
-            format!(
-                "{} is not executable from this TUI yet.",
-                action.command_name()
-            ),
-            now,
-        );
+        self.record_action_rejection(action, now);
     }
 
     pub fn cancel_confirmation(&mut self, now: Instant) {
@@ -314,13 +301,16 @@ impl App {
             return;
         };
 
-        if let Some(message) = self.action_conflict_message(action) {
-            self.confirmation = None;
+        self.confirmation = None;
+        self.request_action_start(action, now);
+    }
+
+    pub fn request_action_start(&mut self, action: TuiAction, now: Instant) {
+        if let Err(message) = self.validate_action_start(action) {
             self.record_action_error(action.command_name(), ActionOutcome::Rejected, message, now);
             return;
         }
 
-        self.confirmation = None;
         self.last_action_command = Some(action.command_name().to_string());
         self.last_action_outcome = None;
         self.last_action_result = Some(format!("{} started.", action.command_name()));
@@ -411,6 +401,38 @@ impl App {
         }
 
         None
+    }
+
+    fn validate_action_start(&self, action: TuiAction) -> std::result::Result<(), String> {
+        if self.connection != ConnectionState::Connected {
+            return Err(format!(
+                "Backend unavailable; cannot start {}.",
+                action.command_name()
+            ));
+        }
+
+        if let Some(message) = self.action_conflict_message(action) {
+            return Err(message);
+        }
+
+        if self.action_executable(action) {
+            Ok(())
+        } else {
+            Err(format!(
+                "{} is not executable from this TUI yet.",
+                action.command_name()
+            ))
+        }
+    }
+
+    fn record_action_rejection(&mut self, action: TuiAction, now: Instant) {
+        let message = self.validate_action_start(action).err().unwrap_or_else(|| {
+            format!(
+                "{} is not executable from this TUI yet.",
+                action.command_name()
+            )
+        });
+        self.record_action_error(action.command_name(), ActionOutcome::Rejected, message, now);
     }
 
     fn spawn_action_worker(&self, action: TuiAction) {

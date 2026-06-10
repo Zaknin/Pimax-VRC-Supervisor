@@ -109,12 +109,12 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     let shortcut = Shortcut::from_key(key);
 
     if app.confirmation.is_some() {
-        match shortcut {
-            Some(Shortcut::Confirm) => {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char(' ') => {
                 app.confirm_action(now);
                 return false;
             }
-            Some(Shortcut::Cancel | Shortcut::Quit) => {
+            KeyCode::Esc => {
                 app.cancel_confirmation(now);
                 return false;
             }
@@ -197,7 +197,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
         }
         ClickAction::QuitTui => true,
         ClickAction::SelectAction(action) => {
-            app.request_action_confirmation(action, now);
+            app.request_action_start(action, now);
             false
         }
         ClickAction::ConfirmModal | ClickAction::CancelModal => false,
@@ -252,8 +252,7 @@ impl Shortcut {
             'h' | 'H' => Some(Self::Help),
             'r' | 'R' | 'к' | 'К' => Some(Self::Refresh),
             'q' | 'Q' | 'й' | 'Й' => Some(Self::Quit),
-            'y' | 'Y' | 'н' | 'Н' => Some(Self::Confirm),
-            'n' | 'N' | 'т' | 'Т' => Some(Self::Cancel),
+            ' ' => Some(Self::Confirm),
             _ => None,
         }
     }

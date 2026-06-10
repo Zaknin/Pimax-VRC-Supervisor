@@ -12,7 +12,7 @@ The TUI gives a desktop/operator view of the supervisor with tightly limited con
 - command capability metadata
 - recent console-log lines
 - disconnected/backend unavailable state
-- confirmation-gated classic-console actions in the same `1`-`6` order
+- validated classic-console actions in the same `1`-`6` order
 
 The TUI can be closed without stopping the supervisor.
 
@@ -72,30 +72,28 @@ Primary shortcuts:
 - `4`: open Base Stations Off confirmation
 - `5`: open Restart OSC Router confirmation
 - `6`: open Reload Autostart Apps confirmation
-- `Enter`: confirm inside the confirmation modal
+- `Enter` / `Space`: confirm inside the confirmation modal
 - `Esc`: close Help, cancel confirmation, or quit the TUI
 - `Up` / `Down`: scroll logs
 - `PageUp` / `PageDown`: scroll logs by page
 - `Home` / `End`: jump logs
-- `Q` / `q`: quit only the Rust TUI from the dashboard; close Help or cancel confirmation in overlays
+- `Q` / `q`: quit only the Rust TUI from the dashboard; close Help in the Help overlay
 
 Convenience aliases:
 
 - `R` / `r`: refresh
-- `Y` / `y`: confirm inside the confirmation modal
-- `N` / `n`: cancel inside the confirmation modal
 
 The footer lists direct action mappings on wide terminals: `0 Help`, `F5 Refresh`, `1 Core`, `2 OGB`, `3 BS On`, `4 BS Off`, `5 OSC`, `6 Autostart`, and `Q Quit TUI`. Narrow terminals may use the compact `1-6 Actions` label.
 
 Help closes on any key press and consumes that key. For example, pressing `1`, `Enter`, `Q`, or `F5` while Help is visible closes Help only and does not trigger the dashboard action underneath.
 
-Letter shortcuts are displayed uppercase, but lowercase input is also accepted. `F1`, `?`, and Russian help aliases do not open TUI help. Selected Russian-layout aliases remain limited to non-help refresh, quit, confirm, and cancel keys, but are not listed in the main Help overlay.
+Letter shortcuts are displayed uppercase, but lowercase input is also accepted. `F1`, `?`, and Russian help aliases do not open TUI help. Selected Russian-layout aliases remain limited to non-help refresh and quit keys, but are not listed in the main Help overlay.
 
 Simple Russian-layout aliases are accepted for the same physical keys where terminal input provides them. Other layouts and IMEs should use the primary number/function/Enter/Esc shortcuts.
 
 ## Background Actions
 
-Confirmed actions run in background worker threads. The confirmation modal closes immediately after `Enter` or `Y`, the running action appears in the Backend / Errors panel, and the TUI remains responsive for log scrolling, Help, refresh, quit, and other safe actions.
+Confirmed actions run in background worker threads. The confirmation modal closes immediately after `Enter` or `Space`, the running action appears in the action status panel, and the TUI remains responsive for log scrolling, Help, refresh, quit, and other safe actions.
 
 The TUI tracks running actions by canonical backend command name:
 
@@ -111,9 +109,11 @@ Phase 17 gives the TUI a Pimax-inspired dark terminal theme with green healthy/a
 
 The dashboard now emphasizes a top backend status bar, a supervisor status card, action cards for the six confirmed actions, running-action/latest-result panels, a quieter backend/errors panel, clearer logs, a stronger confirmation modal, and an accurate small-terminal fallback. The visual polish does not change backend behavior, action allowlists, SteamVR overlay behavior, classic console behavior, or action safety semantics.
 
-Phase 17B reduces normal operator UI noise by hiding risk-category wording from the dashboard and confirmation modal while keeping safety enforcement internal. Ready action cards use muted borders with green `READY` badges; running and blocked states carry the stronger visual emphasis. Status rows and action cards use more stable alignment.
+Phase 17B reduces normal operator UI noise by hiding risk-category wording from the dashboard and confirmation modal while keeping safety enforcement internal. Status rows and action cards use more stable alignment.
 
-Phase 17B also adds original mouse-click support. Clicking an action card opens confirmation only, clicking Confirm in the modal behaves like `Enter`, clicking Cancel behaves like `Esc`, and clicks while Help is visible close Help only. Clicks outside a confirmation modal are ignored so dashboard controls underneath cannot fire. If mouse capture is unavailable, the TUI continues keyboard-only.
+Phase 17B also adds original mouse-click support. Clicking Confirm in the modal behaves like `Enter`, clicking Cancel behaves like `Esc`, and clicks while Help is visible close Help only. Clicks outside a confirmation modal are ignored so dashboard controls underneath cannot fire. If mouse capture is unavailable, the TUI continues keyboard-only.
+
+Phase 17C refines action-card and backend-unavailable behavior. Keyboard `1`-`6` still opens confirmation, while mouse clicks on action cards start the selected allowed action immediately after the same backend, metadata, duplicate-command, and Base Stations On/Off conflict checks. Ready cards show `START`; disconnected cards show `BACKEND OFF` with muted borders and cannot start workers, even when cached command metadata exists from an earlier connection. The Core Apps status row shows `WAITING` while lifecycle is `waiting-vrchat` instead of warning that helper apps are incomplete.
 
 ## Build
 
@@ -139,7 +139,7 @@ Do not commit generated `target/` or `release/` output. Keep `PimaxVrcSupervisor
 ## Current Limitations
 
 - Only the six audited regular classic-console actions are executable from the TUI.
-- Every TUI action requires explicit confirmation and uses backend `action-json`.
+- Keyboard actions require explicit confirmation; mouse action-card clicks start immediately after the same validation and use backend `action-json`.
 - Read-only `query-json` polling keeps short timeouts; confirmed `action-json` requests use a separate longer timeout so successful backend work is not reported as a short polling timeout.
 - Confirmed actions run in the background; duplicate commands are blocked in the TUI, and Base Stations On/Off overlap is blocked by both the TUI and supervisor backend.
 - No legacy action commands are sent by the TUI.
@@ -152,7 +152,7 @@ Do not commit generated `target/` or `release/` output. Keep `PimaxVrcSupervisor
 
 ## Action Safety Design
 
-Action execution is intentionally allowlisted. The current TUI exposes only confirmation-gated regular classic-console actions through backend `action-json` and does not execute legacy bridge action commands.
+Action execution is intentionally allowlisted. The current TUI exposes only regular classic-console actions through backend `action-json`; keyboard starts are confirmation-gated, mouse card starts are directly validated, and the TUI does not execute legacy bridge action commands.
 
 The safety and confirmation model for future action execution is documented separately in [TUI Action Execution Safety Design](ratatui-action-execution-design.md).
 
@@ -176,7 +176,9 @@ Phase 16B adds the matching backend-local manual base-station action guard, so B
 
 Phase 17 improves visibility and operator usability with a Pimax-inspired dark/green theme, action cards, status badges, clearer running-action/latest-result panels, improved Help and confirmation overlays, less noisy logs, and a small-terminal fallback. It is a UI-only pass and does not change backend action behavior.
 
-Phase 17B adds original mouse-click support and further reduces operator-screen noise. The dashboard no longer shows routine risk-category wording, the confirmation modal focuses on action/effect/command, and mouse clicks reuse the same confirmation-gated action flow as keyboard shortcuts.
+Phase 17B adds original mouse-click support and further reduces operator-screen noise. The dashboard no longer shows routine risk-category wording, and the confirmation modal focuses on action/effect/command.
+
+Phase 17C makes mouse action-card clicks direct-start actions after validation, while keyboard shortcuts remain confirmation-gated. It also makes backend-off action cards consistently disabled and display-only, simplifies modal controls to `Enter`/`Space` confirm and `Esc` cancel, and adds the display-only Core Apps waiting state for `waiting-vrchat`.
 
 ## Future Direction
 

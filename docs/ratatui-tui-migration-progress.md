@@ -1806,6 +1806,79 @@ Short Phase 16 direction:
 - Build and run a manual/runtime shortcut test matrix across keyboard layouts.
 - Continue polishing action confirmation safety and failure paths without expanding beyond the Phase 15 parity action set.
 
+### Phase 17C - TUI mouse actions and backend-unavailable state refinement
+
+Status: Completed
+
+Summary:
+
+- Refined only the Rust desktop TUI interaction and display behavior after Phase 17B runtime testing.
+- Kept backend behavior, bridge protocol, SteamVR host behavior, classic console behavior, Configurator behavior, supervisor cleanup/lifecycle behavior, and Phase 16B base-station guard behavior unchanged.
+- Did not modify `PimaxVrcSupervisor/Program.cs`.
+
+Rust TUI changes:
+
+- Added a shared validated action-start path used by keyboard-confirmed actions and direct mouse action-card starts.
+- Left-clicking an action card now starts the selected existing `TuiAction` immediately after backend connection, metadata, duplicate-command, and Base Stations On/Off conflict checks.
+- Keyboard `1`-`6` still opens confirmation and does not start actions directly.
+- Confirmation now accepts `Enter`, `Space`, or mouse Confirm; `Esc` or mouse Cancel cancels.
+- `Q` inside the modal does not quit the TUI and does not send a backend command.
+- Backend-disconnected state now overrides stale command metadata before action validation and card rendering.
+- Backend-down cards show `BACKEND OFF` with muted borders, do not appear startable, and cannot spawn action workers.
+- Ready cards now show `START` and can show `click or press <number>` hints when space allows.
+- Core Apps status now shows `WAITING` / `waiting for VRChat` while lifecycle contains `waiting-vrchat`.
+- Help behavior remains `0` primary Help and `H`/`h` English-layout alias; Help closes on any key or mouse click and consumes it.
+
+Documentation changes:
+
+- Updated README and Ratatui docs to document direct mouse action starts, keyboard confirmation, `Enter`/`Space` modal confirmation, `Esc` modal cancellation, backend-off card behavior, and Core Apps waiting display.
+- Updated the action safety design to record that mouse direct-start still uses only existing `TuiAction` values and the same validation path.
+- Recorded that no backend/C# behavior changed in this phase.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `README.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Build/test commands run:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+
+Build/test result:
+
+- `cargo fmt` completed successfully.
+- Rust debug and release builds completed successfully.
+- All three explicit C# Release builds completed successfully with 0 warnings and 0 errors.
+- Source inspection confirmed `PimaxVrcSupervisor/Program.cs` has no Phase 17C diff.
+- Source inspection confirmed `bridge.rs` still has no generic arbitrary command executor and sends `action-json` only through `execute_tui_action(TuiAction)`.
+- Source inspection confirmed the TUI sends no legacy action command strings directly.
+- Source inspection confirmed `force-stop-supervisor` remains blocked/not TUI-executable and `Q`/`q` sends no backend command.
+- Copied the rebuilt Rust release TUI binary to `release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe` for local runtime testing.
+
+Runtime scenarios to verify when safe:
+
+- Start TUI without supervisor: cards show `BACKEND OFF`, not full red borders; clicking cards records a visible rejection/status and starts no worker.
+- Start supervisor after TUI: after refresh, permitted cards become `START` and clickable.
+- Close supervisor while TUI is open: after failed refresh, cards return to `BACKEND OFF`; cached metadata does not keep cards looking ready.
+
+Generated output status:
+
+- `release/` and `PimaxVrcSupervisor.Tui/target/` remain ignored generated output and must not be staged.
+
+Short Phase 18 direction:
+
+- Run a real-world VR-session runtime matrix for Phase 17C mouse direct starts, keyboard confirmation, backend reconnect/disconnect states, and action result display before adding new features.
+
 ### Phase 16 - TUI background actions and Autostart duplicate protection
 
 Status: Completed
