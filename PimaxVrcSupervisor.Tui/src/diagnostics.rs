@@ -31,6 +31,7 @@ struct DiagnosticsInner {
     interval_started_at: Instant,
     connected: bool,
     counters: DiagnosticsCounters,
+    process_metrics: ProcessMetricsSampler,
 }
 
 #[derive(Debug, Default)]
@@ -79,6 +80,7 @@ impl TuiDiagnostics {
             interval_started_at: Instant::now(),
             connected: false,
             counters: DiagnosticsCounters::default(),
+            process_metrics: ProcessMetricsSampler::new(),
         };
 
         Self {
@@ -102,6 +104,7 @@ impl TuiDiagnostics {
             interval_started_at: Instant::now(),
             connected: false,
             counters: DiagnosticsCounters::default(),
+            process_metrics: ProcessMetricsSampler::new(),
         };
 
         let diagnostics = Self {
@@ -281,13 +284,14 @@ impl DiagnosticsHandle {
 }
 
 impl DiagnosticsInner {
-    fn build_summary(&self, elapsed: Duration) -> String {
+    fn build_summary(&mut self, elapsed: Duration) -> String {
         let counters = &self.counters;
         let bridge_avg = if counters.bridge_calls == 0 {
             0
         } else {
             counters.bridge_ms_sum / u128::from(counters.bridge_calls)
         };
+        let process = self.process_metrics.sample(elapsed);
 
         json!({
             "event": "desktop_tui_diagnostics_summary",
@@ -305,9 +309,313 @@ impl DiagnosticsInner {
             "bridge_ms_max": counters.bridge_ms_max,
             "actions_started": counters.actions_started,
             "lifecycle_requests": counters.lifecycle_requests,
-            "connection_changes": counters.connection_changes
+            "connection_changes": counters.connection_changes,
+            "tui_cpu_percent": process.cpu_percent,
+            "tui_cpu_time_delta_ms": process.cpu_time_delta_ms,
+            "tui_cpu_time_total_ms": process.cpu_time_total_ms,
+            "tui_working_set_mb": process.working_set_mb,
+            "tui_private_memory_mb": process.private_memory_mb,
+            "tui_thread_count": process.thread_count,
+            "tui_handle_count": process.handle_count
         })
         .to_string()
+    }
+}
+
+#[derive(Debug, Default)]
+struct ProcessMetricsSampler {
+    previous_cpu_total_100ns: Option<u64>,
+    logical_cpu_count: f64,
+}
+
+#[derive(Debug, Default)]
+struct ProcessMetrics {
+    cpu_percent: Option<f64>,
+    cpu_time_delta_ms: Option<u64>,
+    cpu_time_total_ms: Option<u64>,
+    working_set_mb: Option<f64>,
+    private_memory_mb: Option<f64>,
+    thread_count: Option<u32>,
+    handle_count: Option<u32>,
+}
+
+impl ProcessMetricsSampler {
+    fn new() -> Self {
+        Self {
+            previous_cpu_total_100ns: platform_process_metrics::cpu_total_100ns(),
+            logical_cpu_count: std::thread::available_parallelism()
+                .map(|value| value.get().max(1) as f64)
+                .unwrap_or(1.0),
+        }
+    }
+
+    fn sample(&mut self, elapsed: Duration) -> ProcessMetrics {
+        let snapshot = platform_process_metrics::snapshot();
+        let cpu_total_100ns = snapshot.cpu_total_100ns;
+        let previous_cpu_total_100ns = self.previous_cpu_total_100ns;
+        if cpu_total_100ns.is_some() {
+            self.previous_cpu_total_100ns = cpu_total_100ns;
+        }
+
+        let cpu_delta_100ns = match (previous_cpu_total_100ns, cpu_total_100ns) {
+            (Some(previous), Some(current)) if current >= previous => Some(current - previous),
+            _ => None,
+        };
+        let cpu_time_delta_ms = cpu_delta_100ns.map(|value| value / 10_000);
+        let cpu_percent = cpu_delta_100ns
+            .and_then(|delta| {
+                let denominator = elapsed.as_secs_f64() * self.logical_cpu_count;
+                if denominator <= 0.0 {
+                    return None;
+                }
+
+                Some(((delta as f64 / 10_000_000.0) / denominator) * 100.0)
+            })
+            .and_then(sanitize_f64);
+
+        ProcessMetrics {
+            cpu_percent,
+            cpu_time_delta_ms,
+            cpu_time_total_ms: cpu_total_100ns.map(|value| value / 10_000),
+            working_set_mb: snapshot.working_set_bytes.and_then(bytes_to_mb),
+            private_memory_mb: snapshot.private_memory_bytes.and_then(bytes_to_mb),
+            thread_count: snapshot.thread_count,
+            handle_count: snapshot.handle_count,
+        }
+    }
+}
+
+fn bytes_to_mb(value: u64) -> Option<f64> {
+    sanitize_f64(value as f64 / 1_048_576.0)
+}
+
+fn sanitize_f64(value: f64) -> Option<f64> {
+    if value.is_finite() && value >= 0.0 {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Default)]
+struct PlatformProcessMetrics {
+    cpu_total_100ns: Option<u64>,
+    working_set_bytes: Option<u64>,
+    private_memory_bytes: Option<u64>,
+    thread_count: Option<u32>,
+    handle_count: Option<u32>,
+}
+
+#[cfg(windows)]
+mod platform_process_metrics {
+    use std::{ffi::c_void, mem};
+
+    use super::PlatformProcessMetrics;
+
+    const TH32CS_SNAPTHREAD: u32 = 0x0000_0004;
+    const INVALID_HANDLE_VALUE: isize = -1isize;
+
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy, Default)]
+    struct FileTime {
+        low_date_time: u32,
+        high_date_time: u32,
+    }
+
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy)]
+    struct ProcessMemoryCountersEx {
+        cb: u32,
+        page_fault_count: u32,
+        peak_working_set_size: usize,
+        working_set_size: usize,
+        quota_peak_paged_pool_usage: usize,
+        quota_paged_pool_usage: usize,
+        quota_peak_non_paged_pool_usage: usize,
+        quota_non_paged_pool_usage: usize,
+        pagefile_usage: usize,
+        peak_pagefile_usage: usize,
+        private_usage: usize,
+    }
+
+    impl Default for ProcessMemoryCountersEx {
+        fn default() -> Self {
+            Self {
+                cb: mem::size_of::<Self>() as u32,
+                page_fault_count: 0,
+                peak_working_set_size: 0,
+                working_set_size: 0,
+                quota_peak_paged_pool_usage: 0,
+                quota_paged_pool_usage: 0,
+                quota_peak_non_paged_pool_usage: 0,
+                quota_non_paged_pool_usage: 0,
+                pagefile_usage: 0,
+                peak_pagefile_usage: 0,
+                private_usage: 0,
+            }
+        }
+    }
+
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy)]
+    struct ThreadEntry32 {
+        dw_size: u32,
+        cnt_usage: u32,
+        th32_thread_id: u32,
+        th32_owner_process_id: u32,
+        tp_base_pri: i32,
+        tp_delta_pri: i32,
+        dw_flags: u32,
+    }
+
+    impl Default for ThreadEntry32 {
+        fn default() -> Self {
+            Self {
+                dw_size: mem::size_of::<Self>() as u32,
+                cnt_usage: 0,
+                th32_thread_id: 0,
+                th32_owner_process_id: 0,
+                tp_base_pri: 0,
+                tp_delta_pri: 0,
+                dw_flags: 0,
+            }
+        }
+    }
+
+    pub fn cpu_total_100ns() -> Option<u64> {
+        process_times()
+            .map(|(kernel, user)| filetime_to_u64(kernel).saturating_add(filetime_to_u64(user)))
+    }
+
+    pub fn snapshot() -> PlatformProcessMetrics {
+        let process = unsafe { GetCurrentProcess() };
+        let cpu_total_100ns = cpu_total_100ns();
+        let (working_set_bytes, private_memory_bytes) = memory_info(process);
+        let handle_count = handle_count(process);
+        let thread_count = thread_count(unsafe { GetCurrentProcessId() });
+
+        PlatformProcessMetrics {
+            cpu_total_100ns,
+            working_set_bytes,
+            private_memory_bytes,
+            thread_count,
+            handle_count,
+        }
+    }
+
+    fn process_times() -> Option<(FileTime, FileTime)> {
+        let mut creation_time = FileTime::default();
+        let mut exit_time = FileTime::default();
+        let mut kernel_time = FileTime::default();
+        let mut user_time = FileTime::default();
+        let result = unsafe {
+            GetProcessTimes(
+                GetCurrentProcess(),
+                &mut creation_time,
+                &mut exit_time,
+                &mut kernel_time,
+                &mut user_time,
+            )
+        };
+
+        if result == 0 {
+            None
+        } else {
+            Some((kernel_time, user_time))
+        }
+    }
+
+    fn memory_info(process: *mut c_void) -> (Option<u64>, Option<u64>) {
+        let mut counters = ProcessMemoryCountersEx::default();
+        let result = unsafe {
+            GetProcessMemoryInfo(
+                process,
+                &mut counters,
+                mem::size_of::<ProcessMemoryCountersEx>() as u32,
+            )
+        };
+
+        if result == 0 {
+            (None, None)
+        } else {
+            (
+                Some(counters.working_set_size as u64),
+                Some(counters.private_usage as u64),
+            )
+        }
+    }
+
+    fn handle_count(process: *mut c_void) -> Option<u32> {
+        let mut count = 0u32;
+        let result = unsafe { GetProcessHandleCount(process, &mut count) };
+        if result == 0 { None } else { Some(count) }
+    }
+
+    fn thread_count(process_id: u32) -> Option<u32> {
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+        if snapshot as isize == INVALID_HANDLE_VALUE {
+            return None;
+        }
+
+        let mut entry = ThreadEntry32::default();
+        let mut count = 0u32;
+        let mut ok = unsafe { Thread32First(snapshot, &mut entry) } != 0;
+        while ok {
+            if entry.th32_owner_process_id == process_id {
+                count = count.saturating_add(1);
+            }
+            entry.dw_size = mem::size_of::<ThreadEntry32>() as u32;
+            ok = unsafe { Thread32Next(snapshot, &mut entry) } != 0;
+        }
+
+        unsafe {
+            CloseHandle(snapshot);
+        }
+        Some(count)
+    }
+
+    fn filetime_to_u64(value: FileTime) -> u64 {
+        (u64::from(value.high_date_time) << 32) | u64::from(value.low_date_time)
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> *mut c_void;
+        fn GetCurrentProcessId() -> u32;
+        fn GetProcessTimes(
+            process: *mut c_void,
+            creation_time: *mut FileTime,
+            exit_time: *mut FileTime,
+            kernel_time: *mut FileTime,
+            user_time: *mut FileTime,
+        ) -> i32;
+        fn GetProcessHandleCount(process: *mut c_void, handle_count: *mut u32) -> i32;
+        fn CreateToolhelp32Snapshot(flags: u32, process_id: u32) -> *mut c_void;
+        fn Thread32First(snapshot: *mut c_void, entry: *mut ThreadEntry32) -> i32;
+        fn Thread32Next(snapshot: *mut c_void, entry: *mut ThreadEntry32) -> i32;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+    }
+
+    #[link(name = "psapi")]
+    unsafe extern "system" {
+        fn GetProcessMemoryInfo(
+            process: *mut c_void,
+            counters: *mut ProcessMemoryCountersEx,
+            size: u32,
+        ) -> i32;
+    }
+}
+
+#[cfg(not(windows))]
+mod platform_process_metrics {
+    use super::PlatformProcessMetrics;
+
+    pub fn cpu_total_100ns() -> Option<u64> {
+        None
+    }
+
+    pub fn snapshot() -> PlatformProcessMetrics {
+        PlatformProcessMetrics::default()
     }
 }
 

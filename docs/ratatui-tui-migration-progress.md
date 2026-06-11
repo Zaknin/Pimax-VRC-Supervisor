@@ -2224,7 +2224,63 @@ Verification:
 
 Next direction:
 
-- Phase 20C can add richer process/load metrics only if the lower idle redraw/retry load remains stable in runtime testing.
+- Phase 20C should add diagnostics-only process/load metrics to the existing Desktop TUI summary records without changing UI, bridge, action, lifecycle, or refresh behavior.
+
+### Phase 20C - Add Desktop TUI process load diagnostics
+
+Status: Completed
+
+Summary:
+
+- Added diagnostics-only process load metrics to existing `desktop_tui_diagnostics_summary` records.
+- Metrics are sampled only once per diagnostics interval.
+- Existing Desktop TUI UI behavior, Phase 20B render scheduling, connected refresh cadence, disconnected retry backoff, bridge protocols, action/lifecycle behavior, Configurator behavior, Supervisor behavior, SteamVR host behavior, and cleanup behavior remain unchanged.
+- GPU metrics and terminal-host metrics remain intentionally deferred.
+
+Rust TUI diagnostics changes:
+
+- Added low-overhead Windows process sampling using raw Windows FFI; no new Rust dependency was added.
+- Added CPU total/delta sampling through process kernel/user CPU time.
+- Added working set and private memory counters when available.
+- Added thread count and process handle count when available.
+- Missing or unavailable counters are written as `null`; diagnostics failures do not affect the TUI.
+
+New summary fields:
+
+- `tui_cpu_percent`
+- `tui_cpu_time_delta_ms`
+- `tui_cpu_time_total_ms`
+- `tui_working_set_mb`
+- `tui_private_memory_mb`
+- `tui_thread_count`
+- `tui_handle_count`
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/diagnostics.rs`
+- `README.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Verification:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`: passed.
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`: passed.
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`: passed.
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`: passed.
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`: passed.
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`: passed.
+- Release-folder refresh: complete. All three C# projects published to `release\PimaxVrcSupervisor-v1.3.0-test`, and the rebuilt `PimaxVrcSupervisorTui.exe` was copied into the same folder.
+- Runtime diagnostics smoke: passed from the refreshed release folder with an isolated config at `%TEMP%\pimax-tui-phase20c.json`. The log contained one `desktop_tui_diagnostics_started` marker and two `desktop_tui_diagnostics_summary` records.
+- Sample summary included `tui_cpu_percent=0.025926883169498663`, `tui_cpu_time_delta_ms=62`, `tui_cpu_time_total_ms=78`, `tui_working_set_mb=7.08203125`, `tui_private_memory_mb=1.453125`, `tui_thread_count=2`, and `tui_handle_count=72`.
+- Connected runtime diagnostics smoke: skipped during implementation because starting the Supervisor can enter local lifecycle, app, VR/session, monitor, and base-station workflows.
+- Regression smoke for Configurator launch and supervisor shutdown flows was not performed during implementation for the same lifecycle-safety reason.
+- Source inspection confirmed `PimaxVrcSupervisor/Program.cs`, `PimaxVrcSupervisor.ConfigEditor/Program.cs`, `PimaxVrcSupervisor.SteamVrHost`, and `PimaxVrcSupervisor.Tui/src/bridge.rs` had no behavior diff.
+- Generated output remained ignored and unstaged: `release/`, `PimaxVrcSupervisor.Tui/target/`, the temporary diagnostics config, and the diagnostics log were not staged.
+
+Next direction:
+
+- Phase 20D can compare process load in connected and disconnected real-world sessions before considering any further diagnostics expansion.
 
 ### Phase 17D - Backend-off consistency, neutral modal controls, action hints, and log follow
 

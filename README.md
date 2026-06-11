@@ -225,6 +225,8 @@ Phase 20A-Hotfix makes Desktop TUI diagnostics prove file creation immediately. 
 
 Phase 20B reduces Desktop TUI idle load. The TUI no longer redraws just because the input poll timed out; it redraws on visible state changes, refresh completion, resize, and a low-rate heartbeat. Connected refresh remains about every 3 seconds, while disconnected automatic retry backs off to about 7 seconds; manual refresh remains immediate. No bridge protocol, action, lifecycle, Configurator, Supervisor, SteamVR, or cleanup behavior changes.
 
+Phase 20C adds diagnostics-only Desktop TUI process load metrics to the existing summary records. When TUI diagnostics are enabled, each `desktop_tui_diagnostics_summary` now includes TUI CPU percentage, CPU time delta/total, working set, private memory, thread count, and handle count when those Windows process counters are available. Metrics are sampled only once per diagnostics interval; there is no UI panel, extra bridge traffic, action change, lifecycle change, or SteamVR behavior change.
+
 Confirmed actions run in the background so the TUI stays responsive. Different safe actions may run at the same time, but the same command cannot be started twice while running and Base Stations On/Off are mutually exclusive. Once shutdown is requested, normal action execution is disabled. `force-stop-supervisor` remains blocked from the TUI.
 
 Keybindings:
@@ -312,7 +314,7 @@ The release includes a commented `supervisor.config.json`. Important settings:
 | `RestartDelayAfterReconnectSeconds` | `10` | Stability wait before restarting apps after Pimax reconnect. |
 | `DiagnosticsLogSupervisor` | `false` | Writes passive supervisor performance diagnostics when enabled. |
 | `DiagnosticsLogSteamVrOverlay` | `false` | Writes passive SteamVR dashboard host diagnostics when enabled. |
-| `DiagnosticsLogDesktopTui` | `false` | Writes lightweight Desktop TUI load, refresh, bridge timing, input, action, lifecycle, and connection summary counters when enabled. |
+| `DiagnosticsLogDesktopTui` | `false` | Writes lightweight Desktop TUI load, refresh, bridge timing, input, action, lifecycle, connection, CPU, memory, thread, and handle summary counters when enabled. |
 | `DiagnosticsDebugSupervisor` | `false` | Writes supervisor debug-event logs. |
 | `DiagnosticsDebugSteamVrOverlay` | `false` | Writes SteamVR overlay debug-event logs. |
 | `DiagnosticsDebugSteamVrPointer` | `false` | Draws the visible SteamVR overlay pointer marker for hover hit-test troubleshooting when overlay debug logging is enabled. |
