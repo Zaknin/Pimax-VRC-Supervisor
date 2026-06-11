@@ -76,6 +76,7 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 - After an accepted or already-in-progress shutdown response, the TUI waits for backend disconnect or a 60 second timeout, then exits.
 - Hidden supervisor launch is deferred because the only current hidden supervisor path, `--steamvr-start`, changes supervisor lifecycle behavior.
 - No tray/minimize behavior, config schema, auto-start setting, terminal X-close guarantee, generic command executor, or `force-stop-supervisor` exposure was added.
+- Phase 18G adds Windows best-effort terminal close handling for the TUI. If the terminal host delivers a console close/logoff/shutdown event, the TUI sends the existing `lifecycle-json` shutdown request with source `desktop-tui-window-close`. This is not a guarantee and does not add tray/minimize behavior, a wrapper, or a close-TUI-only connected path.
 
 ## Phase 18D Hardening Status
 
@@ -104,7 +105,7 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 
 ## Risks And Safety Constraints
 
-- Do not make terminal close/X-close implicitly stop the supervisor until a separate design exists.
+- Keep terminal close/X-close handling best-effort and document terminal-host limitations.
 - Do not expose `force-stop-supervisor` through the TUI.
 - Do not make the Configurator launch hidden supervisor workflows until elevation, duplicate-instance, first-run prompt, and cleanup behavior are designed.
 - Do not break SteamVR overlay compatibility or legacy bridge commands.

@@ -791,6 +791,25 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         ]));
     }
 
+    if let Some(notice) = &app.console_close_notice {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<8}", "X-close"), theme::label_style()),
+            Span::styled(truncate(notice, 84), theme::warning_style()),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<8}", "X-close"), theme::label_style()),
+            Span::styled(
+                if app.console_close_enabled {
+                    "best-effort shutdown enabled"
+                } else {
+                    "not available"
+                },
+                theme::secondary_style(),
+            ),
+        ]));
+    }
+
     if app.shutdown_in_progress {
         let message = app
             .shutdown_message

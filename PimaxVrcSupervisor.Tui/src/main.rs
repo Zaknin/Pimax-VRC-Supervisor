@@ -1,5 +1,6 @@
 mod app;
 mod bridge;
+mod console_close;
 mod models;
 mod theme;
 mod ui;
@@ -35,6 +36,16 @@ enum Shortcut {
 fn main() -> Result<()> {
     color_eyre::install()?;
 
+    let (console_close_guard, console_close_error) = match console_close::install() {
+        Ok(guard) => (Some(guard), None),
+        Err(error) => (
+            None,
+            Some(format!(
+                "Window-close shutdown handler disabled; keyboard shutdown still works: {error}"
+            )),
+        ),
+    };
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -45,9 +56,11 @@ fn main() -> Result<()> {
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    let result = run(&mut terminal, mouse_capture_error);
+    let result = run(&mut terminal, mouse_capture_error, console_close_error);
 
     restore_terminal(&mut terminal)?;
+
+    drop(console_close_guard);
 
     result
 }
@@ -66,12 +79,14 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io
 fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     mouse_capture_error: Option<String>,
+    console_close_error: Option<String>,
 ) -> Result<()> {
     let mut app = App::new();
     app.set_mouse_status(
         mouse_capture_error.is_none(),
         mouse_capture_error.map(|error| format!("Mouse disabled; keyboard-only mode: {error}")),
     );
+    app.set_console_close_status(console_close_error.is_none(), console_close_error);
     app.refresh(Instant::now());
 
     loop {

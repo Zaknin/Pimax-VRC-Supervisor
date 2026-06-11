@@ -1806,6 +1806,59 @@ Short Phase 16 direction:
 - Build and run a manual/runtime shortcut test matrix across keyboard layouts.
 - Continue polishing action confirmation safety and failure paths without expanding beyond the Phase 15 parity action set.
 
+### Phase 18G - Best-effort TUI window-close shutdown handling
+
+Status: Completed
+
+Summary:
+
+- Added Windows best-effort console close/logoff/shutdown handling to the Rust Desktop TUI.
+- Closing the TUI terminal window now attempts one narrow lifecycle request: `lifecycle-json {"action":"request-graceful-shutdown","source":"desktop-tui-window-close"}`.
+- The handler is best-effort only. It cannot guarantee cleanup if the terminal host kills the process without delivering a console close event or if the backend is unreachable.
+- Confirmed dashboard `Q` behavior is unchanged: connected `Q` opens the graceful-shutdown confirmation, backend-off `Q` exits only the TUI.
+- No tray/minimize behavior, close-TUI-only connected path, generic executor, new lifecycle action, new TUI action, SteamVR host behavior change, Configurator behavior change, or action allowlist change was added.
+
+Implementation notes:
+
+- Added `PimaxVrcSupervisor.Tui/src/console_close.rs` with raw Windows `SetConsoleCtrlHandler` FFI and non-Windows stubs.
+- Registered the handler from `main.rs` and kept terminal cleanup unchanged.
+- Added a process-local duplicate guard shared by the window-close handler and confirmed `Q` shutdown path.
+- Added a visible System-panel line for best-effort X-close shutdown handler status; install failure is nonfatal and leaves normal keyboard shutdown available.
+- Added backend source normalization for `desktop-tui-window-close` so supervisor logs can show `Desktop TUI window close`.
+
+Files changed:
+
+- `PimaxVrcSupervisor/Program.cs`
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/console_close.rs`
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `README.md`
+- `docs/phase-18-tui-lifecycle-configurator-design.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Verification:
+
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml` completed successfully.
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml` completed successfully.
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release` completed successfully.
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release` completed successfully with 0 warnings and 0 errors.
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release` completed successfully with 0 warnings and 0 errors.
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release` completed successfully with 0 warnings and 0 errors.
+- Release-folder refresh initially hit a locked `PimaxVrcSupervisorConfigurator.dll` held by `PimaxVrcSupervisorConfigurator` PID `44008`; that local Configurator test process was stopped and the publish/copy refresh then completed successfully.
+- Refreshed `release\PimaxVrcSupervisor-v1.3.0-test` with updated supervisor, Configurator, SteamVR host, and Rust TUI binaries.
+- `lifecycle-json` remains the only graceful shutdown bridge path.
+- `force-stop-supervisor` remains blocked/unexposed from structured TUI flow.
+- `action-json` remains limited to the existing allowlisted TUI actions.
+- `PimaxVrcSupervisor.SteamVrHost` source has no diff.
+- `PimaxVrcSupervisor.Tui/src/bridge.rs` source has no diff.
+- `git status --short release` produced no tracked release output.
+- `git status --ignored --short release` reported ignored release output only.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported ignored Rust target output only.
+- Runtime window-close testing should be performed from the refreshed release folder when a safe supervisor session is available.
+
 ### Phase 17D - Backend-off consistency, neutral modal controls, action hints, and log follow
 
 Status: Completed

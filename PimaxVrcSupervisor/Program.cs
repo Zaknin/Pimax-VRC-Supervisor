@@ -3625,6 +3625,7 @@ internal sealed class AppSupervisor
         return source.Trim() switch
         {
             var value when value.Equals("desktop-tui", StringComparison.OrdinalIgnoreCase) => "Desktop TUI",
+            var value when value.Equals("desktop-tui-window-close", StringComparison.OrdinalIgnoreCase) => "Desktop TUI window close",
             var value => value
         };
     }

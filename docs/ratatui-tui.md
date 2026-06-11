@@ -16,6 +16,8 @@ Phase 18E adds `--desktop-tui-start`, a dedicated hidden supervisor startup mode
 
 Phase 18F validates the release-folder build and source boundaries for the primary workflow. Source inspection confirmed `--desktop-tui-start` remains separate from `--steamvr-start`, and the release folder was refreshed successfully. Interactive lifecycle shutdown testing was skipped during implementation because confirming shutdown can run supervisor cleanup, restore monitors, stop apps, and affect base stations.
 
+Phase 18G adds Windows best-effort terminal close handling. When the terminal host delivers a console close/logoff/shutdown event, the TUI sends `lifecycle-json {"action":"request-graceful-shutdown","source":"desktop-tui-window-close"}` before the process exits. This is intentionally best-effort and cannot guarantee cleanup if the terminal host kills the process without delivering the event.
+
 ## Purpose
 
 The TUI gives a desktop/operator view of the supervisor with tightly limited control behavior. It displays:
@@ -57,6 +59,12 @@ For confirmed supervisor shutdown, it uses a separate lifecycle envelope:
 
 ```text
 lifecycle-json {"action":"request-graceful-shutdown","source":"Desktop TUI"}
+```
+
+For best-effort Windows terminal close handling, it uses the same lifecycle command with a distinct source:
+
+```text
+lifecycle-json {"action":"request-graceful-shutdown","source":"desktop-tui-window-close"}
 ```
 
 The lifecycle command is not a regular action card and does not use `force-stop-supervisor`.
@@ -129,6 +137,8 @@ The TUI tracks running actions by canonical backend command name:
 If `Q` is pressed while actions are running, the TUI opens the same shutdown confirmation. Confirming requests backend cleanup through `lifecycle-json`; it does not cancel backend work directly and does not send `force-stop-supervisor`. Normal action starts are disabled after shutdown is requested.
 
 If the backend accepts shutdown but remains reachable for 60 seconds, the TUI shows `Shutdown was requested, but the supervisor is still reachable. Check the supervisor logs.` before it exits. This is an operator warning only; it does not send `force-stop-supervisor`, retry shutdown, or add a close-TUI-only path.
+
+Closing the TUI terminal window is different from pressing `Q`: it cannot show a confirmation modal because the process is already closing. On Windows, the TUI registers a best-effort console close handler that sends the lifecycle request once and ignores failures. This depends on the terminal host delivering the close event and is not a substitute for the confirmed `Q` workflow.
 
 ## Visual Design
 

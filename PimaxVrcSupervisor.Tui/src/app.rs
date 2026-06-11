@@ -10,6 +10,7 @@ use ratatui::layout::Rect;
 
 use crate::{
     bridge::{SupervisorBridge, backend_endpoint},
+    console_close,
     models::{
         CommandResult, CommandSummary, LogLine, StatusSummary, TuiAction, commands_from_response,
         logs_from_response, status_from_response,
@@ -106,6 +107,8 @@ pub struct App {
     pub click_regions: Vec<ClickRegion>,
     pub mouse_enabled: bool,
     pub mouse_notice: Option<String>,
+    pub console_close_enabled: bool,
+    pub console_close_notice: Option<String>,
     action_result_tx: Sender<CompletedActionResult>,
     action_result_rx: Receiver<CompletedActionResult>,
     shutdown_result_tx: Sender<ShutdownRequestResult>,
@@ -161,6 +164,8 @@ impl App {
             click_regions: Vec::new(),
             mouse_enabled: false,
             mouse_notice: None,
+            console_close_enabled: false,
+            console_close_notice: None,
             action_result_tx,
             action_result_rx,
             shutdown_result_tx,
@@ -298,6 +303,11 @@ impl App {
     pub fn set_mouse_status(&mut self, enabled: bool, notice: Option<String>) {
         self.mouse_enabled = enabled;
         self.mouse_notice = notice;
+    }
+
+    pub fn set_console_close_status(&mut self, enabled: bool, notice: Option<String>) {
+        self.console_close_enabled = enabled;
+        self.console_close_notice = notice;
     }
 
     pub fn clear_click_regions(&mut self) {
@@ -457,6 +467,7 @@ impl App {
         self.shutdown_message =
             Some("Supervisor shutdown requested. Waiting for cleanup...".to_string());
         self.shutdown_error = None;
+        console_close::mark_shutdown_requested();
         self.spawn_shutdown_worker();
     }
 

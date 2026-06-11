@@ -205,6 +205,8 @@ Phase 18E adds `--desktop-tui-start`, a dedicated hidden supervisor startup mode
 
 Phase 18F validates the release-folder build and source boundaries for this workflow. Builds and publish/copy completed successfully, `--desktop-tui-start` remains separate from `--steamvr-start`, and SteamVR host/TUI bridge sources stayed unchanged. Interactive runtime shutdown tests were left for a safe local VR session because confirming `Q` can trigger supervisor cleanup, monitor restore, app shutdown, and base-station behavior.
 
+Phase 18G adds best-effort Windows terminal close handling for the Desktop TUI. If the terminal host delivers a console close/logoff/shutdown event, the TUI sends `lifecycle-json {"action":"request-graceful-shutdown","source":"desktop-tui-window-close"}` before the process exits. This is not guaranteed under forced termination or terminal hosts that do not deliver close events, and it does not add tray/minimize behavior or a close-TUI-only path.
+
 Confirmed actions run in the background so the TUI stays responsive. Different safe actions may run at the same time, but the same command cannot be started twice while running and Base Stations On/Off are mutually exclusive. Once shutdown is requested, normal action execution is disabled. `force-stop-supervisor` remains blocked from the TUI.
 
 Keybindings:
