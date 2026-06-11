@@ -2282,6 +2282,70 @@ Next direction:
 
 - Phase 20D can compare process load in connected and disconnected real-world sessions before considering any further diagnostics expansion.
 
+### Phase 20D - Collect Desktop TUI load baselines
+
+Status: Completed
+
+Summary:
+
+- Collected and documented Desktop TUI diagnostics baselines from the existing Phase 20C release build.
+- This was a diagnostics/reporting phase only.
+- No source behavior, bridge protocol, render cadence, refresh cadence, Configurator behavior, Supervisor behavior, SteamVR host behavior, cleanup behavior, action allowlist, or release layout changed.
+
+Collection basis:
+
+- Commit/build basis: `70ca6de Phase 20C: add Desktop TUI process load diagnostics`.
+- Release folder: `release\PimaxVrcSupervisor-v1.3.0-test`.
+- TUI executable last write time: 2026-06-11 20:17:34.
+- Temporary config: `%TEMP%\pimax-tui-phase20d.json`.
+- Diagnostics folder: `%TEMP%\PimaxVrcSupervisorPhase20D`.
+- Diagnostics interval: 15 seconds.
+
+Collection scope:
+
+- Disconnected collection: skipped because `PimaxVrcSupervisor.exe` was already running as PID `38344`; it was not stopped automatically.
+- Connected collection: performed using a separate temporary TUI process, PID `51560`, while an existing TUI process, PID `45128`, remained running.
+- Only the temporary TUI process was stopped after collection.
+
+Raw grouped statistics:
+
+| connected | samples | avg_renders | max_renders | avg_refreshes | avg_bridge_calls | avg_bridge_failures | avg_bridge_timeouts | avg_bridge_ms | max_bridge_ms | avg_cpu_percent | max_cpu_percent | avg_working_set_mb | max_working_set_mb | avg_private_memory_mb | max_private_memory_mb | avg_thread_count | max_thread_count | avg_handle_count | max_handle_count |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| true | 4 | 5.5 | 7 | 5.25 | 15.75 | 0 | 0 | 6.25 | 52 | 0.021 | 0.026 | 7.8 | 7.81 | 2.01 | 2.02 | 2.5 | 4 | 72 | 72 |
+
+Sample summary line:
+
+```json
+{"actions_started":0,"bridge_calls":18,"bridge_failures":0,"bridge_ms_avg":8,"bridge_ms_max":52,"bridge_ms_min":0,"bridge_timeouts":0,"connected":true,"connection_changes":1,"event":"desktop_tui_diagnostics_summary","input_wakeups":52,"interval_seconds":15.115755,"lifecycle_requests":0,"pid":51560,"refreshes":6,"renders":7,"tui_cpu_percent":0.0064605605211251445,"tui_cpu_time_delta_ms":15,"tui_cpu_time_total_ms":31,"tui_handle_count":72,"tui_private_memory_mb":2.0234375,"tui_thread_count":4,"tui_working_set_mb":7.7890625}
+```
+
+Interpretation:
+
+- Connected idle load looks healthy.
+- Average renders were `5.5` per 15 seconds, far below the old connected pre-20B render baseline of about `75` per 15 seconds.
+- Connected refresh cadence stayed near the intended 3 second cadence.
+- Bridge failures and bridge timeouts were both `0`.
+- Average TUI CPU was `0.021%`, with maximum `0.026%`.
+- Working set and private memory were stable around `7.8 MB` and `2.01 MB`.
+- Handle count stayed constant at `72`.
+- Thread count settled at `2` after the startup interval; the first interval showed `4`, consistent with startup/transient activity.
+- No `NaN`, `Infinity`, invalid JSON, missing Phase 20A/20B fields, or null process metric values were observed.
+
+Files changed:
+
+- `docs/ratatui-tui-load-baselines.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Verification:
+
+- Source safety inspection confirmed no source-code diffs in `PimaxVrcSupervisor/Program.cs`, `PimaxVrcSupervisor.ConfigEditor/Program.cs`, `PimaxVrcSupervisor.SteamVrHost`, `PimaxVrcSupervisor.Tui/src/bridge.rs`, `PimaxVrcSupervisor.Tui/src/app.rs`, `PimaxVrcSupervisor.Tui/src/main.rs`, or `PimaxVrcSupervisor.Tui/src/diagnostics.rs`.
+- Generated output and temporary diagnostics artifacts were not staged.
+
+Next direction:
+
+- No further connected-idle TUI optimization is recommended right now.
+- If more Phase 20 diagnostics work is needed, run a disconnected-only baseline when the Supervisor can be safely stopped, or run a longer 10-15 minute soak to confirm memory and handle stability.
+
 ### Phase 17D - Backend-off consistency, neutral modal controls, action hints, and log follow
 
 Status: Completed
