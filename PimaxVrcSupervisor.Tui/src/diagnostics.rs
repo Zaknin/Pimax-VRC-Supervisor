@@ -322,6 +322,7 @@ struct DiagnosticsConfig {
 fn load_config(path: &Path) -> Option<DiagnosticsConfig> {
     let text = fs::read_to_string(path).ok()?;
     let text = strip_json_line_comments(text.trim_start_matches('\u{feff}'));
+    let text = strip_json_trailing_commas(&text);
     let root = serde_json::from_str::<Value>(&text).ok()?;
     let master_enabled = root
         .get("DiagnosticsEnabled")
@@ -505,6 +506,55 @@ fn strip_json_line_comments(value: &str) -> String {
         }
 
         output.push(ch);
+    }
+
+    output
+}
+
+fn strip_json_trailing_commas(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let chars: Vec<char> = value.chars().collect();
+    let mut index = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while index < chars.len() {
+        let ch = chars[index];
+
+        if in_string {
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+
+        if ch == '"' {
+            in_string = true;
+            output.push(ch);
+            index += 1;
+            continue;
+        }
+
+        if ch == ',' {
+            let mut lookahead = index + 1;
+            while lookahead < chars.len() && chars[lookahead].is_whitespace() {
+                lookahead += 1;
+            }
+
+            if lookahead < chars.len() && matches!(chars[lookahead], '}' | ']') {
+                index += 1;
+                continue;
+            }
+        }
+
+        output.push(ch);
+        index += 1;
     }
 
     output

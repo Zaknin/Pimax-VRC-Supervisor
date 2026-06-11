@@ -2132,8 +2132,9 @@ Status: Completed
 Summary:
 
 - Hardened Desktop TUI diagnostics file creation after runtime testing showed supervisor diagnostics working but no `PimaxVrcSupervisorTui.diagnostics.log`.
-- Root cause addressed: the Rust TUI diagnostics reader used strict JSON parsing against the project’s commented config format and did not write a startup marker before the first interval.
+- Root cause addressed: the normal release test config `supervisor_moved.config.json` contained a trailing comma, while the Rust TUI diagnostics reader used strict JSON parsing and silently disabled diagnostics on parse failure. Phase 20A also lacked a startup marker before the first interval.
 - Added support for both `--config <path>` and `--config=<path>`.
+- Added diagnostics-only tolerance for `//` comments and trailing commas while extracting the TUI diagnostics settings.
 - Kept no-argument config fallback order: config beside `PimaxVrcSupervisorTui.exe`, then current working directory, then diagnostics disabled.
 - Kept effective enable logic aligned with Configurator convention: `DiagnosticsLogDesktopTui=true` enables TUI diagnostics unless an optional/manual `DiagnosticsEnabled=false` is present.
 - Missing `DiagnosticsLogDesktopTui`, missing config, unreadable config, or malformed config still disables TUI diagnostics silently.
@@ -2164,7 +2165,7 @@ Verification:
 - `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`: passed.
 - `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`: passed.
 - Release-folder refresh: complete. All three C# projects published to `release\PimaxVrcSupervisor-v1.3.0-test`, and the rebuilt `PimaxVrcSupervisorTui.exe` was copied into the same folder.
-- Runtime smoke: passed with a temporary config and no supervisor. Enabled mode created `PimaxVrcSupervisorTui.diagnostics.log` with one `desktop_tui_diagnostics_started` marker and `desktop_tui_diagnostics_summary` lines. Disabled mode kept the same file timestamp and line count after relaunch.
+- Runtime smoke: passed from the release folder with the real `supervisor_moved.config.json`. Enabled mode created `%TEMP%\PimaxVrcSupervisorDiagnostics\PimaxVrcSupervisorTui.diagnostics.log` with one `desktop_tui_diagnostics_started` marker and one `desktop_tui_diagnostics_summary` line after the 15 second interval. Disabled mode kept the same file timestamp and line count after relaunch.
 - Regression smoke for full Configurator launch and supervisor shutdown flows was not performed during implementation because it can enter local supervisor lifecycle and VR/session cleanup paths.
 
 Next direction:
