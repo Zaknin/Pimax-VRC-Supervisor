@@ -66,7 +66,7 @@ internal sealed class ConfigEditorForm : Form
         "Ctrl+O = Browse config",
         "F5 = Reload",
         "Ctrl+R = Reload",
-        "Ctrl+L = Launch Supervisor",
+        "Ctrl+L = Launch Supervisor (uses Desktop TUI option)",
         "Ctrl+Shift+V = Validate",
         "Delete = Delete selected row in Auto Startup, Base Stations, or OSC Routes grids"
     ];
@@ -114,6 +114,7 @@ internal sealed class ConfigEditorForm : Form
     private readonly CheckBox _diagnosticsVerboseCheckBox = new ThemedCheckBox { Text = "Verbose diagnostic timings", AutoSize = true };
     private readonly CheckBox _diagnosticsDebugSteamVrPointerCheckBox = new ThemedCheckBox { Text = "Show SteamVR overlay pointer marker", AutoSize = true };
     private readonly CheckBox _mouthTrackerRestartOnReconnectCheckBox = new ThemedCheckBox { Text = "Enable automatic restart on mouth tracker reconnects", AutoSize = true };
+    private readonly CheckBox _useDesktopTuiAsDefaultInterfaceCheckBox = new ThemedCheckBox { Text = "Use Desktop TUI as default interface", AutoSize = true };
     private readonly TextBox _diagnosticsLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly DataGridView _autoLaunchAppsGrid = new()
     {
@@ -207,6 +208,7 @@ internal sealed class ConfigEditorForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         KeyPreview = true;
         RestoreWindowState();
+        _useDesktopTuiAsDefaultInterfaceCheckBox.Checked = _editorState.UseDesktopTuiAsDefaultInterface;
 
         ConfigureToolTips();
         BuildLayout();
@@ -1996,12 +1998,11 @@ internal sealed class ConfigEditorForm : Form
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Bottom,
-            ColumnCount = 8,
+            ColumnCount = 7,
             AutoSize = true,
             Padding = new Padding(0, 10, 0, 0)
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -2016,19 +2017,18 @@ internal sealed class ConfigEditorForm : Form
         var launchButton = CreateButton("Launch Supervisor");
         launchButton.Click += (_, _) => LaunchSupervisor();
         launchButton.FlatStyle = FlatStyle.Flat;
-        _toolTips.SetToolTip(launchButton, "Launch Supervisor (Ctrl+L). Starts the console supervisor using the currently selected config file. Save changes first if you want the launched supervisor to use them.");
+        _toolTips.SetToolTip(launchButton, "Launch Supervisor (Ctrl+L). Uses the Desktop TUI option in this footer: checked opens the Desktop TUI, unchecked starts the classic visible console. Save changes first if you want the launched supervisor to use them.");
+
+        _useDesktopTuiAsDefaultInterfaceCheckBox.CheckedChanged += (_, _) =>
+        {
+            _editorState.UseDesktopTuiAsDefaultInterface = _useDesktopTuiAsDefaultInterfaceCheckBox.Checked;
+            SaveEditorState();
+        };
+        _toolTips.SetToolTip(_useDesktopTuiAsDefaultInterfaceCheckBox, "When enabled, Launch Supervisor starts the Supervisor hidden and opens the Desktop TUI.");
 
         var launchSteamVrButton = CreateButton("Launch SteamVR");
         launchSteamVrButton.Click += (_, _) => LaunchSteamVr();
         _toolTips.SetToolTip(launchSteamVrButton, "Starts SteamVR normally through Steam.");
-
-        var launchDesktopTuiButton = CreateButton("Launch Desktop TUI");
-        launchDesktopTuiButton.Click += (_, _) => LaunchDesktopTui();
-        _toolTips.SetToolTip(launchDesktopTuiButton, "Opens the Desktop TUI. Start the Supervisor first for live status and actions.");
-
-        var launchSupervisorAndDesktopTuiButton = CreateButton("Launch Supervisor + Desktop TUI");
-        launchSupervisorAndDesktopTuiButton.Click += (_, _) => LaunchSupervisorAndDesktopTui();
-        _toolTips.SetToolTip(launchSupervisorAndDesktopTuiButton, "Starts the Supervisor and opens the Desktop TUI. Press Q in the TUI to close managed apps and exit the Supervisor.");
 
         var saveButton = CreateButton("Save");
         saveButton.Tag = "Primary";
@@ -2041,12 +2041,11 @@ internal sealed class ConfigEditorForm : Form
 
         layout.Controls.Add(_statusLabel, 0, 0);
         layout.Controls.Add(validateButton, 1, 0);
-        layout.Controls.Add(launchButton, 2, 0);
-        layout.Controls.Add(launchSteamVrButton, 3, 0);
-        layout.Controls.Add(launchDesktopTuiButton, 4, 0);
-        layout.Controls.Add(launchSupervisorAndDesktopTuiButton, 5, 0);
-        layout.Controls.Add(saveAsButton, 6, 0);
-        layout.Controls.Add(saveButton, 7, 0);
+        layout.Controls.Add(_useDesktopTuiAsDefaultInterfaceCheckBox, 2, 0);
+        layout.Controls.Add(launchButton, 3, 0);
+        layout.Controls.Add(launchSteamVrButton, 4, 0);
+        layout.Controls.Add(saveAsButton, 5, 0);
+        layout.Controls.Add(saveButton, 6, 0);
         return layout;
     }
 
@@ -2981,41 +2980,65 @@ internal sealed class ConfigEditorForm : Form
 
     private void LaunchSupervisor()
     {
+        if (_useDesktopTuiAsDefaultInterfaceCheckBox.Checked)
+        {
+            LaunchSupervisorWithDesktopTui();
+            return;
+        }
+
+        if (IsSupervisorRunning())
+        {
+            SetStatus("Supervisor is already running.");
+            return;
+        }
+
         if (!TryPrepareSupervisorLaunch(out var supervisorPath, out var configPath))
         {
             return;
         }
 
-        LaunchSupervisorProcess(supervisorPath, configPath);
+        LaunchSupervisorProcess(supervisorPath, configPath, successStatus: "Started Supervisor.");
     }
 
-    private void LaunchSupervisorAndDesktopTui()
+    private void LaunchSupervisorWithDesktopTui()
     {
+        var supervisorRunning = IsSupervisorRunning();
+        var tuiRunning = IsDesktopTuiRunning();
+
+        if (supervisorRunning && tuiRunning)
+        {
+            SetStatus("Supervisor and Desktop TUI are already running.");
+            return;
+        }
+
+        if (supervisorRunning)
+        {
+            var result = LaunchDesktopTui(showAlreadyOpenMessage: false);
+            if (result == DesktopTuiLaunchResult.Launched)
+            {
+                SetStatus("Supervisor is already running. Opened Desktop TUI.");
+            }
+            else if (result == DesktopTuiLaunchResult.AlreadyRunning)
+            {
+                SetStatus("Supervisor and Desktop TUI are already running.");
+            }
+            return;
+        }
+
         if (!TryPrepareSupervisorLaunch(out var supervisorPath, out var configPath))
         {
             return;
         }
 
-        if (Process.GetProcessesByName("PimaxVrcSupervisor").Any())
+        if (LaunchSupervisorProcess(supervisorPath, configPath, desktopTuiStart: true, successStatus: null))
         {
-            var existingSupervisorTuiResult = LaunchDesktopTui();
-            if (existingSupervisorTuiResult == DesktopTuiLaunchResult.Launched)
-            {
-                SetStatus("Supervisor is already running. Desktop TUI opened.");
-            }
-            else if (existingSupervisorTuiResult == DesktopTuiLaunchResult.AlreadyRunning)
-            {
-                SetStatus("Supervisor is already running. Desktop TUI is already open.");
-            }
-            return;
-        }
+            var tuiResult = tuiRunning
+                ? DesktopTuiLaunchResult.AlreadyRunning
+                : LaunchDesktopTui(showAlreadyOpenMessage: false);
 
-        if (LaunchSupervisorProcess(supervisorPath, configPath, desktopTuiStart: true))
-        {
-            var tuiResult = LaunchDesktopTui();
             if (tuiResult == DesktopTuiLaunchResult.Launched)
             {
-                SetStatus("Started Supervisor and opened Desktop TUI.");
+                SetStatus("Started Supervisor and Desktop TUI.");
             }
             else if (tuiResult == DesktopTuiLaunchResult.AlreadyRunning)
             {
@@ -3058,7 +3081,7 @@ internal sealed class ConfigEditorForm : Form
         return true;
     }
 
-    private bool LaunchSupervisorProcess(string supervisorPath, string configPath, bool desktopTuiStart = false)
+    private bool LaunchSupervisorProcess(string supervisorPath, string configPath, bool desktopTuiStart = false, string? successStatus = "Started Supervisor.")
     {
         try
         {
@@ -3084,7 +3107,10 @@ internal sealed class ConfigEditorForm : Form
             }
 
             Process.Start(startInfo);
-            SetStatus("Started Supervisor using " + Path.GetFileName(configPath) + ".");
+            if (!string.IsNullOrWhiteSpace(successStatus))
+            {
+                SetStatus(successStatus);
+            }
             return true;
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
@@ -3132,7 +3158,7 @@ internal sealed class ConfigEditorForm : Form
         Failed
     }
 
-    private DesktopTuiLaunchResult LaunchDesktopTui()
+    private DesktopTuiLaunchResult LaunchDesktopTui(bool showAlreadyOpenMessage = true)
     {
         var tuiPath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisorTui.exe");
         if (!File.Exists(tuiPath))
@@ -3149,13 +3175,16 @@ internal sealed class ConfigEditorForm : Form
             return DesktopTuiLaunchResult.Failed;
         }
 
-        if (Process.GetProcessesByName("PimaxVrcSupervisorTui").Any())
+        if (IsDesktopTuiRunning())
         {
-            ShowThemedMessageBox(
-                "Desktop TUI is already open.",
-                "Desktop TUI already open",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            if (showAlreadyOpenMessage)
+            {
+                ShowThemedMessageBox(
+                    "Desktop TUI is already open.",
+                    "Desktop TUI already open",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
             SetStatus("Desktop TUI is already open.");
             return DesktopTuiLaunchResult.AlreadyRunning;
         }
@@ -3180,6 +3209,10 @@ internal sealed class ConfigEditorForm : Form
             return DesktopTuiLaunchResult.Failed;
         }
     }
+
+    private static bool IsSupervisorRunning() => Process.GetProcessesByName("PimaxVrcSupervisor").Any();
+
+    private static bool IsDesktopTuiRunning() => Process.GetProcessesByName("PimaxVrcSupervisorTui").Any();
 
     private static bool IsAdministrator()
     {
@@ -3945,6 +3978,7 @@ internal sealed class ConfigEditorForm : Form
         _editorState.LastSelectedTab = _tabs.SelectedIndex;
         _editorState.WindowState = WindowState;
         _editorState.WindowBounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+        _editorState.UseDesktopTuiAsDefaultInterface = _useDesktopTuiAsDefaultInterfaceCheckBox.Checked;
         _editorState.Save();
     }
 
@@ -7036,6 +7070,7 @@ internal sealed class EditorState
     public Rectangle? WindowBounds { get; set; }
     public FormWindowState WindowState { get; set; } = FormWindowState.Normal;
     public int LastSelectedTab { get; set; }
+    public bool UseDesktopTuiAsDefaultInterface { get; set; } = true;
     public List<string> StartupTaskMigrationPromptedReleaseFolders { get; set; } = [];
 
     public static EditorState Load()

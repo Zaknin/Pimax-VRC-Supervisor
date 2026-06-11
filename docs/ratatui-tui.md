@@ -22,6 +22,8 @@ Phase 18H records successful release-folder runtime validation of this best-effo
 
 Phase 19A cleans normal operator-facing Configurator and Desktop TUI wording. Routine UI now says `Supervisor`, `Connected`, `DISCONNECTED`, `Shut down Supervisor`, and `closing managed apps` instead of protocol or implementation terms. Protocol strings such as `query-json`, `action-json`, and `lifecycle-json` remain unchanged internally and are kept in design documentation where they are useful.
 
+Phase 19B makes Desktop TUI the default Configurator launch interface. The Configurator footer now has `Use Desktop TUI as default interface` enabled by default; when checked, **Launch Supervisor** starts the Supervisor hidden and opens the Desktop TUI. When unchecked, **Launch Supervisor** starts the classic visible Supervisor console. Standalone normal UI buttons for **Launch Desktop TUI** and **Launch Supervisor + Desktop TUI** were removed. Release-folder runtime smoke is valid only after all three C# publishes and the Rust TUI copy succeed.
+
 ## Purpose
 
 The TUI gives a desktop/operator view of the supervisor with tightly limited control behavior. It displays:
@@ -79,9 +81,9 @@ The SteamVR overlay remains unchanged. The TUI does not replace VR status/log re
 
 ## Launch Requirements
 
-The supervisor backend must already be running for live data. The TUI does not start the supervisor, does not elevate, and does not start SteamVR or VRChat. The Configurator can launch the supervisor and TUI together with **Launch Supervisor + Desktop TUI**.
+The supervisor backend must already be running for live data. The TUI does not start the supervisor, does not elevate, and does not start SteamVR or VRChat. The Configurator **Launch Supervisor** button can start the supervisor and TUI together when `Use Desktop TUI as default interface` is checked.
 
-When launched through **Launch Supervisor + Desktop TUI**, the supervisor receives `--desktop-tui-start`. That flag hides the console for the Desktop TUI workflow only; it does not set SteamVR startup mode and does not change cleanup or action semantics.
+When launched through checked-mode **Launch Supervisor**, the supervisor receives `--desktop-tui-start`. That flag hides the console for the Desktop TUI workflow only; it does not set SteamVR startup mode and does not change cleanup or action semantics.
 
 From a release folder that contains `PimaxVrcSupervisorTui.exe`:
 

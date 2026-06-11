@@ -6,7 +6,7 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 
 - `PimaxVrcSupervisor.exe` is the C# safety-critical backend. It owns startup, Windows elevation-sensitive operations, SteamVR/VRChat/Pimax monitoring, cleanup, monitor layout, base-station power, OSC routing, managed app lifecycle, diagnostics, the classic console UI, and the loopback TCP command bridge.
 - `PimaxVrcSupervisorTui.exe` is a separate Rust/Ratatui desktop terminal UI. It connects to the already-running supervisor on `127.0.0.1:37957`, reads `query-json`, and executes only the audited regular `TuiAction` set through `action-json`.
-- `PimaxVrcSupervisorConfigurator.exe` is the WinForms editor/launcher for `supervisor.config.json`. It has Launch Supervisor, Launch SteamVR, Launch Desktop TUI, and Launch Supervisor + Desktop TUI buttons.
+- `PimaxVrcSupervisorConfigurator.exe` is the WinForms editor/launcher for `supervisor.config.json`. Its normal launch controls are Launch Supervisor, Launch SteamVR, and the persisted `Use Desktop TUI as default interface` checkbox.
 - `PimaxVrcSupervisorSteamVrHost.exe` is the SteamVR dashboard overlay host. It remains on the existing SteamVR overlay and legacy bridge workflow.
 - Release packaging uses a flat folder layout that already includes the Rust TUI executable beside the C# executables.
 
@@ -87,6 +87,16 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 - Configurator launcher status text uses `started`, `opened`, and `already open` language instead of raw launch terminology.
 - Internal protocol names and command strings remain unchanged and continue to appear in this design document where they define implementation boundaries.
 
+## Phase 19B Primary Launch Interface Status
+
+- The normal Configurator UI no longer shows standalone `Launch Desktop TUI` or `Launch Supervisor + Desktop TUI` buttons.
+- `Use Desktop TUI as default interface` is enabled by default and persisted in Configurator local state.
+- With the option checked, `Launch Supervisor` starts the Supervisor with hidden Desktop TUI startup mode and opens the Desktop TUI.
+- With the option unchecked, `Launch Supervisor` starts the classic visible Supervisor console.
+- `Launch SteamVR` remains unchanged.
+- No tray/minimize behavior, config schema change, protocol change, SteamVR host change, or lifecycle behavior change was added.
+- Release-folder runtime validation for this workflow is valid only after all three C# publishes and the Rust TUI copy complete successfully; partial refreshes must be reported as partial and not used as runtime evidence.
+
 ## Phase 18D Hardening Status
 
 - The primary TUI shutdown flow remains the same confirmed `Q` workflow; no close-TUI-only dashboard path was restored.
@@ -123,9 +133,8 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 
 ## Proposed User-Facing Wording
 
-- `Launch Desktop TUI`: opens the Desktop TUI. It does not start or stop the supervisor.
-- `Launch Supervisor + Desktop TUI`: starts the Supervisor if needed, then opens the Desktop TUI.
-- `Launch Supervisor`: starts the classic supervisor console using the current config.
+- `Use Desktop TUI as default interface`: when checked, makes `Launch Supervisor` open the Desktop TUI workflow.
+- `Launch Supervisor`: starts the hidden Desktop TUI workflow when the option is checked, or the classic visible Supervisor console when unchecked.
 - `Launch SteamVR`: starts SteamVR normally through Steam.
 - `Q`: opens `Shut down Supervisor?` confirmation. Confirming closes managed apps and exits the Supervisor through the existing cleanup path.
 
