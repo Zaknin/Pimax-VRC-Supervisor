@@ -32,6 +32,8 @@ Phase 20A adds optional Desktop TUI load diagnostics. The Configurator passes th
 
 Phase 20A-Hotfix makes Desktop TUI diagnostics create the log immediately when enabled. The TUI accepts both `--config <path>` and `--config=<path>`, tolerates comments and trailing commas while reading only diagnostics settings, expands Windows-style `%VAR%` diagnostics folders, falls back to the temp diagnostics folder when the configured folder cannot be opened, writes a `desktop_tui_diagnostics_started` startup marker, and labels periodic summary records with `desktop_tui_diagnostics_summary`.
 
+Phase 20B reduces idle redraw and disconnected bridge load. The TUI redraws on visible state changes, refresh completion, terminal resize, and a low-rate heartbeat instead of redrawing on every input-poll timeout. Connected refresh stays near the existing 3-second cadence, disconnected automatic retry backs off to about 7 seconds, and manual refresh remains immediate. Bridge protocols, actions, lifecycle behavior, Configurator launch behavior, SteamVR behavior, and cleanup behavior are unchanged.
+
 ## Purpose
 
 The TUI gives a desktop/operator view of the supervisor with tightly limited control behavior. It displays:

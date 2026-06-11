@@ -19,6 +19,10 @@ use crate::{
 };
 
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
+pub const DISCONNECTED_REFRESH_INTERVAL: Duration = Duration::from_secs(7);
+pub const CONNECTED_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
+pub const DISCONNECTED_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+pub const ACTIVE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 pub const MAX_LOG_LINES: usize = 80;
 pub const LOG_PAGE_SIZE: usize = 8;
 pub const SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -109,6 +113,8 @@ pub struct App {
     pub mouse_notice: Option<String>,
     pub console_close_enabled: bool,
     pub console_close_notice: Option<String>,
+    render_needed: bool,
+    last_render_at: Option<Instant>,
     diagnostics: TuiDiagnostics,
     action_result_tx: Sender<CompletedActionResult>,
     action_result_rx: Receiver<CompletedActionResult>,
@@ -168,6 +174,8 @@ impl App {
             mouse_notice: None,
             console_close_enabled: false,
             console_close_notice: None,
+            render_needed: true,
+            last_render_at: None,
             diagnostics,
             action_result_tx,
             action_result_rx,
@@ -212,6 +220,7 @@ impl App {
 
         self.refresh_in_progress = false;
         self.clamp_log_scroll();
+        self.mark_render_needed();
     }
 
     pub fn drain_action_results(&mut self) {
@@ -239,6 +248,8 @@ impl App {
 
         if should_refresh {
             self.refresh(Instant::now());
+        } else {
+            self.mark_render_needed();
         }
     }
 
@@ -271,6 +282,8 @@ impl App {
                 result.completed_at,
             );
         }
+
+        self.mark_render_needed();
     }
 
     pub fn should_auto_refresh(&self, now: Instant) -> bool {
@@ -279,7 +292,7 @@ impl App {
         }
 
         self.last_attempt
-            .map(|attempt| now.duration_since(attempt) >= REFRESH_INTERVAL)
+            .map(|attempt| now.duration_since(attempt) >= self.refresh_interval())
             .unwrap_or(true)
     }
 
@@ -290,34 +303,58 @@ impl App {
             return MAX_POLL;
         }
 
-        let Some(last_attempt) = self.last_attempt else {
-            return Duration::ZERO;
-        };
+        let refresh_remaining = self
+            .last_attempt
+            .map(|last_attempt| remaining_until(now, last_attempt, self.refresh_interval()))
+            .unwrap_or(Duration::ZERO);
 
-        let elapsed = now.duration_since(last_attempt);
-        if elapsed >= REFRESH_INTERVAL {
+        let heartbeat_remaining = self
+            .last_render_at
+            .map(|last_render_at| remaining_until(now, last_render_at, self.heartbeat_interval()))
+            .unwrap_or(Duration::ZERO);
+
+        let next_due = refresh_remaining.min(heartbeat_remaining);
+        if next_due.is_zero() {
             Duration::ZERO
         } else {
-            (REFRESH_INTERVAL - elapsed).min(MAX_POLL)
+            next_due.min(MAX_POLL)
         }
+    }
+
+    pub fn should_render(&self, now: Instant) -> bool {
+        if self.render_needed {
+            return true;
+        }
+
+        self.last_render_at
+            .map(|last_render_at| now.duration_since(last_render_at) >= self.heartbeat_interval())
+            .unwrap_or(true)
+    }
+
+    pub fn mark_render_needed(&mut self) {
+        self.render_needed = true;
     }
 
     pub fn toggle_help(&mut self) {
         self.help_visible = !self.help_visible;
+        self.mark_render_needed();
     }
 
     pub fn close_help(&mut self) {
         self.help_visible = false;
+        self.mark_render_needed();
     }
 
     pub fn set_mouse_status(&mut self, enabled: bool, notice: Option<String>) {
         self.mouse_enabled = enabled;
         self.mouse_notice = notice;
+        self.mark_render_needed();
     }
 
     pub fn set_console_close_status(&mut self, enabled: bool, notice: Option<String>) {
         self.console_close_enabled = enabled;
         self.console_close_notice = notice;
+        self.mark_render_needed();
     }
 
     pub fn clear_click_regions(&mut self) {
@@ -380,6 +417,7 @@ impl App {
         if self.validate_action_start(action).is_ok() {
             self.help_visible = false;
             self.confirmation = Some(action);
+            self.mark_render_needed();
             return;
         }
 
@@ -441,12 +479,14 @@ impl App {
         });
         self.diagnostics.record_action_started();
         self.spawn_action_worker(action);
+        self.mark_render_needed();
     }
 
     pub fn request_shutdown_confirmation(&mut self, now: Instant) -> bool {
         if self.connection != ConnectionState::Connected {
             self.shutdown_message = Some("Supervisor is not running. Exiting TUI.".to_string());
             self.last_action_completed_at = Some(now);
+            self.mark_render_needed();
             return true;
         }
 
@@ -457,11 +497,13 @@ impl App {
         self.help_visible = false;
         self.confirmation = None;
         self.shutdown_confirmation = true;
+        self.mark_render_needed();
         false
     }
 
     pub fn cancel_shutdown_confirmation(&mut self) {
         self.shutdown_confirmation = false;
+        self.mark_render_needed();
     }
 
     pub fn confirm_shutdown(&mut self, now: Instant) {
@@ -480,9 +522,12 @@ impl App {
         console_close::mark_shutdown_requested();
         self.diagnostics.record_lifecycle_request();
         self.spawn_shutdown_worker();
+        self.mark_render_needed();
     }
 
-    pub fn record_render(&self) {
+    pub fn record_render(&mut self, now: Instant) {
+        self.last_render_at = Some(now);
+        self.render_needed = false;
         self.diagnostics.record_render();
     }
 
@@ -518,6 +563,7 @@ impl App {
             self.shutdown_message =
                 Some("The Supervisor did not exit in time. Check the Supervisor logs.".to_string());
             self.shutdown_exit_after = Some(now + SHUTDOWN_TIMEOUT_NOTICE_DELAY);
+            self.mark_render_needed();
         }
 
         false
@@ -527,6 +573,7 @@ impl App {
         self.log_follow = false;
         self.log_scroll = self.log_scroll.saturating_add(amount);
         self.clamp_log_scroll();
+        self.mark_render_needed();
     }
 
     pub fn scroll_logs_down(&mut self, amount: usize) {
@@ -535,12 +582,14 @@ impl App {
             self.log_follow = true;
         }
         self.clamp_log_scroll();
+        self.mark_render_needed();
     }
 
     pub fn scroll_logs_home(&mut self) {
         self.log_follow = false;
         self.log_scroll = self.logs.len().saturating_sub(1);
         self.clamp_log_scroll();
+        self.mark_render_needed();
     }
 
     pub fn scroll_logs_end(&mut self) {
@@ -551,6 +600,7 @@ impl App {
         self.log_follow = true;
         self.log_scroll = 0;
         self.clamp_log_scroll();
+        self.mark_render_needed();
     }
 
     pub fn last_success_label(&self, now: Instant) -> String {
@@ -742,6 +792,7 @@ impl App {
         self.last_action_result = Some(message);
         self.last_action_error = None;
         self.last_action_completed_at = Some(now);
+        self.mark_render_needed();
     }
 
     fn record_action_error(
@@ -756,6 +807,34 @@ impl App {
         self.last_action_error = Some(message);
         self.last_action_result = None;
         self.last_action_completed_at = Some(now);
+        self.mark_render_needed();
+    }
+
+    fn refresh_interval(&self) -> Duration {
+        match self.connection {
+            ConnectionState::Connected => REFRESH_INTERVAL,
+            ConnectionState::Disconnected => DISCONNECTED_REFRESH_INTERVAL,
+        }
+    }
+
+    fn heartbeat_interval(&self) -> Duration {
+        if self.shutdown_in_progress || !self.running_actions.is_empty() {
+            ACTIVE_HEARTBEAT_INTERVAL
+        } else {
+            match self.connection {
+                ConnectionState::Connected => CONNECTED_HEARTBEAT_INTERVAL,
+                ConnectionState::Disconnected => DISCONNECTED_HEARTBEAT_INTERVAL,
+            }
+        }
+    }
+}
+
+fn remaining_until(now: Instant, last: Instant, interval: Duration) -> Duration {
+    let elapsed = now.duration_since(last);
+    if elapsed >= interval {
+        Duration::ZERO
+    } else {
+        interval - elapsed
     }
 }
 

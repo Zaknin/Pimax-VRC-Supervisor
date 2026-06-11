@@ -223,6 +223,8 @@ Phase 20A adds optional Desktop TUI load diagnostics. The new **Log Desktop TUI 
 
 Phase 20A-Hotfix makes Desktop TUI diagnostics prove file creation immediately. The TUI accepts both `--config <path>` and `--config=<path>`, tolerates comments and trailing commas while reading only diagnostics settings, expands Windows `%VAR%` tokens in the diagnostics folder, falls back to the temp diagnostics folder if the configured folder cannot be opened, writes a `desktop_tui_diagnostics_started` startup marker, and labels periodic summary records as `desktop_tui_diagnostics_summary`. Disabled diagnostics still write no TUI diagnostics lines.
 
+Phase 20B reduces Desktop TUI idle load. The TUI no longer redraws just because the input poll timed out; it redraws on visible state changes, refresh completion, resize, and a low-rate heartbeat. Connected refresh remains about every 3 seconds, while disconnected automatic retry backs off to about 7 seconds; manual refresh remains immediate. No bridge protocol, action, lifecycle, Configurator, Supervisor, SteamVR, or cleanup behavior changes.
+
 Confirmed actions run in the background so the TUI stays responsive. Different safe actions may run at the same time, but the same command cannot be started twice while running and Base Stations On/Off are mutually exclusive. Once shutdown is requested, normal action execution is disabled. `force-stop-supervisor` remains blocked from the TUI.
 
 Keybindings:

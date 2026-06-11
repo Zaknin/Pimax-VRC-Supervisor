@@ -110,8 +110,11 @@ fn run(
             break;
         }
 
-        terminal.draw(|frame| ui::render(frame, &mut app))?;
-        app.record_render();
+        let now = Instant::now();
+        if app.should_render(now) {
+            terminal.draw(|frame| ui::render(frame, &mut app))?;
+            app.record_render(now);
+        }
         app.maybe_write_diagnostics(Instant::now());
 
         if event::poll(app.poll_timeout(Instant::now()))? {
@@ -130,6 +133,9 @@ fn run(
                     if handle_mouse(&mut app, mouse) {
                         break;
                     }
+                }
+                Event::Resize(_, _) => {
+                    app.mark_render_needed();
                 }
                 _ => {}
             }

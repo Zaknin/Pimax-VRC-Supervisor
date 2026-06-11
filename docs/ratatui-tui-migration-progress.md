@@ -2170,7 +2170,61 @@ Verification:
 
 Next direction:
 
-- Phase 20B should add richer process/load metrics only after the basic Desktop TUI diagnostics log is confirmed in runtime testing.
+- Phase 20B should reduce idle redraw load and disconnected bridge retry load while preserving connected refresh cadence and all bridge protocols.
+
+### Phase 20B - Reduce Desktop TUI idle redraw and disconnected bridge load
+
+Status: Completed
+
+Summary:
+
+- Reduced Rust Desktop TUI idle rendering without changing Supervisor, Configurator, SteamVR host, bridge protocol, action allowlist, lifecycle behavior, cleanup behavior, or release layout.
+- The TUI no longer redraws just because the input poll timed out.
+- Refresh completion marks render-needed conservatively, so refreshed data is still visible immediately.
+- Connected refresh remains about every 3 seconds; connected refresh reduction was not a goal.
+- Disconnected automatic retry backs off to 7 seconds; manual refresh remains immediate.
+
+Rust TUI behavior:
+
+- Added render scheduling with explicit render-needed state and heartbeat rendering.
+- Render triggers now include startup, terminal resize, state-changing input, refresh completion, action/shutdown result changes, connection/error changes, Help/modal changes, and heartbeat.
+- Added heartbeat intervals: 3 seconds when connected and idle, 5 seconds when disconnected and idle, and 1 second while actions or shutdown are running.
+- Diagnostics flushing stays independent of rendering so interval summaries still write during idle periods.
+- Kept `query-json`, `action-json`, and `lifecycle-json` request behavior unchanged.
+
+Diagnostics expectations:
+
+- Before disconnected baseline from Phase 20A investigation: about `renders=52` and `bridge_timeouts=5` per 15 second interval.
+- Expected disconnected after Phase 20B: materially fewer renders and about `1-3` bridge timeouts per 15 second interval depending on startup/manual refresh timing.
+- Before connected baseline from Phase 20A investigation: about `renders=75`, `refreshes=5`, and `bridge_calls=15` per 15 second interval.
+- Expected connected after Phase 20B: materially fewer renders while keeping refresh cadence near 3 seconds and bridge calls consistent with the existing connected refresh model.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `README.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Verification:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`: passed.
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`: passed.
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`: passed.
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`: passed.
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`: passed.
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`: passed.
+- Release-folder refresh: complete. All three C# projects published to `release\PimaxVrcSupervisor-v1.3.0-test`, and the rebuilt `PimaxVrcSupervisorTui.exe` was copied into the same folder.
+- Disconnected runtime diagnostics smoke: passed from the refreshed release folder with a temporary diagnostics config under `%TEMP%\PimaxVrcSupervisorPhase20B`. Two 15 second summary intervals were recorded: first interval `renders=6`, `refreshes=3`, `bridge_timeouts=3`; second interval `renders=4`, `refreshes=2`, `bridge_timeouts=2`.
+- Connected runtime diagnostics smoke: skipped during implementation because starting the Supervisor can enter local lifecycle, app, VR/session, monitor, and base-station workflows.
+- Regression smoke for Configurator launch and supervisor shutdown flows was not performed during implementation for the same lifecycle-safety reason.
+- Source inspection confirmed `PimaxVrcSupervisor/Program.cs`, `PimaxVrcSupervisor.SteamVrHost`, and `PimaxVrcSupervisor.Tui/src/bridge.rs` had no behavior diff.
+- Generated output remained ignored and unstaged: `release/`, `PimaxVrcSupervisor.Tui/target/`, the temporary diagnostics config, and the diagnostics log were not staged.
+
+Next direction:
+
+- Phase 20C can add richer process/load metrics only if the lower idle redraw/retry load remains stable in runtime testing.
 
 ### Phase 17D - Backend-off consistency, neutral modal controls, action hints, and log follow
 
