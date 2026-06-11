@@ -207,6 +207,8 @@ Phase 18F validates the release-folder build and source boundaries for this work
 
 Phase 18G adds best-effort Windows terminal close handling for the Desktop TUI. If the terminal host delivers a console close/logoff/shutdown event, the TUI sends `lifecycle-json {"action":"request-graceful-shutdown","source":"desktop-tui-window-close"}` before the process exits. This is not guaranteed under forced termination or terminal hosts that do not deliver close events, and it does not add tray/minimize behavior or a close-TUI-only path.
 
+Phase 18H records successful local release-folder runtime validation of that window-close path. In the tested Windows terminal host, closing the TUI window with X triggered the lifecycle shutdown request, the supervisor ran Ctrl+C-equivalent cleanup, managed apps closed through supervisor cleanup, and the supervisor exited. `Q` remains the preferred confirmed shutdown path; X-close remains best-effort and unconfirmed.
+
 Confirmed actions run in the background so the TUI stays responsive. Different safe actions may run at the same time, but the same command cannot be started twice while running and Base Stations On/Off are mutually exclusive. Once shutdown is requested, normal action execution is disabled. `force-stop-supervisor` remains blocked from the TUI.
 
 Keybindings:

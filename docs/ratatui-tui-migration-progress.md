@@ -1859,6 +1859,46 @@ Verification:
 - `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported ignored Rust target output only.
 - Runtime window-close testing should be performed from the refreshed release folder when a safe supervisor session is available.
 
+### Phase 18H - Controlled runtime validation of TUI shutdown paths
+
+Status: Completed
+
+Summary:
+
+- Runtime-tested the primary Desktop TUI shutdown path from the refreshed release folder.
+- Confirmed TUI window X close triggers the best-effort lifecycle shutdown path.
+- Confirmed the TUI sends `lifecycle-json {"action":"request-graceful-shutdown","source":"desktop-tui-window-close"}` on the tested window-close path.
+- Confirmed managed apps close through the supervisor cleanup path.
+- Confirmed the supervisor exits after cleanup.
+- No source-code changes were required for this validation phase.
+- No tray/minimize behavior was added.
+- No terminal-host universal X-close guarantee was added beyond the existing best-effort handler.
+- No close-TUI-only connected path was added.
+- `lifecycle-json` remains the only graceful shutdown bridge path.
+- `force-stop-supervisor` remains blocked/unexposed.
+- `release/` and `PimaxVrcSupervisor.Tui/target` remain ignored and unstaged.
+
+Runtime validation:
+
+- TUI window X close: passed in the tested Windows terminal host.
+- Supervisor cleanup after TUI X close: passed.
+- Managed app cleanup through supervisor: passed.
+- Supervisor exit after cleanup: passed.
+
+Files changed:
+
+- `README.md`
+- `docs/phase-18-tui-lifecycle-configurator-design.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Verification:
+
+- Standard C# and Rust source builds were rerun for this docs-only validation phase.
+- Safety inspection confirmed the runtime source boundaries from Phase 18G are unchanged.
+- No release-folder republish was performed because Phase 18H changed documentation only and Phase 18G had already refreshed the local release test folder.
+
 ### Phase 17D - Backend-off consistency, neutral modal controls, action hints, and log follow
 
 Status: Completed

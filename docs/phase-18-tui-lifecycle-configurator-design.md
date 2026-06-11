@@ -77,6 +77,7 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 - Hidden supervisor launch is deferred because the only current hidden supervisor path, `--steamvr-start`, changes supervisor lifecycle behavior.
 - No tray/minimize behavior, config schema, auto-start setting, terminal X-close guarantee, generic command executor, or `force-stop-supervisor` exposure was added.
 - Phase 18G adds Windows best-effort terminal close handling for the TUI. If the terminal host delivers a console close/logoff/shutdown event, the TUI sends the existing `lifecycle-json` shutdown request with source `desktop-tui-window-close`. This is not a guarantee and does not add tray/minimize behavior, a wrapper, or a close-TUI-only connected path.
+- Phase 18H runtime validation confirmed the release-folder TUI window X close path in the tested Windows terminal host. The supervisor received the lifecycle request, ran Ctrl+C-equivalent cleanup, closed managed apps through supervisor cleanup, and exited.
 
 ## Phase 18D Hardening Status
 
@@ -100,7 +101,8 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 - Source validation confirmed the Phase 18E launch split: normal `Launch Supervisor` remains visible, while `Launch Supervisor + Desktop TUI` passes `--desktop-tui-start`.
 - Build and release-folder refresh completed successfully for supervisor, Configurator, SteamVR host, and Rust TUI binaries.
 - SteamVR host source and Rust TUI bridge source remained unchanged.
-- Interactive runtime shutdown testing was skipped during implementation because it can trigger local supervisor cleanup, monitor restore, app shutdown, VR/SteamVR/VRChat workflow changes, and base-station behavior.
+- Phase 18F interactive runtime shutdown testing was skipped during implementation because it can trigger local supervisor cleanup, monitor restore, app shutdown, VR/SteamVR/VRChat workflow changes, and base-station behavior.
+- Phase 18H later validated the TUI window X close shutdown path from the refreshed release folder in a safe local test session.
 - No tray/minimize behavior, terminal X-close shutdown guarantee, close-TUI-only `Q`, config schema change, new lifecycle action, new TUI action, or generic executor was added.
 
 ## Risks And Safety Constraints

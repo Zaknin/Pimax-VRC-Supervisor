@@ -18,6 +18,8 @@ Phase 18F validates the release-folder build and source boundaries for the prima
 
 Phase 18G adds Windows best-effort terminal close handling. When the terminal host delivers a console close/logoff/shutdown event, the TUI sends `lifecycle-json {"action":"request-graceful-shutdown","source":"desktop-tui-window-close"}` before the process exits. This is intentionally best-effort and cannot guarantee cleanup if the terminal host kills the process without delivering the event.
 
+Phase 18H records successful release-folder runtime validation of this best-effort path in the tested Windows terminal host: TUI window X close requested supervisor cleanup, managed apps closed through the supervisor cleanup path, and the supervisor exited.
+
 ## Purpose
 
 The TUI gives a desktop/operator view of the supervisor with tightly limited control behavior. It displays:
@@ -139,6 +141,8 @@ If `Q` is pressed while actions are running, the TUI opens the same shutdown con
 If the backend accepts shutdown but remains reachable for 60 seconds, the TUI shows `Shutdown was requested, but the supervisor is still reachable. Check the supervisor logs.` before it exits. This is an operator warning only; it does not send `force-stop-supervisor`, retry shutdown, or add a close-TUI-only path.
 
 Closing the TUI terminal window is different from pressing `Q`: it cannot show a confirmation modal because the process is already closing. On Windows, the TUI registers a best-effort console close handler that sends the lifecycle request once and ignores failures. This depends on the terminal host delivering the close event and is not a substitute for the confirmed `Q` workflow.
+
+The window-close path passed local release-folder validation in the tested Windows terminal host. It remains best-effort only and is not guaranteed for forced process kill, Task Manager kill, terminal crash, or terminal hosts that do not deliver console close events.
 
 ## Visual Design
 

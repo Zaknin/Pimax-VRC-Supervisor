@@ -96,6 +96,8 @@ Phase 18F is validation-only for action/lifecycle safety. Source inspection conf
 
 Phase 18G adds Windows best-effort TUI terminal close handling. The handler sends the existing dedicated lifecycle request with source `desktop-tui-window-close` when the terminal host delivers a console close/logoff/shutdown event. It is not an `action-json` action, does not expose `force-stop-supervisor`, does not add a generic executor, and is not guaranteed if the terminal host terminates the process without delivering the event.
 
+Phase 18H validates that best-effort path in the local release-folder runtime test. Closing the TUI window with X caused the supervisor to run Ctrl+C-equivalent cleanup, close managed apps through supervisor cleanup, and exit. This validation does not change the safety model: `Q` remains the preferred confirmed shutdown path, X-close remains unconfirmed best-effort lifecycle control, and `force-stop-supervisor` remains blocked.
+
 ## Phase 17B Implementation Status
 
 Phase 17B keeps the same action safety model but removes routine risk-category wording from the normal operator UI. Mouse-click support is implemented with original project code and maps only to existing `TuiAction` values and overlay controls. Action-card clicks open confirmation only, modal Confirm/Cancel clicks mirror keyboard behavior, and no backend command is sent without the existing confirmation step.
