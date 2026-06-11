@@ -38,6 +38,9 @@ internal sealed class ConfigEditorForm : Form
     private const string ActiveConfigSelectionFileName = "supervisor.active-config.txt";
     private const string DefaultConfigResourceName = "PimaxVrcSupervisor.Configurator.Defaults.supervisor.config.json";
     private const string DefaultVrcFaceTrackingDirectory = @"C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking";
+    private const string AutostartModeOff = "Off";
+    private const string AutostartModeScheduledTask = "Start in CLI mode when SteamVR is running";
+    private const string AutostartModeSteamVrManifest = "SteamVR Overlay";
     private static readonly string DefaultIntifacePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "IntifaceCentral",
@@ -99,8 +102,7 @@ internal sealed class ConfigEditorForm : Form
     private readonly ComboBox _baseStationPowerDownModeComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     private readonly CheckBox _mouthTrackerCheckBox = CreateOptionalConfigCheckBox("Use Vive mouth tracker");
     private readonly CheckBox _turnOffMonitorsCheckBox = CreateOptionalConfigCheckBox("Turn off secondary monitors during headset sessions");
-    private readonly CheckBox _autoLaunchTaskCheckBox = new ThemedCheckBox { Text = "Start in CLI mode when SteamVR is running", AutoSize = true };
-    private readonly CheckBox _startWithSteamVrCheckBox = new ThemedCheckBox { Text = "SteamVR Overlay", AutoSize = true };
+    private readonly ComboBox _autostartModeComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Left, Width = 310 };
     private readonly CheckBox _faceTrackerAutomationEnabledCheckBox = new ThemedCheckBox { Text = "Enable Face Tracking Auto Startup", AutoSize = true };
     private readonly CheckBox _faceTrackerRestartOnReconnectCheckBox = new ThemedCheckBox { Text = "Enable automatic restart on headset reconnects", AutoSize = true };
     private readonly CheckBox _usePimaxLogCheckBox = new ThemedCheckBox { Text = "Watch Pimax PiService logs for fast reconnects", AutoSize = true };
@@ -484,6 +486,18 @@ internal sealed class ConfigEditorForm : Form
         layout.AutoSize = true;
         layout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
+        _autostartModeComboBox.Items.Clear();
+        _autostartModeComboBox.Items.Add(AutostartModeOff);
+        _autostartModeComboBox.Items.Add(AutostartModeScheduledTask);
+        _autostartModeComboBox.Items.Add(AutostartModeSteamVrManifest);
+        if (_autostartModeComboBox.SelectedIndex < 0)
+        {
+            _autostartModeComboBox.SelectedItem = AutostartModeOff;
+        }
+
+        AddSectionHeader(layout, "Autostart");
+        AddLabeledRow(layout, "Autostart mode", _autostartModeComboBox, "Choose what the Supervisor should do automatically when SteamVR is running.");
+
         AddSectionHeader(layout, "Startup");
         _useDesktopTuiAsDefaultInterfaceCheckBox.CheckedChanged += (_, _) =>
         {
@@ -491,8 +505,6 @@ internal sealed class ConfigEditorForm : Form
             SaveEditorState();
         };
         AddFullWidth(layout, _useDesktopTuiAsDefaultInterfaceCheckBox, "When enabled, Launch Supervisor starts the Supervisor hidden and opens the Desktop TUI.");
-        AddFullWidth(layout, _autoLaunchTaskCheckBox, "Checked lets the app create or repair the elevated auto-launch Scheduled Task.");
-        AddFullWidth(layout, _startWithSteamVrCheckBox, "Checked registers the SteamVR dashboard host manifest and starts the supervisor when SteamVR starts.");
         AddFullWidth(layout, _turnOffMonitorsCheckBox, "Checked saves the current monitor layout and disables secondary monitors during the VR session. The layout is restored after VRChat and SteamVR close.");
         AddSectionHeader(layout, "Diagnostics");
         AddFullWidth(layout, _diagnosticsEnabledCheckBox, "Checked enables diagnostic and debug settings in this editor. Unchecked saves all diagnostic and debug options as disabled.");
@@ -661,30 +673,11 @@ internal sealed class ConfigEditorForm : Form
             }
         };
 
-        _autoLaunchTaskCheckBox.CheckStateChanged += (_, _) =>
-        {
-            if (_suppressDirtyTracking)
-            {
-                return;
-            }
-
-            _startupIntegrationPreferenceTouched = true;
-            if (_autoLaunchTaskCheckBox.CheckState == CheckState.Checked && _startWithSteamVrCheckBox.Checked)
-            {
-                _startWithSteamVrCheckBox.Checked = false;
-            }
-        };
-
-        _startWithSteamVrCheckBox.CheckedChanged += (_, _) =>
+        _autostartModeComboBox.SelectedIndexChanged += (_, _) =>
         {
             if (!_suppressDirtyTracking)
             {
                 _startupIntegrationPreferenceTouched = true;
-            }
-
-            if (_startWithSteamVrCheckBox.Checked && _autoLaunchTaskCheckBox.CheckState == CheckState.Checked)
-            {
-                _autoLaunchTaskCheckBox.CheckState = CheckState.Unchecked;
             }
         };
     }
@@ -3286,27 +3279,7 @@ internal sealed class ConfigEditorForm : Form
         _oscRouterReceivePortInput.Value = Math.Clamp(GetInt(node, "OscRouterReceivePort", 9001), (int)_oscRouterReceivePortInput.Minimum, (int)_oscRouterReceivePortInput.Maximum);
         _mouthTrackerCheckBox.Checked = GetBoolCheckState(node, "MouthTrackerUser") == CheckState.Checked;
         _turnOffMonitorsCheckBox.Checked = GetBoolCheckState(node, "TurnOffSecondaryMonitors") == CheckState.Checked;
-        var startupLaunchMode = GetStartupLaunchMode(node);
-        if (startupLaunchMode == "ScheduledTask")
-        {
-            _autoLaunchTaskCheckBox.CheckState = CheckState.Checked;
-            _startWithSteamVrCheckBox.Checked = false;
-        }
-        else if (startupLaunchMode == "SteamVrManifest")
-        {
-            _autoLaunchTaskCheckBox.CheckState = CheckState.Unchecked;
-            _startWithSteamVrCheckBox.Checked = true;
-        }
-        else if (startupLaunchMode == "None")
-        {
-            _autoLaunchTaskCheckBox.CheckState = CheckState.Unchecked;
-            _startWithSteamVrCheckBox.Checked = false;
-        }
-        else
-        {
-            _autoLaunchTaskCheckBox.Checked = GetBoolCheckState(node, "AutoLaunchScheduledTask") == CheckState.Checked;
-            _startWithSteamVrCheckBox.Checked = false;
-        }
+        SetStartupLaunchMode(GetStartupLaunchModeForEditor(node));
         _usePimaxLogCheckBox.Checked = GetBool(node, "UsePimaxServiceLogReconnectDetector", defaultValue: true);
         _useMouthTrackerPnPCheckBox.Checked = GetBool(node, "UseMouthTrackerPnPReconnectDetector", defaultValue: true);
         _mouthTrackerRestartOnReconnectCheckBox.Checked = GetBool(node, "MouthTrackerRestartOnReconnectEnabled", defaultValue: true);
@@ -3729,21 +3702,12 @@ internal sealed class ConfigEditorForm : Form
 
     private void SetStartupLaunchMode(string startupLaunchMode)
     {
-        switch (startupLaunchMode)
+        _autostartModeComboBox.SelectedItem = startupLaunchMode switch
         {
-            case "ScheduledTask":
-                _autoLaunchTaskCheckBox.CheckState = CheckState.Checked;
-                _startWithSteamVrCheckBox.Checked = false;
-                break;
-            case "SteamVrManifest":
-                _autoLaunchTaskCheckBox.CheckState = CheckState.Unchecked;
-                _startWithSteamVrCheckBox.Checked = true;
-                break;
-            default:
-                _autoLaunchTaskCheckBox.CheckState = CheckState.Unchecked;
-                _startWithSteamVrCheckBox.Checked = false;
-                break;
-        }
+            "ScheduledTask" => AutostartModeScheduledTask,
+            "SteamVrManifest" => AutostartModeSteamVrManifest,
+            _ => AutostartModeOff
+        };
     }
 
     private StartupTaskMigrationChoice ShowStartupTaskMigrationDialog(
@@ -4196,34 +4160,38 @@ internal sealed class ConfigEditorForm : Form
         return value is "None" or "ScheduledTask" or "SteamVrManifest" ? value : "";
     }
 
-    private string GetSelectedStartupLaunchMode()
+    private static string GetStartupLaunchModeForEditor(JsonNode? node)
     {
-        if (_startWithSteamVrCheckBox.Checked)
+        var startupLaunchMode = GetStartupLaunchMode(node);
+        if (!string.IsNullOrWhiteSpace(startupLaunchMode))
+        {
+            return startupLaunchMode;
+        }
+
+        if (GetBoolCheckState(node, "StopWithSteamVr") == CheckState.Checked)
         {
             return "SteamVrManifest";
         }
 
-        return _autoLaunchTaskCheckBox.CheckState switch
+        return GetBoolCheckState(node, "AutoLaunchScheduledTask") == CheckState.Checked
+            ? "ScheduledTask"
+            : "None";
+    }
+
+    private string GetSelectedStartupLaunchMode()
+        => Convert.ToString(_autostartModeComboBox.SelectedItem) switch
         {
-            CheckState.Checked => "ScheduledTask",
+            AutostartModeScheduledTask => "ScheduledTask",
+            AutostartModeSteamVrManifest => "SteamVrManifest",
             _ => "None"
         };
-    }
 
     private string GetSelectedStartupLaunchModeForSave(JsonNode? baseNode)
     {
-        if (_startWithSteamVrCheckBox.Checked)
-        {
-            return "SteamVrManifest";
-        }
+        var selectedMode = GetSelectedStartupLaunchMode();
 
-        if (_autoLaunchTaskCheckBox.CheckState == CheckState.Checked)
-        {
-            return "ScheduledTask";
-        }
-
-        return _startupIntegrationPreferenceTouched || StartupIntegrationConfigured(baseNode)
-            ? "None"
+        return selectedMode != "None" || _startupIntegrationPreferenceTouched || StartupIntegrationConfigured(baseNode)
+            ? selectedMode
             : "Unspecified";
     }
 

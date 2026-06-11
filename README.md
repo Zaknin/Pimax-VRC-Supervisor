@@ -181,10 +181,12 @@ The editor includes tabs for:
 
 ## SteamVR Startup
 
-The **Basics** tab has a **Startup** section:
+The **Basics** tab has an **Autostart** section with one **Autostart mode** dropdown:
 
+- **Off** disables managed autostart.
 - **Start in CLI mode when SteamVR is running** uses a hidden elevated watcher that starts the supervisor after SteamVR `vrserver.exe` is running. The supervisor waits for the Pimax headset, powers on base stations if enabled, then waits for VRChat before starting managed apps.
 - **SteamVR Overlay** registers `PimaxVrcSupervisorSteamVrHost.exe` as a SteamVR dashboard overlay app and creates a separate on-demand elevated helper task. SteamVR starts the host, the host starts the elevated supervisor with `--steamvr-start`, and the supervisor waits for VRChat before starting managed apps.
+
 SteamVR manifest startup exits with SteamVR. When `vrserver.exe` exits, the supervisor powers down base stations if needed, restores monitors, closes managed apps, and exits.
 
 The SteamVR host dashboard includes buttons for restarting Broken Eye/VRCFaceTracking, turning base stations on or off, and restarting the OSC router.
@@ -214,6 +216,8 @@ Phase 19A cleans normal Configurator and Desktop TUI wording so operator screens
 Phase 19B makes Desktop TUI the normal Configurator launch interface. The `Use Desktop TUI as default interface` option is enabled by default; with it enabled, **Launch Supervisor** starts the Supervisor hidden and opens the Desktop TUI. Uncheck it to start the classic visible Supervisor console instead. The standalone **Launch Desktop TUI** and **Launch Supervisor + Desktop TUI** buttons were removed from the normal UI, and **Launch SteamVR** remains unchanged.
 
 Phase 19C moves `Use Desktop TUI as default interface` from the footer into the **Startup** section. This is a layout cleanup only: persistence, default checked state, **Launch Supervisor** behavior, protocols, and runtime config schema are unchanged.
+
+Phase 19D replaces the old autostart checkboxes with one **Autostart mode** dropdown: `Off`, `Start in CLI mode when SteamVR is running`, or `SteamVR Overlay`. The UI still writes the existing runtime config fields, and the **Startup** section keeps the Desktop TUI default-interface and secondary-monitor options.
 
 Confirmed actions run in the background so the TUI stays responsive. Different safe actions may run at the same time, but the same command cannot be started twice while running and Base Stations On/Off are mutually exclusive. Once shutdown is requested, normal action execution is disabled. `force-stop-supervisor` remains blocked from the TUI.
 

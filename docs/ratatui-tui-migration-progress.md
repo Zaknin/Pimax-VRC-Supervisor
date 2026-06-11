@@ -2015,9 +2015,53 @@ Verification:
 - Release-folder refresh: complete. All three C# projects published to `release\PimaxVrcSupervisor-v1.3.0-test`, and `PimaxVrcSupervisorTui.exe` was copied into the same folder.
 - Runtime smoke: not performed during implementation because it requires an interactive release-folder Configurator/TUI session and can enter supervisor lifecycle flows.
 
+### Phase 19D - Replace Autostart checkboxes with mode selector
+
+Status: Completed
+
+Summary:
+
+- Replaced the two General tab Autostart checkboxes with one `Autostart mode` dropdown.
+- Dropdown options are `Off`, `Start in CLI mode when SteamVR is running`, and `SteamVR Overlay`.
+- Existing runtime config fields are preserved through UI mapping; no supervisor runtime config schema was added or changed.
+- The Startup section keeps `Use Desktop TUI as default interface` and `Turn off secondary monitors during headset sessions`.
+- Footer remains status plus action buttons only: `Validate`, `Launch Supervisor`, `Launch SteamVR`, `Save As...`, and `Save`.
+
+Config mapping:
+
+- `Off`: `StartupLaunchMode=None`, `AutoLaunchScheduledTask=false`, `StopWithSteamVr=false` when the startup setting is touched or previously configured.
+- `Start in CLI mode when SteamVR is running`: `StartupLaunchMode=ScheduledTask`, `AutoLaunchScheduledTask=true`, `StopWithSteamVr=false`.
+- `SteamVR Overlay`: `StartupLaunchMode=SteamVrManifest`, `AutoLaunchScheduledTask=false`, `StopWithSteamVr=true`.
+- Existing valid `StartupLaunchMode` values take precedence when loading configs.
+- Legacy `AutoLaunchScheduledTask=true` without an explicit mode loads as CLI mode.
+- Legacy `StopWithSteamVr=true` without an explicit mode loads as SteamVR Overlay, so mixed legacy state normalizes to the more specific SteamVR Overlay mode on the next save.
+
+Files changed:
+
+- `PimaxVrcSupervisor.ConfigEditor/Program.cs`
+- `README.md`
+- `docs/phase-18-tui-lifecycle-configurator-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Behavior and protocol boundaries:
+
+- No Desktop TUI launch behavior, TUI shutdown behavior, TUI window-close behavior, `query-json`, `action-json`, `lifecycle-json`, action allowlist, `force-stop-supervisor` blocking, supervisor cleanup behavior, SteamVR launch behavior, SteamVR host behavior, or release layout behavior changed.
+
+Verification:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`: passed.
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`: passed.
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`: passed.
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`: passed.
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`: passed.
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`: passed.
+- Release-folder refresh: complete. All three C# projects published to `release\PimaxVrcSupervisor-v1.3.0-test`, and `PimaxVrcSupervisorTui.exe` was copied into the same folder.
+- Runtime smoke: not performed during implementation because it requires an interactive release-folder Configurator/TUI session and can enter supervisor lifecycle flows.
+
 Next direction:
 
-- Phase 19D should be a release-folder runtime smoke pass for the Startup-section placement and primary Configurator launch interface if the release refresh is complete.
+- Phase 19E should be a release-folder runtime smoke pass for the Autostart dropdown and primary Configurator launch interface if the release refresh is complete.
 
 ### Phase 17D - Backend-off consistency, neutral modal controls, action hints, and log follow
 

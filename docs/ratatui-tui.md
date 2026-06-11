@@ -26,6 +26,8 @@ Phase 19B makes Desktop TUI the default Configurator launch interface. The `Use 
 
 Phase 19C moves `Use Desktop TUI as default interface` from the footer into the Configurator **Startup** section. It does not change persistence, default checked state, **Launch Supervisor** behavior, bridge protocols, or the supervisor runtime config schema.
 
+Phase 19D replaces the two Configurator autostart checkboxes with one **Autostart mode** dropdown. The dropdown maps to the existing supervisor config fields and does not change Desktop TUI launch, shutdown, bridge protocol, or action behavior.
+
 ## Purpose
 
 The TUI gives a desktop/operator view of the supervisor with tightly limited control behavior. It displays:

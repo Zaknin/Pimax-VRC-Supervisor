@@ -103,6 +103,14 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 - The footer contains status and one-time action buttons only: Validate, Launch Supervisor, Launch SteamVR, Save As, and Save.
 - This is a layout cleanup only; persistence, default checked state, launch behavior, protocols, runtime config schema, SteamVR behavior, and cleanup behavior are unchanged.
 
+## Phase 19D Autostart Mode Selector Status
+
+- The Configurator General tab now uses one `Autostart mode` dropdown instead of separate `Start in CLI mode when SteamVR is running` and `SteamVR Overlay` checkboxes.
+- Dropdown choices are `Off`, `Start in CLI mode when SteamVR is running`, and `SteamVR Overlay`.
+- The dropdown writes the existing runtime fields: `StartupLaunchMode`, `AutoLaunchScheduledTask`, and `StopWithSteamVr`.
+- The Startup section keeps `Use Desktop TUI as default interface` and `Turn off secondary monitors during headset sessions`.
+- No supervisor runtime schema, protocol, TUI behavior, SteamVR host behavior, action allowlist, lifecycle behavior, or cleanup behavior changed.
+
 ## Phase 18D Hardening Status
 
 - The primary TUI shutdown flow remains the same confirmed `Q` workflow; no close-TUI-only dashboard path was restored.
