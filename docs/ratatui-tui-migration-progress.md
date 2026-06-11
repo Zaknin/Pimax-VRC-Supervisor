@@ -2311,9 +2311,93 @@ Generated output status:
 - `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
 - `release/` and Rust `target/` output remain generated/ignored and were not staged.
 
-Short Phase 18D direction:
+### Phase 18D - Harden primary TUI lifecycle workflow
 
-- Run a real-world lifecycle runtime matrix for Configurator combined launch, TUI shutdown cancel/confirm, backend-off `Q`, duplicate launch behavior, and post-shutdown timeout behavior before adding hidden supervisor or tray/minimize behavior.
+Status: Completed with release-folder supervisor publish blocked by a locked watcher process
+
+Summary:
+
+- Hardened the Phase 18C primary TUI lifecycle workflow without adding tray behavior, hidden supervisor launch mode, close-TUI-only dashboard `Q`, generic command execution, new lifecycle actions, or SteamVR host changes.
+- Preserved `lifecycle-json` as the only graceful shutdown bridge path and kept it limited to `request-graceful-shutdown`.
+- Preserved Ctrl+C-equivalent cleanup sharing, cleanup order, and existing idempotency guards.
+- Kept `force-stop-supervisor` explicitly blocked from structured action flow, including when shutdown is already in progress.
+- Kept the six regular `action-json` TUI actions unchanged.
+
+Files changed:
+
+- `PimaxVrcSupervisor/Program.cs`
+- `PimaxVrcSupervisor.ConfigEditor/Program.cs`
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `README.md`
+- `docs/phase-18-tui-lifecycle-configurator-design.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Backend hardening:
+
+- The TCP bridge now writes an already-produced response with `CancellationToken.None`, so an accepted `lifecycle-json` response has a better chance to reach the TUI even if graceful shutdown cancellation begins quickly.
+- `force-stop-supervisor` is rejected before the shutdown-in-progress action rejection, so structured requests for that command still receive the explicit blocked response.
+- Malformed, missing, non-object, and unknown lifecycle requests remain structured compact JSON failures.
+
+TUI hardening:
+
+- Lifecycle request failures now record the actual backend/bridge rejection message in the last-action/error display instead of a generic shutdown failure.
+- If shutdown is accepted but the backend remains reachable after 60 seconds, the TUI shows `Shutdown was requested, but the supervisor is still reachable. Check the supervisor logs.` for a short two-second notice period before exiting.
+- Shutdown-in-progress still disables normal action starts and mouse action clicks.
+- Backend-off dashboard `Q` still exits the TUI without sending any backend command.
+
+Configurator hardening:
+
+- `Launch Desktop TUI` still behaves as before for standalone TUI launch.
+- `Launch Supervisor + Desktop TUI` now distinguishes launched, already-running, and failed Desktop TUI outcomes in its final status messages.
+- Existing normal supervisor validation, unsaved-change, config path, UAC launch behavior, and duplicate supervisor skip behavior are preserved.
+- Hidden/non-interactive supervisor launch remains deferred because `--steamvr-start` changes supervisor/SteamVR lifecycle semantics.
+
+Build/test commands run:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `dotnet publish .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `Copy-Item .\PimaxVrcSupervisor.Tui\target\release\PimaxVrcSupervisorTui.exe .\release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe -Force`
+
+Build/test result:
+
+- All three C# release builds completed successfully with 0 warnings and 0 errors.
+- `cargo fmt` completed successfully.
+- Rust debug and release builds completed successfully.
+- `PimaxVrcSupervisor.ConfigEditor` and `PimaxVrcSupervisor.SteamVrHost` publish completed successfully after stopping the locked Configurator process.
+- Rust TUI release copy completed successfully.
+- `PimaxVrcSupervisor` publish to the ignored release folder was blocked because `PimaxVrcSupervisorWatcher.exe` PID 24116 held `release/PimaxVrcSupervisor-v1.3.0-test/PimaxVrcSupervisor.dll`; `Stop-Process -Id 24116 -Force` failed with `Access is denied`.
+- Expected release executables were present in the release folder, but `PimaxVrcSupervisor.exe`/DLL output may be stale because the supervisor publish could not overwrite the locked DLL.
+- Runtime lifecycle testing was not performed because it can trigger local supervisor cleanup, VR/SteamVR/VRChat workflows, and base-station behavior.
+
+Source inspection:
+
+- `PimaxVrcSupervisor.SteamVrHost` has no source diff.
+- `PimaxVrcSupervisor.Tui/src/bridge.rs` has no source diff.
+- The TUI still sends `action-json` only through `execute_tui_action(TuiAction)`.
+- The TUI sends no legacy action command strings directly.
+- `lifecycle-json` remains the only graceful shutdown bridge path.
+- `force-stop-supervisor` remains blocked/not TUI-executable.
+
+Generated output status:
+
+- `git status --short release` produced no staged/tracked release output.
+- `git status --ignored --short release` reported `!! release/`.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
+- `release/` and Rust `target/` output remain generated/ignored and were not staged.
+
+Short Phase 18E direction:
+
+- Resolve the locked release watcher situation before runtime testing from the release folder, then run the real-world lifecycle matrix for Configurator combined launch, TUI shutdown cancel/confirm, backend-off `Q`, duplicate launch behavior, and post-shutdown timeout behavior.
+- Continue to defer hidden supervisor mode, terminal X-close shutdown guarantees, and tray/minimize behavior until separate designs are reviewed.
 
 ### Phase 17L - Compact and small TUI action click zones
 

@@ -199,6 +199,8 @@ Phase 18B adds a Configurator **Launch Desktop TUI** button. It launches only `P
 
 Phase 18C adds a Configurator **Launch Supervisor + Desktop TUI** button and a dedicated `lifecycle-json` shutdown request. Dashboard `Q` now opens a shutdown confirmation; confirming requests the same cleanup path used by Ctrl+C in the supervisor, waits for backend exit/disconnect or a timeout, then exits the TUI. There is no close-TUI-only dashboard option in this primary workflow. If the backend is not running, `Q` exits the TUI without starting or stopping anything.
 
+Phase 18D hardens that lifecycle workflow. The supervisor bridge now protects the final `lifecycle-json` response write from shutdown cancellation, the TUI keeps a post-timeout warning visible briefly before exit, and Configurator combined-launch status messages distinguish launched, already-running, and failed Desktop TUI cases. Local `1.3.0-test` release-folder builds should be refreshed after successful source builds.
+
 Confirmed actions run in the background so the TUI stays responsive. Different safe actions may run at the same time, but the same command cannot be started twice while running and Base Stations On/Off are mutually exclusive. Once shutdown is requested, normal action execution is disabled. `force-stop-supervisor` remains blocked from the TUI.
 
 Keybindings:

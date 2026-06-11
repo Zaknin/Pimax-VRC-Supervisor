@@ -20,6 +20,7 @@ pub const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
 pub const MAX_LOG_LINES: usize = 80;
 pub const LOG_PAGE_SIZE: usize = 8;
 pub const SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
+pub const SHUTDOWN_TIMEOUT_NOTICE_DELAY: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ConnectionState {
@@ -93,6 +94,7 @@ pub struct App {
     pub shutdown_in_progress: bool,
     pub shutdown_accepted: bool,
     pub shutdown_started_at: Option<Instant>,
+    pub shutdown_exit_after: Option<Instant>,
     pub shutdown_message: Option<String>,
     pub shutdown_error: Option<String>,
     pub running_actions: Vec<RunningAction>,
@@ -147,6 +149,7 @@ impl App {
             shutdown_in_progress: false,
             shutdown_accepted: false,
             shutdown_started_at: None,
+            shutdown_exit_after: None,
             shutdown_message: None,
             shutdown_error: None,
             running_actions: Vec::new(),
@@ -237,17 +240,19 @@ impl App {
         if result.accepted {
             self.shutdown_accepted = true;
             self.shutdown_in_progress = true;
+            self.shutdown_exit_after = None;
             self.shutdown_message = Some(result.message);
             self.shutdown_error = None;
         } else {
             self.shutdown_in_progress = false;
             self.shutdown_accepted = false;
+            self.shutdown_exit_after = None;
             self.shutdown_message = None;
-            self.shutdown_error = Some(result.message);
+            self.shutdown_error = Some(result.message.clone());
             self.record_action_error(
                 "request-graceful-shutdown",
                 ActionOutcome::Failed,
-                "Supervisor shutdown request failed.".to_string(),
+                result.message,
                 result.completed_at,
             );
         }
@@ -448,6 +453,7 @@ impl App {
         self.shutdown_in_progress = true;
         self.shutdown_accepted = false;
         self.shutdown_started_at = Some(now);
+        self.shutdown_exit_after = None;
         self.shutdown_message =
             Some("Supervisor shutdown requested. Waiting for cleanup...".to_string());
         self.shutdown_error = None;
@@ -467,11 +473,15 @@ impl App {
             .shutdown_started_at
             .is_some_and(|started| now.duration_since(started) >= SHUTDOWN_WAIT_TIMEOUT)
         {
+            if let Some(exit_after) = self.shutdown_exit_after {
+                return now >= exit_after;
+            }
+
             self.shutdown_message = Some(
                 "Shutdown was requested, but the supervisor is still reachable. Check the supervisor logs."
                     .to_string(),
             );
-            return true;
+            self.shutdown_exit_after = Some(now + SHUTDOWN_TIMEOUT_NOTICE_DELAY);
         }
 
         false

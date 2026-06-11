@@ -10,6 +10,8 @@ Phase 18B adds a Configurator **Launch Desktop TUI** button. It only starts `Pim
 
 Phase 18C adds **Launch Supervisor + Desktop TUI** and a confirmed graceful shutdown workflow. Dashboard `Q` now asks the supervisor to run the same cleanup routine as Ctrl+C, then the TUI exits after cleanup is accepted and the backend exits/disconnects or a timeout is reached.
 
+Phase 18D hardens the same workflow. The backend still exposes only the narrow `lifecycle-json` shutdown action, but the TCP bridge is adjusted so a produced lifecycle response can be written even as shutdown cancellation begins. The TUI displays backend lifecycle rejection text directly and keeps the 60-second timeout warning visible briefly before exiting. The Configurator combined-launch button now reports launched, already-running, and failed Desktop TUI cases more precisely.
+
 ## Purpose
 
 The TUI gives a desktop/operator view of the supervisor with tightly limited control behavior. It displays:
@@ -119,6 +121,8 @@ The TUI tracks running actions by canonical backend command name:
 - Other different actions may run concurrently.
 
 If `Q` is pressed while actions are running, the TUI opens the same shutdown confirmation. Confirming requests backend cleanup through `lifecycle-json`; it does not cancel backend work directly and does not send `force-stop-supervisor`. Normal action starts are disabled after shutdown is requested.
+
+If the backend accepts shutdown but remains reachable for 60 seconds, the TUI shows `Shutdown was requested, but the supervisor is still reachable. Check the supervisor logs.` before it exits. This is an operator warning only; it does not send `force-stop-supervisor`, retry shutdown, or add a close-TUI-only path.
 
 ## Visual Design
 

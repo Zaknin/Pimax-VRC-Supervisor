@@ -2998,14 +2998,29 @@ internal sealed class ConfigEditorForm : Form
 
         if (Process.GetProcessesByName("PimaxVrcSupervisor").Any())
         {
-            SetStatus("Supervisor is already running. Launching Desktop TUI.");
-            LaunchDesktopTui();
+            var existingSupervisorTuiResult = LaunchDesktopTui();
+            if (existingSupervisorTuiResult == DesktopTuiLaunchResult.Launched)
+            {
+                SetStatus("Supervisor is already running. Desktop TUI launched.");
+            }
+            else if (existingSupervisorTuiResult == DesktopTuiLaunchResult.AlreadyRunning)
+            {
+                SetStatus("Supervisor and Desktop TUI are already running.");
+            }
             return;
         }
 
         if (LaunchSupervisorProcess(supervisorPath, configPath))
         {
-            LaunchDesktopTui();
+            var tuiResult = LaunchDesktopTui();
+            if (tuiResult == DesktopTuiLaunchResult.Launched)
+            {
+                SetStatus("Launched Supervisor and Desktop TUI.");
+            }
+            else if (tuiResult == DesktopTuiLaunchResult.AlreadyRunning)
+            {
+                SetStatus("Launched Supervisor. Desktop TUI is already running.");
+            }
         }
     }
 
@@ -3104,7 +3119,14 @@ internal sealed class ConfigEditorForm : Form
         }
     }
 
-    private void LaunchDesktopTui()
+    private enum DesktopTuiLaunchResult
+    {
+        Launched,
+        AlreadyRunning,
+        Failed
+    }
+
+    private DesktopTuiLaunchResult LaunchDesktopTui()
     {
         var tuiPath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisorTui.exe");
         if (!File.Exists(tuiPath))
@@ -3118,7 +3140,7 @@ internal sealed class ConfigEditorForm : Form
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
             SetStatus("Desktop TUI executable was not found.");
-            return;
+            return DesktopTuiLaunchResult.Failed;
         }
 
         if (Process.GetProcessesByName("PimaxVrcSupervisorTui").Any())
@@ -3129,7 +3151,7 @@ internal sealed class ConfigEditorForm : Form
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
             SetStatus("Desktop TUI is already running.");
-            return;
+            return DesktopTuiLaunchResult.AlreadyRunning;
         }
 
         try
@@ -3143,11 +3165,13 @@ internal sealed class ConfigEditorForm : Form
                 ErrorDialogParentHandle = Handle
             });
             SetStatus("Desktop TUI launched.");
+            return DesktopTuiLaunchResult.Launched;
         }
         catch (Exception ex)
         {
             ShowThemedMessageBox(ex.Message, "Could not launch Desktop TUI", MessageBoxButtons.OK, MessageBoxIcon.Error);
             SetStatus("Desktop TUI launch failed.");
+            return DesktopTuiLaunchResult.Failed;
         }
     }
 

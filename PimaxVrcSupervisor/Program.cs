@@ -3478,6 +3478,17 @@ internal sealed class AppSupervisor
                 error: "Missing command. Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps.");
         }
 
+        if (string.Equals(canonicalCommand, "force-stop-supervisor", StringComparison.Ordinal))
+        {
+            return ActionJsonResult(
+                request.RequestId,
+                canonicalCommand,
+                success: false,
+                message: "force-stop-supervisor is blocked from structured desktop TUI action flow.",
+                data: null,
+                error: "Blocked command: hard-stops supervisor without cleanup routines.");
+        }
+
         if (Volatile.Read(ref _gracefulShutdownRequested) == 1)
         {
             return ActionJsonResult(
@@ -3497,13 +3508,6 @@ internal sealed class AppSupervisor
             "base-stations-off" => await ExecuteConfirmedBaseStationActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ManualPowerDownBaseStationsAsync, cancellationToken),
             "restart-osc-router" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, RestartOscRouterCommandAsync, cancellationToken),
             "reload-autostart-apps" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ReloadAutostartAppsCommandAsync, cancellationToken),
-            "force-stop-supervisor" => ActionJsonResult(
-                request.RequestId,
-                canonicalCommand,
-                success: false,
-                message: "force-stop-supervisor is blocked from structured desktop TUI action flow.",
-                data: null,
-                error: "Blocked command: hard-stops supervisor without cleanup routines."),
             "status" or "status-json" or "commands-json" or "log" or "log-json" or "query-json" => ActionJsonResult(
                 request.RequestId,
                 canonicalCommand,
@@ -6522,7 +6526,7 @@ internal sealed class SupervisorCommandServer : IDisposable
         {
             var command = await reader.ReadLineAsync(cancellationToken) ?? "";
             var response = await supervisor.ExecuteSupervisorCommandAsync(command, cancellationToken);
-            await writer.WriteLineAsync(response.AsMemory(), cancellationToken);
+            await writer.WriteLineAsync(response.AsMemory(), CancellationToken.None);
         }
     }
 }

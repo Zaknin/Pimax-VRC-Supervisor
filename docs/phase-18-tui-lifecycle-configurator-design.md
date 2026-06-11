@@ -77,6 +77,14 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 - Hidden supervisor launch is deferred because the only current hidden supervisor path, `--steamvr-start`, changes supervisor lifecycle behavior.
 - No tray/minimize behavior, config schema, auto-start setting, terminal X-close guarantee, generic command executor, or `force-stop-supervisor` exposure was added.
 
+## Phase 18D Hardening Status
+
+- The primary TUI shutdown flow remains the same confirmed `Q` workflow; no close-TUI-only dashboard path was restored.
+- The TCP command bridge now preserves the final lifecycle response write even if graceful-shutdown cancellation begins quickly.
+- The TUI surfaces lifecycle rejection messages directly and keeps the post-60-second timeout warning visible briefly before exiting.
+- The Configurator combined launch reports supervisor/TUI duplicate and launch-result states more precisely.
+- The local ignored `release/PimaxVrcSupervisor-v1.3.0-test` folder should be refreshed after successful source builds so runtime tests use current C#, Configurator, SteamVR host, and TUI binaries.
+
 ## Risks And Safety Constraints
 
 - Do not make terminal close/X-close implicitly stop the supervisor until a separate design exists.

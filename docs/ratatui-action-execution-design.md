@@ -88,6 +88,8 @@ Phase 18C adds confirmed supervisor shutdown from the TUI, but it is intentional
 
 The six regular `action-json` actions remain unchanged. `force-stop-supervisor` remains blocked and is not used by the shutdown flow.
 
+Phase 18D hardens this lifecycle boundary without turning shutdown into an action card. The backend keeps `lifecycle-json` narrow, protects the final TCP response write from shutdown cancellation, and continues to reject `force-stop-supervisor` from structured action flow. The TUI shows lifecycle rejection messages directly and displays the 60 second timeout warning before exit.
+
 ## Phase 17B Implementation Status
 
 Phase 17B keeps the same action safety model but removes routine risk-category wording from the normal operator UI. Mouse-click support is implemented with original project code and maps only to existing `TuiAction` values and overlay controls. Action-card clicks open confirmation only, modal Confirm/Cancel clicks mirror keyboard behavior, and no backend command is sent without the existing confirmation step.
