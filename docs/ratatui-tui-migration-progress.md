@@ -2476,6 +2476,98 @@ Short Phase 18F direction:
 - Run the real-world release-folder lifecycle matrix for visible `Launch Supervisor`, hidden `Launch Supervisor + Desktop TUI`, duplicate launch behavior, TUI shutdown cancel/confirm, and backend-off `Q`.
 - Continue to defer terminal X-close shutdown guarantees and tray/minimize behavior until separate designs are reviewed.
 
+### Phase 18F - Runtime validation and release readiness pass
+
+Status: Completed as source/release validation; interactive runtime matrix skipped for safety
+
+Summary:
+
+- Validated the release-folder primary Desktop TUI workflow boundaries after Phase 18E.
+- Confirmed by source inspection that `--desktop-tui-start` exists and is separate from `--steamvr-start`.
+- Confirmed by source inspection that normal Configurator `Launch Supervisor` does not pass `--desktop-tui-start`.
+- Confirmed by source inspection that Configurator `Launch Supervisor + Desktop TUI` passes `--desktop-tui-start`.
+- Confirmed `steamVrStart` remains derived only from `--steamvr-start`.
+- Confirmed `lifecycle-json` remains dedicated to `request-graceful-shutdown`.
+- Confirmed `force-stop-supervisor` remains blocked/unexposed from structured TUI flow.
+- No hardening defects were found that required source-code changes.
+- No tray/minimize behavior, terminal X-close shutdown guarantee, close-TUI-only `Q`, config schema change, auto-start setting, new lifecycle command, new TUI action, SteamVR host change, or generic executor was added.
+
+Files changed:
+
+- `README.md`
+- `docs/phase-18-tui-lifecycle-configurator-design.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Build/test commands run:
+
+- `git status --short`
+- `git log --oneline -10`
+- `rg -n "desktop-tui-start|steamvr-start|watch-vrchat-auto-launch|hide-startup-helper|ConsoleWindow|lifecycle-json|request-graceful-shutdown|force-stop-supervisor|action-json|execute_tui_action" .\PimaxVrcSupervisor .\PimaxVrcSupervisor.ConfigEditor .\PimaxVrcSupervisor.Tui\src`
+- `git diff -- PimaxVrcSupervisor.SteamVrHost`
+- `git diff -- PimaxVrcSupervisor.Tui/src/bridge.rs`
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `dotnet publish .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `Copy-Item .\PimaxVrcSupervisor.Tui\target\release\PimaxVrcSupervisorTui.exe .\release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe -Force`
+
+Build/test result:
+
+- Latest local commit before Phase 18F documentation was `274a7b7 Phase 18E: add primary TUI supervisor launch mode`.
+- Worktree started clean.
+- All three C# release builds completed successfully with 0 warnings and 0 errors.
+- `cargo fmt` completed successfully.
+- Rust debug and release builds completed successfully.
+- Release publish for all three C# projects completed successfully.
+- Rust TUI release executable copy completed successfully.
+- Expected key release executables were present:
+  - `PimaxVrcSupervisor.exe` - timestamp `2026-06-11 10:14:23`
+  - `PimaxVrcSupervisorConfigurator.exe` - timestamp `2026-06-11 10:14:25`
+  - `PimaxVrcSupervisorSteamVrHost.exe` - timestamp `2026-06-11 10:14:26`
+  - `PimaxVrcSupervisorTui.exe` - present in the release folder
+- The repo's actual Configurator executable remains `PimaxVrcSupervisorConfigurator.exe`, not `PimaxVrcSupervisor.ConfigEditor.exe`.
+
+Runtime test matrix:
+
+- `Launch Desktop TUI` runtime click test: skipped because it requires an interactive release-folder GUI/TUI session.
+- Backend-off TUI `Q` runtime test: skipped because it requires an interactive terminal session.
+- `Launch Supervisor` visible-console runtime test: skipped because starting the supervisor can interact with local VR/SteamVR/VRChat/session automation.
+- `Launch Supervisor + Desktop TUI` runtime test: skipped because it starts the supervisor workflow and can interact with local VR/SteamVR/VRChat/session automation.
+- Duplicate combined-launch runtime test: skipped because it depends on the supervisor/TUI runtime session.
+- Connected TUI `Q -> Esc` and `Q -> Enter` tests: skipped because confirmed shutdown can trigger Ctrl+C-equivalent cleanup, monitor restore, app shutdown, and base-station behavior.
+- Malformed/unknown `lifecycle-json` TCP runtime test: skipped because it requires a running supervisor backend.
+- Regular TUI action runtime test: skipped because actions can affect apps, OSC routing, or base-station/session state.
+
+Source inspection:
+
+- `PimaxVrcSupervisor.SteamVrHost` has no source diff.
+- `PimaxVrcSupervisor.Tui/src/bridge.rs` has no source diff.
+- `--desktop-tui-start` appears in supervisor argument parsing and Configurator combined launch only.
+- Configurator combined launch does not use `--steamvr-start`.
+- TUI `action-json` remains routed through `execute_tui_action(TuiAction)`.
+- TUI graceful shutdown remains routed through the narrow `lifecycle-json` helper.
+- `force-stop-supervisor` remains blocked/not TUI-executable.
+
+Generated output status:
+
+- `git status --short release` produced no staged/tracked release output.
+- `git status --ignored --short release` reported `!! release/`.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
+- `release/` and Rust `target/` output remain generated/ignored and were not staged.
+
+Short Phase 18G direction:
+
+- Run the interactive release-folder runtime matrix in a safe local VR/session environment.
+- After runtime validation, design terminal close/X-close semantics separately from confirmed dashboard `Q`.
+- Continue to defer tray/minimize behavior until terminal close semantics are reviewed.
+
 ### Phase 17L - Compact and small TUI action click zones
 
 Status: Completed

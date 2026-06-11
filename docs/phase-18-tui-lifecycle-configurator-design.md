@@ -94,6 +94,14 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 - `--watch-vrchat-auto-launch` remains the scheduled hidden watcher path and is not reused for the primary Desktop TUI workflow.
 - No tray/minimize behavior, terminal X-close guarantee, config schema change, wrapper executable, or SteamVR host change was added.
 
+## Phase 18F Validation Status
+
+- Source validation confirmed the Phase 18E launch split: normal `Launch Supervisor` remains visible, while `Launch Supervisor + Desktop TUI` passes `--desktop-tui-start`.
+- Build and release-folder refresh completed successfully for supervisor, Configurator, SteamVR host, and Rust TUI binaries.
+- SteamVR host source and Rust TUI bridge source remained unchanged.
+- Interactive runtime shutdown testing was skipped during implementation because it can trigger local supervisor cleanup, monitor restore, app shutdown, VR/SteamVR/VRChat workflow changes, and base-station behavior.
+- No tray/minimize behavior, terminal X-close shutdown guarantee, close-TUI-only `Q`, config schema change, new lifecycle action, new TUI action, or generic executor was added.
+
 ## Risks And Safety Constraints
 
 - Do not make terminal close/X-close implicitly stop the supervisor until a separate design exists.
@@ -116,5 +124,6 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 - Phase 18C: primary TUI lifecycle with Ctrl+C-equivalent shutdown.
 - Phase 18D: lifecycle runtime hardening and hidden supervisor mode review.
 - Phase 18E: dedicated hidden primary-TUI supervisor startup mode.
-- Phase 18F: terminal close/X-close behavior design.
-- Phase 18G: tray/minimize architecture decision.
+- Phase 18F: runtime validation and release readiness pass.
+- Phase 18G: terminal close/X-close behavior design.
+- Phase 18H: tray/minimize architecture decision.

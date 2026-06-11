@@ -92,6 +92,8 @@ Phase 18D hardens this lifecycle boundary without turning shutdown into an actio
 
 Phase 18E adds hidden supervisor startup for the primary Desktop TUI workflow through `--desktop-tui-start`. This is startup presentation only: it does not add an action card, does not alter `action-json`, does not reuse `--steamvr-start`, and does not change `lifecycle-json` shutdown semantics.
 
+Phase 18F is validation-only for action/lifecycle safety. Source inspection confirmed the TUI bridge still has only the allowlisted `execute_tui_action(TuiAction)` path plus the narrow lifecycle helper, and `force-stop-supervisor` remains blocked. No new actions, generic executor, or SteamVR host behavior changes were added.
+
 ## Phase 17B Implementation Status
 
 Phase 17B keeps the same action safety model but removes routine risk-category wording from the normal operator UI. Mouse-click support is implemented with original project code and maps only to existing `TuiAction` values and overlay controls. Action-card clicks open confirmation only, modal Confirm/Cancel clicks mirror keyboard behavior, and no backend command is sent without the existing confirmation step.

@@ -14,6 +14,8 @@ Phase 18D hardens the same workflow. The backend still exposes only the narrow `
 
 Phase 18E adds `--desktop-tui-start`, a dedicated hidden supervisor startup mode for this primary workflow. **Launch Supervisor + Desktop TUI** uses it to hide the supervisor console while keeping normal supervisor semantics. The normal **Launch Supervisor** button remains a visible classic-console launch, and `--steamvr-start` remains SteamVR-specific.
 
+Phase 18F validates the release-folder build and source boundaries for the primary workflow. Source inspection confirmed `--desktop-tui-start` remains separate from `--steamvr-start`, and the release folder was refreshed successfully. Interactive lifecycle shutdown testing was skipped during implementation because confirming shutdown can run supervisor cleanup, restore monitors, stop apps, and affect base stations.
+
 ## Purpose
 
 The TUI gives a desktop/operator view of the supervisor with tightly limited control behavior. It displays:
