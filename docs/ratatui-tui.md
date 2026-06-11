@@ -22,7 +22,9 @@ Phase 18H records successful release-folder runtime validation of this best-effo
 
 Phase 19A cleans normal operator-facing Configurator and Desktop TUI wording. Routine UI now says `Supervisor`, `Connected`, `DISCONNECTED`, `Shut down Supervisor`, and `closing managed apps` instead of protocol or implementation terms. Protocol strings such as `query-json`, `action-json`, and `lifecycle-json` remain unchanged internally and are kept in design documentation where they are useful.
 
-Phase 19B makes Desktop TUI the default Configurator launch interface. The Configurator footer now has `Use Desktop TUI as default interface` enabled by default; when checked, **Launch Supervisor** starts the Supervisor hidden and opens the Desktop TUI. When unchecked, **Launch Supervisor** starts the classic visible Supervisor console. Standalone normal UI buttons for **Launch Desktop TUI** and **Launch Supervisor + Desktop TUI** were removed. Release-folder runtime smoke is valid only after all three C# publishes and the Rust TUI copy succeed.
+Phase 19B makes Desktop TUI the default Configurator launch interface. The `Use Desktop TUI as default interface` option is enabled by default; when checked, **Launch Supervisor** starts the Supervisor hidden and opens the Desktop TUI. When unchecked, **Launch Supervisor** starts the classic visible Supervisor console. Standalone normal UI buttons for **Launch Desktop TUI** and **Launch Supervisor + Desktop TUI** were removed. Release-folder runtime smoke is valid only after all three C# publishes and the Rust TUI copy succeed.
+
+Phase 19C moves `Use Desktop TUI as default interface` from the footer into the Configurator **Startup** section. It does not change persistence, default checked state, **Launch Supervisor** behavior, bridge protocols, or the supervisor runtime config schema.
 
 ## Purpose
 

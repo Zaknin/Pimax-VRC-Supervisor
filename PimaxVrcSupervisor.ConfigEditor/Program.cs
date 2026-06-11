@@ -485,6 +485,12 @@ internal sealed class ConfigEditorForm : Form
         layout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
         AddSectionHeader(layout, "Startup");
+        _useDesktopTuiAsDefaultInterfaceCheckBox.CheckedChanged += (_, _) =>
+        {
+            _editorState.UseDesktopTuiAsDefaultInterface = _useDesktopTuiAsDefaultInterfaceCheckBox.Checked;
+            SaveEditorState();
+        };
+        AddFullWidth(layout, _useDesktopTuiAsDefaultInterfaceCheckBox, "When enabled, Launch Supervisor starts the Supervisor hidden and opens the Desktop TUI.");
         AddFullWidth(layout, _autoLaunchTaskCheckBox, "Checked lets the app create or repair the elevated auto-launch Scheduled Task.");
         AddFullWidth(layout, _startWithSteamVrCheckBox, "Checked registers the SteamVR dashboard host manifest and starts the supervisor when SteamVR starts.");
         AddFullWidth(layout, _turnOffMonitorsCheckBox, "Checked saves the current monitor layout and disables secondary monitors during the VR session. The layout is restored after VRChat and SteamVR close.");
@@ -1998,12 +2004,11 @@ internal sealed class ConfigEditorForm : Form
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Bottom,
-            ColumnCount = 7,
+            ColumnCount = 6,
             AutoSize = true,
             Padding = new Padding(0, 10, 0, 0)
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -2017,14 +2022,7 @@ internal sealed class ConfigEditorForm : Form
         var launchButton = CreateButton("Launch Supervisor");
         launchButton.Click += (_, _) => LaunchSupervisor();
         launchButton.FlatStyle = FlatStyle.Flat;
-        _toolTips.SetToolTip(launchButton, "Launch Supervisor (Ctrl+L). Uses the Desktop TUI option in this footer: checked opens the Desktop TUI, unchecked starts the classic visible console. Save changes first if you want the launched supervisor to use them.");
-
-        _useDesktopTuiAsDefaultInterfaceCheckBox.CheckedChanged += (_, _) =>
-        {
-            _editorState.UseDesktopTuiAsDefaultInterface = _useDesktopTuiAsDefaultInterfaceCheckBox.Checked;
-            SaveEditorState();
-        };
-        _toolTips.SetToolTip(_useDesktopTuiAsDefaultInterfaceCheckBox, "When enabled, Launch Supervisor starts the Supervisor hidden and opens the Desktop TUI.");
+        _toolTips.SetToolTip(launchButton, "Launch Supervisor (Ctrl+L). Uses the Desktop TUI option in Startup: checked opens the Desktop TUI, unchecked starts the classic visible console. Save changes first if you want the launched supervisor to use them.");
 
         var launchSteamVrButton = CreateButton("Launch SteamVR");
         launchSteamVrButton.Click += (_, _) => LaunchSteamVr();
@@ -2041,11 +2039,10 @@ internal sealed class ConfigEditorForm : Form
 
         layout.Controls.Add(_statusLabel, 0, 0);
         layout.Controls.Add(validateButton, 1, 0);
-        layout.Controls.Add(_useDesktopTuiAsDefaultInterfaceCheckBox, 2, 0);
-        layout.Controls.Add(launchButton, 3, 0);
-        layout.Controls.Add(launchSteamVrButton, 4, 0);
-        layout.Controls.Add(saveAsButton, 5, 0);
-        layout.Controls.Add(saveButton, 6, 0);
+        layout.Controls.Add(launchButton, 2, 0);
+        layout.Controls.Add(launchSteamVrButton, 3, 0);
+        layout.Controls.Add(saveAsButton, 4, 0);
+        layout.Controls.Add(saveButton, 5, 0);
         return layout;
     }
 

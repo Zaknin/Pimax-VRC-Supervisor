@@ -211,7 +211,9 @@ Phase 18H records successful local release-folder runtime validation of that win
 
 Phase 19A cleans normal Configurator and Desktop TUI wording so operator screens avoid protocol and implementation terms. The TUI now says `Supervisor`, `Connected`, `DISCONNECTED`, `Shut down Supervisor`, and `closing managed apps` in routine UI. Protocol names such as `query-json`, `action-json`, `lifecycle-json`, and `force-stop-supervisor` remain unchanged internally and are kept in technical documentation where they explain the design.
 
-Phase 19B makes Desktop TUI the normal Configurator launch interface. The normal footer now has `Use Desktop TUI as default interface` enabled by default; with it enabled, **Launch Supervisor** starts the Supervisor hidden and opens the Desktop TUI. Uncheck it to start the classic visible Supervisor console instead. The standalone **Launch Desktop TUI** and **Launch Supervisor + Desktop TUI** buttons were removed from the normal UI, and **Launch SteamVR** remains unchanged.
+Phase 19B makes Desktop TUI the normal Configurator launch interface. The `Use Desktop TUI as default interface` option is enabled by default; with it enabled, **Launch Supervisor** starts the Supervisor hidden and opens the Desktop TUI. Uncheck it to start the classic visible Supervisor console instead. The standalone **Launch Desktop TUI** and **Launch Supervisor + Desktop TUI** buttons were removed from the normal UI, and **Launch SteamVR** remains unchanged.
+
+Phase 19C moves `Use Desktop TUI as default interface` from the footer into the **Startup** section. This is a layout cleanup only: persistence, default checked state, **Launch Supervisor** behavior, protocols, and runtime config schema are unchanged.
 
 Confirmed actions run in the background so the TUI stays responsive. Different safe actions may run at the same time, but the same command cannot be started twice while running and Base Stations On/Off are mutually exclusive. Once shutdown is requested, normal action execution is disabled. `force-stop-supervisor` remains blocked from the TUI.
 

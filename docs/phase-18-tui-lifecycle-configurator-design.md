@@ -6,7 +6,7 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 
 - `PimaxVrcSupervisor.exe` is the C# safety-critical backend. It owns startup, Windows elevation-sensitive operations, SteamVR/VRChat/Pimax monitoring, cleanup, monitor layout, base-station power, OSC routing, managed app lifecycle, diagnostics, the classic console UI, and the loopback TCP command bridge.
 - `PimaxVrcSupervisorTui.exe` is a separate Rust/Ratatui desktop terminal UI. It connects to the already-running supervisor on `127.0.0.1:37957`, reads `query-json`, and executes only the audited regular `TuiAction` set through `action-json`.
-- `PimaxVrcSupervisorConfigurator.exe` is the WinForms editor/launcher for `supervisor.config.json`. Its normal launch controls are Launch Supervisor, Launch SteamVR, and the persisted `Use Desktop TUI as default interface` checkbox.
+- `PimaxVrcSupervisorConfigurator.exe` is the WinForms editor/launcher for `supervisor.config.json`. Its normal launch controls are Launch Supervisor and Launch SteamVR, and its Startup section contains the persisted `Use Desktop TUI as default interface` checkbox.
 - `PimaxVrcSupervisorSteamVrHost.exe` is the SteamVR dashboard overlay host. It remains on the existing SteamVR overlay and legacy bridge workflow.
 - Release packaging uses a flat folder layout that already includes the Rust TUI executable beside the C# executables.
 
@@ -96,6 +96,12 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 - `Launch SteamVR` remains unchanged.
 - No tray/minimize behavior, config schema change, protocol change, SteamVR host change, or lifecycle behavior change was added.
 - Release-folder runtime validation for this workflow is valid only after all three C# publishes and the Rust TUI copy complete successfully; partial refreshes must be reported as partial and not used as runtime evidence.
+
+## Phase 19C Startup Section Placement Status
+
+- `Use Desktop TUI as default interface` now appears in the Configurator Startup section instead of the footer.
+- The footer contains status and one-time action buttons only: Validate, Launch Supervisor, Launch SteamVR, Save As, and Save.
+- This is a layout cleanup only; persistence, default checked state, launch behavior, protocols, runtime config schema, SteamVR behavior, and cleanup behavior are unchanged.
 
 ## Phase 18D Hardening Status
 

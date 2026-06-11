@@ -1981,9 +1981,43 @@ Verification:
 - Expected release executables present: `PimaxVrcSupervisor.exe`, `PimaxVrcSupervisorConfigurator.exe`, `PimaxVrcSupervisorSteamVrHost.exe`, and `PimaxVrcSupervisorTui.exe`.
 - Runtime smoke: not performed during implementation because it requires an interactive release-folder GUI/TUI session and can enter supervisor lifecycle flows. If a future release refresh is partial because a publish/copy is blocked by a PID, locked file, or access denied, release-folder runtime smoke must be treated as skipped/invalid.
 
+### Phase 19C - Move Desktop TUI default toggle to Startup
+
+Status: Completed
+
+Summary:
+
+- Moved `Use Desktop TUI as default interface` from the Configurator footer into the General tab Startup section.
+- Footer now contains status plus action buttons only: `Validate`, `Launch Supervisor`, `Launch SteamVR`, `Save As...`, and `Save`.
+- The checkbox text, tooltip, default checked state, and local `EditorState` persistence remain unchanged.
+- `Launch Supervisor` behavior is unchanged: checked mode starts hidden Supervisor plus Desktop TUI; unchecked mode starts the classic visible Supervisor console.
+
+Files changed:
+
+- `PimaxVrcSupervisor.ConfigEditor/Program.cs`
+- `README.md`
+- `docs/phase-18-tui-lifecycle-configurator-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Behavior and protocol boundaries:
+
+- No supervisor runtime config schema, `PimaxVrcSupervisor/Program.cs`, Desktop TUI bridge, SteamVR host, `Launch SteamVR`, TUI shutdown, TUI window-close shutdown, `query-json`, `action-json`, `lifecycle-json`, action allowlist, `force-stop-supervisor` blocking, cleanup behavior, or release layout behavior changed.
+
+Verification:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`: passed.
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`: passed.
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`: passed.
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`: passed.
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`: passed.
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`: passed.
+- Release-folder refresh: complete. All three C# projects published to `release\PimaxVrcSupervisor-v1.3.0-test`, and `PimaxVrcSupervisorTui.exe` was copied into the same folder.
+- Runtime smoke: not performed during implementation because it requires an interactive release-folder Configurator/TUI session and can enter supervisor lifecycle flows.
+
 Next direction:
 
-- Phase 19C should be a release-folder runtime smoke pass for the primary Configurator launch interface if the release refresh is complete.
+- Phase 19D should be a release-folder runtime smoke pass for the Startup-section placement and primary Configurator launch interface if the release refresh is complete.
 
 ### Phase 17D - Backend-off consistency, neutral modal controls, action hints, and log follow
 
