@@ -20,6 +20,8 @@ Phase 18G adds Windows best-effort terminal close handling. When the terminal ho
 
 Phase 18H records successful release-folder runtime validation of this best-effort path in the tested Windows terminal host: TUI window X close requested supervisor cleanup, managed apps closed through the supervisor cleanup path, and the supervisor exited.
 
+Phase 19A cleans normal operator-facing Configurator and Desktop TUI wording. Routine UI now says `Supervisor`, `Connected`, `DISCONNECTED`, `Shut down Supervisor`, and `closing managed apps` instead of protocol or implementation terms. Protocol strings such as `query-json`, `action-json`, and `lifecycle-json` remain unchanged internally and are kept in design documentation where they are useful.
+
 ## Purpose
 
 The TUI gives a desktop/operator view of the supervisor with tightly limited control behavior. It displays:
@@ -27,7 +29,7 @@ The TUI gives a desktop/operator view of the supervisor with tightly limited con
 - supervisor status
 - command capability metadata
 - recent console-log lines
-- disconnected/backend unavailable state
+- supervisor disconnected state
 - validated classic-console actions in the same `1`-`6` order
 
 The primary workflow no longer has a dashboard close-only shortcut. Use `Q` to request confirmed supervisor cleanup and exit the TUI after the backend exits or disconnects.
@@ -87,7 +89,7 @@ From a release folder that contains `PimaxVrcSupervisorTui.exe`:
 .\PimaxVrcSupervisorTui.exe
 ```
 
-If the backend is not running, the TUI shows a disconnected/backend unavailable state and keeps retrying on periodic or manual refresh.
+If the supervisor is not running, the TUI shows `DISCONNECTED` and keeps retrying on periodic or manual refresh.
 
 During the migration work, a manual runtime check confirmed the TUI can connect to a running supervisor at `127.0.0.1:37957` and display status, command capabilities, and logs. Documentation-only phases do not start the supervisor just to retest this.
 
@@ -118,7 +120,7 @@ Convenience aliases:
 - `R` / `r`: refresh
 - `F` / `f`: resume latest log follow
 
-The footer lists direct action mappings on wide terminals: `0 Help`, `F5 Refresh`, `1 Core`, `2 OGB`, `3 BS On`, `4 BS Off`, `5 OSC`, `6 Autostart`, and `Q Stop`. Compact terminals may use the shorter `1-6 Actions` label.
+The footer lists direct action mappings on wide terminals: `0 Help`, `F5 Refresh`, `1 Core`, `2 OGB`, `3 BS On`, `4 BS Off`, `5 OSC`, `6 Autostart`, and `Q Shutdown`. Compact terminals may use the shorter `1-6 Actions` label.
 
 Help closes on any key press and consumes that key. For example, pressing `1`, `Enter`, `Q`, or `F5` while Help is visible closes Help only and does not trigger the dashboard action underneath.
 
@@ -136,9 +138,9 @@ The TUI tracks running actions by canonical backend command name:
 - `base-stations-on` and `base-stations-off` cannot run at the same time; the supervisor backend also rejects overlapping manual base-station power actions from other entry points.
 - Other different actions may run concurrently.
 
-If `Q` is pressed while actions are running, the TUI opens the same shutdown confirmation. Confirming requests backend cleanup through `lifecycle-json`; it does not cancel backend work directly and does not send `force-stop-supervisor`. Normal action starts are disabled after shutdown is requested.
+If `Q` is pressed while actions are running, the TUI opens the same shutdown confirmation. Confirming requests Supervisor cleanup through `lifecycle-json`; it does not cancel running work directly and does not send `force-stop-supervisor`. Normal action starts are disabled after shutdown is requested.
 
-If the backend accepts shutdown but remains reachable for 60 seconds, the TUI shows `Shutdown was requested, but the supervisor is still reachable. Check the supervisor logs.` before it exits. This is an operator warning only; it does not send `force-stop-supervisor`, retry shutdown, or add a close-TUI-only path.
+If the supervisor accepts shutdown but remains reachable for 60 seconds, the TUI shows `The Supervisor did not exit in time. Check the Supervisor logs.` before it exits. This is an operator warning only; it does not send `force-stop-supervisor`, retry shutdown, or add a close-TUI-only path.
 
 Closing the TUI terminal window is different from pressing `Q`: it cannot show a confirmation modal because the process is already closing. On Windows, the TUI registers a best-effort console close handler that sends the lifecycle request once and ignores failures. This depends on the terminal host delivering the close event and is not a substitute for the confirmed `Q` workflow.
 
@@ -154,7 +156,7 @@ Phase 17B reduces normal operator UI noise by hiding risk-category wording from 
 
 Phase 17B also adds original mouse-click support. Clicking Confirm in the modal behaves like `Enter`, clicking Cancel behaves like `Esc`, and clicks while Help is visible close Help only. Clicks outside a confirmation modal are ignored so dashboard controls underneath cannot fire. If mouse capture is unavailable, the TUI continues keyboard-only.
 
-Phase 17C refines action-card and backend-unavailable behavior. Keyboard `1`-`6` still opens confirmation, while mouse clicks on action cards start the selected allowed action immediately after the same backend, metadata, duplicate-command, and Base Stations On/Off conflict checks. Ready cards show `START`; disconnected cards show `BACKEND OFF` with muted borders and cannot start workers, even when cached command metadata exists from an earlier connection. The Core Apps status row shows `WAITING` while lifecycle is `waiting-vrchat` instead of warning that helper apps are incomplete.
+Phase 17C refines action-card and supervisor-disconnected behavior. Keyboard `1`-`6` still opens confirmation, while mouse clicks on action cards start the selected allowed action immediately after the same connection, metadata, duplicate-command, and Base Stations On/Off conflict checks. Ready cards show `START`; disconnected cards show `DISCONNECTED` with muted borders and cannot start workers, even when cached command metadata exists from an earlier connection. The Core Apps status row shows `WAITING` while lifecycle is `waiting-vrchat` instead of warning that helper apps are incomplete.
 
 Phase 17D tightens the same operator layout. Backend-off state is authoritative across all six action cards, so disconnected cards never mix in conflict `BLOCKED` states. Modal controls remain mouse-clickable but render as neutral text. Recent Logs follow the newest entries by default, scrolling older pauses live follow, and `End` or `F` resumes latest log follow.
 
@@ -162,13 +164,13 @@ Phase 17E adds adaptive layout tiers. Terminals at `120x32` or larger use the fu
 
 Phase 17F adds a priority small layout before the tiny fallback. Terminals at `80x20` or larger keep backend health, lifecycle, Core Apps, OSC Router, Base Stations, all six action states, latest activity, and a last-log line visible. Tiny fallback is now reserved for terminals below `80x20`.
 
-Phase 17F also tightens badge styling. Short state words such as `OK`, `START`, `WAITING`, `RUNNING`, `OFF`, `STOPPED`, `ERROR`, `BACKEND OFF`, `BLOCKED`, and `UNAVAILABLE` use colored badge backgrounds. Normal labels, values, action names, click hints, modal body text, and log lines remain foreground-only without background underlay.
+Phase 17F also tightens badge styling. Short state words such as `OK`, `START`, `WAITING`, `RUNNING`, `OFF`, `STOPPED`, `ERROR`, `DISCONNECTED`, `BLOCKED`, and `UNAVAILABLE` use colored badge backgrounds. Normal labels, values, action names, click hints, modal body text, and log lines remain foreground-only without background underlay.
 
 Phase 17G aligns the small `80x20` action area as a fixed two-row, three-column grid. Small action labels use compact operator text (`Core`, `OGB`, `On`, `Off`, `OSC`, `Auto`) and keep the state badge aligned within each cell. No lifecycle behavior changes were made: dashboard `Q` still quits only the TUI.
 
-Phase 17H changes status/action badges to bracket text, for example `[OK]`, `[START]`, `[WAITING]`, and `[BACKEND OFF]`. The brackets are part of the colored badge span. Small action cells now compose label plus nearby badge first, then pad the rest of the cell, so `1 Core [START]` stays compact at `80x20`.
+Phase 17H changes status/action badges to bracket text, for example `[OK]`, `[START]`, `[WAITING]`, and `[BACKEND OFF]`. The brackets are part of the colored badge span. Phase 17I later reserves brackets for interactive `[START]` controls and Phase 19A changes the normal disconnected wording. Small action cells compose label plus nearby badge first, then pad the rest of the cell, so `1 Core [START]` stays compact at `80x20`.
 
-Phase 17I corrects the badge semantics. Normal status badges now render as unbracketed colored words such as `OK`, `READY`, `WAITING`, `OFF`, and `BACKEND OFF`. Brackets are reserved for interactive action buttons such as `[START]`, while non-startable action states such as `RUNNING`, `BACKEND OFF`, `BLOCKED`, and `UNAVAILABLE` remain unbracketed. Compact and small action rows keep `[START]` close to the action label.
+Phase 17I corrects the badge semantics. Normal status badges now render as unbracketed colored words such as `OK`, `READY`, `WAITING`, `OFF`, and `DISCONNECTED`. Brackets are reserved for interactive action buttons such as `[START]`, while non-startable action states such as `RUNNING`, `DISCONNECTED`, `BLOCKED`, and `UNAVAILABLE` remain unbracketed. Compact and small action rows keep `[START]` close to the action label.
 
 Phase 17J aligns compact dashboard action rows with fixed label and badge columns. Compact rows use `1 Core`, `2 OGB`, `3 BS On`, `4 BS Off`, `5 OSC`, and `6 Auto`, followed by a single aligned action-state column and the display name. Full cards and the small `80x20` grid keep their existing structure.
 

@@ -1,6 +1,6 @@
 # Phase 18 TUI Lifecycle And Configurator Integration Design
 
-Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurator launcher. Phase 18C makes the Desktop TUI the primary operator lifecycle surface by adding a confirmed Ctrl+C-equivalent shutdown request.
+Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurator launcher. Phase 18C makes the Desktop TUI the primary operator lifecycle surface by adding a confirmed Ctrl+C-equivalent shutdown request. Phase 19A keeps the technical lifecycle model intact while cleaning normal UI wording so operators see Supervisor/connected/disconnected/shutdown language instead of protocol terms.
 
 ## Current Architecture Summary
 
@@ -79,6 +79,14 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 - Phase 18G adds Windows best-effort terminal close handling for the TUI. If the terminal host delivers a console close/logoff/shutdown event, the TUI sends the existing `lifecycle-json` shutdown request with source `desktop-tui-window-close`. This is not a guarantee and does not add tray/minimize behavior, a wrapper, or a close-TUI-only connected path.
 - Phase 18H runtime validation confirmed the release-folder TUI window X close path in the tested Windows terminal host. The supervisor received the lifecycle request, ran Ctrl+C-equivalent cleanup, closed managed apps through supervisor cleanup, and exited.
 
+## Phase 19A Interface Wording Status
+
+- Normal Configurator and Desktop TUI screens now avoid protocol and launch-argument wording where it is not needed for operation.
+- The TUI shutdown modal says `Shut down Supervisor?` and explains that managed apps will close and the Supervisor will exit.
+- Disconnected TUI state is shown as `DISCONNECTED` instead of `BACKEND OFF`.
+- Configurator launcher status text uses `started`, `opened`, and `already open` language instead of raw launch terminology.
+- Internal protocol names and command strings remain unchanged and continue to appear in this design document where they define implementation boundaries.
+
 ## Phase 18D Hardening Status
 
 - The primary TUI shutdown flow remains the same confirmed `Q` workflow; no close-TUI-only dashboard path was restored.
@@ -115,11 +123,11 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 
 ## Proposed User-Facing Wording
 
-- `Launch Desktop TUI`: opens the terminal dashboard. It does not start or stop the supervisor.
-- `Launch Supervisor + Desktop TUI`: starts the supervisor with hidden Desktop TUI startup mode if needed, then opens the terminal dashboard.
+- `Launch Desktop TUI`: opens the Desktop TUI. It does not start or stop the supervisor.
+- `Launch Supervisor + Desktop TUI`: starts the Supervisor if needed, then opens the Desktop TUI.
 - `Launch Supervisor`: starts the classic supervisor console using the current config.
 - `Launch SteamVR`: starts SteamVR normally through Steam.
-- `Q`: opens `Stop supervisor and exit TUI?` confirmation. Confirming runs Ctrl+C-equivalent supervisor cleanup.
+- `Q`: opens `Shut down Supervisor?` confirmation. Confirming closes managed apps and exits the Supervisor through the existing cleanup path.
 
 ## Proposed Future Phase Breakdown
 

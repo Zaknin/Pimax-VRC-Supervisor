@@ -2024,11 +2024,11 @@ internal sealed class ConfigEditorForm : Form
 
         var launchDesktopTuiButton = CreateButton("Launch Desktop TUI");
         launchDesktopTuiButton.Click += (_, _) => LaunchDesktopTui();
-        _toolTips.SetToolTip(launchDesktopTuiButton, "Opens the Rust terminal dashboard. The supervisor must be running separately for live status and actions.");
+        _toolTips.SetToolTip(launchDesktopTuiButton, "Opens the Desktop TUI. Start the Supervisor first for live status and actions.");
 
         var launchSupervisorAndDesktopTuiButton = CreateButton("Launch Supervisor + Desktop TUI");
         launchSupervisorAndDesktopTuiButton.Click += (_, _) => LaunchSupervisorAndDesktopTui();
-        _toolTips.SetToolTip(launchSupervisorAndDesktopTuiButton, "Starts the supervisor for the Desktop TUI workflow and opens the Rust terminal dashboard. Press Q in the TUI to run supervisor cleanup and exit.");
+        _toolTips.SetToolTip(launchSupervisorAndDesktopTuiButton, "Starts the Supervisor and opens the Desktop TUI. Press Q in the TUI to close managed apps and exit the Supervisor.");
 
         var saveButton = CreateButton("Save");
         saveButton.Tag = "Primary";
@@ -3001,11 +3001,11 @@ internal sealed class ConfigEditorForm : Form
             var existingSupervisorTuiResult = LaunchDesktopTui();
             if (existingSupervisorTuiResult == DesktopTuiLaunchResult.Launched)
             {
-                SetStatus("Supervisor is already running. Desktop TUI launched.");
+                SetStatus("Supervisor is already running. Desktop TUI opened.");
             }
             else if (existingSupervisorTuiResult == DesktopTuiLaunchResult.AlreadyRunning)
             {
-                SetStatus("Supervisor and Desktop TUI are already running.");
+                SetStatus("Supervisor is already running. Desktop TUI is already open.");
             }
             return;
         }
@@ -3015,11 +3015,11 @@ internal sealed class ConfigEditorForm : Form
             var tuiResult = LaunchDesktopTui();
             if (tuiResult == DesktopTuiLaunchResult.Launched)
             {
-                SetStatus("Launched Supervisor and Desktop TUI.");
+                SetStatus("Started Supervisor and opened Desktop TUI.");
             }
             else if (tuiResult == DesktopTuiLaunchResult.AlreadyRunning)
             {
-                SetStatus("Launched Supervisor. Desktop TUI is already running.");
+                SetStatus("Started Supervisor. Desktop TUI is already open.");
             }
         }
     }
@@ -3050,7 +3050,7 @@ internal sealed class ConfigEditorForm : Form
 
         if (!File.Exists(supervisorPath))
         {
-            ShowThemedMessageBox($"Could not find {supervisorPath}.", "Could not launch supervisor", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ShowThemedMessageBox($"Could not find the Supervisor executable:\r\n\r\n{supervisorPath}", "Could not start Supervisor", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return false;
         }
 
@@ -3084,23 +3084,23 @@ internal sealed class ConfigEditorForm : Form
             }
 
             Process.Start(startInfo);
-            SetStatus("Launched Supervisor using " + Path.GetFileName(configPath) + ".");
+            SetStatus("Started Supervisor using " + Path.GetFileName(configPath) + ".");
             return true;
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
         {
             ShowThemedMessageBox(
-                "Windows cancelled the administrator approval prompt for PimaxVrcSupervisor.exe. Click Launch again and approve the UAC prompt.",
-                "Supervisor launch cancelled",
+                "Windows cancelled the administrator approval prompt. Click Launch again and approve it to start the Supervisor.",
+                "Supervisor start cancelled",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
-            SetStatus("Launch cancelled.");
+            SetStatus("Supervisor start cancelled.");
             return false;
         }
         catch (Exception ex)
         {
-            ShowThemedMessageBox(ex.Message, "Could not launch supervisor", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            SetStatus("Launch failed.");
+            ShowThemedMessageBox(ex.Message, "Could not start Supervisor", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus("Could not start Supervisor.");
             return false;
         }
     }
@@ -3138,25 +3138,25 @@ internal sealed class ConfigEditorForm : Form
         if (!File.Exists(tuiPath))
         {
             ShowThemedMessageBox(
-                "PimaxVrcSupervisorTui.exe was not found next to the Configurator.\r\n\r\n"
-                + "Expected path:\r\n"
+                "Desktop TUI was not found next to the Configurator.\r\n\r\n"
+                + "Expected file:\r\n"
                 + tuiPath
                 + "\r\n\r\nBuild or copy the Rust TUI executable into the release folder and try again.",
-                "Could not launch Desktop TUI",
+                "Could not start Desktop TUI",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
-            SetStatus("Desktop TUI executable was not found.");
+            SetStatus("Desktop TUI was not found.");
             return DesktopTuiLaunchResult.Failed;
         }
 
         if (Process.GetProcessesByName("PimaxVrcSupervisorTui").Any())
         {
             ShowThemedMessageBox(
-                "Desktop TUI is already running.",
-                "Desktop TUI already running",
+                "Desktop TUI is already open.",
+                "Desktop TUI already open",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
-            SetStatus("Desktop TUI is already running.");
+            SetStatus("Desktop TUI is already open.");
             return DesktopTuiLaunchResult.AlreadyRunning;
         }
 
@@ -3170,13 +3170,13 @@ internal sealed class ConfigEditorForm : Form
                 ErrorDialog = true,
                 ErrorDialogParentHandle = Handle
             });
-            SetStatus("Desktop TUI launched.");
+            SetStatus("Desktop TUI opened.");
             return DesktopTuiLaunchResult.Launched;
         }
         catch (Exception ex)
         {
-            ShowThemedMessageBox(ex.Message, "Could not launch Desktop TUI", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            SetStatus("Desktop TUI launch failed.");
+            ShowThemedMessageBox(ex.Message, "Could not start Desktop TUI", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus("Could not start Desktop TUI.");
             return DesktopTuiLaunchResult.Failed;
         }
     }

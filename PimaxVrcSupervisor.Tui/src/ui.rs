@@ -9,7 +9,10 @@ use ratatui::{
 };
 
 use crate::{
-    app::{ActionOutcome, App, ClickAction, ConnectionState, REFRESH_INTERVAL},
+    app::{
+        ActionOutcome, App, ClickAction, ConnectionState, REFRESH_INTERVAL,
+        display_name_for_command, operator_error_message,
+    },
     models::{CommandSummary, TuiAction},
     theme,
 };
@@ -153,7 +156,7 @@ fn render_tiny_fallback(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         Line::from(vec![
             Span::styled("0 Help", theme::success_style()),
             Span::raw("   "),
-            Span::styled("Q Stop Supervisor", theme::warning_style()),
+            Span::styled("Q Shutdown", theme::warning_style()),
         ]),
     ];
 
@@ -174,16 +177,15 @@ fn render_tiny_fallback(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
 }
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
-    let (backend_label, backend_style) = match app.connection {
+    let (supervisor_label, supervisor_style) = match app.connection {
         ConnectionState::Connected => ("OK", theme::badge_success_style()),
-        ConnectionState::Disconnected => ("BACKEND OFF", theme::badge_error_style()),
+        ConnectionState::Disconnected => ("DISCONNECTED", theme::badge_error_style()),
     };
 
     let mut line = vec![
         Span::styled("Pimax VRC Supervisor TUI", theme::title_style()),
-        Span::raw("   Backend "),
-        theme::badge(backend_label, backend_style),
-        Span::raw(format!("   {}", app.backend_endpoint)),
+        Span::raw("   Supervisor "),
+        theme::badge(supervisor_label, supervisor_style),
         Span::styled(
             format!("   Last OK {}", app.last_success_label(now)),
             theme::secondary_style(),
@@ -204,7 +206,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     if app.connection == ConnectionState::Disconnected {
         if let Some(error) = &app.last_error {
             line.push(Span::styled(
-                format!("   Last error: {}", truncate(error, 52)),
+                format!("   {}", truncate(&operator_error_message(error), 52)),
                 theme::error_style(),
             ));
         }
@@ -362,6 +364,7 @@ fn render_compact_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, 
 
     if let Some(outcome) = app.last_action_outcome {
         let command = app.last_action_command.as_deref().unwrap_or("action");
+        let display_name = display_name_for_command(command);
         let when = app
             .last_action_completed_label(now)
             .unwrap_or_else(|| "unknown time".to_string());
@@ -375,29 +378,25 @@ fn render_compact_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, 
             Span::styled("Last ", theme::label_style()),
             Span::styled(status, style),
             Span::styled(format!(" {when} "), foreground(theme::TEXT_SECONDARY)),
-            Span::styled(command.to_string(), foreground(theme::TEXT_PRIMARY)),
+            Span::styled(display_name, foreground(theme::TEXT_PRIMARY)),
             Span::raw(" - "),
             Span::raw(truncate(message, 80)),
         ]));
     } else if let Some(error) = app.last_error.as_deref() {
         lines.push(Line::from(vec![
-            Span::styled("Backend ", theme::label_style()),
+            Span::styled("Supervisor ", theme::label_style()),
             Span::styled("ERROR", theme::badge_error_style()),
             Span::raw(" "),
-            Span::raw(truncate(error, 96)),
+            Span::raw(truncate(&operator_error_message(error), 96)),
         ]));
     } else {
-        let backend = match app.connection {
+        let supervisor = match app.connection {
             ConnectionState::Connected => ("OK", theme::badge_success_style()),
-            ConnectionState::Disconnected => ("BACKEND OFF", theme::badge_error_style()),
+            ConnectionState::Disconnected => ("DISCONNECTED", theme::badge_error_style()),
         };
         lines.push(Line::from(vec![
-            Span::styled("Backend ", theme::label_style()),
-            Span::styled(backend.0, backend.1),
-            Span::styled(
-                format!(" {}", app.backend_endpoint),
-                foreground(theme::TEXT_SECONDARY),
-            ),
+            Span::styled("Supervisor ", theme::label_style()),
+            Span::styled(supervisor.0, supervisor.1),
         ]));
     }
 
@@ -410,21 +409,21 @@ fn render_compact_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, 
 }
 
 fn render_small_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let (backend_label, backend_style) = match app.connection {
+    let (supervisor_label, supervisor_style) = match app.connection {
         ConnectionState::Connected => ("OK", theme::badge_success_style()),
-        ConnectionState::Disconnected => ("BACKEND OFF", theme::badge_error_style()),
+        ConnectionState::Disconnected => ("DISCONNECTED", theme::badge_error_style()),
     };
 
     let line = Line::from(vec![
         Span::styled("Pimax VRC Supervisor TUI", theme::title_style()),
-        Span::raw("   Backend "),
-        theme::badge(backend_label, backend_style),
+        Span::raw("   Supervisor "),
+        theme::badge(supervisor_label, supervisor_style),
     ]);
 
     frame.render_widget(
         Paragraph::new(vec![
             line,
-            Line::from("0 Help  F5 Refresh  1-6 Actions  Q Stop"),
+            Line::from("0 Help  F5 Refresh  1-6 Actions  Q Shutdown"),
         ])
         .block(theme::accent_panel_block("Dashboard"))
         .wrap(Wrap { trim: true }),
@@ -518,7 +517,10 @@ fn render_small_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Inst
     if let Some(running) = app.running_actions.first() {
         lines.push(Line::from(vec![
             Span::styled("Running: ", theme::label_style()),
-            Span::styled(running.command.clone(), foreground(theme::TEXT_PRIMARY)),
+            Span::styled(
+                running.action.display_name(),
+                foreground(theme::TEXT_PRIMARY),
+            ),
             Span::raw(" "),
             Span::styled(
                 format!(
@@ -675,7 +677,7 @@ fn render_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Ins
     } else {
         for running in app.running_actions.iter().take(3) {
             lines.push(Line::from(vec![
-                Span::styled(running.command.clone(), theme::primary_style()),
+                Span::styled(running.action.display_name(), theme::primary_style()),
                 Span::raw("  "),
                 Span::styled(
                     format!(
@@ -701,12 +703,13 @@ fn render_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Ins
     )));
     if let Some(outcome) = app.last_action_outcome {
         let command = app.last_action_command.as_deref().unwrap_or("action");
+        let display_name = display_name_for_command(command);
         let when = app
             .last_action_completed_label(now)
             .unwrap_or_else(|| "unknown time".to_string());
         let (status, style) = action_outcome_style(outcome);
         lines.push(Line::from(vec![
-            Span::styled(command.to_string(), theme::primary_style()),
+            Span::styled(display_name, theme::primary_style()),
             Span::raw("  "),
             Span::styled(status, style),
             Span::styled(format!(" {when}"), theme::secondary_style()),
@@ -721,8 +724,9 @@ fn render_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Ins
         }
     } else if let Some(result) = app.last_action_result.as_deref() {
         let command = app.last_action_command.as_deref().unwrap_or("action");
+        let display_name = display_name_for_command(command);
         lines.push(Line::from(vec![
-            Span::styled(command.to_string(), theme::warning_style()),
+            Span::styled(display_name, theme::warning_style()),
             Span::raw("  "),
             Span::raw(truncate(result, 92)),
         ]));
@@ -745,13 +749,12 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     let mut lines = Vec::new();
     match app.connection {
         ConnectionState::Connected => lines.push(Line::from(vec![
-            Span::styled(format!("{:<8}", "Backend"), theme::label_style()),
+            Span::styled(format!("{:<10}", "Supervisor"), theme::label_style()),
             theme::badge("OK", theme::badge_success_style()),
         ])),
         ConnectionState::Disconnected => lines.push(Line::from(vec![
-            Span::styled(format!("{:<8}", "Backend"), theme::label_style()),
-            theme::badge("BACKEND OFF", theme::badge_error_style()),
-            Span::raw(format!(" {}", app.backend_endpoint)),
+            Span::styled(format!("{:<10}", "Supervisor"), theme::label_style()),
+            theme::badge("DISCONNECTED", theme::badge_error_style()),
         ])),
     }
 
@@ -760,26 +763,26 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
             .last_error_label(now)
             .unwrap_or_else(|| "unknown time".to_string());
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<8}", "Errors"), theme::label_style()),
+            Span::styled(format!("{:<10}", "Status"), theme::label_style()),
             theme::badge("ERROR", theme::badge_error_style()),
             Span::raw(format!(" {when}: ")),
-            Span::raw(truncate(error, 84)),
+            Span::raw(truncate(&operator_error_message(error), 84)),
         ]));
     } else {
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<8}", "Errors"), theme::label_style()),
+            Span::styled(format!("{:<10}", "Status"), theme::label_style()),
             Span::styled("none", theme::secondary_style()),
         ]));
     }
 
     if let Some(notice) = &app.mouse_notice {
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<8}", "Mouse"), theme::label_style()),
+            Span::styled(format!("{:<10}", "Mouse"), theme::label_style()),
             Span::styled(truncate(notice, 84), theme::warning_style()),
         ]));
     } else {
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<8}", "Mouse"), theme::label_style()),
+            Span::styled(format!("{:<10}", "Mouse"), theme::label_style()),
             Span::styled(
                 if app.mouse_enabled {
                     "enabled"
@@ -793,17 +796,17 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
 
     if let Some(notice) = &app.console_close_notice {
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<8}", "X-close"), theme::label_style()),
+            Span::styled(format!("{:<10}", "Window"), theme::label_style()),
             Span::styled(truncate(notice, 84), theme::warning_style()),
         ]));
     } else {
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<8}", "X-close"), theme::label_style()),
+            Span::styled(format!("{:<10}", "Window"), theme::label_style()),
             Span::styled(
                 if app.console_close_enabled {
-                    "best-effort shutdown enabled"
+                    "close requests Supervisor shutdown"
                 } else {
-                    "not available"
+                    "close handling unavailable"
                 },
                 theme::secondary_style(),
             ),
@@ -814,19 +817,19 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         let message = app
             .shutdown_message
             .as_deref()
-            .unwrap_or("Supervisor shutdown requested. Waiting for cleanup...");
+            .unwrap_or("Shutdown requested. Closing managed apps...");
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<8}", "Shutdown"), theme::label_style()),
+            Span::styled(format!("{:<10}", "Shutdown"), theme::label_style()),
             theme::badge("RUNNING", theme::badge_warning_style()),
             Span::raw(" "),
             Span::raw(truncate(message, 84)),
         ]));
     } else if let Some(error) = &app.shutdown_error {
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<8}", "Shutdown"), theme::label_style()),
+            Span::styled(format!("{:<10}", "Shutdown"), theme::label_style()),
             theme::badge("ERROR", theme::badge_error_style()),
             Span::raw(" "),
-            Span::raw(truncate(error, 84)),
+            Span::raw(truncate(&operator_error_message(error), 84)),
         ]));
     }
 
@@ -944,7 +947,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         help_line("ENTER", "Confirm modal action"),
         help_line("SPACE", "Confirm modal action"),
         help_line("ESC", "Cancel modal"),
-        help_line("Q", "Stop supervisor and exit TUI after confirmation"),
+        help_line("Q", "Shut down Supervisor and exit TUI after confirmation"),
         help_line("UP/PGUP", "Scroll logs older, pauses live follow"),
         help_line("DOWN/PGDN", "Scroll logs newer"),
         help_line("WHEEL", "Scroll logs older/newer"),
@@ -955,9 +958,9 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
             theme::warning_style(),
         )),
         Line::from("Mouse actions use the same allowed action list and conflict checks."),
-        Line::from("Q requests Ctrl+C-equivalent supervisor cleanup after confirmation."),
+        Line::from("Q asks the Supervisor to close managed apps and exit after confirmation."),
         Line::from("F1, ?, and Russian help aliases are not mapped."),
-        Line::from("force-stop-supervisor is not exposed."),
+        Line::from("Forced stop is not available from this TUI."),
     ];
 
     frame.render_widget(Clear, popup);
@@ -972,13 +975,10 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
 fn render_shutdown_confirmation(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let popup = centered_rect(62, 38, area);
     let lines = vec![
-        Line::from(Span::styled(
-            "Stop supervisor and exit TUI?",
-            theme::title_style(),
-        )),
+        Line::from(Span::styled("Shut down Supervisor?", theme::title_style())),
         Line::from(""),
-        Line::from("This runs the same cleanup routine as Ctrl+C in the supervisor."),
-        Line::from("Managed apps, monitor restore, and base-station cleanup remain backend-owned."),
+        Line::from("This will close managed apps and exit the Supervisor."),
+        Line::from("Monitor restore and base-station cleanup stay managed by the Supervisor."),
         Line::from(""),
         Line::from(vec![
             Span::styled("ENTER / SPACE Confirm", theme::secondary_style()),
@@ -1007,10 +1007,9 @@ fn render_action_confirmation(frame: &mut Frame<'_>, area: Rect, app: &mut App) 
         Line::from(Span::styled("Confirm Action", theme::title_style())),
         Line::from(""),
         Line::from(Span::styled(action.display_name(), theme::title_style())),
-        labeled_line("Command", action.command_name()),
         Line::from(""),
         Line::from(action.expected_effect()),
-        Line::from("This will send the request to the supervisor backend."),
+        Line::from("The Supervisor will run this action after confirmation."),
         Line::from(""),
         Line::from(vec![
             Span::styled("ENTER / SPACE Confirm", theme::secondary_style()),
@@ -1204,8 +1203,8 @@ fn action_state(app: &App, action: TuiAction, now: Instant) -> ActionState {
 
     if app.connection == ConnectionState::Disconnected {
         return ActionState {
-            label: "BACKEND OFF",
-            detail: Some("backend unavailable".to_string()),
+            label: "DISCONNECTED",
+            detail: Some("Supervisor disconnected".to_string()),
             border_color: theme::BORDER_MUTED,
             style: theme::badge_error_style(),
         };
@@ -1325,11 +1324,11 @@ fn register_modal_clicks(app: &mut App, popup: Rect) {
 
 fn shortcut_line(width: u16) -> &'static str {
     if width >= 120 {
-        "0 Help  F5 Refresh  Wheel Logs  End/F Follow  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  Q Stop"
+        "0 Help  F5 Refresh  Wheel Logs  End/F Follow  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  Q Shutdown"
     } else if width >= 100 {
-        "0 Help  F5 Refresh  1-6 Actions  End/F Logs  Q Stop"
+        "0 Help  F5 Refresh  1-6 Actions  End/F Logs  Q Shutdown"
     } else {
-        "0 Help  F5 Refresh  1-6 Actions  Q Stop"
+        "0 Help  F5 Refresh  1-6 Actions  Q Shutdown"
     }
 }
 
@@ -1357,13 +1356,6 @@ fn simple_status_line<'a>(label: &'a str, value: &'a str) -> Line<'a> {
     Line::from(vec![
         Span::styled(format!("{label:<14}"), theme::label_style()),
         Span::raw(format!("{:<9}", "")),
-        Span::raw(value),
-    ])
-}
-
-fn labeled_line<'a>(label: &'a str, value: &'a str) -> Line<'a> {
-    Line::from(vec![
-        Span::styled(format!("{label}: "), theme::label_style()),
         Span::raw(value),
     ])
 }
@@ -1498,7 +1490,7 @@ fn action_outcome_style(outcome: ActionOutcome) -> (&'static str, Style) {
         ActionOutcome::Failed => ("ERROR", theme::badge_error_style()),
         ActionOutcome::Cancelled => ("CANCELLED", theme::badge_warning_style()),
         ActionOutcome::Rejected => ("BLOCKED", theme::badge_warning_style()),
-        ActionOutcome::BackendOff => ("BACKEND OFF", theme::badge_error_style()),
+        ActionOutcome::BackendOff => ("DISCONNECTED", theme::badge_error_style()),
     }
 }
 

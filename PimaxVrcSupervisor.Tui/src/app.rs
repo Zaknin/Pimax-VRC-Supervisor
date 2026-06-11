@@ -9,7 +9,7 @@ use color_eyre::eyre::Result;
 use ratatui::layout::Rect;
 
 use crate::{
-    bridge::{SupervisorBridge, backend_endpoint},
+    bridge::SupervisorBridge,
     console_close,
     models::{
         CommandResult, CommandSummary, LogLine, StatusSummary, TuiAction, commands_from_response,
@@ -81,7 +81,6 @@ pub struct App {
     pub status: StatusSummary,
     pub commands: Vec<CommandSummary>,
     pub logs: Vec<LogLine>,
-    pub backend_endpoint: String,
     pub last_success: Option<Instant>,
     pub last_error_at: Option<Instant>,
     pub last_error: Option<String>,
@@ -138,7 +137,6 @@ impl App {
             status: StatusSummary::default(),
             commands: Vec::new(),
             logs: Vec::new(),
-            backend_endpoint: backend_endpoint(),
             last_success: None,
             last_error_at: None,
             last_error: None,
@@ -422,7 +420,7 @@ impl App {
 
         self.last_action_command = Some(action.command_name().to_string());
         self.last_action_outcome = None;
-        self.last_action_result = Some(format!("{} started.", action.command_name()));
+        self.last_action_result = Some(format!("{} started.", action.display_name()));
         self.last_action_error = None;
         self.running_actions.push(RunningAction {
             action,
@@ -434,7 +432,7 @@ impl App {
 
     pub fn request_shutdown_confirmation(&mut self, now: Instant) -> bool {
         if self.connection != ConnectionState::Connected {
-            self.shutdown_message = Some("Backend is not running. Exiting TUI.".to_string());
+            self.shutdown_message = Some("Supervisor is not running. Exiting TUI.".to_string());
             self.last_action_completed_at = Some(now);
             return true;
         }
@@ -464,8 +462,7 @@ impl App {
         self.shutdown_accepted = false;
         self.shutdown_started_at = Some(now);
         self.shutdown_exit_after = None;
-        self.shutdown_message =
-            Some("Supervisor shutdown requested. Waiting for cleanup...".to_string());
+        self.shutdown_message = Some("Shutdown requested. Closing managed apps...".to_string());
         self.shutdown_error = None;
         console_close::mark_shutdown_requested();
         self.spawn_shutdown_worker();
@@ -488,10 +485,8 @@ impl App {
                 return now >= exit_after;
             }
 
-            self.shutdown_message = Some(
-                "Shutdown was requested, but the supervisor is still reachable. Check the supervisor logs."
-                    .to_string(),
-            );
+            self.shutdown_message =
+                Some("The Supervisor did not exit in time. Check the Supervisor logs.".to_string());
             self.shutdown_exit_after = Some(now + SHUTDOWN_TIMEOUT_NOTICE_DELAY);
         }
 
@@ -574,7 +569,7 @@ impl App {
             .iter()
             .any(|running| running.command.eq_ignore_ascii_case(candidate_command))
         {
-            return Some(format!("Action already running: {candidate_command}"));
+            return Some(format!("{} is already running.", candidate.display_name()));
         }
 
         let base_station_power_conflict = matches!(
@@ -588,10 +583,7 @@ impl App {
         });
 
         if base_station_power_conflict {
-            return Some(
-                "Base station power action already running: base-stations-on/base-stations-off"
-                    .to_string(),
-            );
+            return Some("A base-station power action is already running.".to_string());
         }
 
         None
@@ -604,8 +596,8 @@ impl App {
 
         if self.connection != ConnectionState::Connected {
             return Err(format!(
-                "Backend unavailable; cannot start {}.",
-                action.command_name()
+                "Supervisor disconnected; cannot start {}.",
+                action.display_name()
             ));
         }
 
@@ -617,8 +609,8 @@ impl App {
             Ok(())
         } else {
             Err(format!(
-                "{} is not executable from this TUI yet.",
-                action.command_name()
+                "{} is not available from this TUI yet.",
+                action.display_name()
             ))
         }
     }
@@ -626,8 +618,8 @@ impl App {
     fn record_action_rejection(&mut self, action: TuiAction, now: Instant) {
         let message = self.validate_action_start(action).err().unwrap_or_else(|| {
             format!(
-                "{} is not executable from this TUI yet.",
-                action.command_name()
+                "{} is not available from this TUI yet.",
+                action.display_name()
             )
         });
         self.record_action_error(action.command_name(), ActionOutcome::Rejected, message, now);
@@ -637,7 +629,7 @@ impl App {
         self.record_action_error(
             action.command_name(),
             ActionOutcome::BackendOff,
-            "backend unavailable".to_string(),
+            "Supervisor disconnected.".to_string(),
             now,
         );
     }
@@ -662,13 +654,13 @@ impl App {
                     command,
                     completed_at: Instant::now(),
                     outcome: ActionOutcome::Failed,
-                    message: error.to_string(),
+                    message: operator_error_message(&error.to_string()),
                 },
                 Err(_) => CompletedActionResult {
                     command,
                     completed_at: Instant::now(),
                     outcome: ActionOutcome::Failed,
-                    message: "Action worker panicked.".to_string(),
+                    message: "Action could not complete.".to_string(),
                 },
             };
 
@@ -693,12 +685,12 @@ impl App {
                 Ok(Err(error)) => ShutdownRequestResult {
                     completed_at: Instant::now(),
                     accepted: false,
-                    message: error.to_string(),
+                    message: operator_error_message(&error.to_string()),
                 },
                 Err(_) => ShutdownRequestResult {
                     completed_at: Instant::now(),
                     accepted: false,
-                    message: "Shutdown request worker panicked.".to_string(),
+                    message: "Shutdown request could not complete.".to_string(),
                 },
             };
 
@@ -748,13 +740,41 @@ fn format_action_result(result: &CommandResult) -> String {
         .as_deref()
         .filter(|value| !value.is_empty())
         .unwrap_or("action");
+    let display_name = display_name_for_command(command);
     let message = result
         .message
         .as_deref()
         .or(result.error.as_deref())
         .unwrap_or("Action completed.");
 
-    format!("{command}: {message}")
+    format!("{display_name}: {message}")
+}
+
+pub fn display_name_for_command(command: &str) -> String {
+    TuiAction::from_command_name(command)
+        .map(TuiAction::display_name)
+        .unwrap_or(command)
+        .to_string()
+}
+
+pub fn operator_error_message(error: &str) -> String {
+    let lower = error.to_lowercase();
+    if lower.contains("backend unavailable")
+        || lower.contains("connection refused")
+        || lower.contains("actively refused")
+        || lower.contains("connection timed out")
+    {
+        "Could not contact Supervisor.".to_string()
+    } else if lower.contains("could not parse supervisor")
+        || lower.contains("response=")
+        || lower.contains("json")
+    {
+        "Could not read the Supervisor response.".to_string()
+    } else if lower.contains("closed connection without a response") {
+        "Supervisor closed the connection before replying.".to_string()
+    } else {
+        error.to_string()
+    }
 }
 
 fn elapsed_label(instant: Option<Instant>, now: Instant, empty: &str) -> String {

@@ -1899,6 +1899,51 @@ Verification:
 - Safety inspection confirmed the runtime source boundaries from Phase 18G are unchanged.
 - No release-folder republish was performed because Phase 18H changed documentation only and Phase 18G had already refreshed the local release test folder.
 
+### Phase 19A - Interface wording cleanup and user-facing text hardening
+
+Status: Completed
+
+Summary:
+
+- Cleaned normal Desktop TUI and Configurator launcher wording so operator screens avoid protocol/debug terms.
+- Desktop TUI routine UI now uses `Supervisor`, `Connected`, `DISCONNECTED`, `Shut down Supervisor`, and `closing managed apps` wording.
+- Desktop TUI action status and latest-result lines now use action display names where possible instead of canonical backend command names.
+- Configurator launcher tooltips/status messages now use `opened`, `started`, `already open`, and `could not start` language.
+- Kept protocol strings, canonical command names, bridge helpers, diagnostics, and design docs technically precise where they define implementation boundaries.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/models.rs`
+- `PimaxVrcSupervisor.Tui/src/ui.rs`
+- `PimaxVrcSupervisor.ConfigEditor/Program.cs`
+- `README.md`
+- `docs/phase-18-tui-lifecycle-configurator-design.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Behavior and protocol boundaries:
+
+- No action allowlist, lifecycle protocol, `Q` behavior, TUI window-close behavior, Configurator launch behavior, SteamVR host behavior, or release layout behavior changed.
+- Internal protocol strings remain unchanged: `query-json`, `action-json`, `lifecycle-json`, `request-graceful-shutdown`, `desktop-tui-window-close`, and canonical backend command names are still used internally.
+- `force-stop-supervisor` remains blocked/unexposed from the Desktop TUI.
+
+Verification:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`: passed.
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`: passed.
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`: passed.
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`: passed.
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`: passed.
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`: passed.
+- Release-folder refresh was partial: rebuilt `PimaxVrcSupervisorTui.exe` was copied into `release\PimaxVrcSupervisor-v1.3.0-test`, but C# publish was blocked because `PimaxVrcSupervisor.exe` PID 2944 held `PimaxVrcSupervisor.dll` and could not be terminated from this shell (`taskkill` returned access denied).
+- Runtime smoke was not performed during implementation; it requires an interactive release-folder GUI/TUI session and can enter supervisor lifecycle flows.
+
+Next direction:
+
+- Phase 19B should be a runtime wording smoke pass from the release folder, with only small copy fixes if any remaining protocol terms appear in normal UI.
+
 ### Phase 17D - Backend-off consistency, neutral modal controls, action hints, and log follow
 
 Status: Completed

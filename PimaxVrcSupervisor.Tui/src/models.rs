@@ -103,6 +103,13 @@ impl TuiAction {
         }
     }
 
+    pub fn from_command_name(command: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|action| action.command_name().eq_ignore_ascii_case(command))
+    }
+
     pub fn expected_effect(self) -> &'static str {
         match self {
             Self::RestartCoreApps => "Restarts configured face-tracking applications.",

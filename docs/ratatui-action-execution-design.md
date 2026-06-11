@@ -98,6 +98,8 @@ Phase 18G adds Windows best-effort TUI terminal close handling. The handler send
 
 Phase 18H validates that best-effort path in the local release-folder runtime test. Closing the TUI window with X caused the supervisor to run Ctrl+C-equivalent cleanup, close managed apps through supervisor cleanup, and exit. This validation does not change the safety model: `Q` remains the preferred confirmed shutdown path, X-close remains unconfirmed best-effort lifecycle control, and `force-stop-supervisor` remains blocked.
 
+Phase 19A changes normal operator-facing wording only. The Desktop TUI now presents disconnected state, shutdown confirmation, action results, and Configurator launch messages with user-facing Supervisor language instead of raw protocol or backend command names. This document intentionally keeps `query-json`, `action-json`, `lifecycle-json`, canonical command names, and `force-stop-supervisor` visible because they define the safety and protocol boundaries.
+
 ## Phase 17B Implementation Status
 
 Phase 17B keeps the same action safety model but removes routine risk-category wording from the normal operator UI. Mouse-click support is implemented with original project code and maps only to existing `TuiAction` values and overlay controls. Action-card clicks open confirmation only, modal Confirm/Cancel clicks mirror keyboard behavior, and no backend command is sent without the existing confirmation step.
@@ -106,11 +108,11 @@ Phase 17B keeps the same action safety model but removes routine risk-category w
 
 Phase 17C keeps the backend action allowlist and bridge protocol unchanged, but refines desktop TUI interaction. Keyboard `1`-`6` actions remain confirmation-gated. Mouse action-card clicks start only existing `TuiAction` values immediately after the same backend connection, metadata, duplicate-command, and Base Stations On/Off conflict checks used by keyboard-confirmed actions.
 
-The confirmation modal now documents only `Enter`/`Space` or mouse Confirm for execution and `Esc` or mouse Cancel for cancellation. Backend-unavailable state overrides cached command metadata before action cards are rendered or actions are started, so cards show disabled `BACKEND OFF` state and cannot spawn workers while disconnected.
+The confirmation modal now documents only `Enter`/`Space` or mouse Confirm for execution and `Esc` or mouse Cancel for cancellation. Supervisor-disconnected state overrides cached command metadata before action cards are rendered or actions are started, so cards show disabled `DISCONNECTED` state and cannot spawn workers while disconnected.
 
 ## Phase 17D Implementation Status
 
-Phase 17D keeps the same action allowlist, bridge protocol, and backend guardrails. It makes backend-off card state authoritative across all six actions, keeps backend-down rejections as `BACKEND OFF` instead of conflict `BLOCKED`, and leaves mouse actions limited to existing `TuiAction` enum values.
+Phase 17D keeps the same action allowlist, bridge protocol, and backend guardrails. It makes disconnected card state authoritative across all six actions, keeps disconnected rejections distinct from conflict `BLOCKED`, and leaves mouse actions limited to existing `TuiAction` enum values.
 
 The modal controls remain clickable but render as neutral text. Recent Logs add live-follow mode; log navigation does not affect action safety or backend command execution.
 
@@ -130,7 +132,7 @@ Phase 17G is a rendering-only polish pass. It aligns the small `80x20` action ro
 
 ## Phase 17H Implementation Status
 
-Phase 17H is also rendering-only. It changes status/action badges to bracket text such as `[START]`, `[OK]`, and `[BACKEND OFF]`, keeps small-layout badges close to their labels, and leaves modal controls neutral. It does not change `Q` semantics, supervisor lifecycle, backend action handling, bridge protocol, tray behavior, Configurator behavior, or action allowlists.
+Phase 17H is also rendering-only. It changes status/action badges to bracket text such as `[START]`, `[OK]`, and `[BACKEND OFF]`, keeps small-layout badges close to their labels, and leaves modal controls neutral. Later display phases reserve brackets for interactive controls and use `DISCONNECTED` as the normal operator-facing disconnected state. It does not change `Q` semantics, supervisor lifecycle, backend action handling, bridge protocol, tray behavior, Configurator behavior, or action allowlists.
 
 ## Phase 17I Implementation Status
 
