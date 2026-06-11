@@ -221,6 +221,8 @@ Phase 19D replaces the old autostart checkboxes with one **Autostart mode** drop
 
 Phase 20A adds optional Desktop TUI load diagnostics. The new **Log Desktop TUI load diagnostics** checkbox follows the existing Diagnostics master toggle and is disabled by default. When enabled, the TUI reads the active config path passed by the Configurator and writes lightweight interval JSONL summaries to `PimaxVrcSupervisorTui.diagnostics.log` in the configured diagnostics folder. It does not add bridge calls, actions, lifecycle commands, launch behavior, or SteamVR behavior.
 
+Phase 20A-Hotfix makes Desktop TUI diagnostics prove file creation immediately. The TUI accepts both `--config <path>` and `--config=<path>`, expands Windows `%VAR%` tokens in the diagnostics folder, falls back to the temp diagnostics folder if the configured folder cannot be opened, writes a `desktop_tui_diagnostics_started` startup marker, and labels periodic summary records as `desktop_tui_diagnostics_summary`. Disabled diagnostics still write no TUI diagnostics lines.
+
 Confirmed actions run in the background so the TUI stays responsive. Different safe actions may run at the same time, but the same command cannot be started twice while running and Base Stations On/Off are mutually exclusive. Once shutdown is requested, normal action execution is disabled. `force-stop-supervisor` remains blocked from the TUI.
 
 Keybindings:

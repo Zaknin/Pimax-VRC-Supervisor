@@ -25,6 +25,7 @@ pub struct TuiDiagnostics {
 #[derive(Debug)]
 struct DiagnosticsInner {
     enabled: bool,
+    config_path: Option<PathBuf>,
     log_path: PathBuf,
     interval: Duration,
     interval_started_at: Instant,
@@ -72,6 +73,7 @@ impl TuiDiagnostics {
     pub fn disabled() -> Self {
         let inner = DiagnosticsInner {
             enabled: false,
+            config_path: None,
             log_path: PathBuf::new(),
             interval: DEFAULT_INTERVAL,
             interval_started_at: Instant::now(),
@@ -86,9 +88,15 @@ impl TuiDiagnostics {
         }
     }
 
-    fn enabled(config: DiagnosticsConfig) -> Self {
+    fn enabled(mut config: DiagnosticsConfig) -> Self {
+        let Some(log_path) = resolve_writable_log_path(&config.log_path) else {
+            return Self::disabled();
+        };
+        config.log_path = log_path;
+
         let inner = DiagnosticsInner {
             enabled: true,
+            config_path: Some(config.config_path),
             log_path: config.log_path,
             interval: config.interval,
             interval_started_at: Instant::now(),
@@ -96,11 +104,13 @@ impl TuiDiagnostics {
             counters: DiagnosticsCounters::default(),
         };
 
-        Self {
+        let diagnostics = Self {
             handle: DiagnosticsHandle {
                 inner: Arc::new(Mutex::new(inner)),
             },
-        }
+        };
+        diagnostics.write_startup_marker();
+        diagnostics
     }
 
     pub fn handle(&self) -> DiagnosticsHandle {
@@ -133,6 +143,10 @@ impl TuiDiagnostics {
 
     pub fn maybe_write(&self, now: Instant) {
         self.handle.maybe_write(now);
+    }
+
+    fn write_startup_marker(&self) {
+        self.handle.write_startup_marker();
     }
 }
 
@@ -221,13 +235,38 @@ impl DiagnosticsHandle {
             return;
         };
 
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
+        let _ = append_line(&path, &summary);
+    }
 
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-            let _ = writeln!(file, "{summary}");
-        }
+    pub fn write_startup_marker(&self) {
+        let marker = {
+            let Ok(inner) = self.inner.lock() else {
+                return;
+            };
+
+            if !inner.enabled {
+                return;
+            }
+
+            let marker = json!({
+                "event": "desktop_tui_diagnostics_started",
+                "config_path": inner
+                    .config_path
+                    .as_ref()
+                    .map(path_to_string)
+                    .unwrap_or_default(),
+                "log_path": path_to_string(&inner.log_path),
+                "interval_seconds": inner.interval.as_secs()
+            })
+            .to_string();
+            Some((inner.log_path.clone(), marker))
+        };
+
+        let Some((path, marker)) = marker else {
+            return;
+        };
+
+        let _ = append_line(&path, &marker);
     }
 
     fn with_inner(&self, action: impl FnOnce(&mut DiagnosticsInner)) {
@@ -251,6 +290,7 @@ impl DiagnosticsInner {
         };
 
         json!({
+            "event": "desktop_tui_diagnostics_summary",
             "interval_seconds": elapsed.as_secs_f64(),
             "pid": std::process::id(),
             "connected": self.connected,
@@ -274,21 +314,29 @@ impl DiagnosticsInner {
 #[derive(Debug)]
 struct DiagnosticsConfig {
     enabled: bool,
+    config_path: PathBuf,
     interval: Duration,
     log_path: PathBuf,
 }
 
 fn load_config(path: &Path) -> Option<DiagnosticsConfig> {
     let text = fs::read_to_string(path).ok()?;
+    let text = strip_json_line_comments(text.trim_start_matches('\u{feff}'));
     let root = serde_json::from_str::<Value>(&text).ok()?;
-    let enabled = root
-        .get("DiagnosticsLogDesktopTui")
+    let master_enabled = root
+        .get("DiagnosticsEnabled")
         .and_then(Value::as_bool)
-        .unwrap_or(false);
+        .unwrap_or(true);
+    let enabled = master_enabled
+        && root
+            .get("DiagnosticsLogDesktopTui")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
 
     if !enabled {
         return Some(DiagnosticsConfig {
             enabled: false,
+            config_path: path.to_path_buf(),
             interval: DEFAULT_INTERVAL,
             log_path: PathBuf::new(),
         });
@@ -304,11 +352,13 @@ fn load_config(path: &Path) -> Option<DiagnosticsConfig> {
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(expand_windows_env_vars)
+        .filter(|value| !value.contains('%'))
         .map(PathBuf::from)
         .unwrap_or_else(default_diagnostics_dir);
 
     Some(DiagnosticsConfig {
         enabled,
+        config_path: path.to_path_buf(),
         interval: Duration::from_secs(interval_seconds),
         log_path: log_directory.join(LOG_FILE_NAME),
     })
@@ -322,6 +372,13 @@ where
     while let Some(arg) = args.next() {
         if arg == "--config" {
             return args.next().map(PathBuf::from);
+        }
+
+        if let Some(value) = arg
+            .to_str()
+            .and_then(|value| value.strip_prefix("--config="))
+        {
+            return Some(PathBuf::from(value));
         }
     }
 
@@ -342,6 +399,40 @@ where
 
 fn default_diagnostics_dir() -> PathBuf {
     std::env::temp_dir().join("PimaxVrcSupervisorDiagnostics")
+}
+
+fn resolve_writable_log_path(configured_path: &Path) -> Option<PathBuf> {
+    if can_append_to_path(configured_path) {
+        return Some(configured_path.to_path_buf());
+    }
+
+    let fallback_path = default_diagnostics_dir().join(LOG_FILE_NAME);
+    if fallback_path != configured_path && can_append_to_path(&fallback_path) {
+        Some(fallback_path)
+    } else {
+        None
+    }
+}
+
+fn can_append_to_path(path: &Path) -> bool {
+    append_line(path, "").is_ok()
+}
+
+fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    if line.is_empty() {
+        return Ok(());
+    }
+
+    writeln!(file, "{line}")
+}
+
+fn path_to_string(path: &PathBuf) -> String {
+    path.display().to_string()
 }
 
 fn expand_windows_env_vars(value: &str) -> String {
@@ -372,6 +463,48 @@ fn expand_windows_env_vars(value: &str) -> String {
             output.push_str(&name);
             output.push('%');
         }
+    }
+
+    output
+}
+
+fn strip_json_line_comments(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        if in_string {
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if ch == '"' {
+            in_string = true;
+            output.push(ch);
+            continue;
+        }
+
+        if ch == '/' && chars.peek().is_some_and(|next| *next == '/') {
+            chars.next();
+            for next in chars.by_ref() {
+                if next == '\n' {
+                    output.push('\n');
+                    break;
+                }
+            }
+            continue;
+        }
+
+        output.push(ch);
     }
 
     output

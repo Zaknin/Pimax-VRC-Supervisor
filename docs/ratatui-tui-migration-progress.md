@@ -2123,7 +2123,53 @@ Verification:
 
 Next direction:
 
-- Phase 20B should perform a focused runtime smoke of Desktop TUI diagnostics from the refreshed release folder, including enabled JSONL write and disabled no-new-lines behavior.
+- Phase 20A-Hotfix should make Desktop TUI diagnostics create a startup marker immediately when enabled.
+
+### Phase 20A-Hotfix - Fix Desktop TUI diagnostics log creation
+
+Status: Completed
+
+Summary:
+
+- Hardened Desktop TUI diagnostics file creation after runtime testing showed supervisor diagnostics working but no `PimaxVrcSupervisorTui.diagnostics.log`.
+- Root cause addressed: the Rust TUI diagnostics reader used strict JSON parsing against the project’s commented config format and did not write a startup marker before the first interval.
+- Added support for both `--config <path>` and `--config=<path>`.
+- Kept no-argument config fallback order: config beside `PimaxVrcSupervisorTui.exe`, then current working directory, then diagnostics disabled.
+- Kept effective enable logic aligned with Configurator convention: `DiagnosticsLogDesktopTui=true` enables TUI diagnostics unless an optional/manual `DiagnosticsEnabled=false` is present.
+- Missing `DiagnosticsLogDesktopTui`, missing config, unreadable config, or malformed config still disables TUI diagnostics silently.
+- Added immediate startup marker writes with event `desktop_tui_diagnostics_started`.
+- Added event label `desktop_tui_diagnostics_summary` to periodic summary lines.
+- Hardened Windows-style diagnostics folder expansion for `%TEMP%`, `%TMP%`, `%USERPROFILE%`, and generic `%NAME%`.
+- Added configured-folder open check and one fallback to `std::env::temp_dir()\PimaxVrcSupervisorDiagnostics`.
+- Disabled diagnostics write no startup marker, no summary lines, and create no diagnostics file solely by launching the TUI.
+
+Behavior and protocol boundaries:
+
+- No `query-json`, `action-json`, `lifecycle-json`, bridge payload, action allowlist, `force-stop-supervisor` blocking, Q shutdown, X-close shutdown, Launch Supervisor behavior, Autostart dropdown behavior, SteamVR behavior, or cleanup behavior changed.
+- No CPU/RAM/GPU/thread/handle/terminal-host process sensors were added; those remain deferred to a later diagnostics phase after file creation is confirmed.
+
+Files changed:
+
+- `PimaxVrcSupervisor.Tui/src/diagnostics.rs`
+- `README.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Verification:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`: passed.
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`: passed.
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`: passed.
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`: passed.
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`: passed.
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`: passed.
+- Release-folder refresh: complete. All three C# projects published to `release\PimaxVrcSupervisor-v1.3.0-test`, and the rebuilt `PimaxVrcSupervisorTui.exe` was copied into the same folder.
+- Runtime smoke: passed with a temporary config and no supervisor. Enabled mode created `PimaxVrcSupervisorTui.diagnostics.log` with one `desktop_tui_diagnostics_started` marker and `desktop_tui_diagnostics_summary` lines. Disabled mode kept the same file timestamp and line count after relaunch.
+- Regression smoke for full Configurator launch and supervisor shutdown flows was not performed during implementation because it can enter local supervisor lifecycle and VR/session cleanup paths.
+
+Next direction:
+
+- Phase 20B should add richer process/load metrics only after the basic Desktop TUI diagnostics log is confirmed in runtime testing.
 
 ### Phase 17D - Backend-off consistency, neutral modal controls, action hints, and log follow
 

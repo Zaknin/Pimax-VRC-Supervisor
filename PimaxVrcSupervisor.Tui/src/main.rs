@@ -37,6 +37,8 @@ enum Shortcut {
 fn main() -> Result<()> {
     color_eyre::install()?;
 
+    let diagnostics = diagnostics::TuiDiagnostics::from_args(std::env::args_os());
+
     let (console_close_guard, console_close_error) = match console_close::install() {
         Ok(guard) => (Some(guard), None),
         Err(error) => (
@@ -57,7 +59,12 @@ fn main() -> Result<()> {
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    let result = run(&mut terminal, mouse_capture_error, console_close_error);
+    let result = run(
+        &mut terminal,
+        mouse_capture_error,
+        console_close_error,
+        diagnostics,
+    );
 
     restore_terminal(&mut terminal)?;
 
@@ -81,8 +88,8 @@ fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     mouse_capture_error: Option<String>,
     console_close_error: Option<String>,
+    diagnostics: diagnostics::TuiDiagnostics,
 ) -> Result<()> {
-    let diagnostics = diagnostics::TuiDiagnostics::from_args(std::env::args_os());
     let mut app = App::new(diagnostics);
     app.set_mouse_status(
         mouse_capture_error.is_none(),

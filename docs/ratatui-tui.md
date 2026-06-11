@@ -30,6 +30,8 @@ Phase 19D replaces the two Configurator autostart checkboxes with one **Autostar
 
 Phase 20A adds optional Desktop TUI load diagnostics. The Configurator passes the selected config path to the TUI, and the TUI reads only `DiagnosticsLogDesktopTui`, `DiagnosticsSummaryIntervalSeconds`, and `DiagnosticsLogDirectory`. Diagnostics are disabled by default; when enabled they append interval JSONL summaries to `PimaxVrcSupervisorTui.diagnostics.log` without adding bridge calls, UI text, actions, lifecycle commands, or SteamVR behavior.
 
+Phase 20A-Hotfix makes Desktop TUI diagnostics create the log immediately when enabled. The TUI accepts both `--config <path>` and `--config=<path>`, expands Windows-style `%VAR%` diagnostics folders, falls back to the temp diagnostics folder when the configured folder cannot be opened, writes a `desktop_tui_diagnostics_started` startup marker, and labels periodic summary records with `desktop_tui_diagnostics_summary`.
+
 ## Purpose
 
 The TUI gives a desktop/operator view of the supervisor with tightly limited control behavior. It displays:
@@ -97,7 +99,7 @@ From a release folder that contains `PimaxVrcSupervisorTui.exe`:
 .\PimaxVrcSupervisorTui.exe
 ```
 
-The Configurator passes `--config <selected config path>` when it launches the TUI so optional TUI diagnostics follow the active config. If the TUI is started manually without `--config`, it looks for `supervisor.config.json` beside the TUI executable, then in the current directory. Missing or unreadable config disables TUI diagnostics silently.
+The Configurator passes `--config <selected config path>` when it launches the TUI so optional TUI diagnostics follow the active config. The TUI also accepts `--config=<selected config path>`. If the TUI is started manually without a config argument, it looks for `supervisor.config.json` beside the TUI executable, then in the current directory. Missing or unreadable config disables TUI diagnostics silently.
 
 If the supervisor is not running, the TUI shows `DISCONNECTED` and keeps retrying on periodic or manual refresh.
 
@@ -231,7 +233,9 @@ Do not commit generated `target/` or `release/` output. Keep `PimaxVrcSupervisor
 
 Desktop TUI diagnostics are optional and disabled by default with `DiagnosticsLogDesktopTui = false`. The Configurator shows **Log Desktop TUI load diagnostics** in the Diagnostics section, controlled by the same **Enable Diagnostics** master checkbox as the existing diagnostics options. Turning the master off disables the control visually but does not clear its live checkbox state; saving writes the option as disabled while the master is off.
 
-When enabled, the TUI appends interval JSONL summaries to `PimaxVrcSupervisorTui.diagnostics.log` in `DiagnosticsLogDirectory` using `DiagnosticsSummaryIntervalSeconds` when valid, or 20 seconds otherwise. Summaries include render, refresh, input wakeup, bridge call/failure/timeout/timing, action-start, lifecycle-request, connection-change, PID, and connected-state counters. Payloads, full bridge responses, command contents, and per-frame records are not logged. Extra process CPU/RAM/thread metrics are intentionally skipped for now to avoid new dependencies or platform-specific code.
+When enabled, the TUI appends JSONL records to `PimaxVrcSupervisorTui.diagnostics.log` in `DiagnosticsLogDirectory` using `DiagnosticsSummaryIntervalSeconds` when valid, or 20 seconds otherwise. It writes one `desktop_tui_diagnostics_started` marker at startup, then `desktop_tui_diagnostics_summary` records after each interval. Summaries include render, refresh, input wakeup, bridge call/failure/timeout/timing, action-start, lifecycle-request, connection-change, PID, and connected-state counters. Payloads, full bridge responses, command contents, and per-frame records are not logged. Extra process CPU/RAM/thread metrics are intentionally skipped for now to avoid new dependencies or platform-specific code.
+
+Diagnostics folder paths support Windows-style environment variables such as `%TEMP%`, `%TMP%`, `%USERPROFILE%`, and generic `%NAME%`. If the configured folder cannot be created or opened, the TUI attempts `std::env::temp_dir()\PimaxVrcSupervisorDiagnostics`. If both attempts fail, diagnostics stay silent and the TUI continues.
 
 ## Action Safety Design
 
