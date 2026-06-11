@@ -1,6 +1,7 @@
 mod app;
 mod bridge;
 mod console_close;
+mod diagnostics;
 mod models;
 mod theme;
 mod ui;
@@ -81,7 +82,8 @@ fn run(
     mouse_capture_error: Option<String>,
     console_close_error: Option<String>,
 ) -> Result<()> {
-    let mut app = App::new();
+    let diagnostics = diagnostics::TuiDiagnostics::from_args(std::env::args_os());
+    let mut app = App::new(diagnostics);
     app.set_mouse_status(
         mouse_capture_error.is_none(),
         mouse_capture_error.map(|error| format!("Mouse disabled; keyboard-only mode: {error}")),
@@ -102,8 +104,11 @@ fn run(
         }
 
         terminal.draw(|frame| ui::render(frame, &mut app))?;
+        app.record_render();
+        app.maybe_write_diagnostics(Instant::now());
 
         if event::poll(app.poll_timeout(Instant::now()))? {
+            app.record_input_wakeup();
             match event::read()? {
                 Event::Key(key) => {
                     if key.kind != KeyEventKind::Press {
@@ -122,6 +127,8 @@ fn run(
                 _ => {}
             }
         }
+
+        app.maybe_write_diagnostics(Instant::now());
     }
 
     Ok(())

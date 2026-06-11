@@ -11,6 +11,7 @@ use ratatui::layout::Rect;
 use crate::{
     bridge::SupervisorBridge,
     console_close,
+    diagnostics::{DiagnosticsHandle, TuiDiagnostics},
     models::{
         CommandResult, CommandSummary, LogLine, StatusSummary, TuiAction, commands_from_response,
         logs_from_response, status_from_response,
@@ -108,6 +109,7 @@ pub struct App {
     pub mouse_notice: Option<String>,
     pub console_close_enabled: bool,
     pub console_close_notice: Option<String>,
+    diagnostics: TuiDiagnostics,
     action_result_tx: Sender<CompletedActionResult>,
     action_result_rx: Receiver<CompletedActionResult>,
     shutdown_result_tx: Sender<ShutdownRequestResult>,
@@ -115,10 +117,11 @@ pub struct App {
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(diagnostics: TuiDiagnostics) -> Self {
         let (action_result_tx, action_result_rx) = channel();
         let (shutdown_result_tx, shutdown_result_rx) = channel();
         Self::with_channels(
+            diagnostics,
             action_result_tx,
             action_result_rx,
             shutdown_result_tx,
@@ -127,6 +130,7 @@ impl App {
     }
 
     fn with_channels(
+        diagnostics: TuiDiagnostics,
         action_result_tx: Sender<CompletedActionResult>,
         action_result_rx: Receiver<CompletedActionResult>,
         shutdown_result_tx: Sender<ShutdownRequestResult>,
@@ -164,6 +168,7 @@ impl App {
             mouse_notice: None,
             console_close_enabled: false,
             console_close_notice: None,
+            diagnostics,
             action_result_tx,
             action_result_rx,
             shutdown_result_tx,
@@ -178,8 +183,10 @@ impl App {
 
         self.refresh_in_progress = true;
         self.last_attempt = Some(now);
+        self.diagnostics.record_refresh();
 
-        let bridge = SupervisorBridge::default();
+        let bridge = SupervisorBridge::with_diagnostics(self.diagnostics_handle());
+        let previous_connection = self.connection;
 
         match Self::load(&bridge) {
             Ok((status, commands, logs)) => {
@@ -196,6 +203,11 @@ impl App {
                 self.last_error = Some(error.to_string());
                 self.last_error_at = Some(now);
             }
+        }
+
+        if previous_connection != self.connection {
+            self.diagnostics
+                .record_connection(self.connection == ConnectionState::Connected);
         }
 
         self.refresh_in_progress = false;
@@ -427,6 +439,7 @@ impl App {
             command: action.command_name().to_string(),
             started_at: now,
         });
+        self.diagnostics.record_action_started();
         self.spawn_action_worker(action);
     }
 
@@ -465,7 +478,24 @@ impl App {
         self.shutdown_message = Some("Shutdown requested. Closing managed apps...".to_string());
         self.shutdown_error = None;
         console_close::mark_shutdown_requested();
+        self.diagnostics.record_lifecycle_request();
         self.spawn_shutdown_worker();
+    }
+
+    pub fn record_render(&self) {
+        self.diagnostics.record_render();
+    }
+
+    pub fn record_input_wakeup(&self) {
+        self.diagnostics.record_input_wakeup();
+    }
+
+    pub fn maybe_write_diagnostics(&self, now: Instant) {
+        self.diagnostics.maybe_write(now);
+    }
+
+    fn diagnostics_handle(&self) -> DiagnosticsHandle {
+        self.diagnostics.handle()
     }
 
     pub fn should_exit_after_shutdown(&mut self, now: Instant) -> bool {
@@ -636,10 +666,11 @@ impl App {
 
     fn spawn_action_worker(&self, action: TuiAction) {
         let sender = self.action_result_tx.clone();
+        let diagnostics = self.diagnostics_handle();
         thread::spawn(move || {
             let command = action.command_name().to_string();
             let result = catch_unwind(AssertUnwindSafe(|| {
-                let bridge = SupervisorBridge::default();
+                let bridge = SupervisorBridge::with_diagnostics(diagnostics);
                 bridge.execute_tui_action(action)
             }));
 
@@ -670,9 +701,10 @@ impl App {
 
     fn spawn_shutdown_worker(&self) {
         let sender = self.shutdown_result_tx.clone();
+        let diagnostics = self.diagnostics_handle();
         thread::spawn(move || {
             let result = catch_unwind(AssertUnwindSafe(|| {
-                let bridge = SupervisorBridge::default();
+                let bridge = SupervisorBridge::with_diagnostics(diagnostics);
                 bridge.request_graceful_shutdown()
             }));
 

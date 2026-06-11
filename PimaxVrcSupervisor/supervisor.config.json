@@ -263,6 +263,9 @@
   // Write passive SteamVR dashboard host diagnostics to a text file. Leave off unless measuring performance.
   "DiagnosticsLogSteamVrOverlay": false,
 
+  // Write lightweight Desktop TUI load and refresh diagnostics to a text file. Leave off unless measuring performance.
+  "DiagnosticsLogDesktopTui": false,
+
   // Write supervisor debug events to a separate text file.
   "DiagnosticsDebugSupervisor": false,
 

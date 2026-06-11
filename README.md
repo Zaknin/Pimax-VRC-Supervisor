@@ -219,6 +219,8 @@ Phase 19C moves `Use Desktop TUI as default interface` from the footer into the 
 
 Phase 19D replaces the old autostart checkboxes with one **Autostart mode** dropdown: `Off`, `Start in CLI mode when SteamVR is running`, or `SteamVR Overlay`. The UI still writes the existing runtime config fields, and the **Startup** section keeps the Desktop TUI default-interface and secondary-monitor options.
 
+Phase 20A adds optional Desktop TUI load diagnostics. The new **Log Desktop TUI load diagnostics** checkbox follows the existing Diagnostics master toggle and is disabled by default. When enabled, the TUI reads the active config path passed by the Configurator and writes lightweight interval JSONL summaries to `PimaxVrcSupervisorTui.diagnostics.log` in the configured diagnostics folder. It does not add bridge calls, actions, lifecycle commands, launch behavior, or SteamVR behavior.
+
 Confirmed actions run in the background so the TUI stays responsive. Different safe actions may run at the same time, but the same command cannot be started twice while running and Base Stations On/Off are mutually exclusive. Once shutdown is requested, normal action execution is disabled. `force-stop-supervisor` remains blocked from the TUI.
 
 Keybindings:
@@ -306,6 +308,7 @@ The release includes a commented `supervisor.config.json`. Important settings:
 | `RestartDelayAfterReconnectSeconds` | `10` | Stability wait before restarting apps after Pimax reconnect. |
 | `DiagnosticsLogSupervisor` | `false` | Writes passive supervisor performance diagnostics when enabled. |
 | `DiagnosticsLogSteamVrOverlay` | `false` | Writes passive SteamVR dashboard host diagnostics when enabled. |
+| `DiagnosticsLogDesktopTui` | `false` | Writes lightweight Desktop TUI load, refresh, bridge timing, input, action, lifecycle, and connection summary counters when enabled. |
 | `DiagnosticsDebugSupervisor` | `false` | Writes supervisor debug-event logs. |
 | `DiagnosticsDebugSteamVrOverlay` | `false` | Writes SteamVR overlay debug-event logs. |
 | `DiagnosticsDebugSteamVrPointer` | `false` | Draws the visible SteamVR overlay pointer marker for hover hit-test troubleshooting when overlay debug logging is enabled. |

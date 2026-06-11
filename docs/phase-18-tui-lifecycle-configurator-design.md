@@ -111,6 +111,14 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 - The Startup section keeps `Use Desktop TUI as default interface` and `Turn off secondary monitors during headset sessions`.
 - No supervisor runtime schema, protocol, TUI behavior, SteamVR host behavior, action allowlist, lifecycle behavior, or cleanup behavior changed.
 
+## Phase 20A Desktop TUI Diagnostics Status
+
+- The Configurator Diagnostics section now includes `Log Desktop TUI load diagnostics`, disabled by default.
+- The option follows the existing Diagnostics master-toggle behavior and is saved to the active supervisor config as `DiagnosticsLogDesktopTui`.
+- Configurator-launched TUI processes receive the selected config path so the TUI can read only the Desktop TUI diagnostics flag, summary interval, and diagnostics folder.
+- When enabled, the TUI writes lightweight interval JSONL summaries to `PimaxVrcSupervisorTui.diagnostics.log`; when disabled or when config cannot be read, it writes nothing.
+- This is observability only. It does not change launch mode, shutdown behavior, `query-json`, `action-json`, `lifecycle-json`, action allowlists, SteamVR host behavior, or cleanup behavior.
+
 ## Phase 18D Hardening Status
 
 - The primary TUI shutdown flow remains the same confirmed `Q` workflow; no close-TUI-only dashboard path was restored.

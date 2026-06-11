@@ -1,13 +1,16 @@
 use std::{
     io::{BufRead, BufReader, Write},
     net::{SocketAddr, TcpStream},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use color_eyre::eyre::{Result, eyre};
 use serde_json::{Value, json};
 
-use crate::models::{CommandResult, QueryResponse, TuiAction};
+use crate::{
+    diagnostics::DiagnosticsHandle,
+    models::{CommandResult, QueryResponse, TuiAction},
+};
 
 pub const BACKEND_HOST: &str = "127.0.0.1";
 pub const BACKEND_PORT: u16 = 37957;
@@ -17,6 +20,7 @@ pub const ACTION_READ_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct SupervisorBridge {
     endpoint: SocketAddr,
+    diagnostics: Option<DiagnosticsHandle>,
 }
 
 impl Default for SupervisorBridge {
@@ -25,6 +29,7 @@ impl Default for SupervisorBridge {
             endpoint: backend_endpoint()
                 .parse()
                 .expect("static endpoint is valid"),
+            diagnostics: None,
         }
     }
 }
@@ -34,6 +39,13 @@ pub fn backend_endpoint() -> String {
 }
 
 impl SupervisorBridge {
+    pub fn with_diagnostics(diagnostics: DiagnosticsHandle) -> Self {
+        Self {
+            diagnostics: Some(diagnostics),
+            ..Self::default()
+        }
+    }
+
     pub fn query_status(&self) -> Result<QueryResponse> {
         self.query(json!({ "resource": "status" }))
     }
@@ -116,6 +128,23 @@ impl SupervisorBridge {
     }
 
     fn send_line(&self, command: &str, read_write_timeout: Duration) -> Result<String> {
+        let started = Instant::now();
+        let result = self.send_line_inner(command, read_write_timeout);
+        if let Some(diagnostics) = &self.diagnostics {
+            diagnostics.record_bridge_call(
+                started.elapsed(),
+                result.is_ok(),
+                result
+                    .as_ref()
+                    .err()
+                    .is_some_and(|error| is_timeout_error(&error.to_string())),
+            );
+        }
+
+        result
+    }
+
+    fn send_line_inner(&self, command: &str, read_write_timeout: Duration) -> Result<String> {
         let mut stream = TcpStream::connect_timeout(&self.endpoint, CONNECT_TIMEOUT)
             .map_err(|error| eyre!("backend unavailable at {}: {error}", self.endpoint))?;
 
@@ -134,4 +163,9 @@ impl SupervisorBridge {
 
         Ok(response.trim_end_matches(['\r', '\n']).to_string())
     }
+}
+
+fn is_timeout_error(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("timed out") || message.contains("timeout") || message.contains("would block")
 }

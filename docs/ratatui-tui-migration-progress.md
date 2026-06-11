@@ -2061,7 +2061,69 @@ Verification:
 
 Next direction:
 
-- Phase 19E should be a release-folder runtime smoke pass for the Autostart dropdown and primary Configurator launch interface if the release refresh is complete.
+- Phase 20A adds optional Desktop TUI load diagnostics.
+
+### Phase 20A - Add Desktop TUI load diagnostics option
+
+Status: Completed
+
+Summary:
+
+- Added optional Desktop TUI load diagnostics, disabled by default.
+- Added `DiagnosticsLogDesktopTui` to the supervisor config model and default `supervisor.config.json`.
+- Added Configurator checkbox `Log Desktop TUI load diagnostics` in the existing Diagnostics section.
+- The checkbox follows the existing Diagnostics master-toggle pattern: master off disables the control visually but does not clear its live checked state; saving writes the option as disabled while the master is off.
+- The Diagnostics master toggle is considered enabled when any diagnostics option is checked, including Desktop TUI diagnostics.
+- Configurator-launched TUI processes now receive `--config <selected config path>` so TUI diagnostics follow the active config.
+- The TUI accepts optional `--config`; without it, it falls back to `supervisor.config.json` beside the TUI executable and then the current directory.
+
+Rust TUI diagnostics behavior:
+
+- Added `PimaxVrcSupervisor.Tui/src/diagnostics.rs`.
+- The TUI reads only `DiagnosticsLogDesktopTui`, `DiagnosticsSummaryIntervalSeconds`, and `DiagnosticsLogDirectory`.
+- Missing or unreadable config disables TUI diagnostics silently.
+- Disabled diagnostics create no file, write no records, add no bridge calls, and show no UI text.
+- Enabled diagnostics append JSONL interval summaries to `PimaxVrcSupervisorTui.diagnostics.log` in the configured diagnostics folder.
+- Summaries include `interval_seconds`, `pid`, `connected`, `renders`, `refreshes`, `input_wakeups`, `bridge_calls`, `bridge_failures`, `bridge_timeouts`, `bridge_ms_min`, `bridge_ms_avg`, `bridge_ms_max`, `actions_started`, `lifecycle_requests`, and `connection_changes`.
+- Process CPU/RAM/thread metrics were intentionally skipped because collecting them cleanly would require additional platform-specific code or a new dependency.
+
+Files changed:
+
+- `PimaxVrcSupervisor/Program.cs`
+- `PimaxVrcSupervisor/supervisor.config.json`
+- `PimaxVrcSupervisor.ConfigEditor/Program.cs`
+- `PimaxVrcSupervisor.Tui/src/app.rs`
+- `PimaxVrcSupervisor.Tui/src/bridge.rs`
+- `PimaxVrcSupervisor.Tui/src/diagnostics.rs`
+- `PimaxVrcSupervisor.Tui/src/main.rs`
+- `README.md`
+- `docs/gui/basics.md`
+- `docs/phase-18-tui-lifecycle-configurator-design.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+- `docs/reference/configuration-fields.md`
+
+Behavior and protocol boundaries:
+
+- No new bridge command, generic executor, TUI action, lifecycle command, Q/X-close behavior, action allowlist, SteamVR host behavior, Autostart mode behavior, launch behavior, or cleanup behavior was added.
+- `bridge.rs` instrumentation observes existing bridge calls only; request verbs and payloads remain unchanged.
+- `force-stop-supervisor` remains blocked/unexposed from the Desktop TUI.
+
+Verification:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`: passed.
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`: passed.
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`: passed.
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`: passed.
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`: passed.
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`: passed.
+- Release-folder refresh: complete. All three C# projects published to `release\PimaxVrcSupervisor-v1.3.0-test`, and `PimaxVrcSupervisorTui.exe` was copied into the same folder.
+- Runtime smoke: not performed during implementation because it requires an interactive release-folder Configurator/TUI session and may enter supervisor lifecycle flows.
+
+Next direction:
+
+- Phase 20B should perform a focused runtime smoke of Desktop TUI diagnostics from the refreshed release folder, including enabled JSONL write and disabled no-new-lines behavior.
 
 ### Phase 17D - Backend-off consistency, neutral modal controls, action hints, and log follow
 

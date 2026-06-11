@@ -8998,6 +8998,7 @@ internal sealed class SupervisorConfig
     public int DeviceProbeTimeoutSeconds { get; init; } = 10;
     public bool DiagnosticsLogSupervisor { get; init; }
     public bool DiagnosticsLogSteamVrOverlay { get; init; }
+    public bool DiagnosticsLogDesktopTui { get; init; }
     public bool DiagnosticsDebugSupervisor { get; init; }
     public bool DiagnosticsDebugSteamVrOverlay { get; init; }
     public bool DiagnosticsVerbose { get; init; }

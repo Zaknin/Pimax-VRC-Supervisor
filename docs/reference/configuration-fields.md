@@ -60,6 +60,7 @@ Complete reference for all fields in `supervisor.config.json`.
 | `DeviceProbeTimeoutSeconds` | int | `10` | Device query timeout. |
 | `DiagnosticsLogSupervisor` | bool | `false` | Write passive supervisor performance diagnostics to a text file. |
 | `DiagnosticsLogSteamVrOverlay` | bool | `false` | Write passive SteamVR dashboard host diagnostics to a text file. |
+| `DiagnosticsLogDesktopTui` | bool | `false` | Write lightweight Desktop TUI render, refresh, input, bridge timing, action, lifecycle, and connection summary diagnostics to a text file. |
 | `DiagnosticsDebugSupervisor` | bool | `false` | Write supervisor debug-event logs. |
 | `DiagnosticsDebugSteamVrOverlay` | bool | `false` | Write SteamVR overlay debug-event logs. |
 | `DiagnosticsDebugSteamVrPointer` | bool | `false` | Draw the visible SteamVR overlay pointer marker for hover hit-test troubleshooting when overlay debug logging is enabled. |

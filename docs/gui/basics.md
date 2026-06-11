@@ -28,6 +28,7 @@ Diagnostics are off by default and are intended for short performance captures.
 | Enable Diagnostics | GUI master switch | Enables the diagnostics controls in the editor. When off, all diagnostics and debug options are saved as disabled. |
 | Log supervisor diagnostics | `DiagnosticsLogSupervisor` | Writes supervisor CPU, memory, loop, command, process detection, app, and base-station timing summaries. |
 | Log SteamVR overlay diagnostics | `DiagnosticsLogSteamVrOverlay` | Writes dashboard host visibility, loop, refresh, render, D3D upload, and texture submit timing summaries. |
+| Log Desktop TUI load diagnostics | `DiagnosticsLogDesktopTui` | Writes Desktop TUI render, refresh, input, bridge timing, action, lifecycle, and connection summary counters. |
 | Log Supervisor Debug | `DiagnosticsDebugSupervisor` | Writes supervisor debug-event logs when diagnostics are enabled in the GUI. |
 | Log SteamVR Overlay Debug | `DiagnosticsDebugSteamVrOverlay` | Writes overlay debug-event logs when diagnostics are enabled in the GUI. |
 | Show SteamVR overlay pointer marker | `DiagnosticsDebugSteamVrPointer` | Draws the visible overlay pointer marker for hover hit-test troubleshooting when overlay debug logging is enabled. |

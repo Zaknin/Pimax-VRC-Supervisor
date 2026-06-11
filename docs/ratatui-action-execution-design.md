@@ -102,6 +102,8 @@ Phase 19A changes normal operator-facing wording only. The Desktop TUI now prese
 
 Phase 19B changes only the Configurator launch surface. `Use Desktop TUI as default interface` is enabled by default, so `Launch Supervisor` opens the hidden Supervisor plus Desktop TUI workflow unless the user unchecks it for the classic visible console. This does not change `query-json`, `action-json`, `lifecycle-json`, the action allowlist, or TUI shutdown semantics.
 
+Phase 20A adds optional Desktop TUI load diagnostics. This is observation only: when `DiagnosticsLogDesktopTui` is enabled, the TUI writes interval JSONL counters for render, refresh, input, bridge timing/failure, action-start, lifecycle-request, and connection-change activity. It does not log payloads or responses, does not add bridge calls, and does not change `query-json`, `action-json`, `lifecycle-json`, the action allowlist, or shutdown semantics.
+
 ## Phase 17B Implementation Status
 
 Phase 17B keeps the same action safety model but removes routine risk-category wording from the normal operator UI. Mouse-click support is implemented with original project code and maps only to existing `TuiAction` values and overlay controls. Action-card clicks open confirmation only, modal Confirm/Cancel clicks mirror keyboard behavior, and no backend command is sent without the existing confirmation step.

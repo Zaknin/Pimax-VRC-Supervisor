@@ -110,6 +110,7 @@ internal sealed class ConfigEditorForm : Form
     private readonly TextBox _pimaxServiceLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly CheckBox _diagnosticsLogSupervisorCheckBox = new ThemedCheckBox { Text = "Log supervisor diagnostics", AutoSize = true };
     private readonly CheckBox _diagnosticsLogSteamVrOverlayCheckBox = new ThemedCheckBox { Text = "Log SteamVR overlay diagnostics", AutoSize = true };
+    private readonly CheckBox _diagnosticsLogDesktopTuiCheckBox = new ThemedCheckBox { Text = "Log Desktop TUI load diagnostics", AutoSize = true };
     private readonly CheckBox _diagnosticsDebugSupervisorCheckBox = new ThemedCheckBox { Text = "Log Supervisor Debug", AutoSize = true };
     private readonly CheckBox _diagnosticsDebugSteamVrOverlayCheckBox = new ThemedCheckBox { Text = "Log SteamVR Overlay Debug", AutoSize = true };
     private readonly CheckBox _diagnosticsEnabledCheckBox = new ThemedCheckBox { Text = "Enable Diagnostics", AutoSize = true };
@@ -424,6 +425,7 @@ internal sealed class ConfigEditorForm : Form
         var diagnosticsEnabled = _diagnosticsEnabledCheckBox.Checked;
         _diagnosticsLogSupervisorCheckBox.Enabled = diagnosticsEnabled;
         _diagnosticsLogSteamVrOverlayCheckBox.Enabled = diagnosticsEnabled;
+        _diagnosticsLogDesktopTuiCheckBox.Enabled = diagnosticsEnabled;
         _diagnosticsDebugSupervisorCheckBox.Enabled = diagnosticsEnabled;
         _diagnosticsDebugSteamVrOverlayCheckBox.Enabled = diagnosticsEnabled;
         _diagnosticsVerboseCheckBox.Enabled = diagnosticsEnabled;
@@ -510,6 +512,7 @@ internal sealed class ConfigEditorForm : Form
         AddFullWidth(layout, _diagnosticsEnabledCheckBox, "Checked enables diagnostic and debug settings in this editor. Unchecked saves all diagnostic and debug options as disabled.");
         AddFullWidth(layout, _diagnosticsLogSupervisorCheckBox, ToolTipWithConfigKey("Write periodic supervisor CPU, memory, loop, process detection, command, app, and base-station timing diagnostics to a text file.", "DiagnosticsLogSupervisor"));
         AddFullWidth(layout, _diagnosticsLogSteamVrOverlayCheckBox, ToolTipWithConfigKey("Write SteamVR dashboard host loop, visibility, refresh, render, D3D upload, and texture submit diagnostics to a text file.", "DiagnosticsLogSteamVrOverlay"));
+        AddFullWidth(layout, _diagnosticsLogDesktopTuiCheckBox, ToolTipWithConfigKey("Writes lightweight Desktop TUI load and refresh diagnostics to the diagnostics log folder.", "DiagnosticsLogDesktopTui"));
         AddFullWidth(layout, _diagnosticsDebugSupervisorCheckBox, ToolTipWithConfigKey("Write supervisor debug events to a separate text file in the diagnostic log folder.", "DiagnosticsDebugSupervisor"));
         AddFullWidth(layout, _diagnosticsDebugSteamVrOverlayCheckBox, ToolTipWithConfigKey("Write SteamVR overlay debug events to a separate text file in the diagnostic log folder.", "DiagnosticsDebugSteamVrOverlay"));
         AddFullWidth(layout, _diagnosticsDebugSteamVrPointerCheckBox, ToolTipWithConfigKey("When SteamVR overlay debug logging is enabled, draw a visible pointer marker inside the overlay for hover hit-test troubleshooting.", "DiagnosticsDebugSteamVrPointer"));
@@ -3181,14 +3184,22 @@ internal sealed class ConfigEditorForm : Form
 
         try
         {
-            Process.Start(new ProcessStartInfo
+            var startInfo = new ProcessStartInfo
             {
                 FileName = tuiPath,
                 WorkingDirectory = AppContext.BaseDirectory,
                 UseShellExecute = true,
                 ErrorDialog = true,
                 ErrorDialogParentHandle = Handle
-            });
+            };
+            var configPath = TryGetFullPath(_configPathTextBox.Text.Trim());
+            if (!string.IsNullOrWhiteSpace(configPath))
+            {
+                startInfo.ArgumentList.Add("--config");
+                startInfo.ArgumentList.Add(configPath);
+            }
+
+            Process.Start(startInfo);
             SetStatus("Desktop TUI opened.");
             return DesktopTuiLaunchResult.Launched;
         }
@@ -3287,12 +3298,14 @@ internal sealed class ConfigEditorForm : Form
         _pimaxServiceLogDirectoryTextBox.Text = GetString(node, "PimaxServiceLogDirectory");
         _diagnosticsLogSupervisorCheckBox.Checked = GetBool(node, "DiagnosticsLogSupervisor", defaultValue: false);
         _diagnosticsLogSteamVrOverlayCheckBox.Checked = GetBool(node, "DiagnosticsLogSteamVrOverlay", defaultValue: false);
+        _diagnosticsLogDesktopTuiCheckBox.Checked = GetBool(node, "DiagnosticsLogDesktopTui", defaultValue: false);
         _diagnosticsDebugSupervisorCheckBox.Checked = GetBool(node, "DiagnosticsDebugSupervisor", defaultValue: false);
         _diagnosticsDebugSteamVrOverlayCheckBox.Checked = GetBool(node, "DiagnosticsDebugSteamVrOverlay", defaultValue: false);
         _diagnosticsVerboseCheckBox.Checked = GetBool(node, "DiagnosticsVerbose", defaultValue: false);
         _diagnosticsDebugSteamVrPointerCheckBox.Checked = GetBool(node, "DiagnosticsDebugSteamVrPointer", defaultValue: false);
         _diagnosticsEnabledCheckBox.Checked = _diagnosticsLogSupervisorCheckBox.Checked
             || _diagnosticsLogSteamVrOverlayCheckBox.Checked
+            || _diagnosticsLogDesktopTuiCheckBox.Checked
             || _diagnosticsDebugSupervisorCheckBox.Checked
             || _diagnosticsDebugSteamVrOverlayCheckBox.Checked
             || _diagnosticsVerboseCheckBox.Checked
@@ -4074,6 +4087,7 @@ internal sealed class ConfigEditorForm : Form
         var steamVrOverlayDebugEnabled = diagnosticsEnabled && _diagnosticsDebugSteamVrOverlayCheckBox.Checked;
         json = JsonPropertyEditor.Replace(json, "DiagnosticsLogSupervisor", diagnosticsEnabled && _diagnosticsLogSupervisorCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "DiagnosticsLogSteamVrOverlay", diagnosticsEnabled && _diagnosticsLogSteamVrOverlayCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsLogDesktopTui", diagnosticsEnabled && _diagnosticsLogDesktopTuiCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "DiagnosticsDebugSupervisor", diagnosticsEnabled && _diagnosticsDebugSupervisorCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "DiagnosticsDebugSteamVrOverlay", steamVrOverlayDebugEnabled ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "DiagnosticsVerbose", diagnosticsEnabled && _diagnosticsVerboseCheckBox.Checked ? "true" : "false");
