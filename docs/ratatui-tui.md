@@ -12,6 +12,8 @@ Phase 18C adds **Launch Supervisor + Desktop TUI** and a confirmed graceful shut
 
 Phase 18D hardens the same workflow. The backend still exposes only the narrow `lifecycle-json` shutdown action, but the TCP bridge is adjusted so a produced lifecycle response can be written even as shutdown cancellation begins. The TUI displays backend lifecycle rejection text directly and keeps the 60-second timeout warning visible briefly before exiting. The Configurator combined-launch button now reports launched, already-running, and failed Desktop TUI cases more precisely.
 
+Phase 18E adds `--desktop-tui-start`, a dedicated hidden supervisor startup mode for this primary workflow. **Launch Supervisor + Desktop TUI** uses it to hide the supervisor console while keeping normal supervisor semantics. The normal **Launch Supervisor** button remains a visible classic-console launch, and `--steamvr-start` remains SteamVR-specific.
+
 ## Purpose
 
 The TUI gives a desktop/operator view of the supervisor with tightly limited control behavior. It displays:
@@ -64,6 +66,8 @@ The SteamVR overlay remains unchanged. The TUI does not replace VR status/log re
 ## Launch Requirements
 
 The supervisor backend must already be running for live data. The TUI does not start the supervisor, does not elevate, and does not start SteamVR or VRChat. The Configurator can launch the supervisor and TUI together with **Launch Supervisor + Desktop TUI**.
+
+When launched through **Launch Supervisor + Desktop TUI**, the supervisor receives `--desktop-tui-start`. That flag hides the console for the Desktop TUI workflow only; it does not set SteamVR startup mode and does not change cleanup or action semantics.
 
 From a release folder that contains `PimaxVrcSupervisorTui.exe`:
 

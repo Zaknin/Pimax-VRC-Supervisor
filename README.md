@@ -201,6 +201,8 @@ Phase 18C adds a Configurator **Launch Supervisor + Desktop TUI** button and a d
 
 Phase 18D hardens that lifecycle workflow. The supervisor bridge now protects the final `lifecycle-json` response write from shutdown cancellation, the TUI keeps a post-timeout warning visible briefly before exit, and Configurator combined-launch status messages distinguish launched, already-running, and failed Desktop TUI cases. Local `1.3.0-test` release-folder builds should be refreshed after successful source builds.
 
+Phase 18E adds `--desktop-tui-start`, a dedicated hidden supervisor startup mode for the primary Desktop TUI workflow. Configurator **Launch Supervisor + Desktop TUI** uses this flag so the supervisor console is hidden while preserving normal supervisor behavior. It does not reuse `--steamvr-start`, does not set SteamVR-started lifecycle mode, and does not affect the normal visible **Launch Supervisor** button.
+
 Confirmed actions run in the background so the TUI stays responsive. Different safe actions may run at the same time, but the same command cannot be started twice while running and Base Stations On/Off are mutually exclusive. Once shutdown is requested, normal action execution is disabled. `force-stop-supervisor` remains blocked from the TUI.
 
 Keybindings:

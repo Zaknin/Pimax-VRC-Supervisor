@@ -90,6 +90,8 @@ The six regular `action-json` actions remain unchanged. `force-stop-supervisor` 
 
 Phase 18D hardens this lifecycle boundary without turning shutdown into an action card. The backend keeps `lifecycle-json` narrow, protects the final TCP response write from shutdown cancellation, and continues to reject `force-stop-supervisor` from structured action flow. The TUI shows lifecycle rejection messages directly and displays the 60 second timeout warning before exit.
 
+Phase 18E adds hidden supervisor startup for the primary Desktop TUI workflow through `--desktop-tui-start`. This is startup presentation only: it does not add an action card, does not alter `action-json`, does not reuse `--steamvr-start`, and does not change `lifecycle-json` shutdown semantics.
+
 ## Phase 17B Implementation Status
 
 Phase 17B keeps the same action safety model but removes routine risk-category wording from the normal operator UI. Mouse-click support is implemented with original project code and maps only to existing `TuiAction` values and overlay controls. Action-card clicks open confirmation only, modal Confirm/Cancel clicks mirror keyboard behavior, and no backend command is sent without the existing confirmation step.

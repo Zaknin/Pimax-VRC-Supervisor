@@ -85,6 +85,15 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 - The Configurator combined launch reports supervisor/TUI duplicate and launch-result states more precisely.
 - The local ignored `release/PimaxVrcSupervisor-v1.3.0-test` folder should be refreshed after successful source builds so runtime tests use current C#, Configurator, SteamVR host, and TUI binaries.
 
+## Phase 18E Hidden Primary-TUI Startup Status
+
+- The supervisor has a dedicated `--desktop-tui-start` flag for Configurator-launched primary Desktop TUI sessions.
+- `--desktop-tui-start` hides the console early through the existing `ConsoleWindow.HideIfPresent()` helper, but keeps `steamVrStart=false`.
+- The normal Configurator `Launch Supervisor` button does not pass this flag and remains a visible classic-console launch.
+- `--steamvr-start` remains SteamVR-specific because it both hides the console and changes supervisor/SteamVR lifecycle behavior.
+- `--watch-vrchat-auto-launch` remains the scheduled hidden watcher path and is not reused for the primary Desktop TUI workflow.
+- No tray/minimize behavior, terminal X-close guarantee, config schema change, wrapper executable, or SteamVR host change was added.
+
 ## Risks And Safety Constraints
 
 - Do not make terminal close/X-close implicitly stop the supervisor until a separate design exists.
@@ -96,7 +105,7 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 ## Proposed User-Facing Wording
 
 - `Launch Desktop TUI`: opens the terminal dashboard. It does not start or stop the supervisor.
-- `Launch Supervisor + Desktop TUI`: starts the normal supervisor workflow if needed, then opens the terminal dashboard.
+- `Launch Supervisor + Desktop TUI`: starts the supervisor with hidden Desktop TUI startup mode if needed, then opens the terminal dashboard.
 - `Launch Supervisor`: starts the classic supervisor console using the current config.
 - `Launch SteamVR`: starts SteamVR normally through Steam.
 - `Q`: opens `Stop supervisor and exit TUI?` confirmation. Confirming runs Ctrl+C-equivalent supervisor cleanup.
@@ -106,5 +115,6 @@ Phase 18A was an audit/design phase only. Phase 18B added a TUI-only Configurato
 - Phase 18B: Configurator `Launch Desktop TUI` button.
 - Phase 18C: primary TUI lifecycle with Ctrl+C-equivalent shutdown.
 - Phase 18D: lifecycle runtime hardening and hidden supervisor mode review.
-- Phase 18E: terminal close/X-close behavior design.
-- Phase 18F: tray/minimize architecture decision.
+- Phase 18E: dedicated hidden primary-TUI supervisor startup mode.
+- Phase 18F: terminal close/X-close behavior design.
+- Phase 18G: tray/minimize architecture decision.

@@ -23,6 +23,20 @@ using var shutdown = new CancellationTokenSource();
 using var consoleLog = SupervisorConsoleLog.Install();
 
 var commandLineArgs = Environment.GetCommandLineArgs().Skip(1).ToArray();
+var desktopTuiStart = commandLineArgs.Any(arg => string.Equals(arg, "--desktop-tui-start", StringComparison.OrdinalIgnoreCase));
+var steamVrStart = commandLineArgs.Any(arg => string.Equals(arg, "--steamvr-start", StringComparison.OrdinalIgnoreCase));
+var watchVrchatAutoLaunch = commandLineArgs.Any(arg => string.Equals(arg, "--watch-vrchat-auto-launch", StringComparison.OrdinalIgnoreCase));
+var applyStartupIntegration = commandLineArgs.Any(arg => string.Equals(arg, "--apply-startup-integration", StringComparison.OrdinalIgnoreCase));
+var showStartupIntegrationResult = commandLineArgs.Any(arg => string.Equals(arg, "--show-result", StringComparison.OrdinalIgnoreCase));
+var hideStartupIntegrationHelperWindow = commandLineArgs.Any(arg => string.Equals(arg, "--hide-startup-helper", StringComparison.OrdinalIgnoreCase));
+if (desktopTuiStart
+    || steamVrStart
+    || watchVrchatAutoLaunch
+    || (applyStartupIntegration && hideStartupIntegrationHelperWindow && !showStartupIntegrationResult))
+{
+    ConsoleWindow.HideIfPresent();
+}
+
 var configPath = TryGetCommandOption(commandLineArgs, "--config", out var requestedConfigPath)
     ? requestedConfigPath
     : null;
@@ -43,15 +57,8 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "--install-auto-launch-task", 
     await InstallAutoLaunchScheduledTaskFromCommandLineAsync(config, shutdown.Token);
     return;
 }
-if (commandLineArgs.Any(arg => string.Equals(arg, "--apply-startup-integration", StringComparison.OrdinalIgnoreCase)))
+if (applyStartupIntegration)
 {
-    var showResult = commandLineArgs.Any(arg => string.Equals(arg, "--show-result", StringComparison.OrdinalIgnoreCase));
-    var hideHelperWindow = commandLineArgs.Any(arg => string.Equals(arg, "--hide-startup-helper", StringComparison.OrdinalIgnoreCase));
-    if (hideHelperWindow && !showResult)
-    {
-        ConsoleWindow.HideIfPresent();
-    }
-
     try
     {
         Console.WriteLine($"Pimax VRC Supervisor {AppVersion.Current}");
@@ -69,7 +76,7 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "--apply-startup-integration",
         Console.WriteLine();
         Console.WriteLine("Startup integration update finished.");
         Console.Out.Flush();
-        if (showResult)
+        if (showStartupIntegrationResult)
         {
             ThemedPrompt.Show(
                 "Startup integration was applied successfully.",
@@ -80,7 +87,7 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "--apply-startup-integration",
     }
     catch (Exception ex)
     {
-        if (showResult)
+        if (showStartupIntegrationResult)
         {
             ThemedPrompt.Show(
                 ex.Message,
@@ -98,9 +105,8 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "--apply-startup-integration",
 
     return;
 }
-if (commandLineArgs.Any(arg => string.Equals(arg, "--watch-vrchat-auto-launch", StringComparison.OrdinalIgnoreCase)))
+if (watchVrchatAutoLaunch)
 {
-    ConsoleWindow.HideIfPresent();
     var skipCurrentSteamVrSession = commandLineArgs.Any(arg => string.Equals(arg, "--skip-current-vrserver-session", StringComparison.OrdinalIgnoreCase));
     await AutoLaunchWatcher.RunAsync(skipCurrentSteamVrSession, shutdown.Token);
     return;
@@ -111,12 +117,6 @@ if (!ownsSupervisorMutex)
 {
     Console.WriteLine("Pimax VRC Supervisor is already running. Exiting this duplicate instance.");
     return;
-}
-
-var steamVrStart = commandLineArgs.Any(arg => string.Equals(arg, "--steamvr-start", StringComparison.OrdinalIgnoreCase));
-if (steamVrStart)
-{
-    ConsoleWindow.HideIfPresent();
 }
 
 var diagnosticsOptions = DiagnosticsOptions.ForSupervisor(config, commandLineArgs);

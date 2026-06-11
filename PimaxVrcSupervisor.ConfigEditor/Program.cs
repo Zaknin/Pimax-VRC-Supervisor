@@ -2028,7 +2028,7 @@ internal sealed class ConfigEditorForm : Form
 
         var launchSupervisorAndDesktopTuiButton = CreateButton("Launch Supervisor + Desktop TUI");
         launchSupervisorAndDesktopTuiButton.Click += (_, _) => LaunchSupervisorAndDesktopTui();
-        _toolTips.SetToolTip(launchSupervisorAndDesktopTuiButton, "Starts the supervisor and opens the Rust terminal dashboard. Press Q in the TUI to run supervisor cleanup and exit.");
+        _toolTips.SetToolTip(launchSupervisorAndDesktopTuiButton, "Starts the supervisor for the Desktop TUI workflow and opens the Rust terminal dashboard. Press Q in the TUI to run supervisor cleanup and exit.");
 
         var saveButton = CreateButton("Save");
         saveButton.Tag = "Primary";
@@ -3010,7 +3010,7 @@ internal sealed class ConfigEditorForm : Form
             return;
         }
 
-        if (LaunchSupervisorProcess(supervisorPath, configPath))
+        if (LaunchSupervisorProcess(supervisorPath, configPath, desktopTuiStart: true))
         {
             var tuiResult = LaunchDesktopTui();
             if (tuiResult == DesktopTuiLaunchResult.Launched)
@@ -3058,7 +3058,7 @@ internal sealed class ConfigEditorForm : Form
         return true;
     }
 
-    private bool LaunchSupervisorProcess(string supervisorPath, string configPath)
+    private bool LaunchSupervisorProcess(string supervisorPath, string configPath, bool desktopTuiStart = false)
     {
         try
         {
@@ -3072,6 +3072,12 @@ internal sealed class ConfigEditorForm : Form
             };
             startInfo.ArgumentList.Add("--config");
             startInfo.ArgumentList.Add(configPath);
+            if (desktopTuiStart)
+            {
+                startInfo.ArgumentList.Add("--desktop-tui-start");
+                startInfo.WindowStyle = ProcessWindowStyle.Hidden;
+            }
+
             if (!IsAdministrator())
             {
                 startInfo.Verb = "runas";

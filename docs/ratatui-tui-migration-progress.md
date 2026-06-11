@@ -2399,6 +2399,83 @@ Short Phase 18E direction:
 - Resolve the locked release watcher situation before runtime testing from the release folder, then run the real-world lifecycle matrix for Configurator combined launch, TUI shutdown cancel/confirm, backend-off `Q`, duplicate launch behavior, and post-shutdown timeout behavior.
 - Continue to defer hidden supervisor mode, terminal X-close shutdown guarantees, and tray/minimize behavior until separate designs are reviewed.
 
+### Phase 18E - Safe hidden supervisor mode for primary TUI workflow
+
+Status: Completed
+
+Summary:
+
+- Added explicit `--desktop-tui-start` supervisor startup mode for Configurator-launched primary Desktop TUI sessions.
+- `--desktop-tui-start` hides the supervisor console early with the existing `ConsoleWindow.HideIfPresent()` helper.
+- Normal Configurator `Launch Supervisor` remains a visible classic-console launch and does not pass `--desktop-tui-start`.
+- `Launch Supervisor + Desktop TUI` now starts the supervisor with `--desktop-tui-start`, then opens the Desktop TUI through the existing same-folder launcher.
+- `steamVrStart` remains true only for `--steamvr-start`; `--desktop-tui-start` does not change SteamVR lifecycle semantics.
+- `--steamvr-start` remains SteamVR-specific, and `--watch-vrchat-auto-launch` remains the scheduled hidden watcher path.
+- TUI `Q` shutdown semantics, `lifecycle-json`, `action-json`, action allowlists, cleanup order, SteamVR host behavior, and classic console behavior were unchanged.
+
+Audit decision:
+
+- `PimaxVrcSupervisor` is a console-subsystem app (`OutputType Exe`), so a brief console creation before managed startup code runs is still possible.
+- Existing code already had `ConsoleWindow.HideIfPresent()` for SteamVR, watcher, and startup-helper paths.
+- A dedicated flag was sufficient for Phase 18E; no Windows-subsystem wrapper, tray app, config schema field, or generic hidden launcher was added.
+- `CreateNoWindow` was not used for the elevated Configurator launch path because the existing `UseShellExecute=true` / `runas` flow is required for UAC behavior.
+
+Files changed:
+
+- `PimaxVrcSupervisor/Program.cs`
+- `PimaxVrcSupervisor.ConfigEditor/Program.cs`
+- `README.md`
+- `docs/phase-18-tui-lifecycle-configurator-design.md`
+- `docs/ratatui-action-execution-design.md`
+- `docs/ratatui-tui.md`
+- `docs/ratatui-tui-migration-progress.md`
+
+Build/test commands run:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release`
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release`
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml`
+- `cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release`
+- `dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `dotnet publish .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release -r win-x64 --self-contained true -o .\release\PimaxVrcSupervisor-v1.3.0-test`
+- `Copy-Item .\PimaxVrcSupervisor.Tui\target\release\PimaxVrcSupervisorTui.exe .\release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe -Force`
+
+Build/test result:
+
+- All three C# release builds completed successfully with 0 warnings and 0 errors.
+- `cargo fmt` completed successfully.
+- Rust debug and release builds completed successfully.
+- Release publish for all three C# projects completed successfully.
+- Rust TUI release executable copy completed successfully.
+- Expected key release executables were present: `PimaxVrcSupervisor.exe`, `PimaxVrcSupervisorConfigurator.exe`, `PimaxVrcSupervisorSteamVrHost.exe`, and `PimaxVrcSupervisorTui.exe`.
+- Runtime lifecycle testing was not performed during implementation because it can trigger local supervisor cleanup, VR/SteamVR/VRChat workflows, and base-station behavior.
+
+Source inspection:
+
+- `--desktop-tui-start` is explicit and only used by the Configurator combined launch path.
+- Normal `Launch Supervisor` does not pass `--desktop-tui-start`.
+- Configurator combined launch does not use `--steamvr-start`.
+- `steamVrStart` is still derived only from `--steamvr-start`.
+- `PimaxVrcSupervisor.SteamVrHost` has no source diff.
+- `PimaxVrcSupervisor.Tui/src/bridge.rs` has no source diff.
+- `force-stop-supervisor` remains blocked/not TUI-executable.
+- No generic command executor was added.
+
+Generated output status:
+
+- `git status --short release` produced no staged/tracked release output.
+- `git status --ignored --short release` reported `!! release/`.
+- `git status --ignored --short PimaxVrcSupervisor.Tui/target` reported `!! PimaxVrcSupervisor.Tui/target/`.
+- `release/` and Rust `target/` output remain generated/ignored and were not staged.
+
+Short Phase 18F direction:
+
+- Run the real-world release-folder lifecycle matrix for visible `Launch Supervisor`, hidden `Launch Supervisor + Desktop TUI`, duplicate launch behavior, TUI shutdown cancel/confirm, and backend-off `Q`.
+- Continue to defer terminal X-close shutdown guarantees and tray/minimize behavior until separate designs are reviewed.
+
 ### Phase 17L - Compact and small TUI action click zones
 
 Status: Completed
