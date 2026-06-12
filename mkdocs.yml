@@ -1,5 +1,5 @@
-﻿site_name: Pimax VRC Supervisor Manual
-site_description: User manual and technical reference for Pimax VRC Supervisor
+site_name: Pimax VRC Supervisor Manual
+site_description: User manual for Pimax VRC Supervisor
 site_url: https://zaknin.github.io/Pimax-VRC-Supervisor/
 
 repo_url: https://github.com/Zaknin/Pimax-VRC-Supervisor
@@ -30,7 +30,6 @@ theme:
     - search.highlight
     - search.suggest
     - content.code.copy
-    - content.tabs.link
 
 markdown_extensions:
   - admonition
@@ -39,53 +38,37 @@ markdown_extensions:
       permalink: true
   - pymdownx.details
   - pymdownx.superfences
-  - pymdownx.tabbed:
-      alternate_style: true
 
 nav:
   - Home: index.md
-  - Getting Started:
-      - Overview: getting-started.md
-      - Installation: installation.md
-      - Configuration: configuration.md
-  - GUI Manual:
-      - Overview: gui/index.md
-      - Basics: gui/basics.md
-      - Face Tracking: gui/face-tracking.md
-      - Base Stations: gui/base-stations.md
-      - Auto Startup: gui/auto-launch.md
-      - OSC Router: gui/osc-router.md
-      - OSCGoesBrrr: gui/oscgoesbrrr.md
-      - Processes: gui/processes.md
-      - Detectors: gui/detectors.md
-      - Timing: gui/timing.md
-      - Raw JSON: gui/raw-json.md
-  - VR Overlay:
-      - Overview: overlay/index.md
-      - Controls: overlay/controls.md
-      - Configuration: overlay/configuration.md
-      - Troubleshooting: overlay/troubleshooting.md
-  - Workflows:
-      - Overview: workflows/index.md
-      - Startup Flow: workflows/startup-flow.md
-      - Headset Detection: workflows/headset-detection.md
-      - Base Station Power: workflows/base-station-power.md
-      - OSC Routing: workflows/osc-routing.md
-      - Auto Launch: workflows/auto-launch.md
-      - VR Overlay Workflow: workflows/vr-overlay-workflow.md
-      - Desktop TUI: ratatui-tui.md
-      - TUI Lifecycle Integration Design: phase-18-tui-lifecycle-configurator-design.md
-      - TUI Action Safety Design: ratatui-action-execution-design.md
-  - Reference:
-      - Overview: reference/index.md
-      - Configuration Fields: reference/configuration-fields.md
-      - Supervisor Functions: reference/supervisor-functions.md
-      - Configurator Functions: reference/config-editor-functions.md
-      - Overlay Functions: reference/overlay-functions.md
+  - Quick Start:
+      - Overview: quick-start/index.md
+      - Installation: quick-start/installation.md
+      - First Setup: quick-start/first-setup.md
+      - Updating: quick-start/updating.md
+  - Using the App:
+      - Configurator: user-guide/configurator.md
+      - Startup Modes: user-guide/startup-modes.md
+      - Terminal UI: user-guide/terminal-ui.md
+      - SteamVR Overlay: user-guide/steamvr-overlay.md
+      - Session Flow: user-guide/session-flow.md
+  - Features:
+      - Face Tracking Startup: features/face-tracking.md
+      - Reconnect Handling: features/reconnect-handling.md
+      - Base Station Power: features/base-stations.md
+      - Monitor Management: features/monitor-management.md
+      - OSC Router: features/osc-router.md
+      - OscGoesBrrr / Intiface: features/oscgoesbrrr.md
+      - Diagnostics: features/diagnostics.md
   - Troubleshooting:
       - Overview: troubleshooting/index.md
-      - Install Issues: troubleshooting/install-issues.md
-      - Configurator Issues: troubleshooting/config-editor-issues.md
-      - OSC Issues: troubleshooting/osc-issues.md
-      - Base Station Issues: troubleshooting/base-station-issues.md
-      - Overlay Issues: troubleshooting/overlay-issues.md
+      - Installation Issues: troubleshooting/installation.md
+      - Startup / Autostart Issues: troubleshooting/startup.md
+      - Terminal UI Issues: troubleshooting/terminal-ui.md
+      - SteamVR Overlay Issues: troubleshooting/steamvr-overlay.md
+      - Base Station Issues: troubleshooting/base-stations.md
+      - OSC Issues: troubleshooting/osc.md
+  - Reference:
+      - Config File: reference/config-file.md
+      - Shortcuts: reference/shortcuts.md
+      - Release Packaging: reference/release-packaging.md

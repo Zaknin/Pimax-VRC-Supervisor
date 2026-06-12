@@ -1,9 +1,6 @@
 name: Deploy Documentation
 
 on:
-  push:
-    branches:
-      - vrmanifest-gui
   workflow_dispatch:
 
 permissions:

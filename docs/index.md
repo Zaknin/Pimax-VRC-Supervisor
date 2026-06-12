@@ -1,40 +1,32 @@
-﻿# Pimax VRC Supervisor Manual
+# Pimax VRC Supervisor
 
-![Version](https://img.shields.io/badge/version-1.2.0-2563eb)
-![Platform](https://img.shields.io/badge/platform-Windows-0f766e)
-![Runtime](https://img.shields.io/badge/.NET-9.0-512bd4)
+Pimax VRC Supervisor helps automate a Pimax VRChat session on Windows. It can start face-tracking tools, manage reconnects, control base stations, run OSC helpers, and clean up the session when VRChat or SteamVR closes.
 
-A small Windows companion app for Pimax Crystal and VRChat sessions. It waits for the headset, starts the tools you rely on, watches for device reconnects, and cleans everything up when VRChat is done.
+The app is built around three user-facing tools:
 
-## What It Does
+- **Configurator** for setup and validation.
+- **Supervisor** for watching the VR session and running the configured automation.
+- **Terminal UI** or **SteamVR Overlay** for session controls.
 
-Pimax + VRChat setups can be fragile when USB devices blink, the runtime reconnects, or face tracking starts in the wrong order. Pimax VRC Supervisor keeps that session flow predictable:
+## Where To Start
 
-- Wait until the Pimax headset is actually present
-- Launch Broken Eye, then VRCFaceTracking
-- Restart the right apps after headset or mouth tracker reconnects
-- Optionally manage secondary monitors during VR
-- Optionally manage SteamVR base-station power through native Bluetooth LE
-- Optionally auto-launch when SteamVR starts, then wait for VRChat before starting managed apps
-- Optionally start from SteamVR through a VR app manifest with a small SteamVR-launched control dashboard
-- Optionally start Intiface and OscGoesBrrr for Lovense workflows
-- Optionally route local OSC packets to multiple OSC apps
+If this is your first time using the app:
 
-## Included Apps
+1. Read [Installation](quick-start/installation.md).
+2. Follow [First Setup](quick-start/first-setup.md).
+3. Choose a startup mode in [Startup Modes](user-guide/startup-modes.md).
+4. Use [Troubleshooting](troubleshooting/index.md) if something does not start.
 
-| App | Purpose |
-| --- | --- |
-| `PimaxVrcSupervisor.exe` | Console supervisor that watches the VR session and manages apps/devices. |
-| `PimaxVrcSupervisorConfigurator.exe` | GUI editor for `supervisor.config.json`. |
-| `supervisor.config.json` | Documented configuration file copied next to the executables. |
+## What It Can Automate
 
-## Quick Links
+- Broken Eye and VRCFaceTracking startup.
+- Face-tracking restart after headset reconnects.
+- SteamVR Base Station power on and power off.
+- Secondary monitor disable/restore during headset sessions.
+- OSC routing for face tracking and VRChat.
+- OscGoesBrrr and Intiface startup.
+- Optional diagnostics for troubleshooting.
 
-- [Getting Started](getting-started.md) â€” overview of features and concepts
-- [Installation](installation.md) â€” download, extract, and first-run setup
-- [Configuration](configuration.md) â€” key settings and examples
-- [GUI Manual](gui/index.md) â€” using the Configurator
-- [VR Overlay](overlay/index.md) â€” SteamVR dashboard host
-- [Workflows](workflows/index.md) â€” OscGoesBrrr, OSC Router, and more
-- [Reference](reference/index.md) â€” full configuration reference
-- [Troubleshooting](troubleshooting/index.md) â€” common issues and fixes
+## Recommended Setup
+
+For most users, use **Terminal Mode** with **Use Terminal UI as default interface** enabled. This gives you a clear dashboard, confirmed session actions, and automatic Terminal UI close when the paired Supervisor exits.
