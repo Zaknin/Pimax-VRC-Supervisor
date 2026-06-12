@@ -1,58 +1,88 @@
 # Pimax VRC Supervisor
 
-Pimax VRC Supervisor is a Windows utility for Pimax VRChat setups. It helps start face-tracking tools, manage session cleanup, control base stations, run OSC helpers, and provide a simple Configurator plus Terminal UI for day-to-day control.
+Pimax VRC Supervisor is a Windows companion app for Pimax VRChat sessions. It starts the tools you rely on, watches for headset and tracker reconnects, gives you a Terminal UI for session controls, and cleans up managed apps when the session ends.
 
-The release-candidate user manual is published at [Pimax VRC Supervisor Manual](https://zaknin.github.io/Pimax-VRC-Supervisor/).
+It is built for users who want less manual startup work and a cleaner SteamVR/VRChat session flow.
 
-## Who It Is For
+## What It Does
 
-Use Pimax VRC Supervisor if you use a Pimax headset with VRChat and want help with one or more of these tasks:
+- Starts Broken Eye and VRCFaceTracking in the right order.
+- Restarts face-tracking tools after headset or tracker reconnects.
+- Opens a Terminal UI dashboard for monitoring and confirmed session actions.
+- Supports a SteamVR Overlay mode for in-headset controls.
+- Powers SteamVR Base Stations on and off when configured.
+- Restores monitor/session state during cleanup.
+- Runs an optional OSC Router for local OSC fan-out.
+- Starts OscGoesBrrr and Intiface workflows when configured.
+- Writes optional diagnostics for troubleshooting.
 
-- Starting Broken Eye and VRCFaceTracking for headset sessions.
-- Restarting face-tracking tools after reconnects.
-- Powering SteamVR Base Stations on and off.
-- Starting OscGoesBrrr and Intiface.
-- Routing OSC messages between VRChat, face tracking, and helper tools.
-- Turning off secondary monitors during headset sessions and restoring them afterward.
-- Starting from SteamVR through Terminal Mode or SteamVR Overlay mode.
+## Recommended For
 
-## Main Parts
+- Pimax headset users.
+- VRChat users.
+- VRCFaceTracking and Broken Eye users.
+- Users who want SteamVR startup automation without maintaining scripts.
+- Users who want base-station power and session cleanup helpers.
 
-- **Configurator**: the main setup tool. Use it to select paths, choose startup mode, configure features, validate settings, and save your config.
-- **Supervisor**: the background/session controller that watches SteamVR, VRChat, headset state, and configured tools.
-- **Terminal UI**: a terminal dashboard for monitoring the Supervisor and running confirmed session actions.
-- **SteamVR Overlay**: an optional SteamVR dashboard interface for session controls inside SteamVR.
+## Download
+
+Release-candidate packages are provided in two Windows x64 variants:
+
+- **with-dotnet9**: larger, self-contained package. Use this if you do not want to install .NET separately.
+- **no-dotnet9**: smaller package. Use this only if the .NET 9 Windows Desktop Runtime x64 is already installed.
+
+Extract the zip to a writable folder such as:
+
+```text
+C:\Tools\PimaxVrcSupervisor
+```
+
+Keep the files together in the extracted folder. The Configurator, Supervisor, SteamVR host, Terminal UI, config file, and assets are designed to run from the same flat release folder.
+
+## Documentation
+
+Read the full user manual:
+
+[Pimax VRC Supervisor Manual](https://zaknin.github.io/Pimax-VRC-Supervisor/)
+
+Useful starting points:
+
+- [Quick Start](https://zaknin.github.io/Pimax-VRC-Supervisor/quick-start/)
+- [Installation](https://zaknin.github.io/Pimax-VRC-Supervisor/quick-start/installation/)
+- [Startup Modes](https://zaknin.github.io/Pimax-VRC-Supervisor/user-guide/startup-modes/)
+- [Terminal UI](https://zaknin.github.io/Pimax-VRC-Supervisor/user-guide/terminal-ui/)
+- [Troubleshooting](https://zaknin.github.io/Pimax-VRC-Supervisor/troubleshooting/)
 
 ## Quick Start
 
-1. Download the release zip from the project releases page.
-2. Extract it to a writable folder.
-3. Run `PimaxVrcSupervisorConfigurator.exe`.
-4. Open **General** and choose an **Autostart mode**.
-5. Fill in required tool paths on the feature tabs you use.
+1. Extract the release zip.
+2. Run `PimaxVrcSupervisorConfigurator.exe`.
+3. Select or create a config.
+4. Set paths for the tools you use.
+5. Choose an **Autostart mode**.
 6. Click **Validate**.
 7. Click **Save**.
 8. Click **Launch Supervisor**.
 
-For most users, start with **Terminal Mode** and keep **Use Terminal UI as default interface** enabled. This starts the Supervisor for SteamVR sessions and opens Terminal UI automatically.
+For most users, start with **Terminal Mode** and keep **Use Terminal UI as default interface** enabled.
 
-## Documentation
+## Included Apps
 
-Start here:
-
-- [User Manual](https://zaknin.github.io/Pimax-VRC-Supervisor/)
-- [Quick Start](https://zaknin.github.io/Pimax-VRC-Supervisor/quick-start/)
-- [Installation](https://zaknin.github.io/Pimax-VRC-Supervisor/quick-start/installation/)
-- [Startup Modes](https://zaknin.github.io/Pimax-VRC-Supervisor/user-guide/startup-modes/)
-- [Troubleshooting](https://zaknin.github.io/Pimax-VRC-Supervisor/troubleshooting/)
+| App | Purpose |
+| --- | --- |
+| `PimaxVrcSupervisor.exe` | Session Supervisor and classic console. |
+| `PimaxVrcSupervisorConfigurator.exe` | GUI setup and validation tool. |
+| `PimaxVrcSupervisorTui.exe` | Terminal UI dashboard and controls. |
+| `PimaxVrcSupervisorSteamVrHost.exe` | SteamVR Overlay host. |
 
 ## Safety Notes
 
-- Confirmed actions in Terminal UI can restart tools, start helper apps, or change base-station power state.
-- Connected Terminal UI shutdown runs Supervisor cleanup. It may close managed apps and restore session state.
-- SteamVR Overlay mode is separate from Terminal Mode. Choose the one that fits how you want to control the session.
-- Raw JSON editing is advanced. Prefer the Configurator tabs unless you know exactly what you need to change.
+- Base-station controls affect real hardware. Test with one station first if you are unsure.
+- Monitor management can change active displays during headset sessions.
+- Terminal UI actions are confirmation-gated because they can restart apps or change session state.
+- Connected Terminal UI shutdown runs Supervisor cleanup and may close managed apps.
+- Use Diagnostics when troubleshooting; leave extra diagnostics off during normal use unless needed.
 
-## Build Notes
+## Build From Source
 
-Most users do not need to build from source. Developers can use the existing .NET 9 and Rust project files, but build instructions are intentionally kept out of the user manual.
+Most users should use the release zip. Developers need the .NET 9 SDK, Rust stable MSVC toolchain, and Windows build tools. Release packaging is documented in `RELEASE_PACKAGING.md`.
