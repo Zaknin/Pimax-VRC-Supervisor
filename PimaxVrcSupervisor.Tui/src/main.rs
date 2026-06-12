@@ -6,7 +6,7 @@ mod models;
 mod theme;
 mod ui;
 
-use std::{io, time::Instant};
+use std::{ffi::OsStr, io, time::Instant};
 
 use crate::models::TuiAction;
 use app::{App, ClickAction, LOG_PAGE_SIZE};
@@ -37,7 +37,11 @@ enum Shortcut {
 fn main() -> Result<()> {
     color_eyre::install()?;
 
-    let diagnostics = diagnostics::TuiDiagnostics::from_args(std::env::args_os());
+    let args = std::env::args_os().collect::<Vec<_>>();
+    let exit_when_supervisor_exits = args
+        .iter()
+        .any(|arg| arg == OsStr::new("--exit-when-supervisor-exits"));
+    let diagnostics = diagnostics::TuiDiagnostics::from_args(args);
 
     let (console_close_guard, console_close_error) = match console_close::install() {
         Ok(guard) => (Some(guard), None),
@@ -64,6 +68,7 @@ fn main() -> Result<()> {
         mouse_capture_error,
         console_close_error,
         diagnostics,
+        exit_when_supervisor_exits,
     );
 
     restore_terminal(&mut terminal)?;
@@ -89,8 +94,9 @@ fn run(
     mouse_capture_error: Option<String>,
     console_close_error: Option<String>,
     diagnostics: diagnostics::TuiDiagnostics,
+    exit_when_supervisor_exits: bool,
 ) -> Result<()> {
-    let mut app = App::new(diagnostics);
+    let mut app = App::new(diagnostics, exit_when_supervisor_exits);
     app.set_mouse_status(
         mouse_capture_error.is_none(),
         mouse_capture_error.map(|error| format!("Mouse disabled; keyboard-only mode: {error}")),
@@ -107,6 +113,10 @@ fn run(
         }
 
         if app.should_exit_after_shutdown(now) {
+            break;
+        }
+
+        if app.should_exit_after_supervisor_disconnect(now) {
             break;
         }
 

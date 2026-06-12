@@ -2465,6 +2465,52 @@ Next direction:
 
 - If a full runtime launch smoke is needed, repeat checked mode using a real safe session config with valid app paths and an intentional SteamVR/vrserver test window, then inspect Supervisor and TUI command lines from an elevated shell.
 
+### Phase 20G - Auto-close autostart Desktop TUI on Supervisor exit
+
+Status: Completed
+
+Summary:
+
+- Added an autostart-only Desktop TUI auto-exit path for scheduled CLI autostart sessions.
+- The scheduled watcher now launches `PimaxVrcSupervisorTui.exe` with `--exit-when-supervisor-exits` only when Desktop TUI default is enabled for `Start in CLI mode when SteamVR is running`.
+- Manual Desktop TUI launches, Configurator manual launch paths, unchecked scheduled CLI mode, and SteamVR Overlay mode do not receive the auto-exit flag.
+- No bridge protocol, action allowlist, lifecycle shutdown behavior, Desktop TUI `Q` behavior, Desktop TUI X-close behavior, diagnostics fields, render/backoff behavior, SteamVR host behavior, Supervisor cleanup behavior, base-station behavior, monitor behavior, OSC behavior, VRChat process behavior, or release layout changed.
+
+Implementation:
+
+- Added TUI argument parsing for `--exit-when-supervisor-exits`.
+- Added TUI state to track whether the TUI has connected to the Supervisor at least once.
+- If the flag is present and a previously established Supervisor connection becomes disconnected, the TUI starts a 7 second grace timer and then exits.
+- The TUI does not auto-exit when it starts disconnected and has never connected.
+- Auto-exit sends no `lifecycle-json`, `action-json`, `query-json`, `force-stop-supervisor`, or other new bridge request.
+
+Verification:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release` completed successfully.
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release` completed successfully.
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release` completed successfully.
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml` completed successfully.
+- Rust debug and release builds completed successfully.
+- Source inspection confirmed watcher-launched Desktop TUI includes `--exit-when-supervisor-exits`.
+- Source inspection confirmed Configurator manual TUI launch paths do not include `--exit-when-supervisor-exits`.
+- Source inspection confirmed SteamVR Overlay remains on the `--steamvr-start` path and does not launch the TUI.
+- Source inspection confirmed `PimaxVrcSupervisor.Tui/src/bridge.rs` has no protocol or payload diff.
+
+Release refresh:
+
+- The ignored local test release folder was refreshed after successful source builds by publishing all three C# projects and copying the rebuilt Rust `PimaxVrcSupervisorTui.exe`.
+- Refresh is considered complete only when all three C# publishes and the Rust TUI copy succeed.
+- The first Phase 20G publish attempt was blocked by elevated `PimaxVrcSupervisorWatcher.exe` PID `8888` locking `PimaxVrcSupervisor.dll`; ending the scheduled task with `schtasks /End /TN "Pimax VRC Supervisor Auto Launch"` released the lock and the retry completed successfully.
+
+Runtime smoke:
+
+- Runtime smoke was not performed during implementation because a complete autostart exit test requires a safe live SteamVR/Supervisor session and intentionally stopping the paired Supervisor.
+- When safe, verify `PimaxVrcSupervisorTui.exe --config <active config> --exit-when-supervisor-exits` stays open before first connection, exits after a previously connected Supervisor disconnects, and manual TUI launches without the flag remain open while disconnected.
+
+Next direction:
+
+- Run a controlled SteamVR CLI autostart session to verify the TUI command line includes `--exit-when-supervisor-exits` and auto-closes after the paired Supervisor exits.
+
 ### Phase 17D - Backend-off consistency, neutral modal controls, action hints, and log follow
 
 Status: Completed

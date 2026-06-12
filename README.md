@@ -229,6 +229,8 @@ Phase 20C adds diagnostics-only Desktop TUI process load metrics to the existing
 
 Phase 20E applies the Configurator **Use Desktop TUI as default interface** preference to scheduled CLI autostart. In **Start in CLI mode when SteamVR is running**, the watcher now captures the active config path and preference when startup integration is applied. If the preference is enabled, the watcher starts the Supervisor hidden with `--desktop-tui-start` and opens the Desktop TUI; if the Supervisor is already running, it opens only the TUI. If the preference is disabled, the watcher keeps the existing visible classic CLI behavior. **SteamVR Overlay** remains unchanged and still uses the SteamVR host / `--steamvr-start` path.
 
+Phase 20G adds an autostart-only Desktop TUI auto-close path. When the scheduled watcher opens the TUI for **Start in CLI mode when SteamVR is running** with Desktop TUI default enabled, it passes `--exit-when-supervisor-exits`. The TUI waits until it has connected to the Supervisor at least once, then exits after the paired Supervisor disconnects for a short grace period. Manual TUI launches keep the existing disconnected behavior and remain open until the user exits. No protocol, action, cleanup, diagnostics, render/backoff, SteamVR Overlay, or Configurator layout behavior changes.
+
 Confirmed actions run in the background so the TUI stays responsive. Different safe actions may run at the same time, but the same command cannot be started twice while running and Base Stations On/Off are mutually exclusive. Once shutdown is requested, normal action execution is disabled. `force-stop-supervisor` remains blocked from the TUI.
 
 Keybindings:

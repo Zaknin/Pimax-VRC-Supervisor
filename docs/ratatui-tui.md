@@ -38,6 +38,8 @@ Phase 20C adds diagnostics-only process load metrics to the existing Desktop TUI
 
 Phase 20E applies the Configurator **Use Desktop TUI as default interface** preference to scheduled CLI autostart. When **Autostart mode** is `Start in CLI mode when SteamVR is running`, applying startup integration stores the active config path and captures whether the Desktop TUI preference was enabled. With the preference enabled, the watcher starts the Supervisor hidden with `--desktop-tui-start` and opens the Desktop TUI with `--config <active config>`; if the Supervisor is already running, it opens only the TUI. With the preference disabled, scheduled CLI autostart keeps the existing visible classic-console launch. **SteamVR Overlay** remains unchanged and continues to use the SteamVR host / `--steamvr-start` path.
 
+Phase 20G adds an autostart-only TUI auto-exit flag. When the scheduled watcher opens the Desktop TUI for checked Desktop TUI default CLI autostart, it passes `--exit-when-supervisor-exits`. The TUI does not close during startup if the Supervisor is not connected yet; after it has connected once, losing that Supervisor connection starts a short grace timer and then exits the TUI. Manual TUI launches do not receive the flag and keep the existing disconnected behavior.
+
 ## Purpose
 
 The TUI gives a desktop/operator view of the supervisor with tightly limited control behavior. It displays:
@@ -100,6 +102,8 @@ The supervisor backend must already be running for live data. The TUI does not s
 When launched through checked-mode **Launch Supervisor**, the supervisor receives `--desktop-tui-start`. That flag hides the console for the Desktop TUI workflow only; it does not set SteamVR startup mode and does not change cleanup or action semantics.
 
 The same Desktop TUI default-interface preference also applies to scheduled CLI autostart. If **Start in CLI mode when SteamVR is running** is selected and startup integration is applied while the preference is checked, the watcher launches the hidden Supervisor plus Desktop TUI using the active config. If the Supervisor is already running but the TUI is not, it launches only the TUI. Unchecking the preference preserves the visible classic CLI autostart path.
+
+Only the scheduled watcher Desktop TUI launch adds `--exit-when-supervisor-exits`. This flag is intentionally local to the TUI and does not change bridge protocol, shutdown requests, Supervisor cleanup, or SteamVR Overlay behavior.
 
 From a release folder that contains `PimaxVrcSupervisorTui.exe`:
 

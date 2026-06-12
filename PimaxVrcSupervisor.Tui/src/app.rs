@@ -27,6 +27,7 @@ pub const MAX_LOG_LINES: usize = 80;
 pub const LOG_PAGE_SIZE: usize = 8;
 pub const SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
 pub const SHUTDOWN_TIMEOUT_NOTICE_DELAY: Duration = Duration::from_secs(2);
+pub const SUPERVISOR_DISCONNECT_AUTO_EXIT_DELAY: Duration = Duration::from_secs(7);
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ConnectionState {
@@ -113,6 +114,10 @@ pub struct App {
     pub mouse_notice: Option<String>,
     pub console_close_enabled: bool,
     pub console_close_notice: Option<String>,
+    exit_when_supervisor_exits: bool,
+    was_connected_once: bool,
+    supervisor_disconnect_seen_at: Option<Instant>,
+    auto_exit_after_supervisor_disconnect: Option<Instant>,
     render_needed: bool,
     last_render_at: Option<Instant>,
     diagnostics: TuiDiagnostics,
@@ -123,11 +128,12 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(diagnostics: TuiDiagnostics) -> Self {
+    pub fn new(diagnostics: TuiDiagnostics, exit_when_supervisor_exits: bool) -> Self {
         let (action_result_tx, action_result_rx) = channel();
         let (shutdown_result_tx, shutdown_result_rx) = channel();
         Self::with_channels(
             diagnostics,
+            exit_when_supervisor_exits,
             action_result_tx,
             action_result_rx,
             shutdown_result_tx,
@@ -137,6 +143,7 @@ impl App {
 
     fn with_channels(
         diagnostics: TuiDiagnostics,
+        exit_when_supervisor_exits: bool,
         action_result_tx: Sender<CompletedActionResult>,
         action_result_rx: Receiver<CompletedActionResult>,
         shutdown_result_tx: Sender<ShutdownRequestResult>,
@@ -174,6 +181,10 @@ impl App {
             mouse_notice: None,
             console_close_enabled: false,
             console_close_notice: None,
+            exit_when_supervisor_exits,
+            was_connected_once: false,
+            supervisor_disconnect_seen_at: None,
+            auto_exit_after_supervisor_disconnect: None,
             render_needed: true,
             last_render_at: None,
             diagnostics,
@@ -217,6 +228,7 @@ impl App {
             self.diagnostics
                 .record_connection(self.connection == ConnectionState::Connected);
         }
+        self.update_supervisor_disconnect_auto_exit(now);
 
         self.refresh_in_progress = false;
         self.clamp_log_scroll();
@@ -569,6 +581,15 @@ impl App {
         false
     }
 
+    pub fn should_exit_after_supervisor_disconnect(&self, now: Instant) -> bool {
+        if self.shutdown_in_progress {
+            return false;
+        }
+
+        self.auto_exit_after_supervisor_disconnect
+            .is_some_and(|exit_after| now >= exit_after)
+    }
+
     pub fn scroll_logs_up(&mut self, amount: usize) {
         self.log_follow = false;
         self.log_scroll = self.log_scroll.saturating_add(amount);
@@ -629,6 +650,29 @@ impl App {
             commands_from_response(&commands_response),
             logs_from_response(&log_response),
         ))
+    }
+
+    fn update_supervisor_disconnect_auto_exit(&mut self, now: Instant) {
+        if !self.exit_when_supervisor_exits {
+            return;
+        }
+
+        match self.connection {
+            ConnectionState::Connected => {
+                self.was_connected_once = true;
+                self.supervisor_disconnect_seen_at = None;
+                self.auto_exit_after_supervisor_disconnect = None;
+            }
+            ConnectionState::Disconnected if self.was_connected_once => {
+                if self.supervisor_disconnect_seen_at.is_none() {
+                    self.supervisor_disconnect_seen_at = Some(now);
+                    self.auto_exit_after_supervisor_disconnect =
+                        Some(now + SUPERVISOR_DISCONNECT_AUTO_EXIT_DELAY);
+                    self.mark_render_needed();
+                }
+            }
+            ConnectionState::Disconnected => {}
+        }
     }
 
     fn clamp_log_scroll(&mut self) {

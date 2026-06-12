@@ -7328,6 +7328,7 @@ internal static class AutoLaunchWatcher
                 startInfo.ArgumentList.Add("--config");
                 startInfo.ArgumentList.Add(configPath);
             }
+            startInfo.ArgumentList.Add("--exit-when-supervisor-exits");
 
             Process.Start(startInfo);
         }
