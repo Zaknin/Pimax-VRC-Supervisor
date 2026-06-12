@@ -69,6 +69,7 @@ nav:
       - Base Station Issues: troubleshooting/base-stations.md
       - OSC Issues: troubleshooting/osc.md
   - Reference:
+      - Overview: reference/index.md
       - Config File: reference/config-file.md
       - Shortcuts: reference/shortcuts.md
       - Release Packaging: reference/release-packaging.md
