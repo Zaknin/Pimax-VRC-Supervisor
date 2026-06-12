@@ -1364,6 +1364,7 @@ internal sealed class AppSupervisor
     private int _baseStationPowerOnPassesCompleted;
     private readonly HashSet<string> _baseStationPowerOnCommandSucceeded = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _baseStationSteamVrConfirmedActive = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _baseStationPowerOnLastFailure = new(StringComparer.OrdinalIgnoreCase);
     private DateTimeOffset? _lastBaseStationPowerOnSkippedLogAt;
     private DateTimeOffset? _nextBaseStationPowerOnAttemptAt;
     private DateTimeOffset? _baseStationSecondPowerOnPassCompletedAt;
@@ -2083,33 +2084,58 @@ internal sealed class AppSupervisor
             Console.WriteLine($"Base station scan failed: {ex.Message}");
         }
 
-        _config.SaveBaseStationSettings();
+        TrySaveBaseStationSettings("base station setup settings");
         await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
     }
 
-    private void MergeDiscoveredBaseStations(IReadOnlyList<BaseStationDevice> discovered)
+    private bool MergeDiscoveredBaseStations(IReadOnlyList<BaseStationDevice> discovered, bool addNewDevices = true)
     {
         if (discovered.Count == 0)
         {
-            return;
+            return false;
         }
 
         var merged = _config.BaseStations.ToList();
+        var changed = false;
         foreach (var baseStation in discovered.Select(station => station.WithDefaults()))
         {
             var existing = merged.FirstOrDefault(candidate => string.Equals(candidate.BluetoothAddress, baseStation.BluetoothAddress, StringComparison.OrdinalIgnoreCase));
             if (existing is null)
             {
-                merged.Add(baseStation);
+                if (addNewDevices)
+                {
+                    merged.Add(baseStation);
+                    changed = true;
+                }
+
                 continue;
             }
 
-            existing.Name = string.IsNullOrWhiteSpace(existing.Name) ? baseStation.Name : existing.Name;
-            existing.FriendlyName = string.IsNullOrWhiteSpace(existing.FriendlyName) ? baseStation.FriendlyName : existing.FriendlyName;
-            existing.Version = existing.Version == BaseStationVersion.Unknown ? baseStation.Version : existing.Version;
+            if (string.IsNullOrWhiteSpace(existing.Name) && !string.IsNullOrWhiteSpace(baseStation.Name))
+            {
+                existing.Name = baseStation.Name;
+                changed = true;
+            }
+
+            if (string.IsNullOrWhiteSpace(existing.FriendlyName) && !string.IsNullOrWhiteSpace(baseStation.FriendlyName))
+            {
+                existing.FriendlyName = baseStation.FriendlyName;
+                changed = true;
+            }
+
+            if (existing.Version == BaseStationVersion.Unknown && baseStation.Version != BaseStationVersion.Unknown)
+            {
+                existing.Version = baseStation.Version;
+                changed = true;
+            }
         }
 
-        _config.BaseStations = merged.ToArray();
+        if (changed)
+        {
+            _config.BaseStations = merged.ToArray();
+        }
+
+        return changed;
     }
 
     private async Task EnsureSteamVrStartupInstalledAsync(CancellationToken cancellationToken)
@@ -3976,6 +4002,7 @@ internal sealed class AppSupervisor
         _baseStationSecondPowerOnPassCompletedAt = null;
         _baseStationPowerOnCommandSucceeded.Clear();
         _baseStationSteamVrConfirmedActive.Clear();
+        _baseStationPowerOnLastFailure.Clear();
         _nextBaseStationPowerOnAttemptAt = null;
         await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken, manualOverride: true);
         return new ManualBaseStationActionResult(true, resultMessage);
@@ -4197,6 +4224,7 @@ internal sealed class AppSupervisor
         }
 
         var routineStartedAt = Stopwatch.GetTimestamp();
+        baseStations = await RefreshIncompleteBaseStationMetadataAsync(baseStations, cancellationToken);
         WriteDiagnosticEvent(
             "base-station wake routine begin"
             + $"; targetPasses={targetPowerOnPasses}"
@@ -4345,11 +4373,87 @@ internal sealed class AppSupervisor
 
         _baseStationPowerOnPassesCompleted = 0;
         _baseStationSecondPowerOnPassCompletedAt = null;
-        _baseStationPowerOnCommandSucceeded.Clear();
-        _baseStationSteamVrConfirmedActive.Clear();
-        _nextBaseStationPowerOnAttemptAt = DateTimeOffset.UtcNow.AddSeconds(10);
-        WriteDiagnosticEvent($"base-station wake routine incomplete; nextAttemptAt={_nextBaseStationPowerOnAttemptAt.Value:O}; elapsedMs={Stopwatch.GetElapsedTime(routineStartedAt).TotalMilliseconds:0.0}");
+        _nextBaseStationPowerOnAttemptAt = null;
+        LogSkippedBaseStationsAfterPowerOn(baseStations, finalStates, confirmedOrCommandSucceeded);
+        _baseStationPowerOnComplete = true;
+        WriteDiagnosticEvent($"base-station wake routine complete; result=skipped-unavailable; elapsedMs={Stopwatch.GetElapsedTime(routineStartedAt).TotalMilliseconds:0.0}");
         return BaseStationWakeRoutineResult.Ran;
+    }
+
+    private async Task<BaseStationDevice[]> RefreshIncompleteBaseStationMetadataAsync(
+        BaseStationDevice[] baseStations,
+        CancellationToken cancellationToken)
+    {
+        if (!baseStations.Any(HasIncompleteBaseStationMetadata))
+        {
+            return baseStations;
+        }
+
+        Console.WriteLine("Base station metadata is incomplete. Scanning for current base-station details before power-on...");
+        WriteDiagnosticEvent("base-station metadata scan begin; reason=incomplete-configured-metadata");
+        try
+        {
+            var discovered = await BaseStationDiscovery.ScanAsync(TimeSpan.FromSeconds(10), cancellationToken);
+            var changed = MergeDiscoveredBaseStations(discovered, addNewDevices: false);
+            Console.WriteLine($"Base station metadata scan complete: {discovered.Count} station(s) found.");
+            WriteDiagnosticEvent($"base-station metadata scan complete; discovered={discovered.Count}; changed={changed}");
+            if (changed)
+            {
+                TrySaveBaseStationSettings("base station metadata scan");
+            }
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            Console.WriteLine($"Base station metadata scan failed; continuing with configured metadata: {ex.Message}");
+            WriteDiagnosticEvent($"base-station metadata scan failed; error={ex.Message}");
+        }
+
+        return GetEnabledBaseStations();
+    }
+
+    private static bool HasIncompleteBaseStationMetadata(BaseStationDevice baseStation)
+        => string.IsNullOrWhiteSpace(baseStation.Name)
+            || string.IsNullOrWhiteSpace(baseStation.FriendlyName)
+            || baseStation.Version == BaseStationVersion.Unknown;
+
+    private void TrySaveBaseStationSettings(string reason)
+    {
+        try
+        {
+            _config.SaveBaseStationSettings();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not save {reason}; continuing with in-memory base-station settings: {ex.Message}");
+            WriteDiagnosticEvent($"base-station settings save failed; reason={reason}; error={ex.Message}");
+        }
+    }
+
+    private void LogSkippedBaseStationsAfterPowerOn(
+        BaseStationDevice[] baseStations,
+        BaseStationPowerState[] finalStates,
+        HashSet<string> confirmedOrCommandSucceeded)
+    {
+        var skipped = baseStations
+            .Where((baseStation, index) =>
+                !IsAwakeBaseStationState(finalStates[index])
+                && !confirmedOrCommandSucceeded.Contains(baseStation.BluetoothAddress))
+            .ToArray();
+        if (skipped.Length == 0)
+        {
+            return;
+        }
+
+        Console.WriteLine("Some detected base stations are not supported for automatic power control and were skipped.");
+        foreach (var baseStation in skipped)
+        {
+            var failure = _baseStationPowerOnLastFailure.TryGetValue(baseStation.BluetoothAddress, out var message)
+                ? message
+                : "not confirmed awake after startup attempts";
+            Console.WriteLine(
+                $"Base station skipped: {baseStation.DisplayName} "
+                + $"({baseStation.BluetoothAddress}, version={baseStation.EffectiveVersion}): {failure}");
+        }
     }
 
     private bool CanUseSteamVrTrackingConfirmationForStartup()
@@ -4454,6 +4558,7 @@ internal sealed class AppSupervisor
             _baseStationSecondPowerOnPassCompletedAt = null;
             _baseStationPowerOnCommandSucceeded.Clear();
             _baseStationSteamVrConfirmedActive.Clear();
+            _baseStationPowerOnLastFailure.Clear();
             return;
         }
 
@@ -4492,6 +4597,7 @@ internal sealed class AppSupervisor
             _baseStationSecondPowerOnPassCompletedAt = null;
             _baseStationPowerOnCommandSucceeded.Clear();
             _baseStationSteamVrConfirmedActive.Clear();
+            _baseStationPowerOnLastFailure.Clear();
         }
     }
 
@@ -4652,9 +4758,12 @@ internal sealed class AppSupervisor
                 {
                     try
                     {
-                        await commandAsync(baseStation, cancellationToken);
+                        await RunBaseStationPowerOnCommandWithTimeoutAsync(
+                            token => commandAsync(baseStation, token),
+                            cancellationToken);
                         successes++;
                         onSuccess?.Invoke(index);
+                        _baseStationPowerOnLastFailure.Remove(baseStation.BluetoothAddress);
                         lastException = null;
                         Console.WriteLine($"Base station {baseStation.DisplayName}: {action} succeeded.");
                         break;
@@ -4677,6 +4786,7 @@ internal sealed class AppSupervisor
 
             if (lastException is not null)
             {
+                _baseStationPowerOnLastFailure[baseStation.BluetoothAddress] = lastException.Message;
                 Console.WriteLine($"Base station {baseStation.DisplayName}: could not {action}: {lastException.Message}");
             }
 
@@ -4687,6 +4797,22 @@ internal sealed class AppSupervisor
         }
 
         return successes;
+    }
+
+    private static async Task RunBaseStationPowerOnCommandWithTimeoutAsync(
+        Func<CancellationToken, Task> action,
+        CancellationToken cancellationToken)
+    {
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(BaseStationCommandTiming.PowerOnCommandTimeout);
+        try
+        {
+            await action(timeoutSource.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutSource.IsCancellationRequested)
+        {
+            throw new TimeoutException($"Bluetooth power-on command did not finish within {BaseStationCommandTiming.PowerOnCommandTimeout.TotalSeconds:0} seconds.");
+        }
     }
 
     private async Task<bool[]> SendBaseStationPowerOnPassAsync(BaseStationDevice[] baseStations, int pass, int totalPasses, CancellationToken cancellationToken)
@@ -4784,7 +4910,7 @@ internal sealed class AppSupervisor
                     continue;
                 }
 
-                states[index] = await _baseStationGattClient.ReadPowerStateAsync(baseStation, cancellationToken);
+                states[index] = await ReadBaseStationPowerStateWithTimeoutAsync(baseStation, cancellationToken);
                 if (states[index] == BaseStationPowerState.Unsupported)
                 {
                     baseStation.PowerStateReadUnsupported = true;
@@ -4807,11 +4933,27 @@ internal sealed class AppSupervisor
 
         if (_baseStationSettingsNeedSave && saveSettings)
         {
-            _config.SaveBaseStationSettings();
+            TrySaveBaseStationSettings("base station power-state metadata");
             _baseStationSettingsNeedSave = false;
         }
 
         return states;
+    }
+
+    private async Task<BaseStationPowerState> ReadBaseStationPowerStateWithTimeoutAsync(
+        BaseStationDevice baseStation,
+        CancellationToken cancellationToken)
+    {
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(BaseStationCommandTiming.PowerStateReadTimeout);
+        try
+        {
+            return await _baseStationGattClient.ReadPowerStateAsync(baseStation, timeoutSource.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutSource.IsCancellationRequested)
+        {
+            throw new TimeoutException($"Bluetooth power-state read did not finish within {BaseStationCommandTiming.PowerStateReadTimeout.TotalSeconds:0} seconds.");
+        }
     }
 
     private static bool IsAwakeBaseStationState(BaseStationPowerState state)

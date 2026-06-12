@@ -36,6 +36,8 @@ internal static class BaseStationCommandTiming
 {
     public static readonly TimeSpan InterStationDelay = TimeSpan.FromSeconds(1);
     public static readonly TimeSpan UnsupportedV2PowerOnBurstDelay = TimeSpan.FromSeconds(2);
+    public static readonly TimeSpan PowerOnCommandTimeout = TimeSpan.FromSeconds(8);
+    public static readonly TimeSpan PowerStateReadTimeout = TimeSpan.FromSeconds(8);
     public static readonly TimeSpan PowerDownCommandTimeout = TimeSpan.FromSeconds(8);
     public static readonly TimeSpan PowerDownRecoveryScanDuration = TimeSpan.FromSeconds(4);
     public static readonly TimeSpan PowerDownRecoverySettleDelay = TimeSpan.FromMilliseconds(500);
