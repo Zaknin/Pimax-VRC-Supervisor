@@ -38,8 +38,9 @@ internal sealed class ConfigEditorForm : Form
     private const string ActiveConfigSelectionFileName = "supervisor.active-config.txt";
     private const string DefaultConfigResourceName = "PimaxVrcSupervisor.Configurator.Defaults.supervisor.config.json";
     private const string DefaultVrcFaceTrackingDirectory = @"C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking";
+    private const int MaxDisplayNameLength = 64;
     private const string AutostartModeOff = "Off";
-    private const string AutostartModeScheduledTask = "Start in CLI mode when SteamVR is running";
+    private const string AutostartModeScheduledTask = "Terminal Mode";
     private const string AutostartModeSteamVrManifest = "SteamVR Overlay";
     private static readonly string DefaultIntifacePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -60,7 +61,7 @@ internal sealed class ConfigEditorForm : Form
         "5 = OSC Router launch/restart",
         "6 = Reload Autostart apps",
         "F1 = Show console shortcuts",
-        "Modern desktop TUI primary keys: 0 help, F5 refresh, 1-6 actions, Q quit TUI, Enter confirm, Esc cancel"
+        "Terminal UI primary keys: 0 help, F5 refresh, 1-6 actions, Q quit TUI, Enter confirm, Esc cancel"
     ];
     private static readonly string[] EditorShortcutLines =
     [
@@ -69,7 +70,7 @@ internal sealed class ConfigEditorForm : Form
         "Ctrl+O = Browse config",
         "F5 = Reload",
         "Ctrl+R = Reload",
-        "Ctrl+L = Launch Supervisor (uses Desktop TUI option)",
+        "Ctrl+L = Launch Supervisor (uses Terminal UI option)",
         "Ctrl+Shift+V = Validate",
         "Delete = Delete selected row in Auto Startup, Base Stations, or OSC Routes grids"
     ];
@@ -110,14 +111,14 @@ internal sealed class ConfigEditorForm : Form
     private readonly TextBox _pimaxServiceLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly CheckBox _diagnosticsLogSupervisorCheckBox = new ThemedCheckBox { Text = "Log supervisor diagnostics", AutoSize = true };
     private readonly CheckBox _diagnosticsLogSteamVrOverlayCheckBox = new ThemedCheckBox { Text = "Log SteamVR overlay diagnostics", AutoSize = true };
-    private readonly CheckBox _diagnosticsLogDesktopTuiCheckBox = new ThemedCheckBox { Text = "Log Desktop TUI load diagnostics", AutoSize = true };
+    private readonly CheckBox _diagnosticsLogDesktopTuiCheckBox = new ThemedCheckBox { Text = "Log Terminal UI load diagnostics", AutoSize = true };
     private readonly CheckBox _diagnosticsDebugSupervisorCheckBox = new ThemedCheckBox { Text = "Log Supervisor Debug", AutoSize = true };
     private readonly CheckBox _diagnosticsDebugSteamVrOverlayCheckBox = new ThemedCheckBox { Text = "Log SteamVR Overlay Debug", AutoSize = true };
     private readonly CheckBox _diagnosticsEnabledCheckBox = new ThemedCheckBox { Text = "Enable Diagnostics", AutoSize = true };
     private readonly CheckBox _diagnosticsVerboseCheckBox = new ThemedCheckBox { Text = "Verbose diagnostic timings", AutoSize = true };
     private readonly CheckBox _diagnosticsDebugSteamVrPointerCheckBox = new ThemedCheckBox { Text = "Show SteamVR overlay pointer marker", AutoSize = true };
     private readonly CheckBox _mouthTrackerRestartOnReconnectCheckBox = new ThemedCheckBox { Text = "Enable automatic restart on mouth tracker reconnects", AutoSize = true };
-    private readonly CheckBox _useDesktopTuiAsDefaultInterfaceCheckBox = new ThemedCheckBox { Text = "Use Desktop TUI as default interface", AutoSize = true };
+    private readonly CheckBox _useDesktopTuiAsDefaultInterfaceCheckBox = new ThemedCheckBox { Text = "Use Terminal UI as default interface", AutoSize = true };
     private readonly TextBox _diagnosticsLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly DataGridView _autoLaunchAppsGrid = new()
     {
@@ -498,7 +499,7 @@ internal sealed class ConfigEditorForm : Form
         }
 
         AddSectionHeader(layout, "Autostart");
-        AddLabeledRow(layout, "Autostart mode", _autostartModeComboBox, "Choose what the Supervisor should do automatically when SteamVR is running.");
+        AddLabeledRow(layout, "Autostart mode", _autostartModeComboBox, "Choose what the Supervisor should do automatically when SteamVR is running. Terminal Mode starts a watcher when SteamVR is running; depending on the Terminal UI default-interface option, it can launch hidden Supervisor + Terminal UI or preserve classic visible CLI behavior.");
 
         AddSectionHeader(layout, "Startup");
         _useDesktopTuiAsDefaultInterfaceCheckBox.CheckedChanged += (_, _) =>
@@ -506,13 +507,13 @@ internal sealed class ConfigEditorForm : Form
             _editorState.UseDesktopTuiAsDefaultInterface = _useDesktopTuiAsDefaultInterfaceCheckBox.Checked;
             SaveEditorState();
         };
-        AddFullWidth(layout, _useDesktopTuiAsDefaultInterfaceCheckBox, "When enabled, Launch Supervisor starts the Supervisor hidden and opens the Desktop TUI.");
+        AddFullWidth(layout, _useDesktopTuiAsDefaultInterfaceCheckBox, "When enabled, Launch Supervisor starts the Supervisor hidden and opens the Terminal UI.");
         AddFullWidth(layout, _turnOffMonitorsCheckBox, "Checked saves the current monitor layout and disables secondary monitors during the VR session. The layout is restored after VRChat and SteamVR close.");
         AddSectionHeader(layout, "Diagnostics");
         AddFullWidth(layout, _diagnosticsEnabledCheckBox, "Checked enables diagnostic and debug settings in this editor. Unchecked saves all diagnostic and debug options as disabled.");
         AddFullWidth(layout, _diagnosticsLogSupervisorCheckBox, ToolTipWithConfigKey("Write periodic supervisor CPU, memory, loop, process detection, command, app, and base-station timing diagnostics to a text file.", "DiagnosticsLogSupervisor"));
         AddFullWidth(layout, _diagnosticsLogSteamVrOverlayCheckBox, ToolTipWithConfigKey("Write SteamVR dashboard host loop, visibility, refresh, render, D3D upload, and texture submit diagnostics to a text file.", "DiagnosticsLogSteamVrOverlay"));
-        AddFullWidth(layout, _diagnosticsLogDesktopTuiCheckBox, ToolTipWithConfigKey("Writes lightweight Desktop TUI load and refresh diagnostics to the diagnostics log folder.", "DiagnosticsLogDesktopTui"));
+        AddFullWidth(layout, _diagnosticsLogDesktopTuiCheckBox, ToolTipWithConfigKey("Writes lightweight Terminal UI load and refresh diagnostics to the diagnostics log folder.", "DiagnosticsLogDesktopTui"));
         AddFullWidth(layout, _diagnosticsDebugSupervisorCheckBox, ToolTipWithConfigKey("Write supervisor debug events to a separate text file in the diagnostic log folder.", "DiagnosticsDebugSupervisor"));
         AddFullWidth(layout, _diagnosticsDebugSteamVrOverlayCheckBox, ToolTipWithConfigKey("Write SteamVR overlay debug events to a separate text file in the diagnostic log folder.", "DiagnosticsDebugSteamVrOverlay"));
         AddFullWidth(layout, _diagnosticsDebugSteamVrPointerCheckBox, ToolTipWithConfigKey("When SteamVR overlay debug logging is enabled, draw a visible pointer marker inside the overlay for hover hit-test troubleshooting.", "DiagnosticsDebugSteamVrPointer"));
@@ -2018,7 +2019,7 @@ internal sealed class ConfigEditorForm : Form
         var launchButton = CreateButton("Launch Supervisor");
         launchButton.Click += (_, _) => LaunchSupervisor();
         launchButton.FlatStyle = FlatStyle.Flat;
-        _toolTips.SetToolTip(launchButton, "Launch Supervisor (Ctrl+L). Uses the Desktop TUI option in Startup: checked opens the Desktop TUI, unchecked starts the classic visible console. Save changes first if you want the launched supervisor to use them.");
+        _toolTips.SetToolTip(launchButton, "Launch Supervisor (Ctrl+L). Uses the Terminal UI option in Startup: checked opens the Terminal UI, unchecked starts the classic visible console. Save changes first if you want the launched supervisor to use them.");
 
         var launchSteamVrButton = CreateButton("Launch SteamVR");
         launchSteamVrButton.Click += (_, _) => LaunchSteamVr();
@@ -2659,7 +2660,7 @@ internal sealed class ConfigEditorForm : Form
             return [];
         }
 
-        return Directory
+        var profileItems = Directory
             .EnumerateFiles(directory, "*.config.json", SearchOption.TopDirectoryOnly)
             .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
             .Select(path =>
@@ -2669,13 +2670,23 @@ internal sealed class ConfigEditorForm : Form
                 var displayName = currentPath is not null
                     && !string.IsNullOrWhiteSpace(currentDisplayNameOverride)
                     && PathsEqual(fullPath, currentPath)
-                        ? currentDisplayNameOverride.Trim()
+                        ? NormalizeDisplayNameForDisplay(currentDisplayNameOverride)
                         : ReadConfigDisplayName(path);
-                return new ConfigProfileItem(
-                    string.IsNullOrWhiteSpace(displayName) ? fileName : displayName.Trim(),
-                    fileName,
-                    fullPath);
+                var friendlyName = string.IsNullOrWhiteSpace(displayName) ? fileName : displayName;
+                return new ConfigProfileItem(friendlyName, fileName, fullPath, friendlyName);
             })
+            .ToArray();
+
+        var duplicateNames = profileItems
+            .GroupBy(item => item.FriendlyName, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return profileItems
+            .Select(item => duplicateNames.Contains(item.FriendlyName)
+                ? item with { DisplayName = $"{item.FriendlyName} - {item.FileName}" }
+                : item)
             .ToArray();
     }
 
@@ -2683,7 +2694,7 @@ internal sealed class ConfigEditorForm : Form
     {
         try
         {
-            return GetString(ParseJson(File.ReadAllText(path)), "DisplayName");
+            return NormalizeDisplayNameForDisplay(GetString(ParseJson(File.ReadAllText(path)), "DisplayName"));
         }
         catch
         {
@@ -2773,7 +2784,7 @@ internal sealed class ConfigEditorForm : Form
     private void UpdateConfigSelectorTooltip()
     {
         var tooltip = _configSelectorComboBox.SelectedItem is ConfigProfileItem item
-            ? $"Config: {item.DisplayName}\r\nFile: {item.FileName}\r\nPath:\r\n{item.Path}"
+            ? $"Display name: {item.FriendlyName}\r\nFile: {item.FileName}\r\nPath:\r\n{item.Path}"
             : "Select a named *.config.json file from the app folder.";
         _toolTips.SetToolTip(_configSelectorComboBox, tooltip);
     }
@@ -2782,6 +2793,46 @@ internal sealed class ConfigEditorForm : Form
     {
         var fileName = string.IsNullOrWhiteSpace(path) ? "" : Path.GetFileName(path);
         return string.IsNullOrWhiteSpace(fileName) ? "supervisor.config.json" : fileName;
+    }
+
+    private static DisplayNameNormalizationResult NormalizeDisplayNameForStorage(string value)
+        => NormalizeDisplayName(value, truncateForStorage: true);
+
+    private static string NormalizeDisplayNameForDisplay(string value)
+        => NormalizeDisplayName(value, truncateForStorage: false).Value;
+
+    private static DisplayNameNormalizationResult NormalizeDisplayName(string value, bool truncateForStorage)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return new DisplayNameNormalizationResult("", Shortened: false);
+        }
+
+        var builder = new StringBuilder(value.Length);
+        foreach (var character in value)
+        {
+            if (char.IsControl(character))
+            {
+                if (char.IsWhiteSpace(character))
+                {
+                    builder.Append(' ');
+                }
+
+                continue;
+            }
+
+            builder.Append(char.IsWhiteSpace(character) ? ' ' : character);
+        }
+
+        var normalized = Regex.Replace(builder.ToString().Trim(), @"\s+", " ");
+        if (!truncateForStorage || normalized.Length <= MaxDisplayNameLength)
+        {
+            return new DisplayNameNormalizationResult(normalized, Shortened: false);
+        }
+
+        return new DisplayNameNormalizationResult(
+            normalized[..MaxDisplayNameLength].TrimEnd(),
+            Shortened: true);
     }
 
     private static bool PathsEqual(string first, string second)
@@ -3000,7 +3051,7 @@ internal sealed class ConfigEditorForm : Form
 
         if (supervisorRunning && tuiRunning)
         {
-            SetStatus("Supervisor and Desktop TUI are already running.");
+            SetStatus("Supervisor and Terminal UI are already running.");
             return;
         }
 
@@ -3009,11 +3060,11 @@ internal sealed class ConfigEditorForm : Form
             var result = LaunchDesktopTui(showAlreadyOpenMessage: false);
             if (result == DesktopTuiLaunchResult.Launched)
             {
-                SetStatus("Supervisor is already running. Opened Desktop TUI.");
+                SetStatus("Supervisor is already running. Opened Terminal UI.");
             }
             else if (result == DesktopTuiLaunchResult.AlreadyRunning)
             {
-                SetStatus("Supervisor and Desktop TUI are already running.");
+                SetStatus("Supervisor and Terminal UI are already running.");
             }
             return;
         }
@@ -3031,11 +3082,11 @@ internal sealed class ConfigEditorForm : Form
 
             if (tuiResult == DesktopTuiLaunchResult.Launched)
             {
-                SetStatus("Started Supervisor and Desktop TUI.");
+                SetStatus("Started Supervisor and Terminal UI.");
             }
             else if (tuiResult == DesktopTuiLaunchResult.AlreadyRunning)
             {
-                SetStatus("Started Supervisor. Desktop TUI is already open.");
+                SetStatus("Started Supervisor. Terminal UI is already open.");
             }
         }
     }
@@ -3157,14 +3208,14 @@ internal sealed class ConfigEditorForm : Form
         if (!File.Exists(tuiPath))
         {
             ShowThemedMessageBox(
-                "Desktop TUI was not found next to the Configurator.\r\n\r\n"
+                "Terminal UI was not found next to the Configurator.\r\n\r\n"
                 + "Expected file:\r\n"
                 + tuiPath
-                + "\r\n\r\nBuild or copy the Rust TUI executable into the release folder and try again.",
-                "Could not start Desktop TUI",
+                + "\r\n\r\nBuild or copy the Rust Terminal UI executable into the release folder and try again.",
+                "Could not start Terminal UI",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
-            SetStatus("Desktop TUI was not found.");
+            SetStatus("Terminal UI was not found.");
             return DesktopTuiLaunchResult.Failed;
         }
 
@@ -3173,12 +3224,12 @@ internal sealed class ConfigEditorForm : Form
             if (showAlreadyOpenMessage)
             {
                 ShowThemedMessageBox(
-                    "Desktop TUI is already open.",
-                    "Desktop TUI already open",
+                    "Terminal UI is already open.",
+                    "Terminal UI already open",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
             }
-            SetStatus("Desktop TUI is already open.");
+            SetStatus("Terminal UI is already open.");
             return DesktopTuiLaunchResult.AlreadyRunning;
         }
 
@@ -3200,13 +3251,13 @@ internal sealed class ConfigEditorForm : Form
             }
 
             Process.Start(startInfo);
-            SetStatus("Desktop TUI opened.");
+            SetStatus("Terminal UI opened.");
             return DesktopTuiLaunchResult.Launched;
         }
         catch (Exception ex)
         {
-            ShowThemedMessageBox(ex.Message, "Could not start Desktop TUI", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            SetStatus("Could not start Desktop TUI.");
+            ShowThemedMessageBox(ex.Message, "Could not start Terminal UI", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus("Could not start Terminal UI.");
             return DesktopTuiLaunchResult.Failed;
         }
     }
@@ -3271,7 +3322,8 @@ internal sealed class ConfigEditorForm : Form
 
     private void PopulateControls(JsonNode? node)
     {
-        _displayNameTextBox.Text = GetStringOrDefault(node, "DisplayName", GetFallbackDisplayName(_configPathTextBox.Text));
+        _displayNameTextBox.Text = NormalizeDisplayNameForDisplay(
+            GetStringOrDefault(node, "DisplayName", GetFallbackDisplayName(_configPathTextBox.Text)));
         _brokenEyePathTextBox.Text = GetString(node, "BrokenEyePath");
         _vrcFaceTrackingPathTextBox.Text = GetString(node, "VrcFaceTrackingPath");
         _intifacePathTextBox.Text = GetStringOrDefault(node, "IntifacePath", DefaultIntifacePath);
@@ -3383,6 +3435,20 @@ internal sealed class ConfigEditorForm : Form
                 return false;
             }
 
+            var displayNameNormalization = NormalizeDisplayNameForStorage(_displayNameTextBox.Text);
+            if (!string.Equals(_displayNameTextBox.Text, displayNameNormalization.Value, StringComparison.Ordinal))
+            {
+                _displayNameTextBox.Text = displayNameNormalization.Value;
+            }
+            if (displayNameNormalization.Shortened)
+            {
+                ShowThemedMessageBox(
+                    $"The display name was shortened to {MaxDisplayNameLength} characters before saving.",
+                    "Display name shortened",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+
             var json = BuildCurrentJson();
             ParseJson(json);
             var shouldApplyStartupIntegration = forceApplyStartupIntegration || StartupIntegrationSelectionChanged(_loadedJson, json);
@@ -3401,6 +3467,11 @@ internal sealed class ConfigEditorForm : Form
             var savedStatus = backupPath is null
                 ? $"Saved config at {DateTime.Now:HH:mm}."
                 : $"Saved config and created backup at {DateTime.Now:HH:mm}.";
+            if (displayNameNormalization.Shortened)
+            {
+                savedStatus += $" Display name was shortened to {MaxDisplayNameLength} characters.";
+            }
+
             SetCleanStatus(savedStatus, backupPath is null ? null : "Backup path:\r\n" + backupPath);
             ResetFirstRunPreferenceTouchTracking();
             if (shouldApplyStartupIntegration)
@@ -3488,6 +3559,7 @@ internal sealed class ConfigEditorForm : Form
             return;
         }
 
+        var windowSnapshot = CaptureVisibleWindowState();
         try
         {
             var startupHelperPath = CreateOrUpdateStartupHelperExecutable(supervisorPath);
@@ -3497,7 +3569,8 @@ internal sealed class ConfigEditorForm : Form
                 WorkingDirectory = Path.GetDirectoryName(startupHelperPath) ?? AppContext.BaseDirectory,
                 UseShellExecute = !IsAdministrator(),
                 ErrorDialog = true,
-                ErrorDialogParentHandle = Handle
+                ErrorDialogParentHandle = Handle,
+                WindowStyle = ProcessWindowStyle.Hidden
             };
             startInfo.ArgumentList.Add("--apply-startup-integration");
             startInfo.ArgumentList.Add("--hide-startup-helper");
@@ -3530,21 +3603,24 @@ internal sealed class ConfigEditorForm : Form
                     "None" => "Saved config and requested removal of managed startup tasks.",
                     _ => "Saved config and requested startup integration update."
                 });
+                RestoreVisibleWindowStateIfMinimized(windowSnapshot);
                 return;
             }
 
             _startupIntegrationApplyInProgress = true;
             SetActiveOperationStatus("Applying startup integration...");
-            _ = MonitorStartupIntegrationApplyAsync(process, startupLaunchMode);
+            _ = MonitorStartupIntegrationApplyAsync(process, startupLaunchMode, windowSnapshot);
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
         {
             SetStatus("Startup integration was saved but Windows cancelled the administrator approval prompt.");
+            RestoreVisibleWindowStateIfMinimized(windowSnapshot);
         }
         catch (Exception ex)
         {
             ShowThemedMessageBox(ex.Message, "Could not apply startup integration", MessageBoxButtons.OK, MessageBoxIcon.Error);
             SetStatus("Startup integration apply failed.");
+            RestoreVisibleWindowStateIfMinimized(windowSnapshot);
         }
     }
 
@@ -3555,7 +3631,10 @@ internal sealed class ConfigEditorForm : Form
         return helperPath;
     }
 
-    private async Task MonitorStartupIntegrationApplyAsync(Process process, string startupLaunchMode)
+    private async Task MonitorStartupIntegrationApplyAsync(
+        Process process,
+        string startupLaunchMode,
+        WindowStateSnapshot windowSnapshot)
     {
         try
         {
@@ -3609,7 +3688,11 @@ internal sealed class ConfigEditorForm : Form
         }
         finally
         {
-            RunOnUiThread(() => _startupIntegrationApplyInProgress = false);
+            RunOnUiThread(() =>
+            {
+                _startupIntegrationApplyInProgress = false;
+                RestoreVisibleWindowStateIfMinimized(windowSnapshot);
+            });
         }
     }
 
@@ -3950,6 +4033,29 @@ internal sealed class ConfigEditorForm : Form
             : FormWindowState.Normal;
     }
 
+    private WindowStateSnapshot CaptureVisibleWindowState()
+        => new(
+            WindowState == FormWindowState.Minimized ? FormWindowState.Normal : WindowState,
+            WindowState == FormWindowState.Normal ? Bounds : RestoreBounds);
+
+    private void RestoreVisibleWindowStateIfMinimized(WindowStateSnapshot snapshot)
+    {
+        if (IsDisposed || WindowState != FormWindowState.Minimized)
+        {
+            return;
+        }
+
+        if (snapshot.Bounds is { Width: > 0, Height: > 0 } bounds
+            && Screen.AllScreens.Any(screen => screen.WorkingArea.IntersectsWith(bounds)))
+        {
+            Bounds = bounds;
+        }
+
+        WindowState = snapshot.WindowState == FormWindowState.Maximized
+            ? FormWindowState.Maximized
+            : FormWindowState.Normal;
+    }
+
     private void SaveEditorState()
     {
         _editorState.LastConfigPath = TryGetFullPath(_configPathTextBox.Text.Trim()) ?? _editorState.LastConfigPath;
@@ -4024,7 +4130,7 @@ internal sealed class ConfigEditorForm : Form
     private string ApplyControlValues(string baseJson)
     {
         var json = string.IsNullOrWhiteSpace(baseJson) ? "{\r\n}\r\n" : baseJson;
-        json = JsonPropertyEditor.ReplaceTopLevel(json, "DisplayName", Serialize(_displayNameTextBox.Text.Trim()));
+        json = JsonPropertyEditor.ReplaceTopLevel(json, "DisplayName", Serialize(NormalizeDisplayNameForStorage(_displayNameTextBox.Text).Value));
         json = JsonPropertyEditor.Replace(json, "BrokenEyePath", Serialize(_brokenEyePathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "VrcFaceTrackingPath", Serialize(_vrcFaceTrackingPathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "IntifacePath", Serialize(_intifacePathTextBox.Text.Trim()));
@@ -7025,7 +7131,7 @@ internal enum ExternalConfigChoice
     UseCurrentFolderConfig
 }
 
-internal sealed record ConfigProfileItem(string DisplayName, string FileName, string Path)
+internal sealed record ConfigProfileItem(string DisplayName, string FileName, string Path, string FriendlyName)
 {
     public override string ToString() => DisplayName;
 }
@@ -7044,6 +7150,10 @@ internal sealed class ValidationResult
 }
 
 internal sealed record FriendlyValidationSummary(string Heading, string Body);
+
+internal sealed record DisplayNameNormalizationResult(string Value, bool Shortened);
+
+internal sealed record WindowStateSnapshot(FormWindowState WindowState, Rectangle Bounds);
 
 internal sealed class EditorState
 {

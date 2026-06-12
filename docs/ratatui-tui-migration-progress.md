@@ -2511,6 +2511,28 @@ Next direction:
 
 - Run a controlled SteamVR CLI autostart session to verify the TUI command line includes `--exit-when-supervisor-exits` and auto-closes after the paired Supervisor exits.
 
+### Phase 20H - Configurator autostart UX and config display name hardening
+
+Status: Completed
+
+Summary:
+
+- Updated normal Configurator wording from `Desktop TUI` to `Terminal UI` while leaving executable names, source names, protocol strings, and command-line flags unchanged.
+- Renamed the scheduled autostart dropdown option from `Start in CLI mode when SteamVR is running` to `Terminal Mode`.
+- Hardened startup integration apply UX so the helper is requested hidden/no-window where possible and the Configurator restores its prior visible state if Windows minimizes it during helper/UAC handling.
+- Hardened config `DisplayName` handling: names are normalized, saved names are limited to 64 characters, shortened names are reported in the save status, empty names fall back to the filename, and duplicate display names are disambiguated in the selector with the filename.
+
+Boundaries:
+
+- No `query-json`, `action-json`, or `lifecycle-json` protocol behavior changed.
+- No TUI bridge/action/lifecycle behavior, TUI `Q` behavior, TUI window-close behavior, diagnostics fields, render/backoff behavior, SteamVR Overlay behavior, SteamVR host behavior, Supervisor cleanup behavior, base-station behavior, monitor behavior, OSC behavior, VRChat process behavior, or release layout changed.
+- Internal names such as `PimaxVrcSupervisorTui.exe`, `--desktop-tui-start`, `--desktop-tui-default-interface`, and `--exit-when-supervisor-exits` remain unchanged.
+
+Verification:
+
+- Build, release refresh, and runtime smoke results are recorded in the Phase 20H implementation final report.
+- Release refresh remains complete only when all three C# publishes and the Rust TUI copy succeed.
+
 ### Phase 17D - Backend-off consistency, neutral modal controls, action hints, and log follow
 
 Status: Completed

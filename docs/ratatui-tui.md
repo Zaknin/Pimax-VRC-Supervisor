@@ -1,4 +1,4 @@
-# Desktop TUI
+# Terminal UI
 
 `PimaxVrcSupervisorTui.exe` is a separate Rust/Ratatui desktop terminal UI for monitoring a running Pimax VRC Supervisor backend and confirming regular classic-console actions.
 
@@ -6,13 +6,13 @@ The TUI is part of the `cli-ui2` / `1.3.0-test` migration work. It is not a repl
 
 Phase 18 lifecycle and Configurator integration planning is tracked in [TUI Lifecycle And Configurator Integration Design](phase-18-tui-lifecycle-configurator-design.md).
 
-Phase 18B adds a Configurator **Launch Desktop TUI** button. It only starts `PimaxVrcSupervisorTui.exe` from the release folder; it does not start or stop the supervisor.
+Phase 18B adds a Configurator **Launch Terminal UI** button. It only starts `PimaxVrcSupervisorTui.exe` from the release folder; it does not start or stop the supervisor.
 
-Phase 18C adds **Launch Supervisor + Desktop TUI** and a confirmed graceful shutdown workflow. Dashboard `Q` now asks the supervisor to run the same cleanup routine as Ctrl+C, then the TUI exits after cleanup is accepted and the backend exits/disconnects or a timeout is reached.
+Phase 18C adds **Launch Supervisor + Terminal UI** and a confirmed graceful shutdown workflow. Dashboard `Q` now asks the supervisor to run the same cleanup routine as Ctrl+C, then the TUI exits after cleanup is accepted and the backend exits/disconnects or a timeout is reached.
 
-Phase 18D hardens the same workflow. The backend still exposes only the narrow `lifecycle-json` shutdown action, but the TCP bridge is adjusted so a produced lifecycle response can be written even as shutdown cancellation begins. The TUI displays backend lifecycle rejection text directly and keeps the 60-second timeout warning visible briefly before exiting. The Configurator combined-launch button now reports launched, already-running, and failed Desktop TUI cases more precisely.
+Phase 18D hardens the same workflow. The backend still exposes only the narrow `lifecycle-json` shutdown action, but the TCP bridge is adjusted so a produced lifecycle response can be written even as shutdown cancellation begins. The TUI displays backend lifecycle rejection text directly and keeps the 60-second timeout warning visible briefly before exiting. The Configurator combined-launch button now reports launched, already-running, and failed Terminal UI cases more precisely.
 
-Phase 18E adds `--desktop-tui-start`, a dedicated hidden supervisor startup mode for this primary workflow. **Launch Supervisor + Desktop TUI** uses it to hide the supervisor console while keeping normal supervisor semantics. The normal **Launch Supervisor** button remains a visible classic-console launch, and `--steamvr-start` remains SteamVR-specific.
+Phase 18E adds `--desktop-tui-start`, a dedicated hidden supervisor startup mode for this primary workflow. **Launch Supervisor + Terminal UI** uses it to hide the supervisor console while keeping normal supervisor semantics. The normal **Launch Supervisor** button remains a visible classic-console launch, and `--steamvr-start` remains SteamVR-specific.
 
 Phase 18F validates the release-folder build and source boundaries for the primary workflow. Source inspection confirmed `--desktop-tui-start` remains separate from `--steamvr-start`, and the release folder was refreshed successfully. Interactive lifecycle shutdown testing was skipped during implementation because confirming shutdown can run supervisor cleanup, restore monitors, stop apps, and affect base stations.
 
@@ -20,25 +20,27 @@ Phase 18G adds Windows best-effort terminal close handling. When the terminal ho
 
 Phase 18H records successful release-folder runtime validation of this best-effort path in the tested Windows terminal host: TUI window X close requested supervisor cleanup, managed apps closed through the supervisor cleanup path, and the supervisor exited.
 
-Phase 19A cleans normal operator-facing Configurator and Desktop TUI wording. Routine UI now says `Supervisor`, `Connected`, `DISCONNECTED`, `Shut down Supervisor`, and `closing managed apps` instead of protocol or implementation terms. Protocol strings such as `query-json`, `action-json`, and `lifecycle-json` remain unchanged internally and are kept in design documentation where they are useful.
+Phase 19A cleans normal operator-facing Configurator and Terminal UI wording. Routine UI now says `Supervisor`, `Connected`, `DISCONNECTED`, `Shut down Supervisor`, and `closing managed apps` instead of protocol or implementation terms. Protocol strings such as `query-json`, `action-json`, and `lifecycle-json` remain unchanged internally and are kept in design documentation where they are useful.
 
-Phase 19B makes Desktop TUI the default Configurator launch interface. The `Use Desktop TUI as default interface` option is enabled by default; when checked, **Launch Supervisor** starts the Supervisor hidden and opens the Desktop TUI. When unchecked, **Launch Supervisor** starts the classic visible Supervisor console. Standalone normal UI buttons for **Launch Desktop TUI** and **Launch Supervisor + Desktop TUI** were removed. Release-folder runtime smoke is valid only after all three C# publishes and the Rust TUI copy succeed.
+Phase 19B makes Terminal UI the default Configurator launch interface. The `Use Terminal UI as default interface` option is enabled by default; when checked, **Launch Supervisor** starts the Supervisor hidden and opens the Terminal UI. When unchecked, **Launch Supervisor** starts the classic visible Supervisor console. Standalone normal UI buttons for **Launch Terminal UI** and **Launch Supervisor + Terminal UI** were removed. Release-folder runtime smoke is valid only after all three C# publishes and the Rust TUI copy succeed.
 
-Phase 19C moves `Use Desktop TUI as default interface` from the footer into the Configurator **Startup** section. It does not change persistence, default checked state, **Launch Supervisor** behavior, bridge protocols, or the supervisor runtime config schema.
+Phase 19C moves `Use Terminal UI as default interface` from the footer into the Configurator **Startup** section. It does not change persistence, default checked state, **Launch Supervisor** behavior, bridge protocols, or the supervisor runtime config schema.
 
-Phase 19D replaces the two Configurator autostart checkboxes with one **Autostart mode** dropdown. The dropdown maps to the existing supervisor config fields and does not change Desktop TUI launch, shutdown, bridge protocol, or action behavior.
+Phase 19D replaces the two Configurator autostart checkboxes with one **Autostart mode** dropdown. The dropdown maps to the existing supervisor config fields and does not change Terminal UI launch, shutdown, bridge protocol, or action behavior.
 
-Phase 20A adds optional Desktop TUI load diagnostics. The Configurator passes the selected config path to the TUI, and the TUI reads only `DiagnosticsLogDesktopTui`, `DiagnosticsSummaryIntervalSeconds`, and `DiagnosticsLogDirectory`. Diagnostics are disabled by default; when enabled they append interval JSONL summaries to `PimaxVrcSupervisorTui.diagnostics.log` without adding bridge calls, UI text, actions, lifecycle commands, or SteamVR behavior.
+Phase 20A adds optional Terminal UI load diagnostics. The Configurator passes the selected config path to the TUI, and the TUI reads only `DiagnosticsLogDesktopTui`, `DiagnosticsSummaryIntervalSeconds`, and `DiagnosticsLogDirectory`. Diagnostics are disabled by default; when enabled they append interval JSONL summaries to `PimaxVrcSupervisorTui.diagnostics.log` without adding bridge calls, UI text, actions, lifecycle commands, or SteamVR behavior.
 
-Phase 20A-Hotfix makes Desktop TUI diagnostics create the log immediately when enabled. The TUI accepts both `--config <path>` and `--config=<path>`, tolerates comments and trailing commas while reading only diagnostics settings, expands Windows-style `%VAR%` diagnostics folders, falls back to the temp diagnostics folder when the configured folder cannot be opened, writes a `desktop_tui_diagnostics_started` startup marker, and labels periodic summary records with `desktop_tui_diagnostics_summary`.
+Phase 20A-Hotfix makes Terminal UI diagnostics create the log immediately when enabled. The TUI accepts both `--config <path>` and `--config=<path>`, tolerates comments and trailing commas while reading only diagnostics settings, expands Windows-style `%VAR%` diagnostics folders, falls back to the temp diagnostics folder when the configured folder cannot be opened, writes a `desktop_tui_diagnostics_started` startup marker, and labels periodic summary records with `desktop_tui_diagnostics_summary`.
 
 Phase 20B reduces idle redraw and disconnected bridge load. The TUI redraws on visible state changes, refresh completion, terminal resize, and a low-rate heartbeat instead of redrawing on every input-poll timeout. Connected refresh stays near the existing 3-second cadence, disconnected automatic retry backs off to about 7 seconds, and manual refresh remains immediate. Bridge protocols, actions, lifecycle behavior, Configurator launch behavior, SteamVR behavior, and cleanup behavior are unchanged.
 
-Phase 20C adds diagnostics-only process load metrics to the existing Desktop TUI summary records. CPU, memory, thread, and handle counters are sampled once per diagnostics interval and appended to `desktop_tui_diagnostics_summary`; the TUI does not add a diagnostics panel, extra bridge calls, action behavior, lifecycle behavior, or SteamVR behavior.
+Phase 20C adds diagnostics-only process load metrics to the existing Terminal UI summary records. CPU, memory, thread, and handle counters are sampled once per diagnostics interval and appended to `desktop_tui_diagnostics_summary`; the TUI does not add a diagnostics panel, extra bridge calls, action behavior, lifecycle behavior, or SteamVR behavior.
 
-Phase 20E applies the Configurator **Use Desktop TUI as default interface** preference to scheduled CLI autostart. When **Autostart mode** is `Start in CLI mode when SteamVR is running`, applying startup integration stores the active config path and captures whether the Desktop TUI preference was enabled. With the preference enabled, the watcher starts the Supervisor hidden with `--desktop-tui-start` and opens the Desktop TUI with `--config <active config>`; if the Supervisor is already running, it opens only the TUI. With the preference disabled, scheduled CLI autostart keeps the existing visible classic-console launch. **SteamVR Overlay** remains unchanged and continues to use the SteamVR host / `--steamvr-start` path.
+Phase 20E applies the Configurator **Use Terminal UI as default interface** preference to scheduled CLI autostart. When **Autostart mode** is `Terminal Mode`, applying startup integration stores the active config path and captures whether the Terminal UI preference was enabled. With the preference enabled, the watcher starts the Supervisor hidden with `--desktop-tui-start` and opens the Terminal UI with `--config <active config>`; if the Supervisor is already running, it opens only the TUI. With the preference disabled, scheduled CLI autostart keeps the existing visible classic-console launch. **SteamVR Overlay** remains unchanged and continues to use the SteamVR host / `--steamvr-start` path.
 
-Phase 20G adds an autostart-only TUI auto-exit flag. When the scheduled watcher opens the Desktop TUI for checked Desktop TUI default CLI autostart, it passes `--exit-when-supervisor-exits`. The TUI does not close during startup if the Supervisor is not connected yet; after it has connected once, losing that Supervisor connection starts a short grace timer and then exits the TUI. Manual TUI launches do not receive the flag and keep the existing disconnected behavior.
+Phase 20G adds an autostart-only TUI auto-exit flag. When the scheduled watcher opens the Terminal UI for checked Terminal UI default CLI autostart, it passes `--exit-when-supervisor-exits`. The TUI does not close during startup if the Supervisor is not connected yet; after it has connected once, losing that Supervisor connection starts a short grace timer and then exits the TUI. Manual TUI launches do not receive the flag and keep the existing disconnected behavior.
+
+Phase 20H renames normal user-facing Configurator wording from Desktop TUI to Terminal UI and renames the scheduled autostart display option to **Terminal Mode**. It also hardens Configurator startup-integration apply window handling and config `DisplayName` normalization/disambiguation. Internal executable names, flags, bridge protocols, action behavior, diagnostics fields, render/backoff behavior, SteamVR Overlay behavior, and cleanup behavior remain unchanged.
 
 ## Purpose
 
@@ -97,13 +99,13 @@ The SteamVR overlay remains unchanged. The TUI does not replace VR status/log re
 
 ## Launch Requirements
 
-The supervisor backend must already be running for live data. The TUI does not start the supervisor, does not elevate, and does not start SteamVR or VRChat. The Configurator **Launch Supervisor** button can start the supervisor and TUI together when `Use Desktop TUI as default interface` is checked.
+The supervisor backend must already be running for live data. The TUI does not start the supervisor, does not elevate, and does not start SteamVR or VRChat. The Configurator **Launch Supervisor** button can start the supervisor and TUI together when `Use Terminal UI as default interface` is checked.
 
-When launched through checked-mode **Launch Supervisor**, the supervisor receives `--desktop-tui-start`. That flag hides the console for the Desktop TUI workflow only; it does not set SteamVR startup mode and does not change cleanup or action semantics.
+When launched through checked-mode **Launch Supervisor**, the supervisor receives `--desktop-tui-start`. That flag hides the console for the Terminal UI workflow only; it does not set SteamVR startup mode and does not change cleanup or action semantics.
 
-The same Desktop TUI default-interface preference also applies to scheduled CLI autostart. If **Start in CLI mode when SteamVR is running** is selected and startup integration is applied while the preference is checked, the watcher launches the hidden Supervisor plus Desktop TUI using the active config. If the Supervisor is already running but the TUI is not, it launches only the TUI. Unchecking the preference preserves the visible classic CLI autostart path.
+The same Terminal UI default-interface preference also applies to scheduled CLI autostart. If **Terminal Mode** is selected and startup integration is applied while the preference is checked, the watcher launches the hidden Supervisor plus Terminal UI using the active config. If the Supervisor is already running but the TUI is not, it launches only the TUI. Unchecking the preference preserves the visible classic CLI autostart path.
 
-Only the scheduled watcher Desktop TUI launch adds `--exit-when-supervisor-exits`. This flag is intentionally local to the TUI and does not change bridge protocol, shutdown requests, Supervisor cleanup, or SteamVR Overlay behavior.
+Only the scheduled watcher Terminal UI launch adds `--exit-when-supervisor-exits`. This flag is intentionally local to the TUI and does not change bridge protocol, shutdown requests, Supervisor cleanup, or SteamVR Overlay behavior.
 
 From a release folder that contains `PimaxVrcSupervisorTui.exe`:
 
@@ -241,9 +243,9 @@ Do not commit generated `target/` or `release/` output. Keep `PimaxVrcSupervisor
 - No filesystem diagnostic log browsing.
 - No Configurator setting for desktop console mode yet.
 
-## Desktop TUI Diagnostics
+## Terminal UI Diagnostics
 
-Desktop TUI diagnostics are optional and disabled by default with `DiagnosticsLogDesktopTui = false`. The Configurator shows **Log Desktop TUI load diagnostics** in the Diagnostics section, controlled by the same **Enable Diagnostics** master checkbox as the existing diagnostics options. Turning the master off disables the control visually but does not clear its live checkbox state; saving writes the option as disabled while the master is off.
+Terminal UI diagnostics are optional and disabled by default with `DiagnosticsLogDesktopTui = false`. The Configurator shows **Log Terminal UI load diagnostics** in the Diagnostics section, controlled by the same **Enable Diagnostics** master checkbox as the existing diagnostics options. Turning the master off disables the control visually but does not clear its live checkbox state; saving writes the option as disabled while the master is off.
 
 When enabled, the TUI appends JSONL records to `PimaxVrcSupervisorTui.diagnostics.log` in `DiagnosticsLogDirectory` using `DiagnosticsSummaryIntervalSeconds` when valid, or 20 seconds otherwise. It writes one `desktop_tui_diagnostics_started` marker at startup, then `desktop_tui_diagnostics_summary` records after each interval. The diagnostics loader accepts comments and trailing commas while extracting the diagnostics fields, so a tolerated hand-edited config does not silently suppress the TUI diagnostics log. Summaries include render, refresh, input wakeup, bridge call/failure/timeout/timing, action-start, lifecycle-request, connection-change, PID, connected-state, and TUI process counters. Process counters are `tui_cpu_percent`, `tui_cpu_time_delta_ms`, `tui_cpu_time_total_ms`, `tui_working_set_mb`, `tui_private_memory_mb`, `tui_thread_count`, and `tui_handle_count`; unavailable counters are written as `null`. Payloads, full bridge responses, command contents, per-frame records, GPU metrics, and terminal-host metrics are not logged.
 
@@ -255,7 +257,7 @@ Action execution is intentionally allowlisted. The current TUI exposes only regu
 
 The safety and confirmation model for future action execution is documented separately in [TUI Action Execution Safety Design](ratatui-action-execution-design.md).
 
-Phase 9 starts backend-only structured `action-json` support for the `restart-osc-router` allowlist entry. The desktop TUI still does not expose action execution, action buttons, action keybindings, or confirmation UI.
+Phase 9 starts backend-only structured `action-json` support for the `restart-osc-router` allowlist entry. The Terminal UI still does not expose action execution, action buttons, action keybindings, or confirmation UI.
 
 Phase 10 displays backend action metadata in the command capability panel for planning and review. The metadata is informational only: the TUI still sends only read-only `query-json` requests and does not call `action-json` or legacy action commands.
 
