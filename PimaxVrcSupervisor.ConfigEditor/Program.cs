@@ -61,7 +61,13 @@ internal sealed class ConfigEditorForm : Form
         "5 = OSC Router launch/restart",
         "6 = Reload Autostart apps",
         "F1 = Show console shortcuts",
-        "Terminal UI primary keys: 0 help, F5 refresh, 1-6 actions, Q quit TUI, Enter confirm, Esc cancel"
+        "",
+        "Terminal UI keys",
+        "0 = Help",
+        "F5 = Refresh",
+        "Q = Quit Terminal UI",
+        "Enter = Confirm",
+        "Esc = Cancel / Back"
     ];
     private static readonly string[] EditorShortcutLines =
     [
