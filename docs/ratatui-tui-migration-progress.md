@@ -2346,6 +2346,53 @@ Next direction:
 - No further connected-idle TUI optimization is recommended right now.
 - If more Phase 20 diagnostics work is needed, run a disconnected-only baseline when the Supervisor can be safely stopped, or run a longer 10-15 minute soak to confirm memory and handle stability.
 
+### Phase 20E - Apply Desktop TUI default to CLI autostart
+
+Status: Completed
+
+Summary:
+
+- Applied the Configurator-local `Use Desktop TUI as default interface` preference to scheduled CLI autostart.
+- Kept the preference in Configurator local state; it was not added to `supervisor.config.json` and the runtime config schema did not change.
+- Preserved SteamVR Overlay behavior, SteamVR host behavior, Desktop TUI bridge/action/lifecycle behavior, TUI `Q` and X-close behavior, diagnostics behavior, render/backoff behavior, action allowlists, cleanup behavior, and release layout.
+
+Implementation:
+
+- Configurator startup integration now passes `--desktop-tui-default-interface` to the startup helper only when `Use Desktop TUI as default interface` is checked.
+- The scheduled watcher task now includes the active config path through `--config "<active config path>"` when available.
+- The scheduled watcher task includes `--desktop-tui-default-interface` only when the Configurator preference was enabled at save/apply time.
+- The watcher parses `--desktop-tui-default-interface` as a watcher/helper-only preference flag.
+- If Desktop TUI default is enabled and the Supervisor is not running, the watcher starts `PimaxVrcSupervisor.exe` with `--config <path>` and `--desktop-tui-start`, then starts `PimaxVrcSupervisorTui.exe` with `--config <path>` if the TUI is not already running.
+- If Desktop TUI default is enabled and the Supervisor is already running but the TUI is not running, the watcher launches only `PimaxVrcSupervisorTui.exe` with the active config path.
+- If both Supervisor and TUI are already running, the watcher starts nothing.
+- If the Desktop TUI executable is missing, the watcher logs a clear console message and continues the watcher loop; it does not fail scheduled watching.
+- If Desktop TUI default is disabled, the watcher preserves the existing visible classic CLI autostart behavior.
+- `--desktop-tui-start` is not used for SteamVR Overlay mode and `--steamvr-start` is not used for the scheduled Desktop TUI path.
+
+Verification:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release` completed successfully.
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release` completed successfully.
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release` completed successfully.
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml` completed successfully.
+- Rust debug and release builds completed successfully.
+- Source inspection confirmed no TUI bridge/protocol changes.
+- Source inspection confirmed SteamVR host source stayed unchanged.
+
+Release refresh:
+
+- The ignored local test release folder was refreshed after successful source builds by publishing all three C# projects and copying the rebuilt Rust `PimaxVrcSupervisorTui.exe`.
+- Refresh is considered complete only when all three C# publishes and the Rust TUI copy succeed.
+
+Runtime smoke:
+
+- Interactive scheduled-task apply/runtime smoke was not performed during implementation because applying startup integration mutates the local Windows scheduled task and can start watcher/supervisor automation.
+- When safe, verify checked ScheduledTask mode includes `--watch-vrchat-auto-launch`, `--config <active config>`, and `--desktop-tui-default-interface`; unchecked ScheduledTask mode omits `--desktop-tui-default-interface`; SteamVR Overlay remains on the SteamVR host / `--steamvr-start` path.
+
+Next direction:
+
+- Run a safe Configurator startup-integration smoke test on the release folder to inspect the generated scheduled task action in checked and unchecked modes.
+
 ### Phase 17D - Backend-off consistency, neutral modal controls, action hints, and log follow
 
 Status: Completed

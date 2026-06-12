@@ -184,7 +184,7 @@ The editor includes tabs for:
 The **Basics** tab has an **Autostart** section with one **Autostart mode** dropdown:
 
 - **Off** disables managed autostart.
-- **Start in CLI mode when SteamVR is running** uses a hidden elevated watcher that starts the supervisor after SteamVR `vrserver.exe` is running. The supervisor waits for the Pimax headset, powers on base stations if enabled, then waits for VRChat before starting managed apps.
+- **Start in CLI mode when SteamVR is running** uses a hidden elevated watcher that starts the supervisor after SteamVR `vrserver.exe` is running. When **Use Desktop TUI as default interface** is enabled, the watcher starts the supervisor hidden and opens the Desktop TUI with the active config; when disabled, it keeps the classic visible CLI launch. The supervisor waits for the Pimax headset, powers on base stations if enabled, then waits for VRChat before starting managed apps.
 - **SteamVR Overlay** registers `PimaxVrcSupervisorSteamVrHost.exe` as a SteamVR dashboard overlay app and creates a separate on-demand elevated helper task. SteamVR starts the host, the host starts the elevated supervisor with `--steamvr-start`, and the supervisor waits for VRChat before starting managed apps.
 
 SteamVR manifest startup exits with SteamVR. When `vrserver.exe` exits, the supervisor powers down base stations if needed, restores monitors, closes managed apps, and exits.
@@ -226,6 +226,8 @@ Phase 20A-Hotfix makes Desktop TUI diagnostics prove file creation immediately. 
 Phase 20B reduces Desktop TUI idle load. The TUI no longer redraws just because the input poll timed out; it redraws on visible state changes, refresh completion, resize, and a low-rate heartbeat. Connected refresh remains about every 3 seconds, while disconnected automatic retry backs off to about 7 seconds; manual refresh remains immediate. No bridge protocol, action, lifecycle, Configurator, Supervisor, SteamVR, or cleanup behavior changes.
 
 Phase 20C adds diagnostics-only Desktop TUI process load metrics to the existing summary records. When TUI diagnostics are enabled, each `desktop_tui_diagnostics_summary` now includes TUI CPU percentage, CPU time delta/total, working set, private memory, thread count, and handle count when those Windows process counters are available. Metrics are sampled only once per diagnostics interval; there is no UI panel, extra bridge traffic, action change, lifecycle change, or SteamVR behavior change.
+
+Phase 20E applies the Configurator **Use Desktop TUI as default interface** preference to scheduled CLI autostart. In **Start in CLI mode when SteamVR is running**, the watcher now captures the active config path and preference when startup integration is applied. If the preference is enabled, the watcher starts the Supervisor hidden with `--desktop-tui-start` and opens the Desktop TUI; if the Supervisor is already running, it opens only the TUI. If the preference is disabled, the watcher keeps the existing visible classic CLI behavior. **SteamVR Overlay** remains unchanged and still uses the SteamVR host / `--steamvr-start` path.
 
 Confirmed actions run in the background so the TUI stays responsive. Different safe actions may run at the same time, but the same command cannot be started twice while running and Base Stations On/Off are mutually exclusive. Once shutdown is requested, normal action execution is disabled. `force-stop-supervisor` remains blocked from the TUI.
 

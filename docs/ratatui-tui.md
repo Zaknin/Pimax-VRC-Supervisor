@@ -36,6 +36,8 @@ Phase 20B reduces idle redraw and disconnected bridge load. The TUI redraws on v
 
 Phase 20C adds diagnostics-only process load metrics to the existing Desktop TUI summary records. CPU, memory, thread, and handle counters are sampled once per diagnostics interval and appended to `desktop_tui_diagnostics_summary`; the TUI does not add a diagnostics panel, extra bridge calls, action behavior, lifecycle behavior, or SteamVR behavior.
 
+Phase 20E applies the Configurator **Use Desktop TUI as default interface** preference to scheduled CLI autostart. When **Autostart mode** is `Start in CLI mode when SteamVR is running`, applying startup integration stores the active config path and captures whether the Desktop TUI preference was enabled. With the preference enabled, the watcher starts the Supervisor hidden with `--desktop-tui-start` and opens the Desktop TUI with `--config <active config>`; if the Supervisor is already running, it opens only the TUI. With the preference disabled, scheduled CLI autostart keeps the existing visible classic-console launch. **SteamVR Overlay** remains unchanged and continues to use the SteamVR host / `--steamvr-start` path.
+
 ## Purpose
 
 The TUI gives a desktop/operator view of the supervisor with tightly limited control behavior. It displays:
@@ -96,6 +98,8 @@ The SteamVR overlay remains unchanged. The TUI does not replace VR status/log re
 The supervisor backend must already be running for live data. The TUI does not start the supervisor, does not elevate, and does not start SteamVR or VRChat. The Configurator **Launch Supervisor** button can start the supervisor and TUI together when `Use Desktop TUI as default interface` is checked.
 
 When launched through checked-mode **Launch Supervisor**, the supervisor receives `--desktop-tui-start`. That flag hides the console for the Desktop TUI workflow only; it does not set SteamVR startup mode and does not change cleanup or action semantics.
+
+The same Desktop TUI default-interface preference also applies to scheduled CLI autostart. If **Start in CLI mode when SteamVR is running** is selected and startup integration is applied while the preference is checked, the watcher launches the hidden Supervisor plus Desktop TUI using the active config. If the Supervisor is already running but the TUI is not, it launches only the TUI. Unchecking the preference preserves the visible classic CLI autostart path.
 
 From a release folder that contains `PimaxVrcSupervisorTui.exe`:
 

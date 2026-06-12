@@ -3503,6 +3503,10 @@ internal sealed class ConfigEditorForm : Form
             startInfo.ArgumentList.Add("--hide-startup-helper");
             startInfo.ArgumentList.Add("--config");
             startInfo.ArgumentList.Add(Path.GetFullPath(configPath));
+            if (_useDesktopTuiAsDefaultInterfaceCheckBox.Checked)
+            {
+                startInfo.ArgumentList.Add("--desktop-tui-default-interface");
+            }
 
             if (!IsAdministrator())
             {

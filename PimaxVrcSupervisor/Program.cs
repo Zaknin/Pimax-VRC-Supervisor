@@ -29,6 +29,7 @@ var watchVrchatAutoLaunch = commandLineArgs.Any(arg => string.Equals(arg, "--wat
 var applyStartupIntegration = commandLineArgs.Any(arg => string.Equals(arg, "--apply-startup-integration", StringComparison.OrdinalIgnoreCase));
 var showStartupIntegrationResult = commandLineArgs.Any(arg => string.Equals(arg, "--show-result", StringComparison.OrdinalIgnoreCase));
 var hideStartupIntegrationHelperWindow = commandLineArgs.Any(arg => string.Equals(arg, "--hide-startup-helper", StringComparison.OrdinalIgnoreCase));
+var desktopTuiDefaultInterface = commandLineArgs.Any(arg => string.Equals(arg, "--desktop-tui-default-interface", StringComparison.OrdinalIgnoreCase));
 if (desktopTuiStart
     || steamVrStart
     || watchVrchatAutoLaunch
@@ -72,7 +73,7 @@ if (applyStartupIntegration)
         Console.WriteLine("This helper window closes automatically when the startup update finishes.");
         Console.WriteLine();
         Console.Out.Flush();
-        await StartupIntegration.ApplyAsync(config, shutdown.Token);
+        await StartupIntegration.ApplyAsync(config, desktopTuiDefaultInterface, shutdown.Token);
         Console.WriteLine();
         Console.WriteLine("Startup integration update finished.");
         Console.Out.Flush();
@@ -108,7 +109,7 @@ if (applyStartupIntegration)
 if (watchVrchatAutoLaunch)
 {
     var skipCurrentSteamVrSession = commandLineArgs.Any(arg => string.Equals(arg, "--skip-current-vrserver-session", StringComparison.OrdinalIgnoreCase));
-    await AutoLaunchWatcher.RunAsync(skipCurrentSteamVrSession, shutdown.Token);
+    await AutoLaunchWatcher.RunAsync(skipCurrentSteamVrSession, desktopTuiDefaultInterface, configPath, shutdown.Token);
     return;
 }
 
@@ -186,7 +187,12 @@ static async Task InstallAutoLaunchScheduledTaskFromCommandLineAsync(SupervisorC
     }
 
     Console.WriteLine("Installing elevated auto-launch scheduled task...");
-        var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(startWatcherImmediately: true, skipCurrentSteamVrSession: true, cancellationToken);
+    var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(
+        startWatcherImmediately: true,
+        skipCurrentSteamVrSession: true,
+        useDesktopTuiDefaultInterface: false,
+        config.LoadedFromPath,
+        cancellationToken);
     config.SetAutoLaunchScheduledTask(true);
     config.SaveAutoLaunchScheduledTaskPreference();
     Console.WriteLine($"Installed scheduled task: {taskDetails.TaskName}");
@@ -2018,7 +2024,12 @@ internal sealed class AppSupervisor
         {
             try
             {
-                var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(startWatcherImmediately: true, skipCurrentSteamVrSession: true, cancellationToken);
+                var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(
+                    startWatcherImmediately: true,
+                    skipCurrentSteamVrSession: true,
+                    useDesktopTuiDefaultInterface: false,
+                    _config.LoadedFromPath,
+                    cancellationToken);
                 _config.SetAutoLaunchScheduledTask(true);
                 _config.StartupLaunchMode = StartupLaunchMode.ScheduledTask;
                 _config.SaveAutoLaunchScheduledTaskPreference();
@@ -2122,7 +2133,12 @@ internal sealed class AppSupervisor
         Console.WriteLine("Ensuring elevated auto-launch scheduled task is installed.");
         try
         {
-            var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(startWatcherImmediately: true, skipCurrentSteamVrSession: true, cancellationToken);
+            var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(
+                startWatcherImmediately: true,
+                skipCurrentSteamVrSession: true,
+                useDesktopTuiDefaultInterface: false,
+                _config.LoadedFromPath,
+                cancellationToken);
             Console.WriteLine($"Installed elevated auto-launch scheduled task: {taskDetails.TaskName}");
             Console.WriteLine($"Trigger: {taskDetails.TriggerDescription}");
         }
@@ -7174,7 +7190,11 @@ internal static class AutoLaunchWatcher
     private static readonly string SkipCurrentSteamVrSessionMarkerPath =
         Path.Combine(Path.GetTempPath(), "PimaxVrcSupervisorSkipCurrentSteamVrSession.marker");
 
-    public static async Task RunAsync(bool skipCurrentSteamVrSession, CancellationToken cancellationToken)
+    public static async Task RunAsync(
+        bool skipCurrentSteamVrSession,
+        bool useDesktopTuiDefaultInterface,
+        string? configPath,
+        CancellationToken cancellationToken)
     {
         using var mutex = new Mutex(initiallyOwned: true, WatcherMutexName, out var ownsMutex);
         if (!ownsMutex)
@@ -7190,14 +7210,24 @@ internal static class AutoLaunchWatcher
         while (!cancellationToken.IsCancellationRequested)
         {
             var vrServerRunning = IsProcessRunning(VrServerProcessName);
+            var supervisorRunning = IsAnotherSupervisorRunning(supervisorProcessName);
 
             if (!vrServerRunning)
             {
                 launchedForCurrentSteamVrSession = false;
             }
-            else if (!launchedForCurrentSteamVrSession && !IsAnotherSupervisorRunning(supervisorProcessName))
+            else if (!launchedForCurrentSteamVrSession)
             {
-                StartSupervisor(supervisorPath);
+                if (!supervisorRunning)
+                {
+                    StartSupervisor(supervisorPath, configPath, useDesktopTuiDefaultInterface);
+                }
+
+                if (useDesktopTuiDefaultInterface)
+                {
+                    StartDesktopTuiIfNeeded(supervisorPath, configPath);
+                }
+
                 launchedForCurrentSteamVrSession = true;
             }
 
@@ -7240,17 +7270,71 @@ internal static class AutoLaunchWatcher
         return processes.Length > 0;
     }
 
-    private static void StartSupervisor(string supervisorPath)
+    private static void StartSupervisor(
+        string supervisorPath,
+        string? configPath,
+        bool useDesktopTuiDefaultInterface)
     {
         var startInfo = new ProcessStartInfo
         {
             FileName = supervisorPath,
             WorkingDirectory = Path.GetDirectoryName(supervisorPath) ?? Environment.CurrentDirectory,
             UseShellExecute = true,
-            WindowStyle = ProcessWindowStyle.Normal
+            WindowStyle = useDesktopTuiDefaultInterface
+                ? ProcessWindowStyle.Hidden
+                : ProcessWindowStyle.Normal
         };
+        if (!string.IsNullOrWhiteSpace(configPath))
+        {
+            startInfo.ArgumentList.Add("--config");
+            startInfo.ArgumentList.Add(configPath);
+        }
+
+        if (useDesktopTuiDefaultInterface)
+        {
+            startInfo.ArgumentList.Add("--desktop-tui-start");
+        }
 
         Process.Start(startInfo);
+    }
+
+    private static void StartDesktopTuiIfNeeded(string supervisorPath, string? configPath)
+    {
+        const string tuiProcessName = "PimaxVrcSupervisorTui";
+        if (IsProcessRunning(tuiProcessName))
+        {
+            return;
+        }
+
+        try
+        {
+            var supervisorDirectory = Path.GetDirectoryName(supervisorPath) ?? Environment.CurrentDirectory;
+            var tuiPath = Path.Combine(supervisorDirectory, "PimaxVrcSupervisorTui.exe");
+            if (!File.Exists(tuiPath))
+            {
+                Console.WriteLine($"Desktop TUI executable was not found: {tuiPath}");
+                return;
+            }
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = tuiPath,
+                WorkingDirectory = supervisorDirectory,
+                UseShellExecute = true,
+                WindowStyle = ProcessWindowStyle.Normal
+            };
+            if (!string.IsNullOrWhiteSpace(configPath))
+            {
+                startInfo.ArgumentList.Add("--config");
+                startInfo.ArgumentList.Add(configPath);
+            }
+
+            Process.Start(startInfo);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not start Desktop TUI: {ex.Message}");
+        }
     }
 
     public static void RequestSkipCurrentSteamVrSession()
@@ -7320,7 +7404,12 @@ internal static class ScheduledTaskInstaller
         return result.ExitCode == 0;
     }
 
-    public static async Task<ScheduledTaskDetails> CreateOrUpdateAsync(bool startWatcherImmediately, bool skipCurrentSteamVrSession, CancellationToken cancellationToken)
+    public static async Task<ScheduledTaskDetails> CreateOrUpdateAsync(
+        bool startWatcherImmediately,
+        bool skipCurrentSteamVrSession,
+        bool useDesktopTuiDefaultInterface,
+        string? configPath,
+        CancellationToken cancellationToken)
     {
         var supervisorPath = GetSupervisorExecutablePath();
         var supervisorWorkingDirectory = Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory;
@@ -7338,9 +7427,7 @@ internal static class ScheduledTaskInstaller
             watcherPath,
             supervisorWorkingDirectory,
             "Runs an elevated hidden watcher that starts Pimax VRC Supervisor when vrserver.exe is running.",
-            skipCurrentSteamVrSession
-                ? $"{WatcherArgument} --skip-current-vrserver-session"
-                : WatcherArgument,
+            BuildWatcherArguments(skipCurrentSteamVrSession, useDesktopTuiDefaultInterface, configPath),
             includeLogonTrigger: true);
         var taskXmlPath = Path.Combine(Path.GetTempPath(), $"PimaxVrcSupervisorAutoLaunch-{Guid.NewGuid():N}.xml");
 
@@ -7384,6 +7471,36 @@ internal static class ScheduledTaskInstaller
 
         return new ScheduledTaskDetails(TaskName, "Hidden elevated watcher at Windows sign-in; launches supervisor when vrserver.exe is running.");
     }
+
+    private static string BuildWatcherArguments(
+        bool skipCurrentSteamVrSession,
+        bool useDesktopTuiDefaultInterface,
+        string? configPath)
+    {
+        var arguments = new List<string> { WatcherArgument };
+        if (skipCurrentSteamVrSession)
+        {
+            arguments.Add("--skip-current-vrserver-session");
+        }
+
+        if (!string.IsNullOrWhiteSpace(configPath))
+        {
+            arguments.Add("--config");
+            arguments.Add(QuoteArgument(configPath));
+        }
+
+        if (useDesktopTuiDefaultInterface)
+        {
+            arguments.Add("--desktop-tui-default-interface");
+        }
+
+        return string.Join(' ', arguments);
+    }
+
+    private static string QuoteArgument(string argument)
+        => string.IsNullOrEmpty(argument)
+            ? "\"\""
+            : "\"" + argument.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
 
     public static async Task<ScheduledTaskDetails> CreateOrUpdateSteamVrStartHelperAsync(CancellationToken cancellationToken)
     {
@@ -7754,13 +7871,21 @@ internal sealed record SteamVrStartupDetails(string AppKey, string ManifestPath)
 
 internal static class StartupIntegration
 {
-    public static async Task ApplyAsync(SupervisorConfig config, CancellationToken cancellationToken)
+    public static async Task ApplyAsync(
+        SupervisorConfig config,
+        bool useDesktopTuiDefaultInterface,
+        CancellationToken cancellationToken)
     {
         switch (config.GetEffectiveStartupLaunchMode())
         {
             case StartupLaunchMode.ScheduledTask:
                 LogStep("Creating or updating VRChat auto-launch scheduled task...");
-                await ScheduledTaskInstaller.CreateOrUpdateAsync(startWatcherImmediately: true, skipCurrentSteamVrSession: true, cancellationToken);
+                await ScheduledTaskInstaller.CreateOrUpdateAsync(
+                    startWatcherImmediately: true,
+                    skipCurrentSteamVrSession: true,
+                    useDesktopTuiDefaultInterface,
+                    config.LoadedFromPath,
+                    cancellationToken);
                 LogStep("Disabling SteamVR startup manifest if present...");
                 await SteamVrStartupInstaller.DisableAsync(cancellationToken);
                 LogStep("Deleting SteamVR start helper scheduled task if present...");
