@@ -2393,6 +2393,78 @@ Next direction:
 
 - Run a safe Configurator startup-integration smoke test on the release folder to inspect the generated scheduled task action in checked and unchecked modes.
 
+### Phase 20F - Startup integration runtime verification
+
+Status: Completed
+
+Summary:
+
+- Verified Phase 20E startup integration behavior from the refreshed `release\PimaxVrcSupervisor-v1.3.0-test` build.
+- Used temporary configs under `%TEMP%` so tracked config/source files were not modified.
+- No source-code changes were required.
+- No bridge protocol, action allowlist, lifecycle behavior, Desktop TUI `Q`/X-close behavior, diagnostics behavior, render/backoff behavior, SteamVR host behavior, cleanup behavior, base-station behavior, monitor behavior, OSC behavior, VRChat process behavior, or release layout changed.
+
+Current-state inspection:
+
+- Recent commits included `ab747d8 Phase 20E: apply Desktop TUI default to CLI autostart`, `84439bc Phase 20D: record Desktop TUI load baselines`, `70ca6de Phase 20C: add Desktop TUI process load diagnostics`, and `d2710b3 Phase 20B: reduce Desktop TUI idle redraw load`.
+- Initial scheduled task baseline before verification was `Pimax VRC Supervisor Auto Launch`, pointing at `release\PimaxVrcSupervisor-v1.3.0-testnotouch\PimaxVrcSupervisorWatcher.exe` with `--watch-vrchat-auto-launch --skip-current-vrserver-session`.
+- No `PimaxVrcSupervisorWatcher` process was running at the start of verification.
+
+Build and release refresh:
+
+- `dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release` completed successfully.
+- `dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release` completed successfully.
+- `dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release` completed successfully.
+- `cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml` completed successfully.
+- Rust debug and release builds completed successfully.
+- The ignored release folder refresh completed: all three C# publishes succeeded and the rebuilt Rust `PimaxVrcSupervisorTui.exe` copy succeeded.
+
+Checked Desktop TUI default task inspection:
+
+- Applied startup integration with `StartupLaunchMode=ScheduledTask`, `AutoLaunchScheduledTask=true`, `StopWithSteamVr=false`, and `--desktop-tui-default-interface`.
+- Resulting task: `Pimax VRC Supervisor Auto Launch`.
+- Execute: `release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorWatcher.exe`.
+- Working directory: `release\PimaxVrcSupervisor-v1.3.0-test`.
+- Arguments: `--watch-vrchat-auto-launch --skip-current-vrserver-session --config "C:\Users\FucktoryVR\AppData\Local\Temp\pimax-phase20f-scheduled-checked.json" --desktop-tui-default-interface`.
+- Confirmed `--steamvr-start` was not present in the checked ScheduledTask action.
+
+Unchecked Desktop TUI default task inspection:
+
+- Applied startup integration with `StartupLaunchMode=ScheduledTask`, `AutoLaunchScheduledTask=true`, `StopWithSteamVr=false`, and no Desktop TUI default flag.
+- Resulting task: `Pimax VRC Supervisor Auto Launch`.
+- Execute: `release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorWatcher.exe`.
+- Working directory: `release\PimaxVrcSupervisor-v1.3.0-test`.
+- Arguments: `--watch-vrchat-auto-launch --skip-current-vrserver-session --config "C:\Users\FucktoryVR\AppData\Local\Temp\pimax-phase20f-scheduled-unchecked.json"`.
+- Confirmed `--desktop-tui-default-interface` and `--steamvr-start` were not present in the unchecked ScheduledTask action.
+
+SteamVR Overlay mode inspection:
+
+- Applied startup integration with `StartupLaunchMode=SteamVrManifest`, `AutoLaunchScheduledTask=false`, and `StopWithSteamVr=true`.
+- Resulting task: `Pimax VRC Supervisor SteamVR Start`.
+- Execute: `release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisor.exe`.
+- Working directory: `release\PimaxVrcSupervisor-v1.3.0-test`.
+- Arguments: `--steamvr-start`.
+- Confirmed SteamVR Overlay remains on the SteamVR host/helper path and does not use `--desktop-tui-default-interface`.
+
+Runtime smoke:
+
+- Full runtime watcher launch smoke was not completed because the temporary verification configs are not real session configs and could trigger first-run/session behavior.
+- Checked ScheduledTask apply started an elevated watcher and an elevated `PimaxVrcSupervisorTui.exe` process, but process command lines were not readable from the non-elevated shell.
+- No `PimaxVrcSupervisor.exe` process was observed after the checked apply; this is consistent with not using a fully configured runtime session config for the smoke.
+- The scheduled watcher task was stopped with `schtasks /End` after checked and unchecked inspections.
+- The elevated TUI process from checked inspection remained running and could not be stopped from the non-elevated shell: `PimaxVrcSupervisorTui.exe` PID `40040`, access denied.
+- Final scheduled-task state after verification was restored to ScheduledTask mode using the unchecked temporary config, and the task was stopped.
+
+Safety checks:
+
+- `git diff -- PimaxVrcSupervisor/Program.cs PimaxVrcSupervisor.ConfigEditor/Program.cs PimaxVrcSupervisor.SteamVrHost PimaxVrcSupervisor.Tui/src/bridge.rs PimaxVrcSupervisor.Tui/src/app.rs PimaxVrcSupervisor.Tui/src/main.rs PimaxVrcSupervisor.Tui/src/diagnostics.rs` was empty.
+- `release/` and `PimaxVrcSupervisor.Tui/target/` remained ignored generated output.
+- Temporary verification configs were outside the repository and were not staged.
+
+Next direction:
+
+- If a full runtime launch smoke is needed, repeat checked mode using a real safe session config with valid app paths and an intentional SteamVR/vrserver test window, then inspect Supervisor and TUI command lines from an elevated shell.
+
 ### Phase 17D - Backend-off consistency, neutral modal controls, action hints, and log follow
 
 Status: Completed
