@@ -1,7 +1,14 @@
 name: Deploy Documentation
 
+run-name: Pimax VRC Supervisor Docs - ${{ inputs.deployment_date }}
+
 on:
   workflow_dispatch:
+    inputs:
+      deployment_date:
+        description: "Deployment date shown in the GitHub Actions run name"
+        required: true
+        default: "2026-06-12"
 
 permissions:
   contents: read
