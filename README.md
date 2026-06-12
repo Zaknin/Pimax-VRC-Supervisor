@@ -2,7 +2,7 @@
 
 Pimax VRC Supervisor is a Windows utility for Pimax VRChat setups. It helps start face-tracking tools, manage session cleanup, control base stations, run OSC helpers, and provide a simple Configurator plus Terminal UI for day-to-day control.
 
-The current documentation has been refreshed as a release-candidate user manual. The documentation site is prepared for GitHub Pages publishing; until publishing is verified, read the manual from the repository starting at [docs/index.md](docs/index.md).
+The release-candidate user manual is published at [Pimax VRC Supervisor Manual](https://zaknin.github.io/Pimax-VRC-Supervisor/).
 
 ## Who It Is For
 
@@ -40,11 +40,11 @@ For most users, start with **Terminal Mode** and keep **Use Terminal UI as defau
 
 Start here:
 
-- [Quick Start](docs/quick-start/index.md)
-- [Installation](docs/quick-start/installation.md)
-- [First Setup](docs/quick-start/first-setup.md)
-- [Startup Modes](docs/user-guide/startup-modes.md)
-- [Troubleshooting](docs/troubleshooting/index.md)
+- [User Manual](https://zaknin.github.io/Pimax-VRC-Supervisor/)
+- [Quick Start](https://zaknin.github.io/Pimax-VRC-Supervisor/quick-start/)
+- [Installation](https://zaknin.github.io/Pimax-VRC-Supervisor/quick-start/installation/)
+- [Startup Modes](https://zaknin.github.io/Pimax-VRC-Supervisor/user-guide/startup-modes/)
+- [Troubleshooting](https://zaknin.github.io/Pimax-VRC-Supervisor/troubleshooting/)
 
 ## Safety Notes
 
