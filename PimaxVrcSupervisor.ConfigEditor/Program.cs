@@ -13,7 +13,7 @@ using System.Text.RegularExpressions;
 using System.Text.Json.Serialization;
 using PimaxVrcSupervisor.BaseStations;
 
-namespace PimaxVrcSupervisor.ConfigEditor;
+namespace PimaxVrcSupervisor.Configurator;
 
 internal static class Program
 {
@@ -27,12 +27,21 @@ internal static class Program
 
 internal sealed class ConfigEditorForm : Form
 {
-    private static readonly string BaseWindowTitle = $"Pimax VRC Supervisor Config Editor {AppVersion.Current}";
+    private static readonly string BaseWindowTitle = $"Pimax VRC Supervisor Configurator {AppVersion.Current}";
     private const int TemporaryStatusMilliseconds = 15000;
     private const int MinimumGridVisibleRows = 10;
     private const int CompactNumberInputWidth = 104;
-    private const int PathStatusColumnWidth = 230;
+    private const int PathStatusColumnWidth = 320;
+    private const int MinimumConfigSelectorWidth = 180;
+    private const int MaximumConfigSelectorWidth = 620;
+    private const string DefaultConfigFileName = "supervisor.config.json";
+    private const string ActiveConfigSelectionFileName = "supervisor.active-config.txt";
+    private const string DefaultConfigResourceName = "PimaxVrcSupervisor.Configurator.Defaults.supervisor.config.json";
     private const string DefaultVrcFaceTrackingDirectory = @"C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking";
+    private const int MaxDisplayNameLength = 64;
+    private const string AutostartModeOff = "Off";
+    private const string AutostartModeScheduledTask = "Terminal Mode";
+    private const string AutostartModeSteamVrManifest = "SteamVR Overlay";
     private static readonly string DefaultIntifacePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "IntifaceCentral",
@@ -43,20 +52,51 @@ internal sealed class ConfigEditorForm : Form
         "OscGoesBrrr",
         "OscGoesBrrr.exe");
     private static readonly string[][] DefaultLovenseDetectors = [["Lovense"], ["LVS-"]];
+    private static readonly string[] ConsoleShortcutLines =
+    [
+        "1 = Broken Eye + VRCFaceTracking routine",
+        "2 = OSCGoesBrrr + Intiface routine",
+        "3 = Turn on all controlled base stations",
+        "4 = Turn off all controlled base stations",
+        "5 = OSC Router launch/restart",
+        "6 = Reload Autostart apps",
+        "F1 = Show console shortcuts",
+        "",
+        "Terminal UI keys",
+        "0 = Help",
+        "F5 = Refresh",
+        "Q = Quit Terminal UI",
+        "Enter = Confirm",
+        "Esc = Cancel / Back"
+    ];
+    private static readonly string[] EditorShortcutLines =
+    [
+        "Ctrl+S = Save",
+        "Ctrl+Shift+S = Save As",
+        "Ctrl+O = Browse config",
+        "F5 = Reload",
+        "Ctrl+R = Reload",
+        "Ctrl+L = Launch Supervisor (uses Terminal UI option)",
+        "Ctrl+Shift+V = Validate",
+        "Delete = Delete selected row in Auto Startup, Base Stations, or OSC Routes grids"
+    ];
 
+    private readonly ComboBox _configSelectorComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _configPathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
+    private readonly TextBox _displayNameTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _brokenEyePathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _vrcFaceTrackingPathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _intifacePathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly TextBox _oscGoesBrrrPathTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
-    private readonly CheckBox _brokenEyeStartMinimizedCheckBox = new() { Text = "Start Broken Eye minimized", AutoSize = true };
-    private readonly CheckBox _vrcFaceTrackingStartMinimizedCheckBox = new() { Text = "Start VRCFaceTracking minimized", AutoSize = true };
-    private readonly CheckBox _intifaceStartMinimizedCheckBox = new() { Text = "Start Intiface minimized", AutoSize = true };
-    private readonly CheckBox _oscGoesBrrrStartMinimizedCheckBox = new() { Text = "Start OscGoesBrrr minimized", AutoSize = true };
-    private readonly CheckBox _oscGoesBrrrEnabledCheckBox = new() { Text = "Enabled", AutoSize = true };
-    private readonly CheckBox _oscGoesBrrrHotkeyCheckBox = new() { Text = "Enable L hotkey launch", AutoSize = true };
-    private readonly CheckBox _oscGoesBrrrBleScannerCheckBox = new() { Text = "Enable BLE scanner", AutoSize = true };
-    private readonly CheckBox _oscRouterEnabledCheckBox = new() { Text = "Enable OSC routing", AutoSize = true };
+    private readonly CheckBox _useBrokenEyeCheckBox = new ThemedCheckBox { Text = "Use Broken Eye", AutoSize = true };
+    private readonly CheckBox _brokenEyeStartMinimizedCheckBox = new ThemedCheckBox { Text = "Start Broken Eye minimized", AutoSize = true };
+    private readonly CheckBox _vrcFaceTrackingStartMinimizedCheckBox = new ThemedCheckBox { Text = "Start VRCFaceTracking minimized", AutoSize = true };
+    private readonly CheckBox _intifaceStartMinimizedCheckBox = new ThemedCheckBox { Text = "Start Intiface minimized", AutoSize = true };
+    private readonly CheckBox _oscGoesBrrrStartMinimizedCheckBox = new ThemedCheckBox { Text = "Start OscGoesBrrr minimized", AutoSize = true };
+    private readonly CheckBox _oscGoesBrrrEnabledCheckBox = new ThemedCheckBox { Text = "Enabled", AutoSize = true };
+    private readonly CheckBox _oscGoesBrrrHotkeyCheckBox = new ThemedCheckBox { Text = "Use manual console launch mode", AutoSize = true };
+    private readonly CheckBox _oscGoesBrrrBleScannerCheckBox = new ThemedCheckBox { Text = "Enable BLE scanner", AutoSize = true };
+    private readonly CheckBox _oscRouterEnabledCheckBox = new ThemedCheckBox { Text = "Enable OSC routing", AutoSize = true };
     private readonly NumericUpDown _oscRouterReceivePortInput = new()
     {
         Minimum = 1,
@@ -65,14 +105,27 @@ internal sealed class ConfigEditorForm : Form
         Anchor = AnchorStyles.Left,
         Width = 110
     };
-    private readonly CheckBox _baseStationsEnabledCheckBox = new() { Text = "Enable base station power automation", AutoSize = true };
+    private readonly CheckBox _baseStationsEnabledCheckBox = new ThemedCheckBox { Text = "Enable base station power automation", AutoSize = true };
     private readonly ComboBox _baseStationPowerDownModeComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
-    private readonly CheckBox _mouthTrackerCheckBox = CreateOptionalConfigCheckBox("Use Vive mouth tracker");
+    private readonly CheckBox _mouthTrackerCheckBox = CreateOptionalConfigCheckBox("Detect Vive Face Tracker usage");
     private readonly CheckBox _turnOffMonitorsCheckBox = CreateOptionalConfigCheckBox("Turn off secondary monitors during headset sessions");
-    private readonly CheckBox _autoLaunchTaskCheckBox = CreateOptionalConfigCheckBox("Create/evaluate VRChat auto-launch Scheduled Task");
-    private readonly CheckBox _usePimaxLogCheckBox = new() { Text = "Watch Pimax PiService logs for fast reconnects", AutoSize = true };
-    private readonly CheckBox _useMouthTrackerPnPCheckBox = new() { Text = "Watch Windows PnP events for fast mouth tracker reconnects", AutoSize = true };
+    private readonly ComboBox _autostartModeComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Left, Width = 310 };
+    private readonly CheckBox _faceTrackerAutomationEnabledCheckBox = new ThemedCheckBox { Text = "Enable Face Tracking Auto Startup", AutoSize = true };
+    private readonly CheckBox _faceTrackerRestartOnReconnectCheckBox = new ThemedCheckBox { Text = "Enable automatic restart on headset reconnects", AutoSize = true };
+    private readonly CheckBox _usePimaxLogCheckBox = new ThemedCheckBox { Text = "Watch Pimax PiService logs for fast reconnects", AutoSize = true };
+    private readonly CheckBox _useMouthTrackerPnPCheckBox = new ThemedCheckBox { Text = "Watch Windows PnP events for fast face tracker reconnects", AutoSize = true };
     private readonly TextBox _pimaxServiceLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
+    private readonly CheckBox _diagnosticsLogSupervisorCheckBox = new ThemedCheckBox { Text = "Log supervisor diagnostics", AutoSize = true };
+    private readonly CheckBox _diagnosticsLogSteamVrOverlayCheckBox = new ThemedCheckBox { Text = "Log SteamVR overlay diagnostics", AutoSize = true };
+    private readonly CheckBox _diagnosticsLogDesktopTuiCheckBox = new ThemedCheckBox { Text = "Log Terminal UI load diagnostics", AutoSize = true };
+    private readonly CheckBox _diagnosticsDebugSupervisorCheckBox = new ThemedCheckBox { Text = "Log Supervisor Debug", AutoSize = true };
+    private readonly CheckBox _diagnosticsDebugSteamVrOverlayCheckBox = new ThemedCheckBox { Text = "Log SteamVR Overlay Debug", AutoSize = true };
+    private readonly CheckBox _diagnosticsEnabledCheckBox = new ThemedCheckBox { Text = "Enable Diagnostics", AutoSize = true };
+    private readonly CheckBox _diagnosticsVerboseCheckBox = new ThemedCheckBox { Text = "Verbose diagnostic timings", AutoSize = true };
+    private readonly CheckBox _diagnosticsDebugSteamVrPointerCheckBox = new ThemedCheckBox { Text = "Show SteamVR overlay pointer marker", AutoSize = true };
+    private readonly CheckBox _mouthTrackerRestartOnReconnectCheckBox = new ThemedCheckBox { Text = "Enable automatic restart on face tracker reconnects", AutoSize = true };
+    private readonly CheckBox _useDesktopTuiAsDefaultInterfaceCheckBox = new ThemedCheckBox { Text = "Use Terminal UI as default interface", AutoSize = true };
+    private readonly TextBox _diagnosticsLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly DataGridView _autoLaunchAppsGrid = new()
     {
         Dock = DockStyle.Fill,
@@ -116,6 +169,8 @@ internal sealed class ConfigEditorForm : Form
     private readonly TextBox _mouthTrackerDetectorsTextBox = CreateMultilineTextBox();
     private readonly TextBox _lovenseDetectorsTextBox = CreateMultilineTextBox();
     private readonly TextBox _rawJsonTextBox = CreateMultilineTextBox(readOnly: false);
+    private readonly TextBox _rawJsonSearchTextBox = new() { Width = 220, Anchor = AnchorStyles.Left };
+    private readonly Label _rawJsonSearchStatusLabel = new() { AutoSize = false, Height = 27, TextAlign = ContentAlignment.MiddleLeft, Anchor = AnchorStyles.Left, Tag = "Muted" };
     private readonly Label _rawJsonValidationLabel = new() { AutoSize = true, Padding = new Padding(0, 4, 0, 0) };
     private readonly Label _statusLabel = new() { AutoSize = true };
     private readonly ThemedTabHost _tabs = new() { Dock = DockStyle.Fill };
@@ -131,6 +186,7 @@ internal sealed class ConfigEditorForm : Form
     private readonly Dictionary<string, string> _numberLabels = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _numberUnits = new(StringComparer.Ordinal);
     private readonly List<Action> _pathIndicatorRefreshers = [];
+    private readonly List<Control> _faceTrackerAutomationDependentControls = [];
     private readonly EditorState _editorState = EditorState.Load();
     private AppTheme _theme = AppTheme.Light;
     private string _loadedJson = "{\r\n}\r\n";
@@ -146,25 +202,35 @@ internal sealed class ConfigEditorForm : Form
     private bool _hasUnsavedChanges;
     private bool _rawJsonHasUnappliedChanges;
     private bool _suppressDirtyTracking;
+    private bool _suppressConfigSelectorChange;
+    private bool _saveInProgress;
+    private bool _startupIntegrationApplyInProgress;
+    private bool _mouthTrackerPreferenceTouched;
+    private bool _turnOffMonitorsPreferenceTouched;
+    private bool _startupIntegrationPreferenceTouched;
 
     public ConfigEditorForm(string? requestedConfigPath)
     {
         Text = BaseWindowTitle;
         SetWindowIconFromExecutable();
-        MinimumSize = new Size(1040, 720);
-        Size = new Size(1260, 820);
+        MinimumSize = new Size(1180, 860);
+        Size = new Size(1420, 980);
         StartPosition = FormStartPosition.CenterScreen;
         KeyPreview = true;
         RestoreWindowState();
+        _useDesktopTuiAsDefaultInterfaceCheckBox.Checked = _editorState.UseDesktopTuiAsDefaultInterface;
 
         ConfigureToolTips();
         BuildLayout();
+        ConfigureStartupOptionInteractions();
+        ConfigureDiagnosticsOptionInteractions();
+        ConfigureFaceTrackerAutomationOptionInteractions();
         RegisterDirtyTracking(this);
         ApplyWindowsTheme();
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
         _statusTimer.Tick += (_, _) => ExpireTemporaryStatus();
 
-        var configPath = FindConfigPath(requestedConfigPath, requestedConfigPath is null ? _editorState.LastConfigPath : null);
+        var configPath = ResolveInitialConfigPath(requestedConfigPath);
         if (configPath is not null)
         {
             _configPathTextBox.Text = configPath;
@@ -172,9 +238,13 @@ internal sealed class ConfigEditorForm : Form
         }
         else
         {
-            _configPathTextBox.Text = Path.Combine(AppContext.BaseDirectory, "supervisor.config.json");
-            SetPersistentStatus("Ready");
+            var defaultConfigPath = GetDefaultConfigPath();
+            EnsureDefaultConfigFile(defaultConfigPath);
+            _configPathTextBox.Text = defaultConfigPath;
+            LoadConfig(defaultConfigPath);
         }
+
+        Shown += async (_, _) => await PromptForExistingStartupTaskMigrationAsync();
     }
 
     private void SetWindowIconFromExecutable()
@@ -243,7 +313,7 @@ internal sealed class ConfigEditorForm : Form
         var panel = new Panel
         {
             Dock = DockStyle.Top,
-            Height = 58,
+            Height = 112,
             Padding = new Padding(0, 6, 0, 12)
         };
 
@@ -251,16 +321,39 @@ internal sealed class ConfigEditorForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 4,
-            RowCount = 1,
+            RowCount = 3,
             GrowStyle = TableLayoutPanelGrowStyle.FixedSize,
             Margin = new Padding(0),
             Padding = new Padding(0)
         };
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        var configSelectorLabel = new Label { Text = "Config", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, 10, 0) };
+        _configSelectorComboBox.Dock = DockStyle.None;
+        _configSelectorComboBox.Anchor = AnchorStyles.Left;
+        _configSelectorComboBox.Width = MinimumConfigSelectorWidth;
+        _configSelectorComboBox.Margin = new Padding(0, 2, 10, 4);
+        _configSelectorComboBox.SelectedIndexChanged += (_, _) => LoadSelectedConfigFromDropdown();
+        _toolTips.SetToolTip(configSelectorLabel, "Named configs in the app folder.");
+        _toolTips.SetToolTip(_configSelectorComboBox, "Select a named *.config.json file from the app folder.");
+
+        var restoreBackupButton = CreateButton("Restore Backup...", autoSize: false, width: 126, height: 28);
+        restoreBackupButton.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        restoreBackupButton.Margin = new Padding(0, 0, 6, 4);
+        restoreBackupButton.Click += (_, _) => RestoreBackup();
+        _toolTips.SetToolTip(restoreBackupButton, "Restore a selected .bak file into the default supervisor.config.json.");
+
+        var deleteButton = CreateButton("Delete", autoSize: false, width: 86, height: 28);
+        deleteButton.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        deleteButton.Margin = new Padding(0, 0, 0, 4);
+        deleteButton.Click += (_, _) => DeleteSelectedConfig();
+        _toolTips.SetToolTip(deleteButton, "Delete the selected named config file from the app folder.");
 
         var browseButton = CreateButton("Browse...", autoSize: false, width: 96, height: 28);
         browseButton.Anchor = AnchorStyles.Left | AnchorStyles.Right;
@@ -274,15 +367,29 @@ internal sealed class ConfigEditorForm : Form
 
         var configPathLabel = new Label { Text = "Config file", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, 10, 0) };
         _configPathTextBox.Dock = DockStyle.Fill;
-        _configPathTextBox.Margin = new Padding(0, 2, 10, 0);
-        browseButton.Margin = new Padding(0, 0, 6, 0);
-        reloadButton.Margin = new Padding(0);
+        _configPathTextBox.Margin = new Padding(0, 2, 10, 4);
+        browseButton.Margin = new Padding(0, 0, 6, 4);
+        reloadButton.Margin = new Padding(0, 0, 0, 4);
         _toolTips.SetToolTip(configPathLabel, "The JSON file that will be loaded and saved.");
         _toolTips.SetToolTip(_configPathTextBox, "Usually this is supervisor.config.json next to the supervisor exe.");
-        layout.Controls.Add(configPathLabel, 0, 0);
-        layout.Controls.Add(_configPathTextBox, 1, 0);
-        layout.Controls.Add(browseButton, 2, 0);
-        layout.Controls.Add(reloadButton, 3, 0);
+
+        var displayNameLabel = new Label { Text = "Display name", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, 10, 0) };
+        _displayNameTextBox.Dock = DockStyle.Fill;
+        _displayNameTextBox.Margin = new Padding(0, 2, 10, 0);
+        _toolTips.SetToolTip(displayNameLabel, "Friendly name saved as DisplayName in the config JSON.");
+        _toolTips.SetToolTip(_displayNameTextBox, "Friendly name shown in the editor config list and console startup.");
+
+        layout.Controls.Add(configSelectorLabel, 0, 0);
+        layout.Controls.Add(_configSelectorComboBox, 1, 0);
+        layout.Controls.Add(restoreBackupButton, 2, 0);
+        layout.Controls.Add(deleteButton, 3, 0);
+        layout.Controls.Add(configPathLabel, 0, 1);
+        layout.Controls.Add(_configPathTextBox, 1, 1);
+        layout.Controls.Add(browseButton, 2, 1);
+        layout.Controls.Add(reloadButton, 3, 1);
+        layout.Controls.Add(displayNameLabel, 0, 2);
+        layout.Controls.Add(_displayNameTextBox, 1, 2);
+        layout.SetColumnSpan(_displayNameTextBox, 3);
         panel.Controls.Add(layout);
         return panel;
     }
@@ -313,17 +420,64 @@ internal sealed class ConfigEditorForm : Form
         return button;
     }
 
+    private void ConfigureDiagnosticsOptionInteractions()
+    {
+        _diagnosticsEnabledCheckBox.CheckedChanged += (_, _) => UpdateDiagnosticsOptionStates();
+        _diagnosticsDebugSteamVrOverlayCheckBox.CheckedChanged += (_, _) => UpdateDiagnosticsOptionStates();
+        UpdateDiagnosticsOptionStates();
+    }
+
+    private void UpdateDiagnosticsOptionStates()
+    {
+        var diagnosticsEnabled = _diagnosticsEnabledCheckBox.Checked;
+        _diagnosticsLogSupervisorCheckBox.Enabled = diagnosticsEnabled;
+        _diagnosticsLogSteamVrOverlayCheckBox.Enabled = diagnosticsEnabled;
+        _diagnosticsLogDesktopTuiCheckBox.Enabled = diagnosticsEnabled;
+        _diagnosticsDebugSupervisorCheckBox.Enabled = diagnosticsEnabled;
+        _diagnosticsDebugSteamVrOverlayCheckBox.Enabled = diagnosticsEnabled;
+        _diagnosticsVerboseCheckBox.Enabled = diagnosticsEnabled;
+
+        if (_numberInputs.TryGetValue("DiagnosticsSummaryIntervalSeconds", out var summaryIntervalInput))
+        {
+            summaryIntervalInput.Enabled = diagnosticsEnabled;
+        }
+
+        var pointerMarkerEnabled = diagnosticsEnabled && _diagnosticsDebugSteamVrOverlayCheckBox.Checked;
+        _diagnosticsDebugSteamVrPointerCheckBox.Enabled = pointerMarkerEnabled;
+    }
+
+    private void ConfigureFaceTrackerAutomationOptionInteractions()
+    {
+        _faceTrackerAutomationEnabledCheckBox.CheckedChanged += (_, _) => UpdateFaceTrackerAutomationOptionStates();
+        _mouthTrackerCheckBox.CheckedChanged += (_, _) => UpdateFaceTrackerAutomationOptionStates();
+        UpdateFaceTrackerAutomationOptionStates();
+    }
+
+    private void UpdateFaceTrackerAutomationOptionStates()
+    {
+        var automationEnabled = _faceTrackerAutomationEnabledCheckBox.Checked;
+        foreach (var control in _faceTrackerAutomationDependentControls)
+        {
+            control.Enabled = automationEnabled;
+        }
+
+        var mouthTrackerReconnectOptionsEnabled = automationEnabled && _mouthTrackerCheckBox.Checked;
+        _mouthTrackerRestartOnReconnectCheckBox.Enabled = mouthTrackerReconnectOptionsEnabled;
+        _useMouthTrackerPnPCheckBox.Enabled = mouthTrackerReconnectOptionsEnabled;
+    }
+
     private Control BuildTabs()
     {
         var selectedTab = _editorState.LastSelectedTab;
-        _tabs.AddTab("Basics", BuildBasicsTab());
-        _tabs.AddTab("Auto Launch", BuildAutoLaunchTab());
+        _tabs.AddTab("General", BuildBasicsTab());
+        _tabs.AddTab("Face Tracking", BuildFaceTrackingTab());
         _tabs.AddTab("Base Stations", BuildBaseStationsTab());
+        _tabs.AddTab("Auto Startup", BuildAutoLaunchTab());
         _tabs.AddTab("Detectors", BuildDetectorsTab());
         _tabs.AddTab("Processes", BuildProcessesTab());
         _tabs.AddTab("OSC Router", BuildOscRouterTab());
         _tabs.AddTab("OSCGoesBrrr", BuildLovenseTab());
-        _tabs.AddTab("Timing", BuildTimingTab());
+        _tabs.AddTab("Timers", BuildTimingTab());
         _tabs.AddTab("Raw JSON", BuildRawJsonTab());
         _tabs.SelectTab(Math.Clamp(selectedTab, 0, _tabs.TabCount - 1));
         _tabs.SelectedIndexChanged += (_, _) =>
@@ -337,24 +491,46 @@ internal sealed class ConfigEditorForm : Form
     private Control BuildBasicsTab()
     {
         var layout = CreateFormLayout(3);
+        layout.Dock = DockStyle.Top;
+        layout.AutoSize = true;
+        layout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
-        AddPathRow(layout, "Broken Eye executable", _brokenEyePathTextBox, "Full path to Broken Eye.exe. The supervisor starts this app first.", configKey: "BrokenEyePath", defaultFileName: "Broken Eye.exe");
-        AddFullWidth(layout, _brokenEyeStartMinimizedCheckBox, "Checked means the supervisor starts Broken Eye minimized and tries to minimize its main window after launch.");
-        AddPathRow(
-            layout,
-            "VRCFaceTracking executable",
-            _vrcFaceTrackingPathTextBox,
-            "Full path to VRCFaceTracking.exe. The supervisor starts this after Broken Eye settles.",
-            DefaultVrcFaceTrackingDirectory,
-            "VrcFaceTrackingPath",
-            "VRCFaceTracking.exe");
-        AddFullWidth(layout, _vrcFaceTrackingStartMinimizedCheckBox, "Checked means the supervisor starts VRCFaceTracking minimized and tries to minimize its main window after launch.");
-        AddFullWidth(layout, _mouthTrackerCheckBox, "Checked means you use a Vive mouth tracker. Unchecked disables mouth-tracker monitoring. Filled square is shown only when the config leaves the first-run question enabled.");
+        _autostartModeComboBox.Items.Clear();
+        _autostartModeComboBox.Items.Add(AutostartModeOff);
+        _autostartModeComboBox.Items.Add(AutostartModeScheduledTask);
+        _autostartModeComboBox.Items.Add(AutostartModeSteamVrManifest);
+        if (_autostartModeComboBox.SelectedIndex < 0)
+        {
+            _autostartModeComboBox.SelectedItem = AutostartModeOff;
+        }
+
+        AddSectionHeader(layout, "Autostart");
+        AddLabeledRow(layout, "Autostart mode", _autostartModeComboBox, "Choose what the Supervisor should do automatically when SteamVR is running. Terminal Mode starts a watcher when SteamVR is running; depending on the Terminal UI default-interface option, it can launch hidden Supervisor + Terminal UI or preserve classic visible CLI behavior.");
+
+        AddSectionHeader(layout, "Startup");
+        _useDesktopTuiAsDefaultInterfaceCheckBox.CheckedChanged += (_, _) =>
+        {
+            _editorState.UseDesktopTuiAsDefaultInterface = _useDesktopTuiAsDefaultInterfaceCheckBox.Checked;
+            SaveEditorState();
+        };
+        AddFullWidth(layout, _useDesktopTuiAsDefaultInterfaceCheckBox, "When enabled, Launch Supervisor starts the Supervisor hidden and opens the Terminal UI.");
         AddFullWidth(layout, _turnOffMonitorsCheckBox, "Checked saves the current monitor layout and disables secondary monitors during the VR session. The layout is restored after VRChat and SteamVR close.");
-        AddFullWidth(layout, _autoLaunchTaskCheckBox, "Checked lets the app create or repair the elevated auto-launch Scheduled Task. Filled square is shown only when the config asks on first setup.");
-        AddFullWidth(layout, _usePimaxLogCheckBox, "Also scan PiService logs for quick HID remove/add reconnects that normal USB polling can miss.");
-        AddFullWidth(layout, _useMouthTrackerPnPCheckBox, "Also scan Windows Kernel-PnP events for quick mouth tracker reconnects that normal USB polling can miss.");
-        AddFolderValidationRow(layout, "PiService log folder", _pimaxServiceLogDirectoryTextBox, ToolTipWithConfigKey("Folder containing PiService__*.log files. Environment variables such as %LOCALAPPDATA% are expanded by the supervisor.", "PimaxServiceLogDirectory"));
+        AddSectionHeader(layout, "Diagnostics");
+        AddFullWidth(layout, _diagnosticsEnabledCheckBox, "Checked enables diagnostic and debug settings in this editor. Unchecked saves all diagnostic and debug options as disabled.");
+        AddFullWidth(layout, _diagnosticsLogSupervisorCheckBox, ToolTipWithConfigKey("Write periodic supervisor CPU, memory, loop, process detection, command, app, and base-station timing diagnostics to a text file.", "DiagnosticsLogSupervisor"));
+        AddFullWidth(layout, _diagnosticsLogSteamVrOverlayCheckBox, ToolTipWithConfigKey("Write SteamVR dashboard host loop, visibility, refresh, render, D3D upload, and texture submit diagnostics to a text file.", "DiagnosticsLogSteamVrOverlay"));
+        AddFullWidth(layout, _diagnosticsLogDesktopTuiCheckBox, ToolTipWithConfigKey("Writes lightweight Terminal UI load and refresh diagnostics to the diagnostics log folder.", "DiagnosticsLogDesktopTui"));
+        AddFullWidth(layout, _diagnosticsDebugSupervisorCheckBox, ToolTipWithConfigKey("Write supervisor debug events to a separate text file in the diagnostic log folder.", "DiagnosticsDebugSupervisor"));
+        AddFullWidth(layout, _diagnosticsDebugSteamVrOverlayCheckBox, ToolTipWithConfigKey("Write SteamVR overlay debug events to a separate text file in the diagnostic log folder.", "DiagnosticsDebugSteamVrOverlay"));
+        AddFullWidth(layout, _diagnosticsDebugSteamVrPointerCheckBox, ToolTipWithConfigKey("When SteamVR overlay debug logging is enabled, draw a visible pointer marker inside the overlay for hover hit-test troubleshooting.", "DiagnosticsDebugSteamVrPointer"));
+        AddFullWidth(layout, _diagnosticsVerboseCheckBox, ToolTipWithConfigKey("Also log individual slow or per-operation diagnostic timing lines. Leave off unless collecting a short troubleshooting trace.", "DiagnosticsVerbose"));
+        AddNumber(layout, "DiagnosticsSummaryIntervalSeconds", "Summary interval", 1, 3600, "Seconds between diagnostic summary lines when diagnostic logging is enabled.", "seconds");
+        AddFolderValidationRow(
+            layout,
+            "Diagnostic log folder",
+            _diagnosticsLogDirectoryTextBox,
+            ToolTipWithConfigKey("Folder for diagnostic text logs. Default is %TEMP%\\PimaxVrcSupervisorDiagnostics.", "DiagnosticsLogDirectory"),
+            includeOpenButton: true);
 
         var buttons = new FlowLayoutPanel
         {
@@ -373,11 +549,147 @@ internal sealed class ConfigEditorForm : Form
         buttons.Controls.Add(aboutButton);
         AddFullWidth(layout, buttons, "Editor utilities.");
 
+        var content = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoScroll = true,
+            ColumnCount = 2,
+            RowCount = 1,
+            Padding = new Padding(0)
+        };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 64));
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 36));
+        content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        content.Controls.Add(layout, 0, 0);
+        content.Controls.Add(BuildHotkeysPanel(), 1, 0);
+
         return BuildTabWithDescription(
             "General supervisor options",
             "Configure core behavior used by the console supervisor and choose whether helper features are enabled.",
+            content);
+    }
+
+    private Control BuildFaceTrackingTab()
+    {
+        var layout = CreateFormLayout(3, compact: true);
+        AddSectionHeader(layout, "Applications");
+        AddFullWidth(layout, _faceTrackerAutomationEnabledCheckBox, ToolTipWithConfigKey("Checked means the supervisor automatically starts face-tracking applications during headset sessions.", "FaceTrackerAutomationEnabled"));
+        AddFullWidth(layout, _useBrokenEyeCheckBox, ToolTipWithConfigKey("Checked means face-tracking startup and restart routines include Broken Eye. The executable path remains editable either way.", "UseBrokenEye"));
+
+        AddSectionHeader(layout, "Executables");
+        AddPathRow(layout, "Broken Eye executable", _brokenEyePathTextBox, "Full path to Broken Eye.exe. The supervisor starts this app first.", configKey: "BrokenEyePath", defaultFileName: "Broken Eye.exe");
+        AddPathRow(
+            layout,
+            "VRCFaceTracking executable",
+            _vrcFaceTrackingPathTextBox,
+            "Full path to VRCFaceTracking.exe. The supervisor starts this after Broken Eye settles.",
+            DefaultVrcFaceTrackingDirectory,
+            "VrcFaceTrackingPath",
+            "VRCFaceTracking.exe");
+
+        AddSectionHeader(layout, "Startup behavior");
+        AddFullWidth(layout, _brokenEyeStartMinimizedCheckBox, ToolTipWithConfigKey("Checked means the supervisor starts Broken Eye minimized and tries to minimize its main window after launch.", "BrokenEyeStartMinimized"));
+        AddFullWidth(layout, _vrcFaceTrackingStartMinimizedCheckBox, ToolTipWithConfigKey("Checked means the supervisor starts VRCFaceTracking minimized and tries to minimize its main window after launch.", "VrcFaceTrackingStartMinimized"));
+
+        AddSectionHeader(layout, "Vive Face Tracker");
+        AddFullWidth(layout, _mouthTrackerCheckBox, "Checked means you use a Vive Face Tracker. Unchecked disables Vive Face Tracker monitoring.");
+        AddFullWidth(layout, _mouthTrackerRestartOnReconnectCheckBox, ToolTipWithConfigKey("Checked means the supervisor restarts VRCFaceTracking after a Vive Face Tracker reconnect while the headset stays connected.", "MouthTrackerRestartOnReconnectEnabled"));
+
+        AddSectionHeader(layout, "Reconnect Detection");
+        AddFullWidth(layout, _faceTrackerRestartOnReconnectCheckBox, ToolTipWithConfigKey("Checked means the supervisor restarts the managed face-tracking apps after a Pimax headset reconnect.", "FaceTrackerRestartOnReconnectEnabled"));
+        _faceTrackerAutomationDependentControls.Add(_faceTrackerRestartOnReconnectCheckBox);
+        AddFullWidth(layout, _usePimaxLogCheckBox, ToolTipWithConfigKey("Also scan PiService logs for quick HID remove/add reconnects that normal USB polling can miss.", "UsePimaxServiceLogReconnectDetector"));
+        AddFullWidth(layout, _useMouthTrackerPnPCheckBox, ToolTipWithConfigKey("Also scan Windows Kernel-PnP events for quick Vive Face Tracker reconnects that normal USB polling can miss.", "UseMouthTrackerPnPReconnectDetector"));
+        AddFolderValidationRow(
+            layout,
+            "PiService log folder",
+            _pimaxServiceLogDirectoryTextBox,
+            ToolTipWithConfigKey("Folder containing PiService__*.log files. Environment variables such as %LOCALAPPDATA% are expanded by the supervisor.", "PimaxServiceLogDirectory"),
+            includeOpenButton: true);
+        AddNumber(layout, "PimaxServiceLogReconnectLookbackLines", "Pimax log scan depth", 1, 100000, "Number of recent PiService log lines scanned each polling cycle.", "lines");
+        if (_numberInputs.TryGetValue("PimaxServiceLogReconnectLookbackLines", out var pimaxLogScanDepthInput))
+        {
+            _faceTrackerAutomationDependentControls.Add(pimaxLogScanDepthInput);
+        }
+        _faceTrackerAutomationDependentControls.Add(_usePimaxLogCheckBox);
+        _faceTrackerAutomationDependentControls.Add(_useMouthTrackerPnPCheckBox);
+
+        return BuildTabWithDescription(
+            "Face tracking applications",
+            "Configure Broken Eye, VRCFaceTracking, and Vive Face Tracker use.",
             layout,
             limitWidth: true);
+    }
+
+    private Control BuildHotkeysPanel()
+    {
+        var panel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1,
+            Padding = new Padding(18, 8, 8, 8),
+            Margin = new Padding(12, 0, 0, 0)
+        };
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+        panel.Controls.Add(CreateSectionLabel("Hotkeys"), 0, panel.RowCount++);
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var consoleHeader = CreateMutedLabel("Console hotkeys");
+        consoleHeader.Font = new Font(FontFamily.GenericSansSerif, 9F, FontStyle.Bold);
+        consoleHeader.Padding = new Padding(0, 6, 0, 3);
+        panel.Controls.Add(consoleHeader, 0, panel.RowCount++);
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        panel.Controls.Add(CreateShortcutListLabel(ConsoleShortcutLines), 0, panel.RowCount++);
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var editorHeader = CreateMutedLabel("Configurator shortcuts");
+        editorHeader.Font = new Font(FontFamily.GenericSansSerif, 9F, FontStyle.Bold);
+        editorHeader.Padding = new Padding(0, 14, 0, 3);
+        panel.Controls.Add(editorHeader, 0, panel.RowCount++);
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        panel.Controls.Add(CreateShortcutListLabel(EditorShortcutLines), 0, panel.RowCount++);
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        return panel;
+    }
+
+    private static Label CreateShortcutListLabel(string[] lines) => new()
+    {
+        Text = string.Join(Environment.NewLine, lines),
+        AutoSize = true,
+        MaximumSize = new Size(420, 0),
+        Padding = new Padding(0, 0, 0, 4)
+    };
+
+    private void ConfigureStartupOptionInteractions()
+    {
+        _mouthTrackerCheckBox.CheckStateChanged += (_, _) =>
+        {
+            if (!_suppressDirtyTracking)
+            {
+                _mouthTrackerPreferenceTouched = true;
+            }
+        };
+
+        _turnOffMonitorsCheckBox.CheckStateChanged += (_, _) =>
+        {
+            if (!_suppressDirtyTracking)
+            {
+                _turnOffMonitorsPreferenceTouched = true;
+            }
+        };
+
+        _autostartModeComboBox.SelectedIndexChanged += (_, _) =>
+        {
+            if (!_suppressDirtyTracking)
+            {
+                _startupIntegrationPreferenceTouched = true;
+            }
+        };
     }
 
     private Control BuildBaseStationsTab()
@@ -488,7 +800,7 @@ internal sealed class ConfigEditorForm : Form
         _baseStationsGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
             Name = "Name",
-            HeaderText = "BLE name",
+            HeaderText = "Bluetooth name",
             FillWeight = 14,
             MinimumWidth = 120
         });
@@ -565,6 +877,7 @@ internal sealed class ConfigEditorForm : Form
             MinimumWidth = 76
         });
         _baseStationsGrid.CellContentClick += OnBaseStationsGridCellContentClick;
+        _baseStationsGrid.CellValueChanged += OnBaseStationsGridCellValueChanged;
         _baseStationsGrid.CellFormatting += OnWarningGridCellFormatting;
         _baseStationsGrid.DefaultValuesNeeded += OnBaseStationsGridDefaultValuesNeeded;
         _baseStationsGrid.KeyDown += OnManagedGridKeyDown;
@@ -575,6 +888,23 @@ internal sealed class ConfigEditorForm : Form
     {
         e.Row.Cells["Enabled"].Value = true;
         e.Row.Cells["Version"].Value = BaseStationVersion.V2.ToString();
+        RefreshBaseStationIdCellState(e.Row, clearInvalidId: true);
+    }
+
+    private void OnBaseStationsGridCellValueChanged(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.RowIndex >= _baseStationsGrid.Rows.Count)
+        {
+            return;
+        }
+
+        var row = _baseStationsGrid.Rows[e.RowIndex];
+        if (_baseStationsGrid.Columns[e.ColumnIndex].Name == "Version")
+        {
+            RefreshBaseStationIdCellState(row, clearInvalidId: true);
+        }
+
+        UpdateBaseStationRowWarnings();
     }
 
     private async Task ScanBaseStationsAsync()
@@ -926,7 +1256,7 @@ internal sealed class ConfigEditorForm : Form
         layout.Controls.Add(routesPanel, 0, 1);
         return BuildTabWithDescription(
             "OSC routing",
-            "Configure local OSC forwarding from the supervisor to apps such as VRCFT and OSCB00P.",
+            "Forward OSC from VRChat to local applications. Can be used alongside OSCQuery-compatible apps.",
             layout);
     }
 
@@ -937,13 +1267,6 @@ internal sealed class ConfigEditorForm : Form
             return;
         }
 
-        _oscRoutesGrid.Columns.Add(new DataGridViewCheckBoxColumn
-        {
-            Name = "Enabled",
-            HeaderText = "Enabled",
-            FillWeight = 8,
-            MinimumWidth = 76
-        });
         _oscRoutesGrid.Columns.Add(new DataGridViewTextBoxColumn
         {
             Name = "Name",
@@ -957,6 +1280,13 @@ internal sealed class ConfigEditorForm : Form
             HeaderText = "Target app receive port",
             FillWeight = 14,
             MinimumWidth = 140
+        });
+        _oscRoutesGrid.Columns.Add(new DataGridViewCheckBoxColumn
+        {
+            Name = "Enabled",
+            HeaderText = "Enabled",
+            FillWeight = 8,
+            MinimumWidth = 76
         });
         _oscRoutesGrid.DefaultValuesNeeded += OnOscRoutesGridDefaultValuesNeeded;
         _oscRoutesGrid.CellFormatting += OnWarningGridCellFormatting;
@@ -980,7 +1310,7 @@ internal sealed class ConfigEditorForm : Form
         _intifaceStartMinimizedCheckBox.Margin = new Padding(0, 2, 0, 2);
         _oscGoesBrrrStartMinimizedCheckBox.Margin = new Padding(0, 2, 0, 2);
         AddFullWidth(layout, _oscGoesBrrrEnabledCheckBox, ToolTipWithConfigKey("Checked means the OscGoesBrrr workflow is available during headset sessions.", "OscGoesBrrrEnabled"));
-        AddFullWidth(layout, _oscGoesBrrrHotkeyCheckBox, ToolTipWithConfigKey("Checked means the supervisor shows Press L to launch OSCGoesBrrr and starts Intiface plus OscGoesBrrr when L is pressed.", "OscGoesBrrrHotkeyEnabled"));
+        AddFullWidth(layout, _oscGoesBrrrHotkeyCheckBox, ToolTipWithConfigKey("Checked keeps the OSCGoesBrrr workflow in manual console launch mode instead of prestarting Intiface and watching Windows Lovense device detection. Console hotkey 2 is available whenever the OSCGoesBrrr feature is enabled.", "OscGoesBrrrHotkeyEnabled"));
         AddFullWidth(layout, _oscGoesBrrrBleScannerCheckBox, ToolTipWithConfigKey("Checked means the supervisor scans nearby BLE advertisements for Lovense names such as LVS- and auto-launches the workflow when one matches.", "OscGoesBrrrBleScannerEnabled"));
 
         AddSectionHeader(layout, "Executables");
@@ -1062,7 +1392,7 @@ internal sealed class ConfigEditorForm : Form
         const string tooltip = "Optional apps to launch after Broken Eye and VRCFaceTracking are running. The supervisor infers the process name from the selected exe.";
         var label = new Label
         {
-            Text = "Auto-launch apps",
+            Text = "Auto-startup apps",
             AutoSize = true,
             Padding = new Padding(0, 0, 0, 4)
         };
@@ -1092,7 +1422,7 @@ internal sealed class ConfigEditorForm : Form
         layout.Controls.Add(_autoLaunchAppsGrid, 0, 2);
         UpdateDynamicGridHeight(_autoLaunchAppsGrid);
         return BuildTabWithDescription(
-            "Auto-launch apps",
+            "Auto-startup apps",
             "Configure optional tools that should start with the supervisor or restart after a Pimax reconnect.",
             layout);
     }
@@ -1274,18 +1604,18 @@ internal sealed class ConfigEditorForm : Form
             0);
         layout.Controls.Add(
             BuildDetectorPanel(
-                "Mouth tracker detector rules",
+                "Vive Face Tracker detector rules",
                 _mouthTrackerDetectorsTextBox,
-                "Mouth tracker detection",
+                "Vive Face Tracker detection",
                 "One rule per line. Use comma-separated keywords when all keywords must match.\r\nExample: HTC Multimedia Camera",
-                "Each line is one possible mouth tracker match rule. Put multiple required keywords on the same line separated by commas.",
-                "Test Mouth Tracker Rules",
-                () => TestDetectorRulesAsync("Mouth tracker", ParseStringMatrix(_mouthTrackerDetectorsTextBox.Text))),
+                "Each line is one possible Vive Face Tracker match rule. Put multiple required keywords on the same line separated by commas.",
+                "Test Vive Face Tracker Rules",
+                () => TestDetectorRulesAsync("Vive Face Tracker", ParseStringMatrix(_mouthTrackerDetectorsTextBox.Text))),
             0,
             1);
         return BuildTabWithDescription(
             "Device detector rules",
-            "Configure keyword rules used to detect Pimax devices and mouth trackers from USB/Bluetooth device names.",
+            "Configure keyword rules used to detect Pimax devices and Vive Face Trackers from USB/Bluetooth device names.",
             layout);
     }
 
@@ -1557,7 +1887,6 @@ internal sealed class ConfigEditorForm : Form
     {
         var layout = CreateFormLayout(2);
         AddSectionHeader(layout, "Reconnect detection");
-        AddNumber(layout, "PimaxServiceLogReconnectLookbackLines", "Pimax log scan depth", 1, 100000, "Number of recent PiService log lines scanned each polling cycle.", "lines");
         AddNumber(layout, "PollIntervalSeconds", "Supervisor check interval", 1, 3600, "How often the supervisor checks device and watched-process state.", "seconds");
         AddNumber(layout, "RestartDelayAfterReconnectSeconds", "Restart delay after reconnect", 0, 3600, "Seconds to wait after Pimax reconnects before restarting managed apps.", "seconds");
 
@@ -1596,12 +1925,23 @@ internal sealed class ConfigEditorForm : Form
         var warning = CreateMutedLabel("Advanced: edits here directly change the full configuration used by all tabs.");
         warning.Padding = new Padding(0, 0, 0, 8);
 
+        var toolbar = new TableLayoutPanel
+        {
+            AutoSize = true,
+            ColumnCount = 2,
+            Dock = DockStyle.Fill,
+            Padding = new Padding(0, 0, 0, 8)
+        };
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
         var buttons = new FlowLayoutPanel
         {
             AutoSize = true,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
-            Padding = new Padding(0, 0, 0, 8)
+            Margin = new Padding(0),
+            Anchor = AnchorStyles.Left
         };
         var applyButton = CreateButton("Apply JSON to editor");
         applyButton.Click += (_, _) => ApplyRawJsonToEditor();
@@ -1618,9 +1958,41 @@ internal sealed class ConfigEditorForm : Form
         _toolTips.SetToolTip(formatButton, "Pretty-print the Raw JSON text after validating it.");
         buttons.Controls.Add(formatButton);
 
+        var searchPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0),
+            Anchor = AnchorStyles.Right,
+            Padding = new Padding(0)
+        };
+        var searchLabel = new Label { Text = "Search", AutoSize = false, Width = 48, Height = 27, TextAlign = ContentAlignment.MiddleLeft, Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, 6, 0) };
+        var previousButton = CreateButton("Previous", autoSize: false, width: 78, height: 27);
+        var nextButton = CreateButton("Next", autoSize: false, width: 56, height: 27);
+        previousButton.Click += (_, _) => SearchRawJson(forward: false, focusEditor: true);
+        nextButton.Click += (_, _) => SearchRawJson(forward: true, focusEditor: true);
+        _rawJsonSearchTextBox.Margin = new Padding(0, 2, 6, 0);
+        _rawJsonSearchTextBox.KeyDown += RawJsonSearchTextBox_KeyDown;
+        _rawJsonSearchTextBox.TextChanged += (_, _) => UpdateRawJsonSearchStatus();
+        _rawJsonTextBox.TextChanged += (_, _) => UpdateRawJsonSearchStatus();
+        _toolTips.SetToolTip(searchLabel, "Search in the Raw JSON text.");
+        _toolTips.SetToolTip(_rawJsonSearchTextBox, "Search in Raw JSON. Press Enter for next match, Shift+Enter for previous match, or use Previous and Next.");
+        _toolTips.SetToolTip(previousButton, "Find the previous Raw JSON match.");
+        _toolTips.SetToolTip(nextButton, "Find the next Raw JSON match.");
+        searchPanel.Controls.Add(searchLabel);
+        searchPanel.Controls.Add(_rawJsonSearchTextBox);
+        searchPanel.Controls.Add(previousButton);
+        searchPanel.Controls.Add(nextButton);
+        searchPanel.Controls.Add(_rawJsonSearchStatusLabel);
+
+        toolbar.Controls.Add(buttons, 0, 0);
+        toolbar.Controls.Add(searchPanel, 1, 0);
+
         _rawJsonTextBox.Dock = DockStyle.Fill;
+        _rawJsonTextBox.HideSelection = false;
         layout.Controls.Add(warning, 0, 0);
-        layout.Controls.Add(buttons, 0, 1);
+        layout.Controls.Add(toolbar, 0, 1);
         layout.Controls.Add(_rawJsonTextBox, 0, 2);
         layout.Controls.Add(_rawJsonValidationLabel, 0, 3);
 
@@ -1635,11 +2007,12 @@ internal sealed class ConfigEditorForm : Form
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Bottom,
-            ColumnCount = 5,
+            ColumnCount = 6,
             AutoSize = true,
             Padding = new Padding(0, 10, 0, 0)
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -1652,7 +2025,11 @@ internal sealed class ConfigEditorForm : Form
         var launchButton = CreateButton("Launch Supervisor");
         launchButton.Click += (_, _) => LaunchSupervisor();
         launchButton.FlatStyle = FlatStyle.Flat;
-        _toolTips.SetToolTip(launchButton, "Launch Supervisor (Ctrl+L). Starts the console supervisor using the currently selected config file. Save changes first if you want the launched supervisor to use them.");
+        _toolTips.SetToolTip(launchButton, "Launch Supervisor (Ctrl+L). Uses the Terminal UI option in Startup: checked opens the Terminal UI, unchecked starts the classic visible console. Save changes first if you want the launched supervisor to use them.");
+
+        var launchSteamVrButton = CreateButton("Launch SteamVR");
+        launchSteamVrButton.Click += (_, _) => LaunchSteamVr();
+        _toolTips.SetToolTip(launchSteamVrButton, "Starts SteamVR normally through Steam.");
 
         var saveButton = CreateButton("Save");
         saveButton.Tag = "Primary";
@@ -1666,8 +2043,9 @@ internal sealed class ConfigEditorForm : Form
         layout.Controls.Add(_statusLabel, 0, 0);
         layout.Controls.Add(validateButton, 1, 0);
         layout.Controls.Add(launchButton, 2, 0);
-        layout.Controls.Add(saveAsButton, 3, 0);
-        layout.Controls.Add(saveButton, 4, 0);
+        layout.Controls.Add(launchSteamVrButton, 3, 0);
+        layout.Controls.Add(saveAsButton, 4, 0);
+        layout.Controls.Add(saveButton, 5, 0);
         return layout;
     }
 
@@ -1783,6 +2161,7 @@ internal sealed class ConfigEditorForm : Form
             if (dialog.ShowDialog() == DialogResult.OK)
             {
                 textBox.Text = dialog.FileName;
+                RefreshPathIndicators();
             }
         };
 
@@ -1817,24 +2196,117 @@ internal sealed class ConfigEditorForm : Form
         UpdatePathStatus();
     }
 
-    private void AddFolderValidationRow(TableLayoutPanel layout, string label, TextBox textBox, string tooltip)
+    private void AddFolderValidationRow(
+        TableLayoutPanel layout,
+        string label,
+        TextBox textBox,
+        string tooltip,
+        bool includeOpenButton = false,
+        ICollection<Control>? dependentControls = null)
     {
+        var browseButton = CreateButton("Browse...", autoSize: false, width: 104, height: 27);
+        browseButton.Click += (_, _) =>
+        {
+            using var dialog = new FolderBrowserDialog
+            {
+                Description = "Select " + label,
+                UseDescriptionForTitle = true
+            };
+
+            var expandedTextPath = ExpandPath(textBox.Text);
+            if (Directory.Exists(expandedTextPath))
+            {
+                dialog.SelectedPath = expandedTextPath;
+            }
+
+            if (dialog.ShowDialog(this) == DialogResult.OK)
+            {
+                textBox.Text = dialog.SelectedPath;
+                RefreshPathIndicators();
+            }
+        };
+
+        var openButton = includeOpenButton
+            ? CreateButton("Open", autoSize: false, width: 72, height: 27)
+            : null;
+        if (openButton is not null)
+        {
+            openButton.Click += (_, _) => OpenFolderInExplorer(textBox.Text, label);
+        }
+
+        dependentControls?.Add(textBox);
+        dependentControls?.Add(browseButton);
+        if (openButton is not null)
+        {
+            dependentControls?.Add(openButton);
+        }
+
         var labelControl = new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left };
         var statusLabel = CreatePathStatusLabel();
+        var extraPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0)
+        };
+        extraPanel.Controls.Add(browseButton);
+        extraPanel.Controls.Add(statusLabel);
+        if (openButton is not null)
+        {
+            extraPanel.Controls.Add(openButton);
+        }
 
         void UpdatePathStatus()
         {
             var currentTooltip = BuildPathTooltip(tooltip, textBox.Text, null);
             _toolTips.SetToolTip(labelControl, currentTooltip);
             _toolTips.SetToolTip(textBox, currentTooltip);
+            _toolTips.SetToolTip(browseButton, currentTooltip);
             _toolTips.SetToolTip(statusLabel, currentTooltip);
+            if (openButton is not null)
+            {
+                _toolTips.SetToolTip(openButton, currentTooltip);
+            }
             UpdatePathIndicator(statusLabel, textBox.Text, Directory.Exists);
         }
 
-        AddControlRow(layout, labelControl, textBox, statusLabel, tooltip);
+        AddControlRow(layout, labelControl, textBox, extraPanel, tooltip);
         textBox.TextChanged += (_, _) => UpdatePathStatus();
         _pathIndicatorRefreshers.Add(UpdatePathStatus);
         UpdatePathStatus();
+    }
+
+    private void OpenFolderInExplorer(string pathText, string label)
+    {
+        var path = ExpandPath(pathText);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            ShowThemedMessageBox($"Set a {label.ToLowerInvariant()} before opening it.", "Folder path is empty", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(path);
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                UseShellExecute = true
+            };
+            startInfo.ArgumentList.Add(path);
+            Process.Start(startInfo);
+            SetTemporaryStatus("Opened diagnostic log folder.", path);
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessageBox(
+                $"Could not open {label.ToLowerInvariant()}.\r\n\r\nPath:\r\n{path}\r\n\r\n{ex.Message}",
+                "Could not open folder",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            SetStatus("Open folder failed.");
+        }
     }
 
     private static Label CreatePathStatusLabel() => new()
@@ -2076,6 +2548,305 @@ internal sealed class ConfigEditorForm : Form
         }
     }
 
+    private static string GetDefaultConfigPath()
+        => Path.Combine(AppContext.BaseDirectory, DefaultConfigFileName);
+
+    private static string GetDefaultConfigTemplateJson()
+    {
+        using var stream = typeof(ConfigEditorForm).Assembly.GetManifestResourceStream(DefaultConfigResourceName)
+            ?? throw new InvalidOperationException("The default supervisor config template is not embedded in the config editor build.");
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var json = reader.ReadToEnd();
+        return string.IsNullOrWhiteSpace(json) ? "{\r\n}\r\n" : json;
+    }
+
+    private static void EnsureDefaultConfigFile(string path)
+    {
+        if (File.Exists(path))
+        {
+            return;
+        }
+
+        WriteDefaultConfigFile(path);
+    }
+
+    private static void WriteDefaultConfigFile(string path)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        File.WriteAllText(path, GetDefaultConfigTemplateJson(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
+    private static void SaveActiveConfigSelection(string path)
+    {
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var appDirectory = Path.GetFullPath(AppContext.BaseDirectory)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var configDirectory = Path.GetDirectoryName(fullPath)?
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var value = string.Equals(appDirectory, configDirectory, StringComparison.OrdinalIgnoreCase)
+                ? Path.GetFileName(fullPath)
+                : fullPath;
+            File.WriteAllText(
+                Path.Combine(AppContext.BaseDirectory, ActiveConfigSelectionFileName),
+                value,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+        catch
+        {
+            // Direct launch falls back to supervisor.config.json if this convenience marker cannot be written.
+        }
+    }
+
+    private void RefreshConfigSelector(string? currentDisplayNameOverride = null)
+    {
+        _suppressConfigSelectorChange = true;
+        var beganUpdate = false;
+        try
+        {
+            var currentPath = TryGetFullPath(_configPathTextBox.Text.Trim());
+            var items = GetConfigProfileItems(currentPath, currentDisplayNameOverride).ToArray();
+
+            _configSelectorComboBox.BeginUpdate();
+            beganUpdate = true;
+            _configSelectorComboBox.Items.Clear();
+            foreach (var item in items)
+            {
+                _configSelectorComboBox.Items.Add(item);
+            }
+
+            var selectedIndex = currentPath is null
+                ? -1
+                : Array.FindIndex(items, item => PathsEqual(item.Path, currentPath));
+            UpdateConfigSelectorWidth(items);
+            _configSelectorComboBox.SelectedIndex = selectedIndex;
+            _configSelectorComboBox.Enabled = items.Length > 0;
+            _configSelectorComboBox.EndUpdate();
+            beganUpdate = false;
+            _configSelectorComboBox.Refresh();
+            UpdateConfigSelectorTooltip();
+        }
+        catch
+        {
+            if (beganUpdate)
+            {
+                _configSelectorComboBox.EndUpdate();
+            }
+            _configSelectorComboBox.Items.Clear();
+            _configSelectorComboBox.Enabled = false;
+            _configSelectorComboBox.Width = MinimumConfigSelectorWidth;
+            _toolTips.SetToolTip(_configSelectorComboBox, "Could not read named configs from the app folder.");
+        }
+        finally
+        {
+            _suppressConfigSelectorChange = false;
+        }
+    }
+
+    private void UpdateConfigSelectorWidth(IReadOnlyCollection<ConfigProfileItem> items)
+    {
+        var widestText = items.Count == 0
+            ? MinimumConfigSelectorWidth
+            : items.Max(item => TextRenderer.MeasureText(item.DisplayName, _configSelectorComboBox.Font).Width);
+        var desiredWidth = widestText + SystemInformation.VerticalScrollBarWidth + 36;
+        var availableWidth = Math.Max(MinimumConfigSelectorWidth, ClientSize.Width - 430);
+        _configSelectorComboBox.Width = Math.Clamp(
+            desiredWidth,
+            MinimumConfigSelectorWidth,
+            Math.Min(MaximumConfigSelectorWidth, availableWidth));
+        _configSelectorComboBox.DropDownWidth = Math.Max(_configSelectorComboBox.Width, desiredWidth);
+    }
+
+    private IEnumerable<ConfigProfileItem> GetConfigProfileItems(string? currentPath = null, string? currentDisplayNameOverride = null)
+    {
+        var directory = AppContext.BaseDirectory;
+        if (!Directory.Exists(directory))
+        {
+            return [];
+        }
+
+        var profileItems = Directory
+            .EnumerateFiles(directory, "*.config.json", SearchOption.TopDirectoryOnly)
+            .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
+            .Select(path =>
+            {
+                var fileName = Path.GetFileName(path);
+                var fullPath = Path.GetFullPath(path);
+                var displayName = currentPath is not null
+                    && !string.IsNullOrWhiteSpace(currentDisplayNameOverride)
+                    && PathsEqual(fullPath, currentPath)
+                        ? NormalizeDisplayNameForDisplay(currentDisplayNameOverride)
+                        : ReadConfigDisplayName(path);
+                var friendlyName = string.IsNullOrWhiteSpace(displayName) ? fileName : displayName;
+                return new ConfigProfileItem(friendlyName, fileName, fullPath, friendlyName);
+            })
+            .ToArray();
+
+        var duplicateNames = profileItems
+            .GroupBy(item => item.FriendlyName, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return profileItems
+            .Select(item => duplicateNames.Contains(item.FriendlyName)
+                ? item with { DisplayName = $"{item.FriendlyName} - {item.FileName}" }
+                : item)
+            .ToArray();
+    }
+
+    private static string ReadConfigDisplayName(string path)
+    {
+        try
+        {
+            return NormalizeDisplayNameForDisplay(GetString(ParseJson(File.ReadAllText(path)), "DisplayName"));
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private void LoadSelectedConfigFromDropdown()
+    {
+        if (_suppressConfigSelectorChange || _configSelectorComboBox.SelectedItem is not ConfigProfileItem item)
+        {
+            return;
+        }
+
+        var currentPath = TryGetFullPath(_configPathTextBox.Text.Trim());
+        if (currentPath is not null && PathsEqual(currentPath, item.Path))
+        {
+            UpdateConfigSelectorTooltip();
+            return;
+        }
+
+        if (!ConfirmUnsavedChangesBefore("loading another config"))
+        {
+            RefreshConfigSelector();
+            return;
+        }
+
+        _configPathTextBox.Text = item.Path;
+        LoadConfig(item.Path);
+    }
+
+    private void DeleteSelectedConfig()
+    {
+        if (_configSelectorComboBox.SelectedItem is not ConfigProfileItem item)
+        {
+            ShowThemedMessageBox("Select a config to delete.", "Delete config", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            SetStatus("No config selected.");
+            return;
+        }
+
+        var result = ShowThemedMessageBox(
+            "Do you really wish to delete the config and its name?",
+            "Delete config",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+        if (result != DialogResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            var deletedCurrentConfig = PathsEqual(_configPathTextBox.Text.Trim(), item.Path);
+            File.Delete(item.Path);
+
+            if (deletedCurrentConfig)
+            {
+                var nextConfig = GetConfigProfileItems().FirstOrDefault(config => !PathsEqual(config.Path, item.Path));
+                if (nextConfig is not null)
+                {
+                    _configPathTextBox.Text = nextConfig.Path;
+                    LoadConfig(nextConfig.Path);
+                }
+                else
+                {
+                    var defaultConfigPath = GetDefaultConfigPath();
+                    WriteDefaultConfigFile(defaultConfigPath);
+                    _configPathTextBox.Text = defaultConfigPath;
+                    LoadConfig(defaultConfigPath);
+                }
+            }
+            else
+            {
+                RefreshConfigSelector();
+            }
+
+            SetTemporaryStatus($"Deleted config {item.FileName}.");
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessageBox(ex.Message, "Could not delete config", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus("Delete config failed.");
+        }
+    }
+
+    private void UpdateConfigSelectorTooltip()
+    {
+        var tooltip = _configSelectorComboBox.SelectedItem is ConfigProfileItem item
+            ? $"Display name: {item.FriendlyName}\r\nFile: {item.FileName}\r\nPath:\r\n{item.Path}"
+            : "Select a named *.config.json file from the app folder.";
+        _toolTips.SetToolTip(_configSelectorComboBox, tooltip);
+    }
+
+    private static string GetFallbackDisplayName(string path)
+    {
+        var fileName = string.IsNullOrWhiteSpace(path) ? "" : Path.GetFileName(path);
+        return string.IsNullOrWhiteSpace(fileName) ? "supervisor.config.json" : fileName;
+    }
+
+    private static DisplayNameNormalizationResult NormalizeDisplayNameForStorage(string value)
+        => NormalizeDisplayName(value, truncateForStorage: true);
+
+    private static string NormalizeDisplayNameForDisplay(string value)
+        => NormalizeDisplayName(value, truncateForStorage: false).Value;
+
+    private static DisplayNameNormalizationResult NormalizeDisplayName(string value, bool truncateForStorage)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return new DisplayNameNormalizationResult("", Shortened: false);
+        }
+
+        var builder = new StringBuilder(value.Length);
+        foreach (var character in value)
+        {
+            if (char.IsControl(character))
+            {
+                if (char.IsWhiteSpace(character))
+                {
+                    builder.Append(' ');
+                }
+
+                continue;
+            }
+
+            builder.Append(char.IsWhiteSpace(character) ? ' ' : character);
+        }
+
+        var normalized = Regex.Replace(builder.ToString().Trim(), @"\s+", " ");
+        if (!truncateForStorage || normalized.Length <= MaxDisplayNameLength)
+        {
+            return new DisplayNameNormalizationResult(normalized, Shortened: false);
+        }
+
+        return new DisplayNameNormalizationResult(
+            normalized[..MaxDisplayNameLength].TrimEnd(),
+            Shortened: true);
+    }
+
+    private static bool PathsEqual(string first, string second)
+        => string.Equals(
+            TryGetFullPath(first) ?? first,
+            TryGetFullPath(second) ?? second,
+            StringComparison.OrdinalIgnoreCase);
+
     private void BrowseConfig()
     {
         if (!ConfirmUnsavedChangesBefore("loading another config"))
@@ -2131,11 +2902,209 @@ internal sealed class ConfigEditorForm : Form
         }
     }
 
-    private void LaunchSupervisor()
+    private void RestoreBackup()
     {
-        if (!ValidateForLaunch())
+        var backups = GetBackupFileItems().ToArray();
+        if (backups.Length == 0)
+        {
+            ShowThemedMessageBox("No .bak backups were found in the app folder.", "Restore backup", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            SetStatus("No backups found.");
+            return;
+        }
+
+        if (!ConfirmUnsavedChangesBefore("restoring a backup"))
         {
             return;
+        }
+
+        var selectedBackup = ShowBackupSelectionDialog(backups);
+        if (selectedBackup is null)
+        {
+            return;
+        }
+
+        var defaultConfigPath = Path.Combine(AppContext.BaseDirectory, "supervisor.config.json");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(defaultConfigPath)!);
+            var preRestoreBackupPath = CreateConfigBackup(defaultConfigPath);
+            File.Copy(selectedBackup.Path, defaultConfigPath, overwrite: true);
+            _configPathTextBox.Text = defaultConfigPath;
+            LoadConfig(defaultConfigPath);
+            var tooltip = preRestoreBackupPath is null
+                ? "Restored from:\r\n" + selectedBackup.Path
+                : "Restored from:\r\n" + selectedBackup.Path + "\r\n\r\nPrevious default config backup:\r\n" + preRestoreBackupPath;
+            SetTemporaryStatus("Restored backup to supervisor.config.json.", tooltip);
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessageBox(ex.Message, "Could not restore backup", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus("Backup restore failed.");
+        }
+    }
+
+    private IEnumerable<BackupFileItem> GetBackupFileItems()
+    {
+        var directory = AppContext.BaseDirectory;
+        if (!Directory.Exists(directory))
+        {
+            return [];
+        }
+
+        return Directory
+            .EnumerateFiles(directory, "*.bak", SearchOption.TopDirectoryOnly)
+            .Select(path => new BackupFileItem(
+                Path.GetFileName(path),
+                Path.GetFullPath(path),
+                File.GetLastWriteTime(path)))
+            .OrderByDescending(item => item.LastWriteTime)
+            .ThenBy(item => item.FileName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private BackupFileItem? ShowBackupSelectionDialog(IReadOnlyList<BackupFileItem> backups)
+    {
+        using var dialog = new Form
+        {
+            Text = "Restore backup",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ClientSize = new Size(560, 152),
+            ShowInTaskbar = false
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 3,
+            Padding = new Padding(12)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var label = CreateMutedLabel("Choose a backup to restore into the app folder's supervisor.config.json.");
+        label.Margin = new Padding(0, 0, 0, 8);
+
+        var comboBox = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Dock = DockStyle.Top,
+            Margin = new Padding(0, 0, 0, 12)
+        };
+        foreach (var backup in backups)
+        {
+            comboBox.Items.Add(backup);
+        }
+        comboBox.SelectedIndex = 0;
+
+        var buttons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Bottom,
+            FlowDirection = FlowDirection.RightToLeft,
+            Height = 40,
+            WrapContents = false
+        };
+        var restoreButton = CreateButton("Restore", autoSize: false, width: 92, dialogResult: DialogResult.OK);
+        restoreButton.Tag = "Primary";
+        var cancelButton = CreateButton("Cancel", autoSize: false, width: 86, dialogResult: DialogResult.Cancel);
+        buttons.Controls.Add(restoreButton);
+        buttons.Controls.Add(cancelButton);
+
+        root.Controls.Add(label, 0, 0);
+        root.Controls.Add(comboBox, 0, 1);
+        root.Controls.Add(buttons, 0, 2);
+        dialog.Controls.Add(root);
+        dialog.AcceptButton = restoreButton;
+        dialog.CancelButton = cancelButton;
+        ApplyThemeTo(dialog);
+        WindowsTitleBar.ApplyTheme(dialog.Handle, _theme.IsDark);
+
+        return dialog.ShowDialog(this) == DialogResult.OK
+            ? comboBox.SelectedItem as BackupFileItem
+            : null;
+    }
+
+    private void LaunchSupervisor()
+    {
+        if (_useDesktopTuiAsDefaultInterfaceCheckBox.Checked)
+        {
+            LaunchSupervisorWithDesktopTui();
+            return;
+        }
+
+        if (IsSupervisorRunning())
+        {
+            SetStatus("Supervisor is already running.");
+            return;
+        }
+
+        if (!TryPrepareSupervisorLaunch(out var supervisorPath, out var configPath))
+        {
+            return;
+        }
+
+        LaunchSupervisorProcess(supervisorPath, configPath, successStatus: "Started Supervisor.");
+    }
+
+    private void LaunchSupervisorWithDesktopTui()
+    {
+        var supervisorRunning = IsSupervisorRunning();
+        var tuiRunning = IsDesktopTuiRunning();
+
+        if (supervisorRunning && tuiRunning)
+        {
+            SetStatus("Supervisor and Terminal UI are already running.");
+            return;
+        }
+
+        if (supervisorRunning)
+        {
+            var result = LaunchDesktopTui(showAlreadyOpenMessage: false);
+            if (result == DesktopTuiLaunchResult.Launched)
+            {
+                SetStatus("Supervisor is already running. Opened Terminal UI.");
+            }
+            else if (result == DesktopTuiLaunchResult.AlreadyRunning)
+            {
+                SetStatus("Supervisor and Terminal UI are already running.");
+            }
+            return;
+        }
+
+        if (!TryPrepareSupervisorLaunch(out var supervisorPath, out var configPath))
+        {
+            return;
+        }
+
+        if (LaunchSupervisorProcess(supervisorPath, configPath, desktopTuiStart: true, successStatus: null))
+        {
+            var tuiResult = tuiRunning
+                ? DesktopTuiLaunchResult.AlreadyRunning
+                : LaunchDesktopTui(showAlreadyOpenMessage: false);
+
+            if (tuiResult == DesktopTuiLaunchResult.Launched)
+            {
+                SetStatus("Started Supervisor and Terminal UI.");
+            }
+            else if (tuiResult == DesktopTuiLaunchResult.AlreadyRunning)
+            {
+                SetStatus("Started Supervisor. Terminal UI is already open.");
+            }
+        }
+    }
+
+    private bool TryPrepareSupervisorLaunch(out string supervisorPath, out string configPath)
+    {
+        supervisorPath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.exe");
+        configPath = string.Empty;
+
+        if (!ValidateForLaunch())
+        {
+            return false;
         }
 
         if (_hasUnsavedChanges)
@@ -2143,22 +3112,27 @@ internal sealed class ConfigEditorForm : Form
             var result = ShowLaunchUnsavedChangesDialog();
             if (result == LaunchUnsavedChoice.Cancel)
             {
-                return;
+                return false;
             }
 
             if (result == LaunchUnsavedChoice.SaveAndLaunch && !SaveConfig())
             {
-                return;
+                return false;
             }
         }
 
-        var supervisorPath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.exe");
         if (!File.Exists(supervisorPath))
         {
-            ShowThemedMessageBox($"Could not find {supervisorPath}.", "Could not launch supervisor", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return;
+            ShowThemedMessageBox($"Could not find the Supervisor executable:\r\n\r\n{supervisorPath}", "Could not start Supervisor", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
         }
 
+        configPath = Path.GetFullPath(_configPathTextBox.Text.Trim());
+        return true;
+    }
+
+    private bool LaunchSupervisorProcess(string supervisorPath, string configPath, bool desktopTuiStart = false, string? successStatus = "Started Supervisor.")
+    {
         try
         {
             var startInfo = new ProcessStartInfo
@@ -2169,29 +3143,134 @@ internal sealed class ConfigEditorForm : Form
                 ErrorDialog = true,
                 ErrorDialogParentHandle = Handle
             };
+            startInfo.ArgumentList.Add("--config");
+            startInfo.ArgumentList.Add(configPath);
+            if (desktopTuiStart)
+            {
+                startInfo.ArgumentList.Add("--desktop-tui-start");
+                startInfo.WindowStyle = ProcessWindowStyle.Hidden;
+            }
+
             if (!IsAdministrator())
             {
                 startInfo.Verb = "runas";
             }
 
             Process.Start(startInfo);
-            SetStatus("Launched " + supervisorPath);
+            if (!string.IsNullOrWhiteSpace(successStatus))
+            {
+                SetStatus(successStatus);
+            }
+            return true;
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
         {
             ShowThemedMessageBox(
-                "Windows cancelled the administrator approval prompt for PimaxVrcSupervisor.exe. Click Launch again and approve the UAC prompt.",
-                "Supervisor launch cancelled",
+                "Windows cancelled the administrator approval prompt. Click Launch again and approve it to start the Supervisor.",
+                "Supervisor start cancelled",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
-            SetStatus("Launch cancelled.");
+            SetStatus("Supervisor start cancelled.");
+            return false;
         }
         catch (Exception ex)
         {
-            ShowThemedMessageBox(ex.Message, "Could not launch supervisor", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            SetStatus("Launch failed.");
+            ShowThemedMessageBox(ex.Message, "Could not start Supervisor", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus("Could not start Supervisor.");
+            return false;
         }
     }
+
+    private void LaunchSteamVr()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "steam://rungameid/250820",
+                UseShellExecute = true,
+                ErrorDialog = true,
+                ErrorDialogParentHandle = Handle
+            });
+            SetStatus("Launched SteamVR.");
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessageBox(ex.Message, "Could not launch SteamVR", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus("SteamVR launch failed.");
+        }
+    }
+
+    private enum DesktopTuiLaunchResult
+    {
+        Launched,
+        AlreadyRunning,
+        Failed
+    }
+
+    private DesktopTuiLaunchResult LaunchDesktopTui(bool showAlreadyOpenMessage = true)
+    {
+        var tuiPath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisorTui.exe");
+        if (!File.Exists(tuiPath))
+        {
+            ShowThemedMessageBox(
+                "Terminal UI was not found next to the Configurator.\r\n\r\n"
+                + "Expected file:\r\n"
+                + tuiPath
+                + "\r\n\r\nBuild or copy the Rust Terminal UI executable into the release folder and try again.",
+                "Could not start Terminal UI",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            SetStatus("Terminal UI was not found.");
+            return DesktopTuiLaunchResult.Failed;
+        }
+
+        if (IsDesktopTuiRunning())
+        {
+            if (showAlreadyOpenMessage)
+            {
+                ShowThemedMessageBox(
+                    "Terminal UI is already open.",
+                    "Terminal UI already open",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+            SetStatus("Terminal UI is already open.");
+            return DesktopTuiLaunchResult.AlreadyRunning;
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = tuiPath,
+                WorkingDirectory = AppContext.BaseDirectory,
+                UseShellExecute = true,
+                ErrorDialog = true,
+                ErrorDialogParentHandle = Handle
+            };
+            var configPath = TryGetFullPath(_configPathTextBox.Text.Trim());
+            if (!string.IsNullOrWhiteSpace(configPath))
+            {
+                startInfo.ArgumentList.Add("--config");
+                startInfo.ArgumentList.Add(configPath);
+            }
+
+            Process.Start(startInfo);
+            SetStatus("Terminal UI opened.");
+            return DesktopTuiLaunchResult.Launched;
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessageBox(ex.Message, "Could not start Terminal UI", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus("Could not start Terminal UI.");
+            return DesktopTuiLaunchResult.Failed;
+        }
+    }
+
+    private static bool IsSupervisorRunning() => Process.GetProcessesByName("PimaxVrcSupervisor").Any();
+
+    private static bool IsDesktopTuiRunning() => Process.GetProcessesByName("PimaxVrcSupervisorTui").Any();
 
     private static bool IsAdministrator()
     {
@@ -2207,10 +3286,10 @@ internal sealed class ConfigEditorForm : Form
             _suppressDirtyTracking = true;
             if (!File.Exists(path))
             {
-                _loadedJson = "{\r\n}\r\n";
+                _loadedJson = GetDefaultConfigTemplateJson();
                 _appliedRawJson = _loadedJson;
                 _rawJsonTextBox.Text = _loadedJson;
-                PopulateControls(null);
+                PopulateControls(ParseJson(_loadedJson));
                 _loadedJson = BuildCurrentJson();
                 _appliedRawJson = _loadedJson;
                 _rawJsonTextBox.Text = _loadedJson;
@@ -2229,6 +3308,7 @@ internal sealed class ConfigEditorForm : Form
             _rawJsonTextBox.Text = _loadedJson;
             _rawJsonHasUnappliedChanges = false;
             _editorState.LastConfigPath = Path.GetFullPath(path);
+            SaveActiveConfigSelection(path);
             SetCleanStatus("Loaded " + path);
         }
         catch (Exception ex)
@@ -2238,20 +3318,27 @@ internal sealed class ConfigEditorForm : Form
         }
         finally
         {
+            ResetFirstRunPreferenceTouchTracking();
             _suppressDirtyTracking = false;
             ValidateRawJsonText(showStatus: false);
+            RefreshConfigSelector(_displayNameTextBox.Text.Trim());
             UpdateWindowTitle();
         }
     }
 
     private void PopulateControls(JsonNode? node)
     {
+        _displayNameTextBox.Text = NormalizeDisplayNameForDisplay(
+            GetStringOrDefault(node, "DisplayName", GetFallbackDisplayName(_configPathTextBox.Text)));
         _brokenEyePathTextBox.Text = GetString(node, "BrokenEyePath");
         _vrcFaceTrackingPathTextBox.Text = GetString(node, "VrcFaceTrackingPath");
         _intifacePathTextBox.Text = GetStringOrDefault(node, "IntifacePath", DefaultIntifacePath);
         _oscGoesBrrrPathTextBox.Text = GetStringOrFallbackOrDefault(node, "OscGoesBrrrPath", "OscGoesBrrrrPath", DefaultOscGoesBrrrPath);
+        _useBrokenEyeCheckBox.Checked = GetBool(node, "UseBrokenEye", defaultValue: true);
         _brokenEyeStartMinimizedCheckBox.Checked = GetBool(node, "BrokenEyeStartMinimized", defaultValue: false);
         _vrcFaceTrackingStartMinimizedCheckBox.Checked = GetBool(node, "VrcFaceTrackingStartMinimized", defaultValue: false);
+        _faceTrackerAutomationEnabledCheckBox.Checked = GetBool(node, "FaceTrackerAutomationEnabled", defaultValue: true);
+        _faceTrackerRestartOnReconnectCheckBox.Checked = GetBool(node, "FaceTrackerRestartOnReconnectEnabled", defaultValue: true);
         _intifaceStartMinimizedCheckBox.Checked = GetBool(node, "IntifaceStartMinimized", defaultValue: false);
         _oscGoesBrrrStartMinimizedCheckBox.Checked = GetBool(node, "OscGoesBrrrStartMinimized", defaultValue: false);
         _oscGoesBrrrEnabledCheckBox.Checked = GetBoolOrFallback(node, "OscGoesBrrrEnabled", "LovenseAutoLaunchEnabled", defaultValue: false);
@@ -2259,12 +3346,30 @@ internal sealed class ConfigEditorForm : Form
         _oscGoesBrrrBleScannerCheckBox.Checked = GetBool(node, "OscGoesBrrrBleScannerEnabled", defaultValue: false);
         _oscRouterEnabledCheckBox.Checked = GetBool(node, "OscRouterEnabled", defaultValue: false);
         _oscRouterReceivePortInput.Value = Math.Clamp(GetInt(node, "OscRouterReceivePort", 9001), (int)_oscRouterReceivePortInput.Minimum, (int)_oscRouterReceivePortInput.Maximum);
-        _mouthTrackerCheckBox.CheckState = GetBoolCheckState(node, "MouthTrackerUser");
-        _turnOffMonitorsCheckBox.CheckState = GetBoolCheckState(node, "TurnOffSecondaryMonitors");
-        _autoLaunchTaskCheckBox.CheckState = GetBoolCheckState(node, "AutoLaunchScheduledTask");
+        _mouthTrackerCheckBox.Checked = GetBoolCheckState(node, "MouthTrackerUser") == CheckState.Checked;
+        _turnOffMonitorsCheckBox.Checked = GetBoolCheckState(node, "TurnOffSecondaryMonitors") == CheckState.Checked;
+        SetStartupLaunchMode(GetStartupLaunchModeForEditor(node));
         _usePimaxLogCheckBox.Checked = GetBool(node, "UsePimaxServiceLogReconnectDetector", defaultValue: true);
-        _useMouthTrackerPnPCheckBox.Checked = GetBool(node, "UseMouthTrackerPnPReconnectDetector", defaultValue: true);
+        _useMouthTrackerPnPCheckBox.Checked = GetBool(node, "UseMouthTrackerPnPReconnectDetector", defaultValue: false);
+        _mouthTrackerRestartOnReconnectCheckBox.Checked = GetBool(node, "MouthTrackerRestartOnReconnectEnabled", defaultValue: true);
+        UpdateFaceTrackerAutomationOptionStates();
         _pimaxServiceLogDirectoryTextBox.Text = GetString(node, "PimaxServiceLogDirectory");
+        _diagnosticsLogSupervisorCheckBox.Checked = GetBool(node, "DiagnosticsLogSupervisor", defaultValue: false);
+        _diagnosticsLogSteamVrOverlayCheckBox.Checked = GetBool(node, "DiagnosticsLogSteamVrOverlay", defaultValue: false);
+        _diagnosticsLogDesktopTuiCheckBox.Checked = GetBool(node, "DiagnosticsLogDesktopTui", defaultValue: false);
+        _diagnosticsDebugSupervisorCheckBox.Checked = GetBool(node, "DiagnosticsDebugSupervisor", defaultValue: false);
+        _diagnosticsDebugSteamVrOverlayCheckBox.Checked = GetBool(node, "DiagnosticsDebugSteamVrOverlay", defaultValue: false);
+        _diagnosticsVerboseCheckBox.Checked = GetBool(node, "DiagnosticsVerbose", defaultValue: false);
+        _diagnosticsDebugSteamVrPointerCheckBox.Checked = GetBool(node, "DiagnosticsDebugSteamVrPointer", defaultValue: false);
+        _diagnosticsEnabledCheckBox.Checked = _diagnosticsLogSupervisorCheckBox.Checked
+            || _diagnosticsLogSteamVrOverlayCheckBox.Checked
+            || _diagnosticsLogDesktopTuiCheckBox.Checked
+            || _diagnosticsDebugSupervisorCheckBox.Checked
+            || _diagnosticsDebugSteamVrOverlayCheckBox.Checked
+            || _diagnosticsVerboseCheckBox.Checked
+            || _diagnosticsDebugSteamVrPointerCheckBox.Checked;
+        UpdateDiagnosticsOptionStates();
+        _diagnosticsLogDirectoryTextBox.Text = GetStringOrDefault(node, "DiagnosticsLogDirectory", "%TEMP%\\PimaxVrcSupervisorDiagnostics");
         _baseStationsEnabledCheckBox.Checked = GetBool(node, "BaseStationsEnabled", defaultValue: false);
         _baseStationPowerDownModeComboBox.SelectedItem = GetStringOrDefault(node, "BaseStationPowerDownMode", BaseStationPowerDownMode.Sleep.ToString());
         if (_baseStationPowerDownModeComboBox.SelectedIndex < 0)
@@ -2289,9 +3394,11 @@ internal sealed class ConfigEditorForm : Form
         {
             var defaultValue = propertyName switch
             {
-                "DelayBeforeOscGoesBrrrSeconds" => 5,
+                "DelayBeforeVrcFaceTrackingSeconds" => 3,
+                "DelayBeforeOscGoesBrrrSeconds" => 3,
                 "OscGoesBrrrBleScanSeconds" => 30,
                 "OscGoesBrrrBleScanIntervalSeconds" => 60,
+                "DiagnosticsSummaryIntervalSeconds" => 20,
                 _ => decimal.ToInt32(input.Minimum)
             };
             var value = propertyName == "DelayBeforeOscGoesBrrrSeconds"
@@ -2301,15 +3408,17 @@ internal sealed class ConfigEditorForm : Form
         }
     }
 
-    private bool SaveConfig()
+    private bool SaveConfig(bool forceApplyStartupIntegration = false)
     {
+        if (_saveInProgress)
+        {
+            SetStatus("Save is already running.");
+            return false;
+        }
+
         try
         {
-            if (!ValidateForSave())
-            {
-                return false;
-            }
-
+            _saveInProgress = true;
             var path = _configPathTextBox.Text.Trim();
             if (string.IsNullOrWhiteSpace(path))
             {
@@ -2319,11 +3428,40 @@ internal sealed class ConfigEditorForm : Form
             CommitAutoLaunchAppsGridEdits();
             CommitBaseStationsGridEdits();
             CommitOscRoutesGridEdits();
+            var duplicateCoreAutostartErrors = GetCoreAutostartDuplicateMessages();
+            if (duplicateCoreAutostartErrors.Length > 0)
+            {
+                UpdateGridWarnings();
+                ShowThemedMessageBox(
+                    string.Join("\r\n\r\n", duplicateCoreAutostartErrors),
+                    "Could not save config",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                SetStatus("Save failed.");
+                return false;
+            }
+
+            var displayNameNormalization = NormalizeDisplayNameForStorage(_displayNameTextBox.Text);
+            if (!string.Equals(_displayNameTextBox.Text, displayNameNormalization.Value, StringComparison.Ordinal))
+            {
+                _displayNameTextBox.Text = displayNameNormalization.Value;
+            }
+            if (displayNameNormalization.Shortened)
+            {
+                ShowThemedMessageBox(
+                    $"The display name was shortened to {MaxDisplayNameLength} characters before saving.",
+                    "Display name shortened",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+
             var json = BuildCurrentJson();
             ParseJson(json);
+            var shouldApplyStartupIntegration = forceApplyStartupIntegration || StartupIntegrationSelectionChanged(_loadedJson, json);
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
             var backupPath = CreateConfigBackup(path);
             File.WriteAllText(path, json, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            SaveActiveConfigSelection(path);
             _loadedJson = json;
             _appliedRawJson = json;
             _rawJsonHasUnappliedChanges = false;
@@ -2331,10 +3469,21 @@ internal sealed class ConfigEditorForm : Form
             _rawJsonTextBox.Text = json;
             _suppressDirtyTracking = false;
             _editorState.LastConfigPath = Path.GetFullPath(path);
+            RefreshConfigSelector(_displayNameTextBox.Text.Trim());
             var savedStatus = backupPath is null
                 ? $"Saved config at {DateTime.Now:HH:mm}."
                 : $"Saved config and created backup at {DateTime.Now:HH:mm}.";
+            if (displayNameNormalization.Shortened)
+            {
+                savedStatus += $" Display name was shortened to {MaxDisplayNameLength} characters.";
+            }
+
             SetCleanStatus(savedStatus, backupPath is null ? null : "Backup path:\r\n" + backupPath);
+            ResetFirstRunPreferenceTouchTracking();
+            if (shouldApplyStartupIntegration)
+            {
+                ApplyStartupIntegration(path);
+            }
             return true;
         }
         catch (Exception ex)
@@ -2342,6 +3491,10 @@ internal sealed class ConfigEditorForm : Form
             ShowThemedMessageBox(ex.Message, "Could not save config", MessageBoxButtons.OK, MessageBoxIcon.Error);
             SetStatus("Save failed.");
             return false;
+        }
+        finally
+        {
+            _saveInProgress = false;
         }
     }
 
@@ -2351,6 +3504,452 @@ internal sealed class ConfigEditorForm : Form
         CommitBaseStationsGridEdits();
         CommitOscRoutesGridEdits();
         return ApplyControlValues(_appliedRawJson);
+    }
+
+    private static bool StartupIntegrationSelectionChanged(string previousJson, string currentJson)
+    {
+        try
+        {
+            var previous = ParseJson(previousJson);
+            var current = ParseJson(currentJson);
+            var currentMode = GetEffectiveStartupLaunchMode(current);
+            if (!string.Equals(GetEffectiveStartupLaunchMode(previous), currentMode, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            return currentMode == "SteamVrManifest"
+                && !File.Exists(Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.vrmanifest"));
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private static string GetEffectiveStartupLaunchMode(JsonNode? node)
+    {
+        var startupLaunchMode = GetStartupLaunchMode(node);
+        if (!string.IsNullOrWhiteSpace(startupLaunchMode))
+        {
+            return startupLaunchMode;
+        }
+
+        var autoLaunchTask = GetBoolCheckState(node, "AutoLaunchScheduledTask");
+        return autoLaunchTask switch
+        {
+            CheckState.Checked => "ScheduledTask",
+            CheckState.Unchecked => "None",
+            _ => "Unspecified"
+        };
+    }
+
+    private void ApplyStartupIntegration(string configPath)
+    {
+        if (_startupIntegrationApplyInProgress)
+        {
+            SetStatus("Startup integration apply is already running.");
+            return;
+        }
+
+        var startupLaunchMode = GetSelectedStartupLaunchMode();
+        if (startupLaunchMode == "Unspecified")
+        {
+            return;
+        }
+
+        var supervisorPath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.exe");
+        if (!File.Exists(supervisorPath))
+        {
+            SetStatus("Startup integration was saved but not applied because PimaxVrcSupervisor.exe was not found.");
+            return;
+        }
+
+        var windowSnapshot = CaptureVisibleWindowState();
+        try
+        {
+            var startupHelperPath = CreateOrUpdateStartupHelperExecutable(supervisorPath);
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = startupHelperPath,
+                WorkingDirectory = Path.GetDirectoryName(startupHelperPath) ?? AppContext.BaseDirectory,
+                UseShellExecute = !IsAdministrator(),
+                ErrorDialog = true,
+                ErrorDialogParentHandle = Handle,
+                WindowStyle = ProcessWindowStyle.Hidden
+            };
+            startInfo.ArgumentList.Add("--apply-startup-integration");
+            startInfo.ArgumentList.Add("--hide-startup-helper");
+            startInfo.ArgumentList.Add("--config");
+            startInfo.ArgumentList.Add(Path.GetFullPath(configPath));
+            if (_useDesktopTuiAsDefaultInterfaceCheckBox.Checked)
+            {
+                startInfo.ArgumentList.Add("--desktop-tui-default-interface");
+            }
+
+            if (!IsAdministrator())
+            {
+                startInfo.Verb = "runas";
+            }
+            else
+            {
+                startInfo.RedirectStandardOutput = true;
+                startInfo.RedirectStandardError = true;
+                startInfo.CreateNoWindow = true;
+            }
+
+            var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start PimaxVrcSupervisor.exe.");
+            if (!IsAdministrator())
+            {
+                process.Dispose();
+                SetStatus(startupLaunchMode switch
+                {
+                    "ScheduledTask" => "Saved config and requested Scheduled Task startup repair and watcher start.",
+                    "SteamVrManifest" => "Saved config and requested SteamVR startup repair.",
+                    "None" => "Saved config and requested removal of managed startup tasks.",
+                    _ => "Saved config and requested startup integration update."
+                });
+                RestoreVisibleWindowStateIfMinimized(windowSnapshot);
+                return;
+            }
+
+            _startupIntegrationApplyInProgress = true;
+            SetActiveOperationStatus("Applying startup integration...");
+            _ = MonitorStartupIntegrationApplyAsync(process, startupLaunchMode, windowSnapshot);
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            SetStatus("Startup integration was saved but Windows cancelled the administrator approval prompt.");
+            RestoreVisibleWindowStateIfMinimized(windowSnapshot);
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessageBox(ex.Message, "Could not apply startup integration", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            SetStatus("Startup integration apply failed.");
+            RestoreVisibleWindowStateIfMinimized(windowSnapshot);
+        }
+    }
+
+    private static string CreateOrUpdateStartupHelperExecutable(string supervisorPath)
+    {
+        var helperPath = Path.Combine(Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory, "PimaxVrcSupervisorStartupHelper.exe");
+        File.Copy(supervisorPath, helperPath, overwrite: true);
+        return helperPath;
+    }
+
+    private async Task MonitorStartupIntegrationApplyAsync(
+        Process process,
+        string startupLaunchMode,
+        WindowStateSnapshot windowSnapshot)
+    {
+        try
+        {
+            using (process)
+            {
+                var outputTask = process.StandardOutput.ReadToEndAsync();
+                var errorTask = process.StandardError.ReadToEndAsync();
+                var exited = await Task.Run(() => process.WaitForExit(30000));
+                if (!exited)
+                {
+                    TryKillProcessTree(process);
+                    await TryWaitForProcessOutputAsync(outputTask, errorTask);
+                    RunOnUiThread(() =>
+                    {
+                        ShowThemedMessageBox(
+                            "The configuration was saved, but startup integration did not finish within 30 seconds.\r\n\r\nPlease try Save again, or use Validate to check the scheduled task state.",
+                            "Startup integration timed out",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+                        SetStatus("Startup integration timed out.");
+                    });
+                    return;
+                }
+
+                var output = await outputTask;
+                var error = await errorTask;
+                if (process.ExitCode != 0)
+                {
+                    var message = (error + output).Trim();
+                    throw new InvalidOperationException(string.IsNullOrWhiteSpace(message)
+                        ? $"Startup integration exited with code {process.ExitCode}."
+                        : message);
+                }
+            }
+
+            RunOnUiThread(() => SetStatus(startupLaunchMode switch
+            {
+                "ScheduledTask" => "Saved and applied Scheduled Task startup; watcher is running.",
+                "SteamVrManifest" => "Saved and applied SteamVR startup manifest.",
+                "None" => "Saved and disabled startup integrations.",
+                _ => "Saved startup integration."
+            }));
+        }
+        catch (Exception ex)
+        {
+            RunOnUiThread(() =>
+            {
+                ShowThemedMessageBox(ex.Message, "Could not apply startup integration", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                SetStatus("Startup integration apply failed.");
+            });
+        }
+        finally
+        {
+            RunOnUiThread(() =>
+            {
+                _startupIntegrationApplyInProgress = false;
+                RestoreVisibleWindowStateIfMinimized(windowSnapshot);
+            });
+        }
+    }
+
+    private static async Task TryWaitForProcessOutputAsync(params Task<string>[] outputTasks)
+    {
+        try
+        {
+            await Task.WhenAll(outputTasks).WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch
+        {
+        }
+    }
+
+    private void RunOnUiThread(Action action)
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(action);
+            return;
+        }
+
+        action();
+    }
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task PromptForExistingStartupTaskMigrationAsync()
+    {
+        var currentReleaseFolder = GetCurrentConfigEditorDirectory();
+        if ((_editorState.StartupTaskMigrationPromptedReleaseFolders ?? [])
+            .Any(path => string.Equals(
+                global::ScheduledTaskPathValidator.NormalizeDirectory(path),
+                currentReleaseFolder,
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        IReadOnlyList<ScheduledTaskExecutableValidationResult> staleTasks;
+        try
+        {
+            staleTasks = await Task.Run(() => GetExistingStartupTasksOutsideCurrentRelease(currentReleaseFolder));
+        }
+        catch
+        {
+            return;
+        }
+
+        if (staleTasks.Count == 0)
+        {
+            return;
+        }
+
+        var choice = ShowStartupTaskMigrationDialog(staleTasks, currentReleaseFolder);
+        _editorState.MarkStartupTaskMigrationPrompted(currentReleaseFolder);
+        SaveEditorState();
+
+        switch (choice)
+        {
+            case StartupTaskMigrationChoice.Rebind:
+                SetStartupLaunchMode(SelectStartupLaunchModeForTasks(staleTasks));
+                SaveConfig(forceApplyStartupIntegration: true);
+                break;
+            case StartupTaskMigrationChoice.TurnOffAutostart:
+                SetStartupLaunchMode("None");
+                SaveConfig(forceApplyStartupIntegration: true);
+                break;
+            case StartupTaskMigrationChoice.KeepExisting:
+            default:
+                SetStatus("Kept existing startup task configuration.");
+                break;
+        }
+    }
+
+    private static IReadOnlyList<ScheduledTaskExecutableValidationResult> GetExistingStartupTasksOutsideCurrentRelease(string currentReleaseFolder)
+    {
+        return global::ScheduledTaskPathValidator.ManagedTaskNames
+            .Select(taskName => global::ScheduledTaskPathValidator.ValidateExistingTaskExecutable(taskName, currentReleaseFolder))
+            .Where(result => result.Exists && !result.PointsToCurrentDirectory)
+            .ToArray();
+    }
+
+    private static string SelectStartupLaunchModeForTasks(IReadOnlyList<ScheduledTaskExecutableValidationResult> tasks)
+    {
+        return tasks.Any(task => string.Equals(task.TaskName, global::ScheduledTaskPathValidator.SteamVrStartTaskName, StringComparison.OrdinalIgnoreCase))
+            ? "SteamVrManifest"
+            : "ScheduledTask";
+    }
+
+    private void SetStartupLaunchMode(string startupLaunchMode)
+    {
+        _autostartModeComboBox.SelectedItem = startupLaunchMode switch
+        {
+            "ScheduledTask" => AutostartModeScheduledTask,
+            "SteamVrManifest" => AutostartModeSteamVrManifest,
+            _ => AutostartModeOff
+        };
+    }
+
+    private StartupTaskMigrationChoice ShowStartupTaskMigrationDialog(
+        IReadOnlyList<ScheduledTaskExecutableValidationResult> staleTasks,
+        string currentReleaseFolder)
+    {
+        var choice = StartupTaskMigrationChoice.KeepExisting;
+        using var dialog = new Form
+        {
+            Text = "Startup option found",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            ClientSize = new Size(720, 390)
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 4,
+            Padding = new Padding(18, 16, 18, 12)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var heading = new Label
+        {
+            Text = "Autostart from another release was found",
+            AutoSize = true,
+            Font = new Font(Font, FontStyle.Bold),
+            Margin = new Padding(0, 0, 0, 10)
+        };
+        var body = new Label
+        {
+            Text = "A PimaxVrcSupervisor startup task points to another release folder.\r\n\r\n" +
+                "Choose whether to rebind autostart to this release, keep the existing task, or turn off autostart and remove the managed startup tasks.",
+            AutoSize = false,
+            Dock = DockStyle.Top,
+            Height = 76,
+            Margin = new Padding(0, 0, 0, 12)
+        };
+        var details = new TextBox
+        {
+            Text = FormatStartupTaskMigrationDetails(staleTasks, currentReleaseFolder),
+            ReadOnly = true,
+            Multiline = true,
+            ScrollBars = ScrollBars.Both,
+            WordWrap = false,
+            Dock = DockStyle.Fill,
+            Font = new Font(FontFamily.GenericMonospace, Font.Size),
+            Margin = new Padding(0, 0, 0, 12)
+        };
+        var buttons = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false
+        };
+        var rebindButton = CreateButton("Yes, rebind", autoSize: false, width: 112, height: 28);
+        var keepButton = CreateButton("No, keep as is", autoSize: false, width: 124, height: 28);
+        var turnOffButton = CreateButton("Turn off autostart", autoSize: false, width: 148, height: 28);
+
+        rebindButton.Click += (_, _) =>
+        {
+            choice = StartupTaskMigrationChoice.Rebind;
+            dialog.DialogResult = DialogResult.Yes;
+            dialog.Close();
+        };
+        keepButton.Click += (_, _) =>
+        {
+            choice = StartupTaskMigrationChoice.KeepExisting;
+            dialog.DialogResult = DialogResult.No;
+            dialog.Close();
+        };
+        turnOffButton.Click += (_, _) =>
+        {
+            choice = StartupTaskMigrationChoice.TurnOffAutostart;
+            dialog.DialogResult = DialogResult.Ignore;
+            dialog.Close();
+        };
+
+        buttons.Controls.Add(rebindButton);
+        buttons.Controls.Add(keepButton);
+        buttons.Controls.Add(turnOffButton);
+        root.Controls.Add(heading, 0, 0);
+        root.Controls.Add(body, 0, 1);
+        root.Controls.Add(details, 0, 2);
+        root.Controls.Add(buttons, 0, 3);
+        dialog.Controls.Add(root);
+        dialog.AcceptButton = rebindButton;
+        dialog.CancelButton = keepButton;
+
+        ApplyThemeTo(dialog);
+        WindowsTitleBar.ApplyTheme(dialog.Handle, _theme.IsDark);
+        dialog.ShowDialog(this);
+        return choice;
+    }
+
+    private static string FormatStartupTaskMigrationDetails(
+        IReadOnlyList<ScheduledTaskExecutableValidationResult> staleTasks,
+        string currentReleaseFolder)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("Current Configurator folder:");
+        builder.AppendLine(currentReleaseFolder);
+        foreach (var task in staleTasks)
+        {
+            builder.AppendLine();
+            builder.AppendLine("Scheduled task:");
+            builder.AppendLine(task.TaskName);
+            if (task.Issue is not null)
+            {
+                if (!string.IsNullOrWhiteSpace(task.Issue.TaskExecutableDirectory))
+                {
+                    builder.AppendLine("Task executable folder:");
+                    builder.AppendLine(task.Issue.TaskExecutableDirectory);
+                }
+
+                if (!string.IsNullOrWhiteSpace(task.Issue.TaskExecutablePath))
+                {
+                    builder.AppendLine("Task executable:");
+                    builder.AppendLine(task.Issue.TaskExecutablePath);
+                }
+
+                builder.AppendLine("Issue:");
+                builder.AppendLine(task.Issue.Message);
+            }
+        }
+
+        return builder.ToString();
     }
 
     private bool HasUnsavedChanges()
@@ -2440,12 +4039,36 @@ internal sealed class ConfigEditorForm : Form
             : FormWindowState.Normal;
     }
 
+    private WindowStateSnapshot CaptureVisibleWindowState()
+        => new(
+            WindowState == FormWindowState.Minimized ? FormWindowState.Normal : WindowState,
+            WindowState == FormWindowState.Normal ? Bounds : RestoreBounds);
+
+    private void RestoreVisibleWindowStateIfMinimized(WindowStateSnapshot snapshot)
+    {
+        if (IsDisposed || WindowState != FormWindowState.Minimized)
+        {
+            return;
+        }
+
+        if (snapshot.Bounds is { Width: > 0, Height: > 0 } bounds
+            && Screen.AllScreens.Any(screen => screen.WorkingArea.IntersectsWith(bounds)))
+        {
+            Bounds = bounds;
+        }
+
+        WindowState = snapshot.WindowState == FormWindowState.Maximized
+            ? FormWindowState.Maximized
+            : FormWindowState.Normal;
+    }
+
     private void SaveEditorState()
     {
         _editorState.LastConfigPath = TryGetFullPath(_configPathTextBox.Text.Trim()) ?? _editorState.LastConfigPath;
         _editorState.LastSelectedTab = _tabs.SelectedIndex;
         _editorState.WindowState = WindowState;
         _editorState.WindowBounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+        _editorState.UseDesktopTuiAsDefaultInterface = _useDesktopTuiAsDefaultInterfaceCheckBox.Checked;
         _editorState.Save();
     }
 
@@ -2466,15 +4089,64 @@ internal sealed class ConfigEditorForm : Form
         }
     }
 
+    private static ExecutableIdentity? CreateExecutableIdentity(string path, string label)
+    {
+        var normalized = TrimExecutablePath(path);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        var expanded = ExpandPath(normalized);
+        var fullPath = TryGetFullPath(expanded);
+        var fileName = Path.GetFileName(fullPath ?? expanded);
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            fileName = Path.GetFileName(normalized);
+        }
+
+        return string.IsNullOrWhiteSpace(fileName)
+            ? null
+            : new ExecutableIdentity(label, normalized, fullPath, fileName);
+    }
+
+    private static string TrimExecutablePath(string path)
+    {
+        var trimmed = path.Trim();
+        if (trimmed.Length >= 2 && trimmed[0] == '"' && trimmed[^1] == '"')
+        {
+            trimmed = trimmed[1..^1].Trim();
+        }
+
+        return trimmed;
+    }
+
+    private static bool ExecutableIdentitiesMatch(ExecutableIdentity first, ExecutableIdentity second)
+    {
+        if (!string.IsNullOrWhiteSpace(first.FullPath)
+            && !string.IsNullOrWhiteSpace(second.FullPath)
+            && string.Equals(first.FullPath, second.FullPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return string.Equals(first.FileName, second.FileName, StringComparison.OrdinalIgnoreCase);
+    }
+
     private string ApplyControlValues(string baseJson)
     {
         var json = string.IsNullOrWhiteSpace(baseJson) ? "{\r\n}\r\n" : baseJson;
+        json = JsonPropertyEditor.ReplaceTopLevel(json, "DisplayName", Serialize(NormalizeDisplayNameForStorage(_displayNameTextBox.Text).Value));
         json = JsonPropertyEditor.Replace(json, "BrokenEyePath", Serialize(_brokenEyePathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "VrcFaceTrackingPath", Serialize(_vrcFaceTrackingPathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "IntifacePath", Serialize(_intifacePathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrPath", Serialize(_oscGoesBrrrPathTextBox.Text.Trim()));
+        json = JsonPropertyEditor.Replace(json, "UseBrokenEye", _useBrokenEyeCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "BrokenEyeStartMinimized", _brokenEyeStartMinimizedCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "VrcFaceTrackingStartMinimized", _vrcFaceTrackingStartMinimizedCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "FaceTrackerAutomationEnabled", _faceTrackerAutomationEnabledCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "FaceTrackerRestartOnReconnectEnabled", _faceTrackerAutomationEnabledCheckBox.Checked && _faceTrackerRestartOnReconnectCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "MouthTrackerRestartOnReconnectEnabled", _faceTrackerAutomationEnabledCheckBox.Checked && _mouthTrackerCheckBox.Checked && _mouthTrackerRestartOnReconnectCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "IntifaceStartMinimized", _intifaceStartMinimizedCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrStartMinimized", _oscGoesBrrrStartMinimizedCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrEnabled", _oscGoesBrrrEnabledCheckBox.Checked ? "true" : "false");
@@ -2494,15 +4166,49 @@ internal sealed class ConfigEditorForm : Form
         json = JsonPropertyEditor.Replace(json, "OscGoesBrrrProcessNames", Serialize(ParseStringList(_oscGoesBrrrProcessesTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "WatchedShutdownProcessNames", Serialize(ParseStringList(_watchedShutdownProcessesTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "SteamVrServerProcessNames", Serialize(ParseStringList(_steamVrServerProcessesTextBox.Text)));
-        json = JsonPropertyEditor.Replace(json, "MouthTrackerUser", SerializeTriState(_mouthTrackerCheckBox.CheckState));
-        json = JsonPropertyEditor.Replace(json, "TurnOffSecondaryMonitors", SerializeTriState(_turnOffMonitorsCheckBox.CheckState));
-        json = JsonPropertyEditor.Replace(json, "AutoLaunchScheduledTask", SerializeTriState(_autoLaunchTaskCheckBox.CheckState));
+        var baseNode = ParseJson(json);
+        var firstRunBinaryPreferenceTouched = _mouthTrackerPreferenceTouched || _turnOffMonitorsPreferenceTouched;
+        json = JsonPropertyEditor.Replace(
+            json,
+            "MouthTrackerUser",
+            SerializeFirstRunPreferenceBool(
+                baseNode,
+                "MouthTrackerUser",
+                _mouthTrackerCheckBox.Checked,
+                _mouthTrackerPreferenceTouched || firstRunBinaryPreferenceTouched));
+        json = JsonPropertyEditor.Replace(
+            json,
+            "TurnOffSecondaryMonitors",
+            SerializeFirstRunPreferenceBool(
+                baseNode,
+                "TurnOffSecondaryMonitors",
+                _turnOffMonitorsCheckBox.Checked,
+                _turnOffMonitorsPreferenceTouched || firstRunBinaryPreferenceTouched));
+        var startupLaunchMode = GetSelectedStartupLaunchModeForSave(baseNode);
+        json = JsonPropertyEditor.Replace(json, "StartupLaunchMode", Serialize(startupLaunchMode));
+        json = JsonPropertyEditor.Replace(json, "StopWithSteamVr", startupLaunchMode == "SteamVrManifest" ? "true" : "false");
+        json = JsonPropertyEditor.Replace(
+            json,
+            "AutoLaunchScheduledTask",
+            startupLaunchMode == "Unspecified"
+                ? SerializeFirstRunPreferenceBool(baseNode, "AutoLaunchScheduledTask", currentValue: false, _startupIntegrationPreferenceTouched)
+                : startupLaunchMode == "ScheduledTask" ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "PimaxDetectors", Serialize(ParseStringMatrix(_pimaxDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "MouthTrackerDetectors", Serialize(ParseStringMatrix(_mouthTrackerDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "LovenseDetectors", Serialize(ParseStringMatrix(_lovenseDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "UsePimaxServiceLogReconnectDetector", _usePimaxLogCheckBox.Checked ? "true" : "false");
-        json = JsonPropertyEditor.Replace(json, "UseMouthTrackerPnPReconnectDetector", _useMouthTrackerPnPCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "UseMouthTrackerPnPReconnectDetector", _mouthTrackerCheckBox.Checked && _useMouthTrackerPnPCheckBox.Checked ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "PimaxServiceLogDirectory", Serialize(_pimaxServiceLogDirectoryTextBox.Text.Trim()));
+        var diagnosticsEnabled = _diagnosticsEnabledCheckBox.Checked;
+        var steamVrOverlayDebugEnabled = diagnosticsEnabled && _diagnosticsDebugSteamVrOverlayCheckBox.Checked;
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsLogSupervisor", diagnosticsEnabled && _diagnosticsLogSupervisorCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsLogSteamVrOverlay", diagnosticsEnabled && _diagnosticsLogSteamVrOverlayCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsLogDesktopTui", diagnosticsEnabled && _diagnosticsLogDesktopTuiCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsDebugSupervisor", diagnosticsEnabled && _diagnosticsDebugSupervisorCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsDebugSteamVrOverlay", steamVrOverlayDebugEnabled ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsVerbose", diagnosticsEnabled && _diagnosticsVerboseCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsDebugSteamVrPointer", diagnosticsEnabled && _diagnosticsDebugSteamVrPointerCheckBox.Checked ? "true" : "false");
+        json = JsonPropertyEditor.Replace(json, "DiagnosticsLogDirectory", Serialize(_diagnosticsLogDirectoryTextBox.Text.Trim()));
 
         foreach (var (propertyName, input) in _numberInputs)
         {
@@ -2510,6 +4216,16 @@ internal sealed class ConfigEditorForm : Form
         }
 
         return json;
+    }
+
+    private static string SerializeFirstRunPreferenceBool(JsonNode? baseNode, string propertyName, bool currentValue, bool touched)
+    {
+        if (currentValue || touched || GetBoolCheckState(baseNode, propertyName) != CheckState.Indeterminate)
+        {
+            return currentValue ? "true" : "false";
+        }
+
+        return "\"\"";
     }
 
     private static JsonNode? ParseJson(string json)
@@ -2566,6 +4282,58 @@ internal sealed class ConfigEditorForm : Form
     {
         var value = GetStringOrFallback(node, propertyName, fallbackPropertyName);
         return string.IsNullOrWhiteSpace(value) ? defaultValue : value;
+    }
+
+    private static string GetStartupLaunchMode(JsonNode? node)
+    {
+        var value = GetString(node, "StartupLaunchMode");
+        return value is "None" or "ScheduledTask" or "SteamVrManifest" ? value : "";
+    }
+
+    private static string GetStartupLaunchModeForEditor(JsonNode? node)
+    {
+        var startupLaunchMode = GetStartupLaunchMode(node);
+        if (!string.IsNullOrWhiteSpace(startupLaunchMode))
+        {
+            return startupLaunchMode;
+        }
+
+        if (GetBoolCheckState(node, "StopWithSteamVr") == CheckState.Checked)
+        {
+            return "SteamVrManifest";
+        }
+
+        return GetBoolCheckState(node, "AutoLaunchScheduledTask") == CheckState.Checked
+            ? "ScheduledTask"
+            : "None";
+    }
+
+    private string GetSelectedStartupLaunchMode()
+        => Convert.ToString(_autostartModeComboBox.SelectedItem) switch
+        {
+            AutostartModeScheduledTask => "ScheduledTask",
+            AutostartModeSteamVrManifest => "SteamVrManifest",
+            _ => "None"
+        };
+
+    private string GetSelectedStartupLaunchModeForSave(JsonNode? baseNode)
+    {
+        var selectedMode = GetSelectedStartupLaunchMode();
+
+        return selectedMode != "None" || _startupIntegrationPreferenceTouched || StartupIntegrationConfigured(baseNode)
+            ? selectedMode
+            : "Unspecified";
+    }
+
+    private static bool StartupIntegrationConfigured(JsonNode? node)
+        => !string.IsNullOrWhiteSpace(GetStartupLaunchMode(node))
+            || GetBoolCheckState(node, "AutoLaunchScheduledTask") != CheckState.Indeterminate;
+
+    private void ResetFirstRunPreferenceTouchTracking()
+    {
+        _mouthTrackerPreferenceTouched = false;
+        _turnOffMonitorsPreferenceTouched = false;
+        _startupIntegrationPreferenceTouched = false;
     }
 
     private static bool GetBool(JsonNode? node, string propertyName, bool defaultValue)
@@ -2857,7 +4625,7 @@ internal sealed class ConfigEditorForm : Form
 
     private int AddOscRouteGridRow(string name, object appReceivePort, bool enabled)
     {
-        return _oscRoutesGrid.Rows.Add(enabled, name, appReceivePort);
+        return _oscRoutesGrid.Rows.Add(name, appReceivePort, enabled);
     }
 
     private void CommitOscRoutesGridEdits()
@@ -2909,7 +4677,7 @@ internal sealed class ConfigEditorForm : Form
 
     private int AddBaseStationGridRow(BaseStationDevice baseStation)
     {
-        return _baseStationsGrid.Rows.Add(
+        var rowIndex = _baseStationsGrid.Rows.Add(
             baseStation.Enabled,
             baseStation.FriendlyName,
             baseStation.Name,
@@ -2922,6 +4690,8 @@ internal sealed class ConfigEditorForm : Form
             "Sleep",
             "Standby",
             "Identify");
+        RefreshBaseStationIdCellState(_baseStationsGrid.Rows[rowIndex], clearInvalidId: true);
+        return rowIndex;
     }
 
     private void UpsertBaseStationGridRow(BaseStationDevice baseStation)
@@ -2940,6 +4710,7 @@ internal sealed class ConfigEditorForm : Form
 
             row.Cells["Name"].Value = baseStation.Name;
             row.Cells["Version"].Value = baseStation.EffectiveVersion.ToString();
+            RefreshBaseStationIdCellState(row, clearInvalidId: true);
             if (string.IsNullOrWhiteSpace(GetGridString(row, "FriendlyName")))
             {
                 row.Cells["FriendlyName"].Value = baseStation.FriendlyName;
@@ -3005,9 +4776,38 @@ internal sealed class ConfigEditorForm : Form
             Name = name,
             BluetoothAddress = address,
             Version = version,
-            Id = GetGridString(row, "Id"),
+            Id = version == BaseStationVersion.V1 ? GetGridString(row, "Id") : "",
             PowerStateReadUnsupported = GetGridBool(row, "PowerStateReadUnsupported", defaultValue: false)
         }.WithDefaults();
+    }
+
+    private void RefreshBaseStationIdCellState(DataGridViewRow row, bool clearInvalidId)
+    {
+        if (row.IsNewRow || !_baseStationsGrid.Columns.Contains("Id"))
+        {
+            return;
+        }
+
+        if (!Enum.TryParse(GetGridString(row, "Version"), ignoreCase: true, out BaseStationVersion version))
+        {
+            version = BaseStationDevice.InferVersion(GetGridString(row, "Name"));
+        }
+
+        var idCell = row.Cells["Id"];
+        var idAllowed = version == BaseStationVersion.V1;
+        idCell.ReadOnly = !idAllowed;
+        if (!idAllowed && clearInvalidId && !string.IsNullOrWhiteSpace(GetGridString(row, "Id")))
+        {
+            idCell.Value = "";
+        }
+
+        idCell.ToolTipText = idAllowed
+            ? "Base Station 1.0 requires the 8-character ID printed on the back label."
+            : "Base Station 2.0 does not use a V1 ID.";
+        idCell.Style.BackColor = idAllowed
+            ? _theme.InputBack
+            : (_theme.IsDark ? Color.FromArgb(45, 45, 45) : SystemColors.Control);
+        idCell.Style.ForeColor = idAllowed ? _theme.Text : SystemColors.GrayText;
     }
 
     private async Task RefreshBaseStationStatesAsync()
@@ -3153,12 +4953,12 @@ internal sealed class ConfigEditorForm : Form
 
     private static CheckBox CreateOptionalConfigCheckBox(string text)
     {
-        return new CheckBox
+        return new ThemedCheckBox
         {
-            Text = text + " (filled square = set by config)",
+            Text = text,
             AutoSize = true,
             ThreeState = false,
-            CheckState = CheckState.Indeterminate
+            Checked = false
         };
     }
 
@@ -3333,6 +5133,8 @@ internal sealed class ConfigEditorForm : Form
             case TextBox textBox when ReferenceEquals(textBox, _rawJsonTextBox):
                 textBox.TextChanged += (_, _) => OnRawJsonEdited();
                 break;
+            case TextBox textBox when ReferenceEquals(textBox, _rawJsonSearchTextBox):
+                break;
             case TextBox textBox when !ReferenceEquals(textBox, _configPathTextBox):
                 textBox.TextChanged += (_, _) => MarkDirty();
                 break;
@@ -3342,7 +5144,7 @@ internal sealed class ConfigEditorForm : Form
             case NumericUpDown input:
                 input.ValueChanged += (_, _) => MarkDirty();
                 break;
-            case ComboBox comboBox:
+            case ComboBox comboBox when !ReferenceEquals(comboBox, _configSelectorComboBox):
                 comboBox.SelectedIndexChanged += (_, _) => MarkDirty();
                 break;
             case DataGridView grid:
@@ -3354,11 +5156,158 @@ internal sealed class ConfigEditorForm : Form
                     }
                 };
                 grid.CellValueChanged += (_, _) => MarkDirty();
+                grid.CellEndEdit += (_, _) => MarkDirty();
                 grid.RowsAdded += (_, _) => MarkDirty();
                 grid.RowsRemoved += (_, _) => MarkDirty();
                 grid.UserDeletedRow += (_, _) => MarkDirty();
+                grid.EditingControlShowing += (_, e) =>
+                {
+                    if (e.Control is TextBox textBox)
+                    {
+                        textBox.TextChanged -= OnGridEditingControlTextChanged;
+                        textBox.TextChanged += OnGridEditingControlTextChanged;
+                    }
+                };
                 break;
         }
+    }
+
+    private void OnGridEditingControlTextChanged(object? sender, EventArgs e)
+        => MarkDirty();
+
+    private void RawJsonSearchTextBox_KeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.KeyCode != Keys.Enter)
+        {
+            return;
+        }
+
+        SearchRawJson(forward: !e.Shift, focusEditor: false);
+        e.Handled = true;
+        e.SuppressKeyPress = true;
+    }
+
+    private void SearchRawJson(bool forward, bool focusEditor)
+    {
+        var query = _rawJsonSearchTextBox.Text;
+        if (string.IsNullOrEmpty(query))
+        {
+            _rawJsonSearchStatusLabel.Text = "";
+            return;
+        }
+
+        var text = _rawJsonTextBox.Text;
+        if (text.Length == 0)
+        {
+            _rawJsonSearchStatusLabel.Text = "No matches";
+            return;
+        }
+
+        var index = forward
+            ? FindNextRawJsonMatch(text, query)
+            : FindPreviousRawJsonMatch(text, query);
+        if (index < 0)
+        {
+            _rawJsonSearchStatusLabel.Text = "No matches";
+            return;
+        }
+
+        SelectRawJsonSearchMatch(index, query.Length, focusEditor);
+    }
+
+    private void UpdateRawJsonSearchStatus()
+    {
+        var query = _rawJsonSearchTextBox.Text;
+        if (string.IsNullOrEmpty(query))
+        {
+            _rawJsonSearchStatusLabel.Text = "";
+            return;
+        }
+
+        var text = _rawJsonTextBox.Text;
+        var firstIndex = text.IndexOf(query, StringComparison.OrdinalIgnoreCase);
+        if (firstIndex < 0)
+        {
+            _rawJsonSearchStatusLabel.Text = "No matches";
+            return;
+        }
+
+        var currentIndex = _rawJsonTextBox.SelectionStart;
+        if (currentIndex >= 0
+            && currentIndex + query.Length <= text.Length
+            && string.Equals(text.Substring(currentIndex, query.Length), query, StringComparison.OrdinalIgnoreCase))
+        {
+            UpdateRawJsonSearchMatchStatus(currentIndex, query);
+            return;
+        }
+
+        _rawJsonSearchStatusLabel.Text = CountRawJsonMatches(text, query) + " matches";
+    }
+
+    private int FindNextRawJsonMatch(string text, string query)
+    {
+        var startIndex = Math.Min(text.Length, _rawJsonTextBox.SelectionStart + Math.Max(1, _rawJsonTextBox.SelectionLength));
+        var index = text.IndexOf(query, startIndex, StringComparison.OrdinalIgnoreCase);
+        return index >= 0 || startIndex == 0
+            ? index
+            : text.IndexOf(query, 0, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private int FindPreviousRawJsonMatch(string text, string query)
+    {
+        var startIndex = Math.Min(text.Length - 1, _rawJsonTextBox.SelectionStart - 1);
+        var index = startIndex >= 0
+            ? text.LastIndexOf(query, startIndex, startIndex + 1, StringComparison.OrdinalIgnoreCase)
+            : -1;
+        return index >= 0 || text.Length == 0
+            ? index
+            : text.LastIndexOf(query, text.Length - 1, text.Length, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void SelectRawJsonSearchMatch(int index, int length, bool focusEditor)
+    {
+        if (focusEditor)
+        {
+            _rawJsonTextBox.Focus();
+        }
+
+        _rawJsonTextBox.Select(index, length);
+        _rawJsonTextBox.ScrollToCaret();
+        UpdateRawJsonSearchMatchStatus(index, _rawJsonSearchTextBox.Text);
+    }
+
+    private void UpdateRawJsonSearchMatchStatus(int selectedIndex, string query)
+    {
+        var text = _rawJsonTextBox.Text;
+        var total = CountRawJsonMatches(text, query);
+        if (total == 0)
+        {
+            _rawJsonSearchStatusLabel.Text = "No matches";
+            return;
+        }
+
+        var current = 1;
+        var index = text.IndexOf(query, 0, StringComparison.OrdinalIgnoreCase);
+        while (index >= 0 && index < selectedIndex)
+        {
+            current++;
+            index = text.IndexOf(query, index + Math.Max(1, query.Length), StringComparison.OrdinalIgnoreCase);
+        }
+
+        _rawJsonSearchStatusLabel.Text = $"Match {current} of {total}";
+    }
+
+    private static int CountRawJsonMatches(string text, string query)
+    {
+        var count = 0;
+        var index = text.IndexOf(query, 0, StringComparison.OrdinalIgnoreCase);
+        while (index >= 0)
+        {
+            count++;
+            index = text.IndexOf(query, index + Math.Max(1, query.Length), StringComparison.OrdinalIgnoreCase);
+        }
+
+        return count;
     }
 
     private void RefreshRawJsonFromEditor()
@@ -3453,6 +5402,7 @@ internal sealed class ConfigEditorForm : Form
             PopulateControls(node);
             _appliedRawJson = _rawJsonTextBox.Text;
             _rawJsonHasUnappliedChanges = false;
+            ResetFirstRunPreferenceTouchTracking();
             ValidateRawJsonText(showStatus: false);
         }
         catch (Exception ex)
@@ -3539,10 +5489,11 @@ internal sealed class ConfigEditorForm : Form
         try
         {
             _suppressDirtyTracking = true;
-            _appliedRawJson = "{\r\n}\r\n";
+            _appliedRawJson = GetDefaultConfigTemplateJson();
             _rawJsonTextBox.Text = _appliedRawJson;
-            PopulateControls(null);
+            PopulateControls(ParseJson(_appliedRawJson));
             _rawJsonHasUnappliedChanges = false;
+            ResetFirstRunPreferenceTouchTracking();
         }
         finally
         {
@@ -3556,27 +5507,237 @@ internal sealed class ConfigEditorForm : Form
     private void ShowAboutDialog()
     {
         var supervisorPath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.exe");
-        ShowThemedMessageBox(
-            $"Pimax VRC Supervisor Config Editor\r\nVersion {AppVersion.Current}\r\nSupervisor executable: {supervisorPath}",
-            "About",
-            MessageBoxButtons.OK,
-            MessageBoxIcon.Information);
+        using var dialog = new Form
+        {
+            Text = "About",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            ClientSize = new Size(560, 240)
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Padding = new Padding(18, 16, 18, 12)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var content = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1
+        };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+        var iconBox = new PictureBox
+        {
+            Width = 42,
+            Height = 42,
+            Margin = new Padding(0, 4, 14, 0),
+            SizeMode = PictureBoxSizeMode.CenterImage,
+            Image = SystemIcons.Information.ToBitmap()
+        };
+
+        var details = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 5
+        };
+        details.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        details.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        details.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        details.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        details.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var titleLabel = new Label
+        {
+            Text = "Pimax VRC Supervisor Configurator",
+            AutoSize = true,
+            Font = new Font(Font, FontStyle.Bold),
+            Margin = new Padding(0, 0, 0, 8)
+        };
+        var versionLabel = new Label
+        {
+            Text = $"Version {AppVersion.Current}",
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 10)
+        };
+        var integrationLabel = new Label
+        {
+            Text = "Uses optional SteamVR/OpenVR runtime integration for base-station checks and SteamVR startup.",
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 10)
+        };
+        var supervisorPathLabel = new Label
+        {
+            Text = "Supervisor executable:",
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 3)
+        };
+        var supervisorPathTextBox = new TextBox
+        {
+            Text = supervisorPath,
+            ReadOnly = true,
+            BorderStyle = BorderStyle.FixedSingle,
+            Anchor = AnchorStyles.Left | AnchorStyles.Right,
+            Margin = new Padding(0),
+            Width = 450
+        };
+
+        details.Controls.Add(titleLabel, 0, 0);
+        details.Controls.Add(versionLabel, 0, 1);
+        details.Controls.Add(integrationLabel, 0, 2);
+        details.Controls.Add(supervisorPathLabel, 0, 3);
+        details.Controls.Add(supervisorPathTextBox, 0, 4);
+
+        content.Controls.Add(iconBox, 0, 0);
+        content.Controls.Add(details, 1, 0);
+
+        var buttonPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            Padding = new Padding(0, 12, 0, 0)
+        };
+
+        var okButton = CreateButton("OK", autoSize: false, width: 88, height: 28, dialogResult: DialogResult.OK);
+        okButton.Margin = new Padding(6, 0, 0, 0);
+        var moreButton = CreateButton("More", autoSize: false, width: 88, height: 28);
+        moreButton.Margin = new Padding(6, 0, 0, 0);
+        moreButton.Click += (_, _) => ShowAboutDetailsDialog(dialog);
+        buttonPanel.Controls.Add(okButton);
+        buttonPanel.Controls.Add(moreButton);
+
+        root.Controls.Add(content, 0, 0);
+        root.Controls.Add(buttonPanel, 0, 1);
+        dialog.Controls.Add(root);
+
+        dialog.AcceptButton = okButton;
+        dialog.CancelButton = okButton;
+
+        ApplyThemeTo(dialog);
+        WindowsTitleBar.ApplyTheme(dialog.Handle, _theme.IsDark);
+        dialog.ShowDialog(this);
     }
 
-    private void ValidateConfigFromButton()
+    private void ShowAboutDetailsDialog(IWin32Window owner)
     {
-        var result = ValidateCurrentConfig(ValidationMode.Save);
-        UpdateGridWarnings();
+        using var dialog = new Form
+        {
+            Text = "Third-party notices",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.Sizable,
+            MinimizeBox = false,
+            MaximizeBox = true,
+            ShowInTaskbar = false,
+            MinimumSize = new Size(560, 420),
+            ClientSize = new Size(760, 600)
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Padding = new Padding(14, 14, 14, 12)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var noticesTextBox = new TextBox
+        {
+            Text = BuildAboutDetailsText(),
+            ReadOnly = true,
+            Multiline = true,
+            ScrollBars = ScrollBars.Both,
+            WordWrap = true,
+            Dock = DockStyle.Fill,
+            Font = new Font(FontFamily.GenericMonospace, Font.Size)
+        };
+
+        var buttonPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            Padding = new Padding(0, 10, 0, 0)
+        };
+        var closeButton = CreateButton("Close", autoSize: false, width: 88, height: 28, dialogResult: DialogResult.OK);
+        closeButton.Margin = new Padding(6, 0, 0, 0);
+        buttonPanel.Controls.Add(closeButton);
+
+        root.Controls.Add(noticesTextBox, 0, 0);
+        root.Controls.Add(buttonPanel, 0, 1);
+        dialog.Controls.Add(root);
+
+        dialog.AcceptButton = closeButton;
+        dialog.CancelButton = closeButton;
+
+        ApplyThemeTo(dialog);
+        WindowsTitleBar.ApplyTheme(dialog.Handle, _theme.IsDark);
+        dialog.ShowDialog(owner);
+    }
+
+    private static string BuildAboutDetailsText()
+        => """
+           Pimax VRC Supervisor - Third-party notices
+
+           SteamVR/OpenVR runtime integration
+           Pimax VRC Supervisor can optionally query the user's installed SteamVR/OpenVR runtime to confirm active tracking references for SteamVR base-station startup and to register the SteamVR dashboard host manifest. The app does not bundle SteamVR, OpenVR, or openvr_api.dll. When this feature is available, it loads openvr_api.dll from the user's configured SteamVR/OpenVR runtime.
+
+           OpenVR SDK attribution
+           OpenVR SDK
+           Copyright (c) 2015, Valve Corporation
+           License: BSD-3-Clause
+           Source: https://github.com/ValveSoftware/openvr
+           License source: https://raw.githubusercontent.com/ValveSoftware/openvr/master/LICENSE
+
+           OpenVR SDK license text
+           Copyright (c) 2015, Valve Corporation
+           All rights reserved.
+
+           Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+           1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+           2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+           3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+
+           THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+           IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+           Named integrations and devices
+           This app contains compatibility logic, default paths, process names, or device detection labels for Pimax, SteamVR/OpenVR, SteamVR Base Station, HTC Vive/Vive Face Tracker, VRChat, VRCFaceTracking, Broken Eye, Intiface, Lovense, and OscGoesBrrr.
+
+           Trademark notice
+           Product names, company names, trademarks, and registered trademarks are property of their respective owners. Their mention here describes compatibility or user-configurable integration points and does not imply endorsement, sponsorship, or affiliation.
+           """;
+
+    private async void ValidateConfigFromButton()
+    {
+        var result = await ValidateCurrentEditorValuesAsync(includeScheduledTaskValidation: true);
+
         if (result.HasErrors)
         {
-            ShowThemedMessageBox(FormatValidationSummary(result, includePrompt: false), "Configuration validation failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ShowValidationResultDialog(result, hasErrors: true);
             SetStatus($"Validation failed with {result.Errors.Count} error(s).");
             return;
         }
 
         if (result.HasWarnings)
         {
-            ShowThemedMessageBox(FormatValidationSummary(result, includePrompt: false), "Configuration validation warnings", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowValidationResultDialog(result, hasErrors: false);
             SetStatus($"Validation completed with {result.Warnings.Count} warning(s).");
             return;
         }
@@ -3584,28 +5745,40 @@ internal sealed class ConfigEditorForm : Form
         SetStatus("Validation passed.");
     }
 
-    private bool ValidateForSave()
+    private async Task<ValidationResult> ValidateCurrentEditorValuesAsync(bool includeScheduledTaskValidation)
     {
+        SetStatus("Validating configuration...");
         var result = ValidateCurrentConfig(ValidationMode.Save);
         UpdateGridWarnings();
-        if (result.HasErrors)
+        if (includeScheduledTaskValidation)
         {
-            ShowThemedMessageBox(FormatValidationSummary(result, includePrompt: false), "Configuration has errors", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            SetStatus($"Validation failed with {result.Errors.Count} error(s).");
-            return false;
+            await AddScheduledTaskValidationAsync(result);
         }
 
-        if (result.HasWarnings)
+        return result;
+    }
+
+    private async Task AddScheduledTaskValidationAsync(ValidationResult result)
+    {
+        SetStatus("Validating scheduled tasks...");
+        try
         {
-            var answer = ShowThemedMessageBox(FormatValidationSummary(result, includePrompt: true), "Configuration warnings", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
-            if (answer != DialogResult.Yes)
+            var currentEditorDirectory = GetCurrentConfigEditorDirectory();
+            var issues = await Task.Run(() => global::ScheduledTaskPathValidator.ValidateExistingManagedTasks(currentEditorDirectory))
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            foreach (var issue in issues)
             {
-                SetStatus("Save cancelled after validation warnings.");
-                return false;
+                result.Warnings.Add(global::ScheduledTaskPathValidator.FormatIssue(issue));
             }
         }
-
-        return true;
+        catch (TimeoutException)
+        {
+            result.Warnings.Add("Scheduled task validation timed out. Config values were validated, but Windows Task Scheduler did not respond in time.");
+        }
+        catch (Exception ex)
+        {
+            result.Warnings.Add($"Scheduled task validation could not complete: {ex.Message}");
+        }
     }
 
     private bool ValidateForLaunch()
@@ -3676,7 +5849,7 @@ internal sealed class ConfigEditorForm : Form
         }
         if (ParseStringMatrix(_mouthTrackerDetectorsTextBox.Text).Length == 0)
         {
-            result.Warnings.Add("Mouth tracker detector rules are empty.");
+            result.Warnings.Add("Vive Face Tracker detector rules are empty.");
         }
         if (_oscGoesBrrrEnabledCheckBox.Checked && ParseStringMatrix(_lovenseDetectorsTextBox.Text).Length == 0)
         {
@@ -3686,8 +5859,18 @@ internal sealed class ConfigEditorForm : Form
         ValidateOscRoutes(result);
         ValidateBaseStations(result);
         ValidateTimingValues(result);
+        ValidateManagedScheduledTasks(result, mode);
         return result;
     }
+
+    private static void ValidateManagedScheduledTasks(ValidationResult result, ValidationMode mode)
+    {
+        // Existing scheduled tasks are queried asynchronously by the Validate button and are
+        // rewritten/deleted during Save when startup integration is applied.
+    }
+
+    private static string GetCurrentConfigEditorDirectory()
+        => global::ScheduledTaskPathValidator.GetCurrentExecutableDirectory();
 
     private static void ValidatePath(ValidationResult result, string label, string path, bool required)
     {
@@ -3715,6 +5898,11 @@ internal sealed class ConfigEditorForm : Form
 
     private void ValidateAutoLaunchApps(ValidationResult result)
     {
+        foreach (var duplicate in GetCoreAutostartDuplicateMessages())
+        {
+            result.Errors.Add(duplicate);
+        }
+
         foreach (DataGridViewRow row in _autoLaunchAppsGrid.Rows)
         {
             if (row.IsNewRow)
@@ -3740,6 +5928,62 @@ internal sealed class ConfigEditorForm : Form
 
             ValidatePath(result, label, path, required: enabled);
         }
+    }
+
+    private string[] GetCoreAutostartDuplicateMessages()
+    {
+        var duplicates = FindCoreAutostartDuplicateRows();
+        return duplicates
+            .Select(duplicate =>
+                "Core app executable is also listed as an Autostart app. Remove it from Autostart apps before saving.\r\nDuplicate: "
+                + duplicate.Value.Description)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private Dictionary<int, CoreAutostartDuplicate> FindCoreAutostartDuplicateRows()
+    {
+        var coreApps = new[]
+            {
+                CreateExecutableIdentity(_brokenEyePathTextBox.Text, "Broken Eye"),
+                CreateExecutableIdentity(_vrcFaceTrackingPathTextBox.Text, "VRCFaceTracking")
+            }
+            .Where(identity => identity is not null)
+            .Cast<ExecutableIdentity>()
+            .ToArray();
+        var duplicates = new Dictionary<int, CoreAutostartDuplicate>();
+
+        if (coreApps.Length == 0)
+        {
+            return duplicates;
+        }
+
+        foreach (DataGridViewRow row in _autoLaunchAppsGrid.Rows)
+        {
+            if (row.IsNewRow)
+            {
+                continue;
+            }
+
+            var path = GetGridString(row, "Path");
+            var autoLaunchIdentity = CreateExecutableIdentity(path, $"Autostart row {row.Index + 1}");
+            if (autoLaunchIdentity is null)
+            {
+                continue;
+            }
+
+            var matchingCore = coreApps.FirstOrDefault(core => ExecutableIdentitiesMatch(core, autoLaunchIdentity));
+            if (matchingCore is null)
+            {
+                continue;
+            }
+
+            duplicates[row.Index] = new CoreAutostartDuplicate(
+                row.Index,
+                $"{matchingCore.Label} ({matchingCore.Original}) matches Autostart app '{GetGridString(row, "Name")}' ({autoLaunchIdentity.Original})");
+        }
+
+        return duplicates;
     }
 
     private static void ValidateProcessList(ValidationResult result, string label, string text)
@@ -3787,9 +6031,17 @@ internal sealed class ConfigEditorForm : Form
             var name = GetGridString(row, "Name");
             var friendlyName = GetGridString(row, "FriendlyName");
             var address = GetGridString(row, "BluetoothAddress");
+            var version = Enum.TryParse(GetGridString(row, "Version"), ignoreCase: true, out BaseStationVersion parsedVersion)
+                ? parsedVersion
+                : BaseStationDevice.InferVersion(name);
             if (!string.IsNullOrWhiteSpace(address) && !addresses.Add(address))
             {
                 result.Errors.Add($"Duplicate base station Bluetooth address: {address}.");
+            }
+
+            if (version == BaseStationVersion.V2 && !string.IsNullOrWhiteSpace(GetGridString(row, "Id")))
+            {
+                result.Errors.Add("Base Station 2.0 rows cannot have a V1 ID.");
             }
 
             if (enabled && (string.IsNullOrWhiteSpace(address) || string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(friendlyName)))
@@ -3876,6 +6128,167 @@ internal sealed class ConfigEditorForm : Form
         return builder.ToString();
     }
 
+    private void ShowValidationResultDialog(ValidationResult result, bool hasErrors)
+    {
+        var technicalText = FormatValidationSummary(result, includePrompt: false);
+        var friendly = BuildFriendlyValidationSummary(result, hasErrors);
+        using var dialog = new Form
+        {
+            Text = hasErrors ? "Configuration validation failed" : "Configuration validation warnings",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            ClientSize = new Size(620, 250)
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 3,
+            Padding = new Padding(18, 16, 18, 12)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var summaryPanel = new TableLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Top,
+            ColumnCount = 2,
+            RowCount = 1
+        };
+        summaryPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        summaryPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+        var iconBox = new PictureBox
+        {
+            Width = 42,
+            Height = 42,
+            Margin = new Padding(0, 4, 16, 0),
+            SizeMode = PictureBoxSizeMode.CenterImage,
+            Image = IconForMessageBox(hasErrors ? MessageBoxIcon.Error : MessageBoxIcon.Warning).ToBitmap()
+        };
+
+        var textPanel = new TableLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Top,
+            ColumnCount = 1,
+            RowCount = 2
+        };
+        textPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        textPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var headingLabel = new Label
+        {
+            Text = friendly.Heading,
+            AutoSize = true,
+            Font = new Font(Font, FontStyle.Bold),
+            Margin = new Padding(0, 0, 0, 10)
+        };
+        var bodyLabel = new Label
+        {
+            Text = friendly.Body,
+            AutoSize = false,
+            Width = 510,
+            Height = 94,
+            Margin = new Padding(0),
+            TextAlign = ContentAlignment.TopLeft
+        };
+        textPanel.Controls.Add(headingLabel, 0, 0);
+        textPanel.Controls.Add(bodyLabel, 0, 1);
+
+        summaryPanel.Controls.Add(iconBox, 0, 0);
+        summaryPanel.Controls.Add(textPanel, 1, 0);
+
+        var detailsTextBox = new TextBox
+        {
+            Text = technicalText,
+            ReadOnly = true,
+            Multiline = true,
+            ScrollBars = ScrollBars.Both,
+            WordWrap = false,
+            Dock = DockStyle.Fill,
+            Font = new Font(FontFamily.GenericMonospace, Font.Size),
+            Visible = false
+        };
+
+        var buttonPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            Padding = new Padding(0, 12, 0, 0)
+        };
+        var okButton = CreateButton("OK", autoSize: false, width: 88, height: 28, dialogResult: DialogResult.OK);
+        okButton.Margin = new Padding(6, 0, 0, 0);
+        var detailsButton = CreateButton("Show details", autoSize: false, width: 112, height: 28);
+        detailsButton.Margin = new Padding(6, 0, 0, 0);
+        detailsButton.Click += (_, _) =>
+        {
+            var showing = !detailsTextBox.Visible;
+            detailsTextBox.Visible = showing;
+            detailsButton.Text = showing ? "Hide details" : "Show details";
+            dialog.ClientSize = showing ? new Size(720, 520) : new Size(620, 250);
+        };
+        buttonPanel.Controls.Add(okButton);
+        buttonPanel.Controls.Add(detailsButton);
+
+        root.Controls.Add(summaryPanel, 0, 0);
+        root.Controls.Add(detailsTextBox, 0, 1);
+        root.Controls.Add(buttonPanel, 0, 2);
+        dialog.Controls.Add(root);
+        dialog.AcceptButton = okButton;
+        dialog.CancelButton = okButton;
+
+        ApplyThemeTo(dialog);
+        WindowsTitleBar.ApplyTheme(dialog.Handle, _theme.IsDark);
+        dialog.ShowDialog(this);
+    }
+
+    private static FriendlyValidationSummary BuildFriendlyValidationSummary(ValidationResult result, bool hasErrors)
+    {
+        var scheduledTaskIssue = result.Errors.Concat(result.Warnings)
+            .FirstOrDefault(text => text.Contains("Scheduled task:", StringComparison.OrdinalIgnoreCase));
+        if (scheduledTaskIssue is not null)
+        {
+            var taskName = ExtractValidationDetail(scheduledTaskIssue, "Scheduled task");
+            if (string.IsNullOrWhiteSpace(taskName))
+            {
+                taskName = "the scheduled task";
+            }
+
+            return new FriendlyValidationSummary(
+                "Scheduled task needs updating",
+                $"The scheduled task \"{taskName}\" points to an older release of PimaxVrcSupervisor.\r\n\r\nClick OK, then update or recreate the scheduled task so it points to the current release.");
+        }
+
+        var count = hasErrors ? result.Errors.Count : result.Warnings.Count;
+        var kind = hasErrors ? "error" : "warning";
+        return new FriendlyValidationSummary(
+            hasErrors ? "Configuration needs attention" : "Configuration has warnings",
+            $"Validation found {count} {kind}{(count == 1 ? "" : "s")}.\r\n\r\nClick Show details to review the full validation output.");
+    }
+
+    private static string ExtractValidationDetail(string text, string label)
+    {
+        var prefix = label + ":";
+        foreach (var line in text.Split(["\r\n", "\n"], StringSplitOptions.None))
+        {
+            if (line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return line[prefix.Length..].Trim();
+            }
+        }
+
+        return "";
+    }
+
     private string? CreateConfigBackup(string path)
     {
         if (!File.Exists(path))
@@ -3948,6 +6361,7 @@ internal sealed class ConfigEditorForm : Form
 
     private void UpdateAutoLaunchRowWarnings()
     {
+        var duplicateRows = FindCoreAutostartDuplicateRows();
         foreach (DataGridViewRow row in _autoLaunchAppsGrid.Rows)
         {
             row.ErrorText = "";
@@ -3969,11 +6383,17 @@ internal sealed class ConfigEditorForm : Form
                 row.ErrorText = "Executable path does not exist.";
                 row.Cells["Path"].ErrorText = row.ErrorText;
             }
+            else if (duplicateRows.TryGetValue(row.Index, out var duplicate))
+            {
+                row.ErrorText = "Core app executable is also listed as an Autostart app.";
+                row.Cells["Path"].ErrorText = duplicate.Description;
+            }
         }
     }
 
     private void UpdateOscRouteRowWarnings()
     {
+        var seenPorts = new HashSet<int>();
         foreach (DataGridViewRow row in _oscRoutesGrid.Rows)
         {
             row.ErrorText = "";
@@ -3987,6 +6407,10 @@ internal sealed class ConfigEditorForm : Form
             {
                 row.ErrorText = "Enabled OSC route requires a name and target app receive port.";
             }
+            else if (!seenPorts.Add(port))
+            {
+                row.ErrorText = "Duplicate enabled target app receive port.";
+            }
         }
     }
 
@@ -3996,6 +6420,11 @@ internal sealed class ConfigEditorForm : Form
         foreach (DataGridViewRow row in _baseStationsGrid.Rows)
         {
             row.ErrorText = "";
+            if (_baseStationsGrid.Columns.Contains("Id"))
+            {
+                row.Cells["Id"].ErrorText = "";
+            }
+
             if (row.IsNewRow)
             {
                 continue;
@@ -4003,9 +6432,17 @@ internal sealed class ConfigEditorForm : Form
 
             var address = GetGridString(row, "BluetoothAddress");
             var enabled = GetGridBool(row, "Enabled", defaultValue: true);
+            var version = Enum.TryParse(GetGridString(row, "Version"), ignoreCase: true, out BaseStationVersion parsedVersion)
+                ? parsedVersion
+                : BaseStationDevice.InferVersion(GetGridString(row, "Name"));
             if (!string.IsNullOrWhiteSpace(address) && !seenAddresses.Add(address))
             {
                 row.ErrorText = "Duplicate Bluetooth address.";
+            }
+            else if (version == BaseStationVersion.V2 && !string.IsNullOrWhiteSpace(GetGridString(row, "Id")))
+            {
+                row.ErrorText = "Base Station 2.0 does not use a V1 ID.";
+                row.Cells["Id"].ErrorText = row.ErrorText;
             }
             else if (enabled && string.IsNullOrWhiteSpace(address))
             {
@@ -4013,7 +6450,7 @@ internal sealed class ConfigEditorForm : Form
             }
             else if (enabled && (string.IsNullOrWhiteSpace(GetGridString(row, "FriendlyName")) || string.IsNullOrWhiteSpace(GetGridString(row, "Name"))))
             {
-                row.ErrorText = "Friendly name and BLE name are required.";
+                row.ErrorText = "Friendly name and Bluetooth name are required.";
             }
         }
     }
@@ -4232,14 +6669,15 @@ internal sealed class ConfigEditorForm : Form
                 textBox.BackColor = _theme.InputBack;
                 textBox.ForeColor = _theme.Text;
                 textBox.BorderStyle = BorderStyle.FixedSingle;
+                ApplyNativeThemeHint(textBox);
                 break;
             case NumericUpDown input:
                 input.BackColor = _theme.InputBack;
                 input.ForeColor = _theme.Text;
+                ApplyNativeThemeHint(input);
                 break;
             case ComboBox comboBox:
-                comboBox.BackColor = _theme.InputBack;
-                comboBox.ForeColor = _theme.Text;
+                ApplyThemeToComboBox(comboBox);
                 break;
             case DataGridView grid:
                 ApplyThemeToGrid(grid);
@@ -4258,6 +6696,13 @@ internal sealed class ConfigEditorForm : Form
                 checkBox.UseVisualStyleBackColor = false;
                 checkBox.BackColor = _theme.WindowBack;
                 checkBox.ForeColor = _theme.Text;
+                if (checkBox is ThemedCheckBox themedCheckBox)
+                {
+                    themedCheckBox.DisabledForeColor = _theme.DisabledText;
+                    themedCheckBox.CheckBackColor = _theme.InputBack;
+                    themedCheckBox.CheckBorderColor = _theme.Border;
+                    themedCheckBox.CheckMarkColor = _theme.Text;
+                }
                 break;
             case Label label:
                 label.BackColor = _theme.WindowBack;
@@ -4271,6 +6716,7 @@ internal sealed class ConfigEditorForm : Form
             case Panel or TableLayoutPanel:
                 control.BackColor = _theme.WindowBack;
                 control.ForeColor = _theme.Text;
+                ApplyNativeThemeHint(control);
                 break;
             default:
                 control.BackColor = _theme.WindowBack;
@@ -4307,6 +6753,326 @@ internal sealed class ConfigEditorForm : Form
         grid.RowHeadersDefaultCellStyle.ForeColor = _theme.Text;
         grid.AlternatingRowsDefaultCellStyle.BackColor = _theme.WindowBack;
         grid.AlternatingRowsDefaultCellStyle.ForeColor = _theme.Text;
+        grid.RowTemplate.DefaultCellStyle.BackColor = _theme.InputBack;
+        grid.RowTemplate.DefaultCellStyle.ForeColor = _theme.Text;
+
+        foreach (DataGridViewColumn column in grid.Columns)
+        {
+            column.DefaultCellStyle.BackColor = _theme.InputBack;
+            column.DefaultCellStyle.ForeColor = _theme.Text;
+            column.DefaultCellStyle.SelectionBackColor = _theme.ButtonHover;
+            column.DefaultCellStyle.SelectionForeColor = _theme.Text;
+            if (column is DataGridViewButtonColumn buttonColumn)
+            {
+                buttonColumn.FlatStyle = FlatStyle.Flat;
+                buttonColumn.DefaultCellStyle.BackColor = _theme.ButtonBack;
+                buttonColumn.DefaultCellStyle.ForeColor = _theme.Text;
+                buttonColumn.DefaultCellStyle.SelectionBackColor = _theme.ButtonHover;
+                buttonColumn.DefaultCellStyle.SelectionForeColor = _theme.Text;
+            }
+            else if (column is DataGridViewComboBoxColumn comboColumn)
+            {
+                comboColumn.FlatStyle = FlatStyle.Flat;
+                comboColumn.DefaultCellStyle.BackColor = _theme.InputBack;
+                comboColumn.DefaultCellStyle.ForeColor = _theme.Text;
+                comboColumn.DefaultCellStyle.SelectionBackColor = _theme.ButtonHover;
+                comboColumn.DefaultCellStyle.SelectionForeColor = _theme.Text;
+            }
+        }
+
+        grid.CellPainting -= OnThemedGridCellPainting;
+        grid.CellPainting += OnThemedGridCellPainting;
+        grid.EditingControlShowing -= OnThemedGridEditingControlShowing;
+        grid.EditingControlShowing += OnThemedGridEditingControlShowing;
+        ApplyNativeThemeHint(grid);
+        grid.Invalidate();
+    }
+
+    private void ApplyThemeToComboBox(ComboBox comboBox)
+    {
+        comboBox.BackColor = _theme.InputBack;
+        comboBox.ForeColor = _theme.Text;
+        comboBox.FlatStyle = FlatStyle.Flat;
+        comboBox.DrawMode = DrawMode.OwnerDrawFixed;
+        comboBox.DrawItem -= OnThemedComboBoxDrawItem;
+        comboBox.DrawItem += OnThemedComboBoxDrawItem;
+        ApplyNativeThemeHint(comboBox);
+        comboBox.Invalidate();
+    }
+
+    private void OnThemedComboBoxDrawItem(object? sender, DrawItemEventArgs e)
+    {
+        if (sender is not ComboBox comboBox)
+        {
+            return;
+        }
+
+        var selected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
+        var backColor = selected ? _theme.ButtonHover : _theme.InputBack;
+        var textColor = comboBox.Enabled ? _theme.Text : SystemColors.GrayText;
+        using var background = new SolidBrush(backColor);
+        e.Graphics.FillRectangle(background, e.Bounds);
+
+        var text = e.Index >= 0 && e.Index < comboBox.Items.Count
+            ? Convert.ToString(comboBox.Items[e.Index], CultureInfo.CurrentCulture)
+            : comboBox.Text;
+        TextRenderer.DrawText(
+            e.Graphics,
+            text,
+            comboBox.Font,
+            e.Bounds,
+            textColor,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+        if ((e.State & DrawItemState.Focus) == DrawItemState.Focus)
+        {
+            e.DrawFocusRectangle();
+        }
+    }
+
+    private void OnThemedGridEditingControlShowing(object? sender, DataGridViewEditingControlShowingEventArgs e)
+    {
+        if (e.Control is ComboBox comboBox)
+        {
+            ApplyThemeToComboBox(comboBox);
+        }
+    }
+
+    private void OnThemedGridCellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
+    {
+        if (sender is not DataGridView grid
+            || e.RowIndex < 0
+            || e.ColumnIndex < 0
+            || e.Graphics is null
+            || grid.Columns[e.ColumnIndex] is not DataGridViewButtonColumn)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        var selected = (e.State & DataGridViewElementStates.Selected) == DataGridViewElementStates.Selected;
+        using var cellBack = new SolidBrush(selected ? _theme.ButtonHover : _theme.InputBack);
+        e.Graphics.FillRectangle(cellBack, e.CellBounds);
+
+        var buttonBounds = Rectangle.Inflate(e.CellBounds, -4, -4);
+        if (buttonBounds.Width <= 0 || buttonBounds.Height <= 0)
+        {
+            return;
+        }
+
+        using var buttonBack = new SolidBrush(selected ? _theme.ButtonHover : _theme.ButtonBack);
+        using var border = new Pen(_theme.Border);
+        e.Graphics.FillRectangle(buttonBack, buttonBounds);
+        e.Graphics.DrawRectangle(border, buttonBounds);
+
+        var text = Convert.ToString(e.FormattedValue, CultureInfo.CurrentCulture) ?? "";
+        var font = e.CellStyle?.Font ?? grid.Font;
+        TextRenderer.DrawText(
+            e.Graphics,
+            text,
+            font,
+            buttonBounds,
+            _theme.Text,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+    }
+
+    private void ApplyNativeThemeHint(Control control)
+    {
+        if (control is not (TextBox or NumericUpDown or ComboBox or DataGridView or ScrollableControl { AutoScroll: true }))
+        {
+            return;
+        }
+
+        if (control.IsHandleCreated)
+        {
+            WindowsControlTheme.ApplyTheme(control.Handle, _theme.IsDark);
+        }
+
+        control.HandleCreated -= OnThemedControlHandleCreated;
+        control.HandleCreated += OnThemedControlHandleCreated;
+    }
+
+    private void OnThemedControlHandleCreated(object? sender, EventArgs e)
+    {
+        if (sender is Control control)
+        {
+            WindowsControlTheme.ApplyTheme(control.Handle, _theme.IsDark);
+        }
+    }
+
+    private string? ResolveInitialConfigPath(string? requestedConfigPath)
+    {
+        if (!string.IsNullOrWhiteSpace(requestedConfigPath))
+        {
+            return FindConfigPath(requestedConfigPath, null);
+        }
+
+        var lastConfigPath = TryGetFullPath(_editorState.LastConfigPath ?? "");
+        if (lastConfigPath is not null && File.Exists(lastConfigPath))
+        {
+            if (!IsPathInCurrentReleaseFolder(lastConfigPath))
+            {
+                return ResolveExternalLastConfigPath(lastConfigPath);
+            }
+
+            return lastConfigPath;
+        }
+
+        return FindConfigPath(null, null);
+    }
+
+    private string? ResolveExternalLastConfigPath(string lastConfigPath)
+    {
+        var choice = ShowExternalLastConfigPathDialog(lastConfigPath);
+        if (choice == ExternalConfigChoice.CopyLastUsedConfig)
+        {
+            try
+            {
+                var copiedPath = CopyExternalConfigToCurrentRelease(lastConfigPath);
+                SetTemporaryStatus(
+                    "Copied and loaded last-used config.",
+                    "Copied from:\r\n" + lastConfigPath + "\r\n\r\nNow using:\r\n" + copiedPath);
+                return copiedPath;
+            }
+            catch (Exception ex)
+            {
+                ShowThemedMessageBox(
+                    "Could not copy the last-used config into the current release folder.\r\n\r\n" + ex.Message,
+                    "Could not copy config",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+        }
+
+        return FindConfigPath(null, null);
+    }
+
+    private static string CopyExternalConfigToCurrentRelease(string lastConfigPath)
+    {
+        var currentReleaseFolder = GetCurrentConfigEditorDirectory();
+        var fileName = Path.GetFileName(lastConfigPath);
+        if (string.Equals(fileName, DefaultConfigFileName, StringComparison.OrdinalIgnoreCase))
+        {
+            fileName = "supervisor_moved.config.json";
+        }
+
+        var destinationPath = Path.Combine(currentReleaseFolder, fileName);
+        if (File.Exists(destinationPath))
+        {
+            destinationPath = Path.Combine(
+                currentReleaseFolder,
+                Path.GetFileNameWithoutExtension(fileName) + "_" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + Path.GetExtension(fileName));
+        }
+
+        File.Copy(lastConfigPath, destinationPath, overwrite: false);
+        return destinationPath;
+    }
+
+    private ExternalConfigChoice ShowExternalLastConfigPathDialog(string lastConfigPath)
+    {
+        var currentReleaseFolder = GetCurrentConfigEditorDirectory();
+        var lastConfigFolder = global::ScheduledTaskPathValidator.NormalizeDirectory(Path.GetDirectoryName(lastConfigPath) ?? "");
+        var choice = ExternalConfigChoice.UseCurrentFolderConfig;
+        using var dialog = new Form
+        {
+            Text = "Config from another release",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            ClientSize = new Size(760, 360)
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 4,
+            Padding = new Padding(18, 16, 18, 12)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var heading = new Label
+        {
+            Text = "Last-used config is from another release",
+            AutoSize = true,
+            Font = new Font(Font, FontStyle.Bold),
+            Margin = new Padding(0, 0, 0, 10)
+        };
+        var body = new Label
+        {
+            Text = "Choose which config this release should use.\r\n\r\n" +
+                "Copying the last-used config creates a local copy in the current release folder and loads that copy.",
+            AutoSize = false,
+            Dock = DockStyle.Top,
+            Height = 72,
+            Margin = new Padding(0, 0, 0, 12)
+        };
+        var details = new TextBox
+        {
+            Text =
+                "Current Configurator folder:\r\n" +
+                currentReleaseFolder +
+                "\r\n\r\nRemembered config folder:\r\n" +
+                lastConfigFolder +
+                "\r\n\r\nRemembered config file:\r\n" +
+                lastConfigPath,
+            ReadOnly = true,
+            Multiline = true,
+            ScrollBars = ScrollBars.Both,
+            WordWrap = false,
+            Dock = DockStyle.Fill,
+            Font = new Font(FontFamily.GenericMonospace, Font.Size),
+            Margin = new Padding(0, 0, 0, 12)
+        };
+        var buttons = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false
+        };
+        var copyButton = CreateButton("Use last-used config", autoSize: false, width: 156, height: 28);
+        var currentButton = CreateButton("Use current folder config", autoSize: false, width: 176, height: 28);
+
+        copyButton.Click += (_, _) =>
+        {
+            choice = ExternalConfigChoice.CopyLastUsedConfig;
+            dialog.DialogResult = DialogResult.Yes;
+            dialog.Close();
+        };
+        currentButton.Click += (_, _) =>
+        {
+            choice = ExternalConfigChoice.UseCurrentFolderConfig;
+            dialog.DialogResult = DialogResult.No;
+            dialog.Close();
+        };
+
+        buttons.Controls.Add(copyButton);
+        buttons.Controls.Add(currentButton);
+        root.Controls.Add(heading, 0, 0);
+        root.Controls.Add(body, 0, 1);
+        root.Controls.Add(details, 0, 2);
+        root.Controls.Add(buttons, 0, 3);
+        dialog.Controls.Add(root);
+        dialog.AcceptButton = copyButton;
+        dialog.CancelButton = currentButton;
+
+        ApplyThemeTo(dialog);
+        WindowsTitleBar.ApplyTheme(dialog.Handle, _theme.IsDark);
+        dialog.ShowDialog(this);
+        return choice;
+    }
+
+    private static bool IsPathInCurrentReleaseFolder(string path)
+    {
+        var currentReleaseFolder = GetCurrentConfigEditorDirectory();
+        var pathFolder = global::ScheduledTaskPathValidator.NormalizeDirectory(Path.GetDirectoryName(path) ?? "");
+        return string.Equals(pathFolder, currentReleaseFolder, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? FindConfigPath(string? requestedConfigPath, string? lastConfigPath)
@@ -4338,10 +7104,15 @@ internal static class AppVersion
 
 internal sealed record AutoLaunchAppEditorRow(string Name, string Path, bool Enabled, bool RestartOnPimaxReconnect, bool RunAsAdmin, bool StartMinimized);
 
+internal sealed record ExecutableIdentity(string Label, string Original, string? FullPath, string FileName);
+
+internal sealed record CoreAutostartDuplicate(int RowIndex, string Description);
+
 internal sealed record OscRouteEditorRow(string Name, int AppReceivePort, bool Enabled);
 
 internal enum ValidationMode
 {
+    Validate,
     Save,
     Launch
 }
@@ -4353,6 +7124,29 @@ internal enum LaunchUnsavedChoice
     Cancel
 }
 
+internal enum StartupTaskMigrationChoice
+{
+    Rebind,
+    KeepExisting,
+    TurnOffAutostart
+}
+
+internal enum ExternalConfigChoice
+{
+    CopyLastUsedConfig,
+    UseCurrentFolderConfig
+}
+
+internal sealed record ConfigProfileItem(string DisplayName, string FileName, string Path, string FriendlyName)
+{
+    public override string ToString() => DisplayName;
+}
+
+internal sealed record BackupFileItem(string FileName, string Path, DateTime LastWriteTime)
+{
+    public override string ToString() => $"{FileName} ({LastWriteTime:yyyy-MM-dd HH:mm})";
+}
+
 internal sealed class ValidationResult
 {
     public List<string> Errors { get; } = [];
@@ -4361,14 +7155,22 @@ internal sealed class ValidationResult
     public bool HasWarnings => Warnings.Count > 0;
 }
 
+internal sealed record FriendlyValidationSummary(string Heading, string Body);
+
+internal sealed record DisplayNameNormalizationResult(string Value, bool Shortened);
+
+internal sealed record WindowStateSnapshot(FormWindowState WindowState, Rectangle Bounds);
+
 internal sealed class EditorState
 {
-    private static readonly string StatePath = Path.Combine(Application.UserAppDataPath, "config-editor-state.json");
+    private static readonly string StatePath = Path.Combine(Application.UserAppDataPath, "configurator-state.json");
 
     public string? LastConfigPath { get; set; }
     public Rectangle? WindowBounds { get; set; }
     public FormWindowState WindowState { get; set; } = FormWindowState.Normal;
     public int LastSelectedTab { get; set; }
+    public bool UseDesktopTuiAsDefaultInterface { get; set; } = true;
+    public List<string> StartupTaskMigrationPromptedReleaseFolders { get; set; } = [];
 
     public static EditorState Load()
     {
@@ -4400,6 +7202,19 @@ internal sealed class EditorState
             // Editor state is only a convenience; ignore persistence failures.
         }
     }
+
+    public void MarkStartupTaskMigrationPrompted(string releaseFolder)
+    {
+        var normalized = ScheduledTaskPathValidator.NormalizeDirectory(releaseFolder);
+        StartupTaskMigrationPromptedReleaseFolders ??= [];
+        if (!StartupTaskMigrationPromptedReleaseFolders.Any(path => string.Equals(
+            ScheduledTaskPathValidator.NormalizeDirectory(path),
+            normalized,
+            StringComparison.OrdinalIgnoreCase)))
+        {
+            StartupTaskMigrationPromptedReleaseFolders.Add(normalized);
+        }
+    }
 }
 
 internal sealed record AppTheme(
@@ -4414,6 +7229,7 @@ internal sealed record AppTheme(
     Color ToolTipBack,
     Color ToolTipFore,
     Color Text,
+    Color DisabledText,
     Color Border,
     Color StrongBorder,
     Color PrimaryButtonBack)
@@ -4430,6 +7246,7 @@ internal sealed record AppTheme(
         ToolTipBack: SystemColors.Info,
         ToolTipFore: SystemColors.InfoText,
         Text: SystemColors.ControlText,
+        DisabledText: SystemColors.GrayText,
         Border: SystemColors.ControlDark,
         StrongBorder: Color.FromArgb(76, 128, 176),
         PrimaryButtonBack: Color.FromArgb(240, 247, 252));
@@ -4446,9 +7263,112 @@ internal sealed record AppTheme(
         ToolTipBack: Color.FromArgb(45, 45, 45),
         ToolTipFore: Color.WhiteSmoke,
         Text: Color.WhiteSmoke,
+        DisabledText: Color.FromArgb(158, 158, 158),
         Border: Color.FromArgb(86, 86, 86),
         StrongBorder: Color.FromArgb(160, 160, 160),
         PrimaryButtonBack: Color.FromArgb(76, 76, 76));
+}
+
+internal sealed class ThemedCheckBox : CheckBox
+{
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Color DisabledForeColor { get; set; } = SystemColors.GrayText;
+
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Color CheckBackColor { get; set; } = SystemColors.Window;
+
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Color CheckBorderColor { get; set; } = SystemColors.ControlDark;
+
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Color CheckMarkColor { get; set; } = SystemColors.ControlText;
+
+    public ThemedCheckBox()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        UseVisualStyleBackColor = false;
+        Padding = new Padding(0, 1, 0, 1);
+    }
+
+    public override Size GetPreferredSize(Size proposedSize)
+    {
+        var textSize = TextRenderer.MeasureText(Text, Font);
+        return new Size(20 + textSize.Width, Math.Max(18, textSize.Height + Padding.Vertical));
+    }
+
+    protected override void OnEnabledChanged(EventArgs e)
+    {
+        Invalidate();
+        base.OnEnabledChanged(e);
+    }
+
+    protected override void OnCheckedChanged(EventArgs e)
+    {
+        Invalidate();
+        base.OnCheckedChanged(e);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        e.Graphics.Clear(BackColor);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+        var boxSize = 13;
+        var boxTop = Math.Max(0, (Height - boxSize) / 2);
+        var boxBounds = new Rectangle(0, boxTop, boxSize, boxSize);
+        var borderColor = Enabled ? CheckBorderColor : DisabledForeColor;
+        var textColor = Enabled ? ForeColor : DisabledForeColor;
+        using var boxBack = new SolidBrush(Enabled ? CheckBackColor : BackColor);
+        using var boxBorder = new Pen(borderColor);
+        using var boxPath = CreateRoundedRectanglePath(boxBounds, 2);
+        e.Graphics.FillPath(boxBack, boxPath);
+        e.Graphics.DrawPath(boxBorder, boxPath);
+
+        if (CheckState == CheckState.Checked)
+        {
+            using var markPen = new Pen(textColor, 2F)
+            {
+                StartCap = LineCap.Round,
+                EndCap = LineCap.Round
+            };
+            e.Graphics.DrawLines(markPen, [new Point(3, boxTop + 7), new Point(6, boxTop + 10), new Point(10, boxTop + 3)]);
+        }
+        else if (CheckState == CheckState.Indeterminate)
+        {
+            using var markPen = new Pen(textColor, 2F);
+            e.Graphics.DrawLine(markPen, 3, boxTop + 6, 10, boxTop + 6);
+        }
+
+        var textBounds = new Rectangle(20, 0, Math.Max(0, Width - 20), Height);
+        TextRenderer.DrawText(
+            e.Graphics,
+            Text,
+            Font,
+            textBounds,
+            textColor,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+        if (Focused && ShowFocusCues)
+        {
+            ControlPaint.DrawFocusRectangle(e.Graphics, ClientRectangle);
+        }
+    }
+
+    private static GraphicsPath CreateRoundedRectanglePath(Rectangle bounds, int radius)
+    {
+        var diameter = radius * 2;
+        var path = new GraphicsPath();
+        path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
 }
 
 internal sealed class ThemedActionButton : Button
@@ -4743,14 +7663,15 @@ internal sealed class ThemedTabHost : UserControl
                 textBox.BackColor = _theme.InputBack;
                 textBox.ForeColor = _theme.Text;
                 textBox.BorderStyle = BorderStyle.FixedSingle;
+                ApplyNativeThemeHint(textBox);
                 break;
             case NumericUpDown input:
                 input.BackColor = _theme.InputBack;
                 input.ForeColor = _theme.Text;
+                ApplyNativeThemeHint(input);
                 break;
             case ComboBox comboBox:
-                comboBox.BackColor = _theme.InputBack;
-                comboBox.ForeColor = _theme.Text;
+                ApplyThemeToComboBox(comboBox);
                 break;
             case DataGridView grid:
                 ApplyThemeToGrid(grid);
@@ -4769,6 +7690,13 @@ internal sealed class ThemedTabHost : UserControl
                 checkBox.UseVisualStyleBackColor = false;
                 checkBox.BackColor = _theme.WindowBack;
                 checkBox.ForeColor = _theme.Text;
+                if (checkBox is ThemedCheckBox themedCheckBox)
+                {
+                    themedCheckBox.DisabledForeColor = _theme.DisabledText;
+                    themedCheckBox.CheckBackColor = _theme.InputBack;
+                    themedCheckBox.CheckBorderColor = _theme.Border;
+                    themedCheckBox.CheckMarkColor = _theme.Text;
+                }
                 break;
             case Label label:
                 label.BackColor = _theme.WindowBack;
@@ -4782,6 +7710,7 @@ internal sealed class ThemedTabHost : UserControl
             default:
                 control.BackColor = _theme.WindowBack;
                 control.ForeColor = _theme.Text;
+                ApplyNativeThemeHint(control);
                 break;
         }
 
@@ -4809,6 +7738,151 @@ internal sealed class ThemedTabHost : UserControl
         grid.RowHeadersDefaultCellStyle.ForeColor = _theme.Text;
         grid.AlternatingRowsDefaultCellStyle.BackColor = _theme.WindowBack;
         grid.AlternatingRowsDefaultCellStyle.ForeColor = _theme.Text;
+        grid.RowTemplate.DefaultCellStyle.BackColor = _theme.InputBack;
+        grid.RowTemplate.DefaultCellStyle.ForeColor = _theme.Text;
+
+        foreach (DataGridViewColumn column in grid.Columns)
+        {
+            column.DefaultCellStyle.BackColor = _theme.InputBack;
+            column.DefaultCellStyle.ForeColor = _theme.Text;
+            column.DefaultCellStyle.SelectionBackColor = _theme.ButtonHover;
+            column.DefaultCellStyle.SelectionForeColor = _theme.Text;
+            if (column is DataGridViewButtonColumn buttonColumn)
+            {
+                buttonColumn.FlatStyle = FlatStyle.Flat;
+                buttonColumn.DefaultCellStyle.BackColor = _theme.ButtonBack;
+                buttonColumn.DefaultCellStyle.ForeColor = _theme.Text;
+                buttonColumn.DefaultCellStyle.SelectionBackColor = _theme.ButtonHover;
+                buttonColumn.DefaultCellStyle.SelectionForeColor = _theme.Text;
+            }
+            else if (column is DataGridViewComboBoxColumn comboColumn)
+            {
+                comboColumn.FlatStyle = FlatStyle.Flat;
+                comboColumn.DefaultCellStyle.BackColor = _theme.InputBack;
+                comboColumn.DefaultCellStyle.ForeColor = _theme.Text;
+                comboColumn.DefaultCellStyle.SelectionBackColor = _theme.ButtonHover;
+                comboColumn.DefaultCellStyle.SelectionForeColor = _theme.Text;
+            }
+        }
+
+        grid.CellPainting -= OnThemedGridCellPainting;
+        grid.CellPainting += OnThemedGridCellPainting;
+        grid.EditingControlShowing -= OnThemedGridEditingControlShowing;
+        grid.EditingControlShowing += OnThemedGridEditingControlShowing;
+        ApplyNativeThemeHint(grid);
+        grid.Invalidate();
+    }
+
+    private void ApplyThemeToComboBox(ComboBox comboBox)
+    {
+        comboBox.BackColor = _theme.InputBack;
+        comboBox.ForeColor = _theme.Text;
+        comboBox.FlatStyle = FlatStyle.Flat;
+        comboBox.DrawMode = DrawMode.OwnerDrawFixed;
+        comboBox.DrawItem -= OnThemedComboBoxDrawItem;
+        comboBox.DrawItem += OnThemedComboBoxDrawItem;
+        ApplyNativeThemeHint(comboBox);
+        comboBox.Invalidate();
+    }
+
+    private void OnThemedComboBoxDrawItem(object? sender, DrawItemEventArgs e)
+    {
+        if (sender is not ComboBox comboBox)
+        {
+            return;
+        }
+
+        var selected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
+        var backColor = selected ? _theme.ButtonHover : _theme.InputBack;
+        var textColor = comboBox.Enabled ? _theme.Text : SystemColors.GrayText;
+        using var background = new SolidBrush(backColor);
+        e.Graphics.FillRectangle(background, e.Bounds);
+
+        var text = e.Index >= 0 && e.Index < comboBox.Items.Count
+            ? Convert.ToString(comboBox.Items[e.Index], CultureInfo.CurrentCulture)
+            : comboBox.Text;
+        TextRenderer.DrawText(
+            e.Graphics,
+            text,
+            comboBox.Font,
+            e.Bounds,
+            textColor,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+        if ((e.State & DrawItemState.Focus) == DrawItemState.Focus)
+        {
+            e.DrawFocusRectangle();
+        }
+    }
+
+    private void OnThemedGridEditingControlShowing(object? sender, DataGridViewEditingControlShowingEventArgs e)
+    {
+        if (e.Control is ComboBox comboBox)
+        {
+            ApplyThemeToComboBox(comboBox);
+        }
+    }
+
+    private void OnThemedGridCellPainting(object? sender, DataGridViewCellPaintingEventArgs e)
+    {
+        if (sender is not DataGridView grid
+            || e.RowIndex < 0
+            || e.ColumnIndex < 0
+            || e.Graphics is null
+            || grid.Columns[e.ColumnIndex] is not DataGridViewButtonColumn)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        var selected = (e.State & DataGridViewElementStates.Selected) == DataGridViewElementStates.Selected;
+        using var cellBack = new SolidBrush(selected ? _theme.ButtonHover : _theme.InputBack);
+        e.Graphics.FillRectangle(cellBack, e.CellBounds);
+
+        var buttonBounds = Rectangle.Inflate(e.CellBounds, -4, -4);
+        if (buttonBounds.Width <= 0 || buttonBounds.Height <= 0)
+        {
+            return;
+        }
+
+        using var buttonBack = new SolidBrush(selected ? _theme.ButtonHover : _theme.ButtonBack);
+        using var border = new Pen(_theme.Border);
+        e.Graphics.FillRectangle(buttonBack, buttonBounds);
+        e.Graphics.DrawRectangle(border, buttonBounds);
+
+        var text = Convert.ToString(e.FormattedValue, CultureInfo.CurrentCulture) ?? "";
+        var font = e.CellStyle?.Font ?? grid.Font;
+        TextRenderer.DrawText(
+            e.Graphics,
+            text,
+            font,
+            buttonBounds,
+            _theme.Text,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+    }
+
+    private void ApplyNativeThemeHint(Control control)
+    {
+        if (control is not (TextBox or NumericUpDown or ComboBox or DataGridView or ScrollableControl { AutoScroll: true }))
+        {
+            return;
+        }
+
+        if (control.IsHandleCreated)
+        {
+            WindowsControlTheme.ApplyTheme(control.Handle, _theme.IsDark);
+        }
+
+        control.HandleCreated -= OnThemedControlHandleCreated;
+        control.HandleCreated += OnThemedControlHandleCreated;
+    }
+
+    private void OnThemedControlHandleCreated(object? sender, EventArgs e)
+    {
+        if (sender is Control control)
+        {
+            WindowsControlTheme.ApplyTheme(control.Handle, _theme.IsDark);
+        }
     }
 }
 
@@ -4821,6 +7895,29 @@ internal static class WindowsThemeDetector
         var value = Registry.GetValue(PersonalizeKey, "AppsUseLightTheme", 1);
         return value is not int intValue || intValue != 0;
     }
+}
+
+internal static class WindowsControlTheme
+{
+    public static void ApplyTheme(IntPtr handle, bool dark)
+    {
+        if (handle == IntPtr.Zero || !OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
+        {
+            return;
+        }
+
+        try
+        {
+            _ = SetWindowTheme(handle, dark ? "DarkMode_Explorer" : null, null);
+        }
+        catch
+        {
+            // Native scrollbar theming support varies across Windows builds.
+        }
+    }
+
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+    private static extern int SetWindowTheme(IntPtr hwnd, string? pszSubAppName, string? pszSubIdList);
 }
 
 internal static class WindowsTitleBar
@@ -4844,6 +7941,17 @@ internal static class WindowsTitleBar
 
 internal static class JsonPropertyEditor
 {
+    public static string ReplaceTopLevel(string json, string propertyName, string serializedValue)
+    {
+        if (!TryFindTopLevelProperty(json, propertyName, out _, out var valueStart))
+        {
+            return InsertProperty(json, propertyName, serializedValue);
+        }
+
+        var valueEnd = FindValueEnd(json, valueStart);
+        return json[..valueStart] + serializedValue + json[valueEnd..];
+    }
+
     public static string Replace(string json, string propertyName, string serializedValue)
     {
         var propertyMatch = Regex.Match(json, $"\"{Regex.Escape(propertyName)}\"\\s*:");
@@ -4917,6 +8025,76 @@ internal static class JsonPropertyEditor
         }
 
         return json[..removeStart] + json[removeEnd..];
+    }
+
+    private static bool TryFindTopLevelProperty(string json, string propertyName, out int propertyStart, out int valueStart)
+    {
+        propertyStart = -1;
+        valueStart = -1;
+        var propertyToken = JsonSerializer.Serialize(propertyName);
+        var depth = 0;
+        var inString = false;
+        var escaped = false;
+
+        for (var index = 0; index < json.Length; index++)
+        {
+            var ch = json[index];
+            if (inString)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                }
+                else if (ch == '\\')
+                {
+                    escaped = true;
+                }
+                else if (ch == '"')
+                {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                if (depth == 1
+                    && index + propertyToken.Length <= json.Length
+                    && string.CompareOrdinal(json, index, propertyToken, 0, propertyToken.Length) == 0)
+                {
+                    var colonIndex = index + propertyToken.Length;
+                    while (colonIndex < json.Length && char.IsWhiteSpace(json[colonIndex]))
+                    {
+                        colonIndex++;
+                    }
+
+                    if (colonIndex < json.Length && json[colonIndex] == ':')
+                    {
+                        propertyStart = index;
+                        valueStart = colonIndex + 1;
+                        while (valueStart < json.Length && char.IsWhiteSpace(json[valueStart]))
+                        {
+                            valueStart++;
+                        }
+
+                        return true;
+                    }
+                }
+
+                inString = true;
+            }
+            else if (ch is '{' or '[')
+            {
+                depth++;
+            }
+            else if (ch is '}' or ']')
+            {
+                depth = Math.Max(0, depth - 1);
+            }
+        }
+
+        return false;
     }
 
     private static string InsertProperty(string json, string propertyName, string serializedValue)

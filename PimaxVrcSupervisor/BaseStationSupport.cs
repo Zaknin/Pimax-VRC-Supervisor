@@ -35,6 +35,12 @@ internal enum BaseStationPowerState
 internal static class BaseStationCommandTiming
 {
     public static readonly TimeSpan InterStationDelay = TimeSpan.FromSeconds(1);
+    public static readonly TimeSpan UnsupportedV2PowerOnBurstDelay = TimeSpan.FromSeconds(2);
+    public static readonly TimeSpan PowerOnCommandTimeout = TimeSpan.FromSeconds(8);
+    public static readonly TimeSpan PowerStateReadTimeout = TimeSpan.FromSeconds(8);
+    public static readonly TimeSpan PowerDownCommandTimeout = TimeSpan.FromSeconds(8);
+    public static readonly TimeSpan PowerDownRecoveryScanDuration = TimeSpan.FromSeconds(4);
+    public static readonly TimeSpan PowerDownRecoverySettleDelay = TimeSpan.FromMilliseconds(500);
     public static readonly TimeSpan PowerDownStateReadDelay = TimeSpan.FromSeconds(2);
     public static readonly TimeSpan PowerOnRetryPassDelay = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan OpenVrTrackingCheckDelay = TimeSpan.FromSeconds(10);
@@ -108,7 +114,8 @@ internal static class BaseStationPowerDownRoutine
         BaseStationGattClient client,
         Action<string> log,
         Action? saveSettings,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<string?>? setProgress = null)
     {
         var handledAddresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var fallbackBaseStations = new List<BaseStationDevice>();
@@ -140,32 +147,51 @@ internal static class BaseStationPowerDownRoutine
             }
         }
 
-        for (var pass = 1; pass <= BaseStationCommandTiming.PowerDownFallbackPasses && fallbackBaseStations.Count > 0; pass++)
+        var pendingFallbackBaseStations = fallbackBaseStations.ToList();
+        for (var pass = 1; pass <= BaseStationCommandTiming.PowerDownFallbackPasses && pendingFallbackBaseStations.Count > 0; pass++)
         {
             log(pass == 1
-                ? $"Running two-pass base station {action} shutdown for {fallbackBaseStations.Count} station(s)."
+                ? $"Running two-pass base station {action} shutdown for {pendingFallbackBaseStations.Count} station(s)."
                 : $"Repeating base station {action} shutdown pass {pass}/{BaseStationCommandTiming.PowerDownFallbackPasses}.");
 
-            for (var index = 0; index < fallbackBaseStations.Count; index++)
+            var failedThisPass = new List<BaseStationDevice>();
+            for (var index = 0; index < pendingFallbackBaseStations.Count; index++)
             {
-                var baseStation = fallbackBaseStations[index];
+                var baseStation = pendingFallbackBaseStations[index];
                 cancellationToken.ThrowIfCancellationRequested();
 
                 try
                 {
-                    await client.PowerDownAsync(baseStation, mode, cancellationToken);
+                    setProgress?.Invoke($"base-station-{action}: pass {pass}/{BaseStationCommandTiming.PowerDownFallbackPasses}, station {index + 1}/{pendingFallbackBaseStations.Count} {baseStation.DisplayName}");
+                    var startedAt = DateTimeOffset.UtcNow;
+                    await RunWithPerCommandTimeoutAsync(
+                        token => client.PowerDownAsync(baseStation, mode, token),
+                        BaseStationCommandTiming.PowerDownCommandTimeout,
+                        cancellationToken);
                     handledAddresses.Add(baseStation.BluetoothAddress);
-                    log($"Base station {baseStation.DisplayName}: {action} pass {pass} succeeded.");
+                    log($"Base station {baseStation.DisplayName}: {action} pass {pass} succeeded in {(DateTimeOffset.UtcNow - startedAt).TotalSeconds:0.0}s.");
+                }
+                catch (TimeoutException ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    failedThisPass.Add(baseStation);
+                    log($"Base station {baseStation.DisplayName}: {action} pass {pass} timed out after {BaseStationCommandTiming.PowerDownCommandTimeout.TotalSeconds:0}s: {ex.Message}");
                 }
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
+                    failedThisPass.Add(baseStation);
                     log($"Base station {baseStation.DisplayName}: could not {action} on pass {pass}: {ex.Message}");
                 }
 
-                if (index < fallbackBaseStations.Count - 1)
+                if (index < pendingFallbackBaseStations.Count - 1)
                 {
                     await Task.Delay(BaseStationCommandTiming.InterStationDelay, cancellationToken);
                 }
+            }
+
+            pendingFallbackBaseStations = failedThisPass;
+            if (pass < BaseStationCommandTiming.PowerDownFallbackPasses && pendingFallbackBaseStations.Count > 0)
+            {
+                await RunPowerDownRecoveryScanAsync(pendingFallbackBaseStations.Count, action, log, setProgress, cancellationToken);
             }
         }
 
@@ -173,6 +199,8 @@ internal static class BaseStationPowerDownRoutine
         {
             saveSettings();
         }
+
+        setProgress?.Invoke(null);
 
         return new BaseStationPowerDownResult
         {
@@ -190,7 +218,11 @@ internal static class BaseStationPowerDownRoutine
         {
             try
             {
-                await gattClient.PowerDownAsync(baseStation, requestedMode, token);
+                setProgress?.Invoke($"base-station-{action}: confirming {baseStation.DisplayName}");
+                await RunWithPerCommandTimeoutAsync(
+                    timeoutToken => gattClient.PowerDownAsync(baseStation, requestedMode, timeoutToken),
+                    BaseStationCommandTiming.PowerDownCommandTimeout,
+                    token);
                 writeLog($"Base station {baseStation.DisplayName}: {action} command sent; waiting for status.");
                 await Task.Delay(BaseStationCommandTiming.PowerDownStateReadDelay, token);
 
@@ -212,12 +244,56 @@ internal static class BaseStationPowerDownRoutine
                 writeLog($"Base station {baseStation.DisplayName}: status did not confirm {action}; using two-pass shutdown.");
                 return false;
             }
+            catch (TimeoutException ex) when (!token.IsCancellationRequested)
+            {
+                writeLog($"Base station {baseStation.DisplayName}: could not confirm {action}: {ex.Message}. Using two-pass shutdown.");
+                return false;
+            }
             catch (Exception ex) when (!token.IsCancellationRequested)
             {
                 writeLog($"Base station {baseStation.DisplayName}: could not confirm {action}: {ex.Message}. Using two-pass shutdown.");
                 return false;
             }
         }
+    }
+
+    private static async Task RunWithPerCommandTimeoutAsync(
+        Func<CancellationToken, Task> action,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(timeout);
+        try
+        {
+            await action(timeoutSource.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutSource.IsCancellationRequested)
+        {
+            throw new TimeoutException("Bluetooth command did not finish before the per-station timeout.");
+        }
+    }
+
+    private static async Task RunPowerDownRecoveryScanAsync(
+        int failedStationCount,
+        string action,
+        Action<string> log,
+        Action<string?>? setProgress,
+        CancellationToken cancellationToken)
+    {
+        log($"Base station {action} pass left {failedStationCount} station(s). Running {BaseStationCommandTiming.PowerDownRecoveryScanDuration.TotalSeconds:0}s BLE recovery scan before retry.");
+        setProgress?.Invoke($"base-station-{action}: BLE recovery scan");
+        try
+        {
+            var discovered = await BaseStationDiscovery.ScanAsync(BaseStationCommandTiming.PowerDownRecoveryScanDuration, cancellationToken);
+            log($"Base station BLE recovery scan complete: found {discovered.Count} station advertisement(s).");
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            log($"Base station BLE recovery scan failed; retrying {action} anyway: {ex.Message}");
+        }
+
+        await Task.Delay(BaseStationCommandTiming.PowerDownRecoverySettleDelay, cancellationToken);
     }
 
     private static bool NeedsFallbackShutdownWithoutStateRead(BaseStationDevice baseStation)
@@ -554,9 +630,9 @@ internal sealed class BaseStationGattClient
             try
             {
                 using var device = await GetBluetoothLeDeviceAsync(baseStation.BluetoothAddressValue, cancellationToken);
-                using var service = await GetServiceAsync(device, serviceGuid);
-                var characteristic = await GetCharacteristicAsync(service, characteristicGuid);
-                await WriteCharacteristicAsync(characteristic, data);
+                using var service = await GetServiceAsync(device, serviceGuid, cancellationToken);
+                var characteristic = await GetCharacteristicAsync(service, characteristicGuid, cancellationToken);
+                await WriteCharacteristicAsync(characteristic, data, cancellationToken);
                 return;
             }
             catch (Exception ex) when (attempt < retryCount && !cancellationToken.IsCancellationRequested)
@@ -592,14 +668,14 @@ internal sealed class BaseStationGattClient
             try
             {
                 using var device = await GetBluetoothLeDeviceAsync(baseStation.BluetoothAddressValue, cancellationToken);
-                using var service = await GetServiceAsync(device, serviceGuid);
-                var characteristic = await GetCharacteristicAsync(service, characteristicGuid);
+                using var service = await GetServiceAsync(device, serviceGuid, cancellationToken);
+                var characteristic = await GetCharacteristicAsync(service, characteristicGuid, cancellationToken);
                 if (!characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.Read))
                 {
                     return null;
                 }
 
-                var result = await characteristic.ReadValueAsync(BluetoothCacheMode.Uncached).AsTask();
+                var result = await characteristic.ReadValueAsync(BluetoothCacheMode.Uncached).AsTask(cancellationToken);
                 if (result.Status != GattCommunicationStatus.Success)
                 {
                     throw new InvalidOperationException($"Could not read Bluetooth characteristic for {characteristic.Service.Device.Name}: {result.Status}.");
@@ -626,7 +702,7 @@ internal sealed class BaseStationGattClient
         for (var attempt = 1; attempt <= 10; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var device = await BluetoothLEDevice.FromBluetoothAddressAsync(address).AsTask();
+            var device = await BluetoothLEDevice.FromBluetoothAddressAsync(address).AsTask(cancellationToken);
             if (device is not null)
             {
                 return device;
@@ -638,15 +714,15 @@ internal sealed class BaseStationGattClient
         throw new InvalidOperationException("Base station not found.");
     }
 
-    private static async Task<GattDeviceService> GetServiceAsync(BluetoothLEDevice device, Guid serviceGuid)
+    private static async Task<GattDeviceService> GetServiceAsync(BluetoothLEDevice device, Guid serviceGuid, CancellationToken cancellationToken)
     {
-        var result = await device.GetGattServicesForUuidAsync(serviceGuid, BluetoothCacheMode.Cached);
+        var result = await device.GetGattServicesForUuidAsync(serviceGuid, BluetoothCacheMode.Cached).AsTask(cancellationToken);
         if (result.Status == GattCommunicationStatus.Success && result.Services.Count > 0)
         {
             return result.Services[0];
         }
 
-        result = await device.GetGattServicesForUuidAsync(serviceGuid, BluetoothCacheMode.Uncached);
+        result = await device.GetGattServicesForUuidAsync(serviceGuid, BluetoothCacheMode.Uncached).AsTask(cancellationToken);
         if (result.Status == GattCommunicationStatus.Success && result.Services.Count > 0)
         {
             return result.Services[0];
@@ -655,15 +731,15 @@ internal sealed class BaseStationGattClient
         throw new InvalidOperationException($"Could not get Bluetooth service for {device.Name}: {result.Status}.");
     }
 
-    private static async Task<GattCharacteristic> GetCharacteristicAsync(GattDeviceService service, Guid characteristicGuid)
+    private static async Task<GattCharacteristic> GetCharacteristicAsync(GattDeviceService service, Guid characteristicGuid, CancellationToken cancellationToken)
     {
-        var result = await service.GetCharacteristicsForUuidAsync(characteristicGuid, BluetoothCacheMode.Cached);
+        var result = await service.GetCharacteristicsForUuidAsync(characteristicGuid, BluetoothCacheMode.Cached).AsTask(cancellationToken);
         if (result.Status == GattCommunicationStatus.Success && result.Characteristics.Count > 0)
         {
             return result.Characteristics[0];
         }
 
-        result = await service.GetCharacteristicsForUuidAsync(characteristicGuid, BluetoothCacheMode.Uncached);
+        result = await service.GetCharacteristicsForUuidAsync(characteristicGuid, BluetoothCacheMode.Uncached).AsTask(cancellationToken);
         if (result.Status == GattCommunicationStatus.Success && result.Characteristics.Count > 0)
         {
             return result.Characteristics[0];
@@ -672,9 +748,9 @@ internal sealed class BaseStationGattClient
         throw new InvalidOperationException($"Could not get Bluetooth characteristic for {service.Device.Name}: {result.Status}.");
     }
 
-    private static async Task WriteCharacteristicAsync(GattCharacteristic characteristic, byte[] data)
+    private static async Task WriteCharacteristicAsync(GattCharacteristic characteristic, byte[] data, CancellationToken cancellationToken)
     {
-        var status = await characteristic.WriteValueAsync(data.AsBuffer());
+        var status = await characteristic.WriteValueAsync(data.AsBuffer()).AsTask(cancellationToken);
         if (status != GattCommunicationStatus.Success)
         {
             throw new InvalidOperationException($"Could not write Bluetooth characteristic for {characteristic.Service.Device.Name}: {status}.");

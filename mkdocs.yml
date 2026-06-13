@@ -1,0 +1,75 @@
+site_name: Pimax VRC Supervisor Manual
+site_description: User manual for Pimax VRC Supervisor
+site_url: https://zaknin.github.io/Pimax-VRC-Supervisor/
+
+repo_url: https://github.com/Zaknin/Pimax-VRC-Supervisor
+repo_name: Zaknin/Pimax-VRC-Supervisor
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+
+nav:
+  - Home: index.md
+  - Quick Start:
+      - Overview: quick-start/index.md
+      - Installation: quick-start/installation.md
+      - First Setup: quick-start/first-setup.md
+      - Updating: quick-start/updating.md
+  - Using the App:
+      - Configurator: user-guide/configurator.md
+      - Startup Modes: user-guide/startup-modes.md
+      - Terminal UI: user-guide/terminal-ui.md
+      - SteamVR Overlay: user-guide/steamvr-overlay.md
+      - Session Flow: user-guide/session-flow.md
+  - Features:
+      - Face Tracking Startup: features/face-tracking.md
+      - Reconnect Handling: features/reconnect-handling.md
+      - Base Station Power: features/base-stations.md
+      - Monitor Management: features/monitor-management.md
+      - OSC Router: features/osc-router.md
+      - OscGoesBrrr / Intiface: features/oscgoesbrrr.md
+      - Diagnostics: features/diagnostics.md
+  - Troubleshooting:
+      - Overview: troubleshooting/index.md
+      - Installation Issues: troubleshooting/installation.md
+      - Startup / Autostart Issues: troubleshooting/startup.md
+      - Terminal UI Issues: troubleshooting/terminal-ui.md
+      - SteamVR Overlay Issues: troubleshooting/steamvr-overlay.md
+      - Base Station Issues: troubleshooting/base-stations.md
+      - OSC Issues: troubleshooting/osc.md
+  - Reference:
+      - Overview: reference/index.md
+      - Config File: reference/config-file.md
+      - Shortcuts: reference/shortcuts.md
+      - Release Packaging: reference/release-packaging.md

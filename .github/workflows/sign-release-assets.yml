@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag to sign, for example v1.0.9"
+        description: "Existing release tag to sign, for example v1.3.0"
         required: true
         type: string
 
@@ -35,18 +35,26 @@ jobs:
 
           "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Download zip release assets
+      - name: Download final zip release assets
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $release = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json assets | ConvertFrom-Json
-          $zipAssets = @($release.assets | Where-Object { $_.name -like "*.zip" })
+          $expectedNames = @(
+            "PimaxVrcSupervisor-$env:RELEASE_TAG-win-x64-with-dotnet9.zip",
+            "PimaxVrcSupervisor-$env:RELEASE_TAG-win-x64-no-dotnet9.zip"
+          )
+          $zipAssets = @($release.assets | Where-Object { $expectedNames -contains $_.name })
 
           if ($zipAssets.Count -eq 0) {
-            Write-Host "No zip assets found on release $env:RELEASE_TAG."
+            Write-Host "No final v1.3.0-style zip assets found on release $env:RELEASE_TAG."
             "ZIP_ASSET_COUNT=0" | Out-File -FilePath $env:GITHUB_ENV -Append
             exit 0
+          }
+
+          if ($zipAssets.Count -ne 2) {
+            throw "Expected both final zip assets, found $($zipAssets.Count)."
           }
 
           $assetDir = Join-Path $env:RUNNER_TEMP "release-assets"

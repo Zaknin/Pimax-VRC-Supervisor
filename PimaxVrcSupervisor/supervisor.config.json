@@ -1,7 +1,13 @@
-{
-  // Full path to Broken Eye. This app is started first.
-  // If this path is missing or invalid, the supervisor opens a browse dialog and saves your selection here.
+﻿{
+  // Friendly name shown in the config editor and supervisor startup banner.
+  "DisplayName": "Default",
+
+  // Full path to Broken Eye. This app is started first when UseBrokenEye is true.
+  // If UseBrokenEye is true and this path is missing or invalid, the supervisor opens a browse dialog and saves your selection here.
   "BrokenEyePath": "",
+
+  // Include Broken Eye in face-tracking startup, cleanup, and restart routines, including manual dashboard restarts.
+  "UseBrokenEye": true,
 
   // Start Broken Eye minimized, then try to minimize its main window after launch.
   "BrokenEyeStartMinimized": false,
@@ -14,15 +20,27 @@
   // Start VRCFaceTracking minimized, then try to minimize its main window after launch.
   "VrcFaceTrackingStartMinimized": false,
 
+  // Automatically start face-tracking applications during headset sessions.
+  "FaceTrackerAutomationEnabled": true,
+
+  // Restart configured face-tracking applications after the Pimax headset reconnects.
+  // Ignored when FaceTrackerAutomationEnabled is false.
+  "FaceTrackerRestartOnReconnectEnabled": true,
+
+  // Restart VRCFaceTracking after the Vive Face Tracker reconnects while the headset stays connected.
+  // Ignored when FaceTrackerAutomationEnabled or MouthTrackerUser is false.
+  "MouthTrackerRestartOnReconnectEnabled": true,
+
   // Enable the OSCGoesBrrr workflow during headset sessions.
   // These apps are closed during normal VRChat/session cleanup, but they are not restarted when Pimax reconnects.
   "OscGoesBrrrEnabled": false,
 
-  // When enabled, press L in the supervisor console to launch Intiface and then OscGoesBrrr.
+  // Legacy setting name. When enabled, the OSCGoesBrrr workflow stays in manual console launch mode.
+  // Press 2 in the visible supervisor console to launch Intiface and then OscGoesBrrr.
   "OscGoesBrrrHotkeyEnabled": true,
 
   // Optional experimental BLE scanner. When enabled, the supervisor scans nearby BLE advertisements for Lovense names.
-  // The L hotkey remains available as a fallback when OscGoesBrrrHotkeyEnabled is true.
+  // Console hotkey 2 remains available as a fallback when OscGoesBrrr is enabled.
   "OscGoesBrrrBleScannerEnabled": false,
 
   // Enable the in-process OSC router.
@@ -110,7 +128,7 @@
   // FriendlyName is only a user-facing alias; Name and BluetoothAddress keep the actual BLE identity visible.
   // Base Station 1.0 requires Id: the 8-character ID printed on the back label.
   // PowerStateReadUnsupported is set automatically when the station or firmware cannot report power state.
-  // When true, the supervisor skips state reads for faster startup; use Config Editor Refresh State to retry manually.
+  // When true, the supervisor skips state reads for faster startup; use Configurator Refresh State to retry manually.
   "BaseStations": [
     // {
     //   "FriendlyName": "Front left",
@@ -123,19 +141,41 @@
     // }
   ],
 
-  // Set to true if you use a Vive face/mouth tracker exposed as HTC Multimedia Camera.
-  // Set to false to ignore all mouth-tracker detection and VRCFaceTracking-only restart logic.
-  // Leave empty to show a Yes/No dialog on first run; the answer is saved here as true or false.
+  // Set to true if you use a Vive Face Tracker exposed as HTC Multimedia Camera.
+  // Set to false to ignore all face-tracker detection and reconnect restart logic.
+  // Leave empty only for first setup. The supervisor asks while RunInitialSetupQuestions is true,
+  // saves the answer here as true/false, and then stops asking after setup is complete.
   "MouthTrackerUser": "",
+
+  // Run first setup questions once after executable paths are selected.
+  // When true, empty first-setup values below trigger setup prompts.
+  // The supervisor sets this to false after setup answers are saved.
+  // Configurator does not expose this; restore defaults or edit this file manually to ask again.
+  // Existing older configs without this property behave as false and do not re-enter setup automatically.
+  "RunInitialSetupQuestions": true,
 
   // Set to true to disable all secondary monitors while Broken Eye/VRCFaceTracking are running.
   // The full active monitor layout is saved first and restored after VRChat and SteamVR close.
-  // Leave empty to show a Yes/No dialog on first run; the answer is saved here as true or false.
+  // Leave empty only for first setup. The supervisor asks while RunInitialSetupQuestions is true,
+  // saves the answer here as true/false, and then stops asking after setup is complete.
   "TurnOffSecondaryMonitors": "",
 
-  // Leave empty to ask on first setup whether to create an elevated Windows Scheduled Task.
-  // When enabled, the task starts this supervisor when VRChat.exe launches, but only if vrserver.exe is running.
+  // Legacy compatibility field for scheduled-task startup.
+  // Leave empty only for first setup. The supervisor asks while RunInitialSetupQuestions is true.
+  // true maps to StartupLaunchMode=ScheduledTask; false maps to StartupLaunchMode=None.
   "AutoLaunchScheduledTask": "",
+
+  // Startup integration mode.
+  // Unspecified means first setup should ask while RunInitialSetupQuestions is true.
+  // None disables automatic startup.
+  // ScheduledTask creates an elevated Windows Scheduled Task that starts the supervisor when vrserver.exe is running.
+  // The supervisor then waits for VRChat before starting managed apps.
+  // SteamVrManifest registers a SteamVR dashboard host manifest and starts the supervisor when SteamVR starts.
+  "StartupLaunchMode": "Unspecified",
+
+  // Compatibility field. SteamVR shutdown behavior is controlled by StartupLaunchMode=SteamVrManifest.
+  // Configurator writes this as true only for SteamVrManifest mode.
+  "StopWithSteamVr": false,
 
   // Pimax headset detection rules. Each inner array is one possible match rule.
   // A device counts as connected when any inner array has all of its keywords inside one connected-device block.
@@ -153,8 +193,8 @@
     [ "Pimax", "WiGig" ]
   ],
 
-  // Vive mouth tracker detection rules. Each inner array is one possible match rule.
-  // When this appears after being missing, only VRCFaceTracking is restarted.
+  // Vive Face Tracker detection rules. Each inner array is one possible match rule.
+  // When this appears after being missing, VRCFaceTracking can restart if MouthTrackerRestartOnReconnectEnabled is true.
   // Ignored when MouthTrackerUser is false.
   "MouthTrackerDetectors": [
     [ "USB\\VID_0BB4&PID_0321&MI_00" ],
@@ -174,9 +214,9 @@
   // This catches short runtime drops that can happen between normal USB polling checks.
   "UsePimaxServiceLogReconnectDetector": true,
 
-  // Also watch Windows Kernel-PnP events for fast Vive mouth tracker reconnects.
-  // This catches short mouth tracker restarts that can happen between normal USB polling checks.
-  "UseMouthTrackerPnPReconnectDetector": true,
+  // Also watch Windows Kernel-PnP events for fast Vive Face Tracker reconnects.
+  // This catches short face-tracker restarts that can happen between normal USB polling checks.
+  "UseMouthTrackerPnPReconnectDetector": false,
 
   // Folder containing PiService__*.log files. Environment variables like %LOCALAPPDATA% are expanded.
   "PimaxServiceLogDirectory": "%LOCALAPPDATA%\\Pimax\\PiService\\Log",
@@ -194,10 +234,10 @@
   "StartupStableSeconds": 5,
 
   // Seconds to wait after starting Broken Eye before starting VRCFaceTracking.
-  "DelayBeforeVrcFaceTrackingSeconds": 5,
+  "DelayBeforeVrcFaceTrackingSeconds": 3,
 
   // Seconds to wait after Intiface is running before starting OscGoesBrrr.
-  "DelayBeforeOscGoesBrrrSeconds": 5,
+  "DelayBeforeOscGoesBrrrSeconds": 3,
 
   // Seconds each BLE scan burst runs when OscGoesBrrrBleScannerEnabled is true.
   "OscGoesBrrrBleScanSeconds": 30,
@@ -215,5 +255,32 @@
   "ShutdownGraceSeconds": 8,
 
   // Maximum seconds to wait for the Windows device query command to return.
-  "DeviceProbeTimeoutSeconds": 10
+  "DeviceProbeTimeoutSeconds": 10,
+
+  // Write passive supervisor diagnostics to a text file. Leave off unless measuring performance.
+  "DiagnosticsLogSupervisor": false,
+
+  // Write passive SteamVR dashboard host diagnostics to a text file. Leave off unless measuring performance.
+  "DiagnosticsLogSteamVrOverlay": false,
+
+  // Write lightweight Terminal UI load and refresh diagnostics to a text file. Leave off unless measuring performance.
+  "DiagnosticsLogDesktopTui": false,
+
+  // Write supervisor debug events to a separate text file.
+  "DiagnosticsDebugSupervisor": false,
+
+  // Write SteamVR dashboard host debug events to a separate text file.
+  "DiagnosticsDebugSteamVrOverlay": false,
+
+  // When SteamVR overlay debug events are enabled, draw the reported pointer position on the dashboard.
+  "DiagnosticsDebugSteamVrPointer": false,
+
+  // Also write per-operation timing lines. Use only for short troubleshooting captures.
+  "DiagnosticsVerbose": false,
+
+  // Seconds between diagnostic summary lines.
+  "DiagnosticsSummaryIntervalSeconds": 20,
+
+  // Diagnostic log folder. Environment variables like %TEMP% are expanded.
+  "DiagnosticsLogDirectory": "%TEMP%\\PimaxVrcSupervisorDiagnostics"
 }
