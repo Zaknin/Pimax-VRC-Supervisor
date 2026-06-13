@@ -22,12 +22,6 @@ It is built for users who want less manual startup work and a cleaner SteamVR/VR
 - Starts OscGoesBrrr and Intiface workflows when configured.
 - Writes optional diagnostics for troubleshooting.
 
-## Recommended For
-
-- Pimax Crystal headset users.
-- Users who want SteamVR startup automation without maintaining scripts.
-- Users who want base-station power and session cleanup helpers.
-
 ## Requirements
 
 - Windows 10/11
