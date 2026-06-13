@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "v1.3.0-test",
+    [string]$Version = "v1.3.0",
     [string]$Runtime = "win-x64",
     [string]$Configuration = "Release",
     [string]$ReleaseRoot = ".\release"
@@ -48,6 +48,11 @@ function Reset-Path {
         Write-Host "Removing existing $Path"
         Remove-Item -LiteralPath $Path -Recurse -Force
     }
+}
+
+function Build-TerminalUi {
+    Write-Host "Building Rust Terminal UI"
+    cargo build --manifest-path ".\PimaxVrcSupervisor.Tui\Cargo.toml" --release
 }
 
 function Publish-Variant {
@@ -138,6 +143,18 @@ function Test-ExpectedFiles {
     }
 }
 
+function Test-NoStalePackageNames {
+    param([string]$OutputDirectory)
+
+    $stale = Get-ChildItem -LiteralPath $OutputDirectory -Recurse -File |
+        Where-Object { $_.Name -match "1\.3\.0-test|v1\.3\.0-test" }
+
+    if ($stale) {
+        $stale | ForEach-Object { Write-Host "Stale package file name: $($_.FullName)" }
+        throw "Stale test package names found in $OutputDirectory."
+    }
+}
+
 function New-Zip {
     param(
         [string]$SourceDirectory,
@@ -156,7 +173,7 @@ function Show-ZipSummary {
     param([string]$ZipPath)
 
     Write-Host ""
-    Write-Host "--- $(Split-Path -Leaf $ZipPath) ---"
+    Write-Host "--- Zip inventory: $(Split-Path -Leaf $ZipPath) ---"
     $entries = @(tar -tf $ZipPath)
     $entries | ForEach-Object { $_ }
     Write-Host "Entries: $($entries.Count)"
@@ -165,6 +182,8 @@ function Show-ZipSummary {
 New-Item -ItemType Directory -Force -Path $releaseRootPath | Out-Null
 Reset-Path $withRuntimeDir
 Reset-Path $withoutRuntimeDir
+
+Build-TerminalUi
 
 Publish-Variant -OutputDirectory $withRuntimeDir -SelfContained $true
 Publish-Variant -OutputDirectory $withoutRuntimeDir -SelfContained $false
@@ -180,6 +199,8 @@ Remove-GeneratedClutter -OutputDirectory $withoutRuntimeDir
 
 Test-ExpectedFiles -OutputDirectory $withRuntimeDir
 Test-ExpectedFiles -OutputDirectory $withoutRuntimeDir
+Test-NoStalePackageNames -OutputDirectory $withRuntimeDir
+Test-NoStalePackageNames -OutputDirectory $withoutRuntimeDir
 
 New-Zip -SourceDirectory $withRuntimeDir -ZipPath $withRuntimeZip
 New-Zip -SourceDirectory $withoutRuntimeDir -ZipPath $withoutRuntimeZip

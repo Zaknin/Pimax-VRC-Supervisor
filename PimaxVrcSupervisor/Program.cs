@@ -1491,16 +1491,16 @@ internal sealed class AppSupervisor
                 _lastMouthTrackerConnected = await IsMouthTrackerConnectedAsync(cancellationToken);
                 if (_lastMouthTrackerConnected.Value)
                 {
-                    Console.WriteLine("Mouth tracker detected.");
+                    Console.WriteLine("Vive Face Tracker detected.");
                 }
                 else
                 {
-                    Console.WriteLine("you forgot to connect mouth tracker!");
+                    Console.WriteLine("Vive Face Tracker is not connected.");
                 }
             }
             else
             {
-                Console.WriteLine("Mouth tracker monitoring is disabled by config.");
+                Console.WriteLine("Vive Face Tracker monitoring is disabled by config.");
             }
 
             await TryStartOscRouterAsync(cancellationToken);
@@ -1619,7 +1619,7 @@ internal sealed class AppSupervisor
                         cancellationToken);
                     var mouthTrackerConnected = _mouthTrackerUser
                         ? await ReadDeviceConnectedOrPreviousAsync(
-                            "mouth tracker",
+                            "Vive Face Tracker",
                             IsMouthTrackerConnectedAsync,
                             _lastMouthTrackerConnected,
                             cancellationToken)
@@ -1712,7 +1712,7 @@ internal sealed class AppSupervisor
                                     cancellationToken);
                                 mouthTrackerConnected = _mouthTrackerUser
                                     ? await ReadDeviceConnectedOrPreviousAsync(
-                                        "mouth tracker",
+                                        "Vive Face Tracker",
                                         IsMouthTrackerConnectedAsync,
                                         _lastMouthTrackerConnected,
                                         cancellationToken)
@@ -1731,20 +1731,20 @@ internal sealed class AppSupervisor
                         if (!mouthTrackerReconnectAutomationEnabled)
                         {
                             Console.WriteLine(mouthTrackerPnPReconnected && !mouthTrackerReconnected
-                                ? "Mouth tracker device event detected while Pimax Crystal stayed connected. Mouth tracker restart automation is disabled; leaving VRCFaceTracking unchanged."
-                                : "Mouth tracker reconnected while Pimax Crystal stayed connected. Mouth tracker restart automation is disabled; leaving VRCFaceTracking unchanged.");
+                                ? "Vive Face Tracker device event detected while Pimax Crystal stayed connected. Face tracker restart automation is disabled; leaving VRCFaceTracking unchanged."
+                                : "Vive Face Tracker reconnected while Pimax Crystal stayed connected. Face tracker restart automation is disabled; leaving VRCFaceTracking unchanged.");
                         }
                         else
                         {
                             Console.WriteLine(mouthTrackerPnPReconnected && !mouthTrackerReconnected
-                                ? "Mouth tracker device event detected while Pimax Crystal stayed connected. Restarting VRCFaceTracking."
-                                : "Mouth tracker reconnected while Pimax Crystal stayed connected. Restarting VRCFaceTracking.");
+                                ? "Vive Face Tracker device event detected while Pimax Crystal stayed connected. Restarting VRCFaceTracking."
+                                : "Vive Face Tracker reconnected while Pimax Crystal stayed connected. Restarting VRCFaceTracking.");
                             await RestartVrcFaceTrackingAsync(cancellationToken);
                         }
                     }
                     else if (_mouthTrackerUser && _lastMouthTrackerConnected == true && mouthTrackerConnected == false)
                     {
-                        Console.WriteLine("you forgot to connect mouth tracker!");
+                        Console.WriteLine("Vive Face Tracker is not connected.");
                     }
 
                     if (_config.OscGoesBrrrEnabled
@@ -1938,8 +1938,8 @@ internal sealed class AppSupervisor
         _config.SaveMouthTrackerPreference();
 
         Console.WriteLine(answer
-            ? "Mouth tracker workflow enabled."
-            : "Mouth tracker workflow disabled.");
+            ? "Vive Face Tracker workflow enabled."
+            : "Vive Face Tracker workflow disabled.");
 
         return answer;
     }
@@ -2178,10 +2178,10 @@ internal sealed class AppSupervisor
     private static Task<StartupLaunchMode> AskStartupIntegrationPreferenceAsync(CancellationToken cancellationToken)
         => AskPromptAsync(
             () => ThemedPrompt.Show(
-                "How should Pimax VRC Supervisor start automatically?\r\n\r\nStart in CLI mode when SteamVR is running creates an elevated Windows Scheduled Task that starts the supervisor when vrserver.exe is running. The supervisor waits for VRChat before starting managed apps.\r\n\r\nSteamVR Overlay starts through SteamVR with the dashboard overlay.",
+                "How should Pimax VRC Supervisor start automatically?\r\n\r\nTerminal Mode creates an elevated Windows Scheduled Task that starts the supervisor when SteamVR is running. The supervisor waits for VRChat before starting managed apps.\r\n\r\nSteamVR Overlay starts through SteamVR with the dashboard overlay.",
                 "Pimax VRC Supervisor",
                 [
-                    new("Start in CLI mode when SteamVR is running", DialogResult.Yes),
+                    new("Terminal Mode", DialogResult.Yes),
                     new("SteamVR Overlay", DialogResult.OK),
                     new("No", DialogResult.No)
                 ],
@@ -2204,8 +2204,8 @@ internal sealed class AppSupervisor
 
     private static Task<bool> AskMouthTrackerPreferenceAsync(CancellationToken cancellationToken)
         => AskYesNoPromptAsync(
-            "Do you use Vive mouth tracker?",
-            "Could not open mouth tracker question dialog.",
+            "Do you use a Vive Face Tracker?",
+            "Could not open Vive Face Tracker question dialog.",
             cancellationToken);
 
     private static Task<bool> AskBaseStationPowerPreferenceAsync(CancellationToken cancellationToken)
@@ -2575,7 +2575,7 @@ internal sealed class AppSupervisor
         {
             if (!_mouthTrackerPnPEventWarningShown)
             {
-                Console.WriteLine($"Could not scan Windows PnP events for mouth tracker reconnects: {ex.Message}");
+                Console.WriteLine($"Could not scan Windows PnP events for Vive Face Tracker reconnects: {ex.Message}");
                 _mouthTrackerPnPEventWarningShown = true;
             }
 
@@ -2814,8 +2814,8 @@ internal sealed class AppSupervisor
             {
                 _lastMouthTrackerConnected = await IsMouthTrackerConnectedAsync(cancellationToken);
                 Console.WriteLine(_lastMouthTrackerConnected.Value
-                    ? "Mouth tracker detected."
-                    : "you forgot to connect mouth tracker!");
+                    ? "Vive Face Tracker detected."
+                    : "Vive Face Tracker is not connected.");
             }
 
             await TryStartOscRouterAsync(cancellationToken);
@@ -3207,7 +3207,7 @@ internal sealed class AppSupervisor
                     "Returns a structured recent console-log snapshot.",
                     "Logs",
                     "Json",
-                    "Structured recent console-log snapshot for future desktop TUI clients."),
+                    "Structured recent console-log snapshot for future Terminal UI clients."),
                 CommandDefinition(
                     "commands-json",
                     "Command Capabilities",
@@ -3221,14 +3221,14 @@ internal sealed class AppSupervisor
                     "Executes a structured read-only JSON query for status, command capabilities, or recent logs.",
                     "Status",
                     "Json",
-                    "Read-only JSON request envelope for future desktop TUI clients. Does not execute action commands."),
+                    "Read-only JSON request envelope for future Terminal UI clients. Does not execute action commands."),
                 CommandDefinition(
                     "action-json",
                     "Structured Action JSON",
                     "Executes an allowlisted structured action request.",
                     "Actions",
                     "Json",
-                    "Structured action envelope for audited regular console actions. The desktop TUI uses an explicit local allowlist.",
+                    "Structured action envelope for audited regular console actions. The Terminal UI uses an explicit local allowlist.",
                     requiresConfirmation: true,
                     blockedReason: "Envelope only; individual action commands advertise TUI execution support."),
                 CommandDefinition(
@@ -3237,12 +3237,12 @@ internal sealed class AppSupervisor
                     "Executes a narrow structured lifecycle request.",
                     "Lifecycle",
                     "Json",
-                    "Confirmed Desktop TUI shutdown flow only. Not a regular action card.",
+                    "Confirmed Terminal UI shutdown flow only. Not a regular action card.",
                     requiresConfirmation: true,
                     actionSupported: false,
                     actionSafetyCategory: "Disruptive",
                     tuiExecutable: false,
-                    blockedReason: "Lifecycle control is exposed only through the confirmed Desktop TUI shutdown flow."),
+                    blockedReason: "Lifecycle control is exposed only through the confirmed Terminal UI shutdown flow."),
                 CommandDefinition(
                     "restart-core-apps",
                     "Restart Core Apps",
@@ -3325,9 +3325,9 @@ internal sealed class AppSupervisor
                     dangerous: true,
                     requiresConfirmation: true,
                     actionSafetyCategory: "Blocked",
-                    blockedReason: "Blocked from structured desktop TUI action flow because it hard-stops without cleanup routines.")
+                    blockedReason: "Blocked from structured Terminal UI action flow because it hard-stops without cleanup routines.")
             ],
-            "Metadata. available=true means the command is accepted by the current bridge, not that the underlying configured subsystem is enabled or safe/executable from the desktop TUI.");
+            "Metadata. available=true means the command is accepted by the current bridge, not that the underlying configured subsystem is enabled or safe/executable from the Terminal UI.");
 
     private static SupervisorCommandDefinition CommandDefinition(
         string name,
@@ -3341,7 +3341,7 @@ internal sealed class AppSupervisor
         bool actionSupported = false,
         string actionSafetyCategory = "ReadOnly",
         bool tuiExecutable = false,
-        string? blockedReason = "Read-only or not exposed through structured desktop TUI action execution.")
+        string? blockedReason = "Read-only or not exposed through structured Terminal UI action execution.")
         => new(
             name,
             displayName,
@@ -3526,7 +3526,7 @@ internal sealed class AppSupervisor
                 request.RequestId,
                 canonicalCommand,
                 success: false,
-                message: "force-stop-supervisor is blocked from structured desktop TUI action flow.",
+                message: "force-stop-supervisor is blocked from structured Terminal UI action flow.",
                 data: null,
                 error: "Blocked command: hard-stops supervisor without cleanup routines.");
         }
@@ -3661,13 +3661,13 @@ internal sealed class AppSupervisor
     {
         if (string.IsNullOrWhiteSpace(source))
         {
-            return "Desktop TUI";
+            return "Terminal UI";
         }
 
         return source.Trim() switch
         {
-            var value when value.Equals("desktop-tui", StringComparison.OrdinalIgnoreCase) => "Desktop TUI",
-            var value when value.Equals("desktop-tui-window-close", StringComparison.OrdinalIgnoreCase) => "Desktop TUI window close",
+            var value when value.Equals("desktop-tui", StringComparison.OrdinalIgnoreCase) => "Terminal UI",
+            var value when value.Equals("desktop-tui-window-close", StringComparison.OrdinalIgnoreCase) => "Terminal UI window close",
             var value => value
         };
     }
@@ -5533,7 +5533,7 @@ internal sealed class AppSupervisor
         Console.WriteLine("5 = OSC Router launch/restart");
         Console.WriteLine("6 = Reload Autostart apps");
         Console.WriteLine("F1 = Show console shortcuts");
-        Console.WriteLine("Modern desktop TUI primary shortcuts: 0 help, F5 refresh, 1-6 actions, Q quit TUI, Enter confirm, Esc cancel.");
+        Console.WriteLine("Terminal UI primary shortcuts: 0 help, F5 refresh, 1-6 actions, Q quit Terminal UI, Enter confirm, Esc cancel.");
     }
 
     private void RefreshOscGoesBrrrWorkflowState()
@@ -7454,7 +7454,7 @@ internal static class AutoLaunchWatcher
             var tuiPath = Path.Combine(supervisorDirectory, "PimaxVrcSupervisorTui.exe");
             if (!File.Exists(tuiPath))
             {
-                Console.WriteLine($"Desktop TUI executable was not found: {tuiPath}");
+                Console.WriteLine($"Terminal UI executable was not found: {tuiPath}");
                 return;
             }
 
@@ -7476,7 +7476,7 @@ internal static class AutoLaunchWatcher
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Could not start Desktop TUI: {ex.Message}");
+            Console.WriteLine($"Could not start Terminal UI: {ex.Message}");
         }
     }
 
@@ -9248,7 +9248,7 @@ internal sealed class SupervisorConfig
         ["LVS-"]
     ];
     public bool UsePimaxServiceLogReconnectDetector { get; init; } = true;
-    public bool UseMouthTrackerPnPReconnectDetector { get; init; } = true;
+    public bool UseMouthTrackerPnPReconnectDetector { get; init; } = false;
     public string PimaxServiceLogDirectory { get; init; } = @"%LOCALAPPDATA%\Pimax\PiService\Log";
     public int PimaxServiceLogReconnectLookbackLines { get; init; } = 400;
     public int PollIntervalSeconds { get; init; } = 2;
@@ -9340,7 +9340,7 @@ internal sealed class SupervisorConfig
         SaveBooleanPreference(
             nameof(MouthTrackerUser),
             TryGetMouthTrackerUser(out var value) && value,
-            "mouth tracker preference");
+            "Vive Face Tracker preference");
     }
 
     public bool TryGetTurnOffSecondaryMonitors(out bool turnOffSecondaryMonitors)

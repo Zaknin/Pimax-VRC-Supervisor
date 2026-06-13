@@ -27,7 +27,7 @@
   // Ignored when FaceTrackerAutomationEnabled is false.
   "FaceTrackerRestartOnReconnectEnabled": true,
 
-  // Restart VRCFaceTracking after the mouth tracker reconnects while the headset stays connected.
+  // Restart VRCFaceTracking after the Vive Face Tracker reconnects while the headset stays connected.
   // Ignored when FaceTrackerAutomationEnabled or MouthTrackerUser is false.
   "MouthTrackerRestartOnReconnectEnabled": true,
 
@@ -141,8 +141,8 @@
     // }
   ],
 
-  // Set to true if you use a Vive face/mouth tracker exposed as HTC Multimedia Camera.
-  // Set to false to ignore all mouth-tracker detection and reconnect restart logic.
+  // Set to true if you use a Vive Face Tracker exposed as HTC Multimedia Camera.
+  // Set to false to ignore all face-tracker detection and reconnect restart logic.
   // Leave empty only for first setup. The supervisor asks while RunInitialSetupQuestions is true,
   // saves the answer here as true/false, and then stops asking after setup is complete.
   "MouthTrackerUser": "",
@@ -193,7 +193,7 @@
     [ "Pimax", "WiGig" ]
   ],
 
-  // Vive mouth tracker detection rules. Each inner array is one possible match rule.
+  // Vive Face Tracker detection rules. Each inner array is one possible match rule.
   // When this appears after being missing, VRCFaceTracking can restart if MouthTrackerRestartOnReconnectEnabled is true.
   // Ignored when MouthTrackerUser is false.
   "MouthTrackerDetectors": [
@@ -214,9 +214,9 @@
   // This catches short runtime drops that can happen between normal USB polling checks.
   "UsePimaxServiceLogReconnectDetector": true,
 
-  // Also watch Windows Kernel-PnP events for fast Vive mouth tracker reconnects.
-  // This catches short mouth tracker restarts that can happen between normal USB polling checks.
-  "UseMouthTrackerPnPReconnectDetector": true,
+  // Also watch Windows Kernel-PnP events for fast Vive Face Tracker reconnects.
+  // This catches short face-tracker restarts that can happen between normal USB polling checks.
+  "UseMouthTrackerPnPReconnectDetector": false,
 
   // Folder containing PiService__*.log files. Environment variables like %LOCALAPPDATA% are expanded.
   "PimaxServiceLogDirectory": "%LOCALAPPDATA%\\Pimax\\PiService\\Log",
@@ -263,7 +263,7 @@
   // Write passive SteamVR dashboard host diagnostics to a text file. Leave off unless measuring performance.
   "DiagnosticsLogSteamVrOverlay": false,
 
-  // Write lightweight Desktop TUI load and refresh diagnostics to a text file. Leave off unless measuring performance.
+  // Write lightweight Terminal UI load and refresh diagnostics to a text file. Leave off unless measuring performance.
   "DiagnosticsLogDesktopTui": false,
 
   // Write supervisor debug events to a separate text file.

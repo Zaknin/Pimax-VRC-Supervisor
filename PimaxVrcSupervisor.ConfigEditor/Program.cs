@@ -107,13 +107,13 @@ internal sealed class ConfigEditorForm : Form
     };
     private readonly CheckBox _baseStationsEnabledCheckBox = new ThemedCheckBox { Text = "Enable base station power automation", AutoSize = true };
     private readonly ComboBox _baseStationPowerDownModeComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
-    private readonly CheckBox _mouthTrackerCheckBox = CreateOptionalConfigCheckBox("Use Vive mouth tracker");
+    private readonly CheckBox _mouthTrackerCheckBox = CreateOptionalConfigCheckBox("Detect Vive Face Tracker usage");
     private readonly CheckBox _turnOffMonitorsCheckBox = CreateOptionalConfigCheckBox("Turn off secondary monitors during headset sessions");
     private readonly ComboBox _autostartModeComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Left, Width = 310 };
     private readonly CheckBox _faceTrackerAutomationEnabledCheckBox = new ThemedCheckBox { Text = "Enable Face Tracking Auto Startup", AutoSize = true };
     private readonly CheckBox _faceTrackerRestartOnReconnectCheckBox = new ThemedCheckBox { Text = "Enable automatic restart on headset reconnects", AutoSize = true };
     private readonly CheckBox _usePimaxLogCheckBox = new ThemedCheckBox { Text = "Watch Pimax PiService logs for fast reconnects", AutoSize = true };
-    private readonly CheckBox _useMouthTrackerPnPCheckBox = new ThemedCheckBox { Text = "Watch Windows PnP events for fast mouth tracker reconnects", AutoSize = true };
+    private readonly CheckBox _useMouthTrackerPnPCheckBox = new ThemedCheckBox { Text = "Watch Windows PnP events for fast face tracker reconnects", AutoSize = true };
     private readonly TextBox _pimaxServiceLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly CheckBox _diagnosticsLogSupervisorCheckBox = new ThemedCheckBox { Text = "Log supervisor diagnostics", AutoSize = true };
     private readonly CheckBox _diagnosticsLogSteamVrOverlayCheckBox = new ThemedCheckBox { Text = "Log SteamVR overlay diagnostics", AutoSize = true };
@@ -123,7 +123,7 @@ internal sealed class ConfigEditorForm : Form
     private readonly CheckBox _diagnosticsEnabledCheckBox = new ThemedCheckBox { Text = "Enable Diagnostics", AutoSize = true };
     private readonly CheckBox _diagnosticsVerboseCheckBox = new ThemedCheckBox { Text = "Verbose diagnostic timings", AutoSize = true };
     private readonly CheckBox _diagnosticsDebugSteamVrPointerCheckBox = new ThemedCheckBox { Text = "Show SteamVR overlay pointer marker", AutoSize = true };
-    private readonly CheckBox _mouthTrackerRestartOnReconnectCheckBox = new ThemedCheckBox { Text = "Enable automatic restart on mouth tracker reconnects", AutoSize = true };
+    private readonly CheckBox _mouthTrackerRestartOnReconnectCheckBox = new ThemedCheckBox { Text = "Enable automatic restart on face tracker reconnects", AutoSize = true };
     private readonly CheckBox _useDesktopTuiAsDefaultInterfaceCheckBox = new ThemedCheckBox { Text = "Use Terminal UI as default interface", AutoSize = true };
     private readonly TextBox _diagnosticsLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
     private readonly DataGridView _autoLaunchAppsGrid = new()
@@ -591,15 +591,15 @@ internal sealed class ConfigEditorForm : Form
         AddFullWidth(layout, _brokenEyeStartMinimizedCheckBox, ToolTipWithConfigKey("Checked means the supervisor starts Broken Eye minimized and tries to minimize its main window after launch.", "BrokenEyeStartMinimized"));
         AddFullWidth(layout, _vrcFaceTrackingStartMinimizedCheckBox, ToolTipWithConfigKey("Checked means the supervisor starts VRCFaceTracking minimized and tries to minimize its main window after launch.", "VrcFaceTrackingStartMinimized"));
 
-        AddSectionHeader(layout, "Mouth Tracker");
-        AddFullWidth(layout, _mouthTrackerCheckBox, "Checked means you use a Vive mouth tracker. Unchecked disables mouth-tracker monitoring.");
-        AddFullWidth(layout, _mouthTrackerRestartOnReconnectCheckBox, ToolTipWithConfigKey("Checked means the supervisor restarts VRCFaceTracking after a mouth tracker reconnect while the headset stays connected.", "MouthTrackerRestartOnReconnectEnabled"));
+        AddSectionHeader(layout, "Vive Face Tracker");
+        AddFullWidth(layout, _mouthTrackerCheckBox, "Checked means you use a Vive Face Tracker. Unchecked disables Vive Face Tracker monitoring.");
+        AddFullWidth(layout, _mouthTrackerRestartOnReconnectCheckBox, ToolTipWithConfigKey("Checked means the supervisor restarts VRCFaceTracking after a Vive Face Tracker reconnect while the headset stays connected.", "MouthTrackerRestartOnReconnectEnabled"));
 
         AddSectionHeader(layout, "Reconnect Detection");
         AddFullWidth(layout, _faceTrackerRestartOnReconnectCheckBox, ToolTipWithConfigKey("Checked means the supervisor restarts the managed face-tracking apps after a Pimax headset reconnect.", "FaceTrackerRestartOnReconnectEnabled"));
         _faceTrackerAutomationDependentControls.Add(_faceTrackerRestartOnReconnectCheckBox);
         AddFullWidth(layout, _usePimaxLogCheckBox, ToolTipWithConfigKey("Also scan PiService logs for quick HID remove/add reconnects that normal USB polling can miss.", "UsePimaxServiceLogReconnectDetector"));
-        AddFullWidth(layout, _useMouthTrackerPnPCheckBox, ToolTipWithConfigKey("Also scan Windows Kernel-PnP events for quick mouth tracker reconnects that normal USB polling can miss.", "UseMouthTrackerPnPReconnectDetector"));
+        AddFullWidth(layout, _useMouthTrackerPnPCheckBox, ToolTipWithConfigKey("Also scan Windows Kernel-PnP events for quick Vive Face Tracker reconnects that normal USB polling can miss.", "UseMouthTrackerPnPReconnectDetector"));
         AddFolderValidationRow(
             layout,
             "PiService log folder",
@@ -616,7 +616,7 @@ internal sealed class ConfigEditorForm : Form
 
         return BuildTabWithDescription(
             "Face tracking applications",
-            "Configure Broken Eye, VRCFaceTracking, and mouth-tracker use.",
+            "Configure Broken Eye, VRCFaceTracking, and Vive Face Tracker use.",
             layout,
             limitWidth: true);
     }
@@ -1604,18 +1604,18 @@ internal sealed class ConfigEditorForm : Form
             0);
         layout.Controls.Add(
             BuildDetectorPanel(
-                "Mouth tracker detector rules",
+                "Vive Face Tracker detector rules",
                 _mouthTrackerDetectorsTextBox,
-                "Mouth tracker detection",
+                "Vive Face Tracker detection",
                 "One rule per line. Use comma-separated keywords when all keywords must match.\r\nExample: HTC Multimedia Camera",
-                "Each line is one possible mouth tracker match rule. Put multiple required keywords on the same line separated by commas.",
-                "Test Mouth Tracker Rules",
-                () => TestDetectorRulesAsync("Mouth tracker", ParseStringMatrix(_mouthTrackerDetectorsTextBox.Text))),
+                "Each line is one possible Vive Face Tracker match rule. Put multiple required keywords on the same line separated by commas.",
+                "Test Vive Face Tracker Rules",
+                () => TestDetectorRulesAsync("Vive Face Tracker", ParseStringMatrix(_mouthTrackerDetectorsTextBox.Text))),
             0,
             1);
         return BuildTabWithDescription(
             "Device detector rules",
-            "Configure keyword rules used to detect Pimax devices and mouth trackers from USB/Bluetooth device names.",
+            "Configure keyword rules used to detect Pimax devices and Vive Face Trackers from USB/Bluetooth device names.",
             layout);
     }
 
@@ -3350,7 +3350,7 @@ internal sealed class ConfigEditorForm : Form
         _turnOffMonitorsCheckBox.Checked = GetBoolCheckState(node, "TurnOffSecondaryMonitors") == CheckState.Checked;
         SetStartupLaunchMode(GetStartupLaunchModeForEditor(node));
         _usePimaxLogCheckBox.Checked = GetBool(node, "UsePimaxServiceLogReconnectDetector", defaultValue: true);
-        _useMouthTrackerPnPCheckBox.Checked = GetBool(node, "UseMouthTrackerPnPReconnectDetector", defaultValue: true);
+        _useMouthTrackerPnPCheckBox.Checked = GetBool(node, "UseMouthTrackerPnPReconnectDetector", defaultValue: false);
         _mouthTrackerRestartOnReconnectCheckBox.Checked = GetBool(node, "MouthTrackerRestartOnReconnectEnabled", defaultValue: true);
         UpdateFaceTrackerAutomationOptionStates();
         _pimaxServiceLogDirectoryTextBox.Text = GetString(node, "PimaxServiceLogDirectory");
@@ -5718,7 +5718,7 @@ internal sealed class ConfigEditorForm : Form
            IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
            Named integrations and devices
-           This app contains compatibility logic, default paths, process names, or device detection labels for Pimax, SteamVR/OpenVR, SteamVR Base Station, HTC Vive/Vive mouth tracker, VRChat, VRCFaceTracking, Broken Eye, Intiface, Lovense, and OscGoesBrrr.
+           This app contains compatibility logic, default paths, process names, or device detection labels for Pimax, SteamVR/OpenVR, SteamVR Base Station, HTC Vive/Vive Face Tracker, VRChat, VRCFaceTracking, Broken Eye, Intiface, Lovense, and OscGoesBrrr.
 
            Trademark notice
            Product names, company names, trademarks, and registered trademarks are property of their respective owners. Their mention here describes compatibility or user-configurable integration points and does not imply endorsement, sponsorship, or affiliation.
@@ -5849,7 +5849,7 @@ internal sealed class ConfigEditorForm : Form
         }
         if (ParseStringMatrix(_mouthTrackerDetectorsTextBox.Text).Length == 0)
         {
-            result.Warnings.Add("Mouth tracker detector rules are empty.");
+            result.Warnings.Add("Vive Face Tracker detector rules are empty.");
         }
         if (_oscGoesBrrrEnabledCheckBox.Checked && ParseStringMatrix(_lovenseDetectorsTextBox.Text).Length == 0)
         {

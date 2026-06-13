@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release tag/name, for example v1.0.9"
+        description: "Release tag/name, for example v1.3.0"
         required: true
         type: string
 
@@ -30,6 +30,9 @@ jobs:
         with:
           dotnet-version: "9.0.x"
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Resolve release version
         shell: pwsh
         run: |
@@ -42,16 +45,21 @@ jobs:
             throw "Could not determine release version. Push a v* tag or provide the manual workflow version input."
           }
 
-          $releaseDir = "artifacts/PimaxVrcSupervisor-$version"
-          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "RELEASE_DIR=$releaseDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+          if ($version -match "-test") {
+            throw "Release version must not contain '-test': $version"
+          }
 
-      - name: Publish Windows app
+          if ($version -notmatch "^v\d+\.\d+\.\d+$") {
+            throw "Release version must look like v1.3.0. Received: $version"
+          }
+
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ARTIFACT_DIR=artifacts" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build package directories
         shell: pwsh
         run: |
-          dotnet publish .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release -r win-x64 --self-contained true -o $env:RELEASE_DIR
-          dotnet publish .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release -r win-x64 --self-contained true -o $env:RELEASE_DIR
-          dotnet publish .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release -r win-x64 --self-contained true -o $env:RELEASE_DIR
+          .\scripts\package-release.ps1 -Version $env:RELEASE_VERSION -Runtime win-x64 -Configuration Release -ReleaseRoot .\artifacts
 
       - name: Authenticode-sign app binaries
         shell: pwsh
@@ -81,20 +89,12 @@ jobs:
             throw "Could not find signtool.exe on the Windows runner."
           }
 
-          $signTargets = @(
-            "PimaxVrcSupervisor.exe",
-            "PimaxVrcSupervisor.dll",
-            "PimaxVrcSupervisorConfigEditor.exe",
-            "PimaxVrcSupervisorConfigEditor.dll",
-            "PimaxVrcSupervisorSteamVrHost.exe",
-            "PimaxVrcSupervisorSteamVrHost.dll"
-          )
-
-          $files = Get-ChildItem -Path $env:RELEASE_DIR -Recurse -File |
-            Where-Object { $signTargets -contains $_.Name }
+          $packageDirs = Get-ChildItem -Path $env:ARTIFACT_DIR -Directory -Filter "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-*"
+          $files = $packageDirs |
+            ForEach-Object { Get-ChildItem -Path $_.FullName -Recurse -File -Include "PimaxVrcSupervisor*.exe", "PimaxVrcSupervisor*.dll" }
 
           if ($files.Count -eq 0) {
-            throw "No app binaries were found to sign in $env:RELEASE_DIR."
+            throw "No app binaries were found to sign."
           }
 
           foreach ($file in $files) {
@@ -111,52 +111,123 @@ jobs:
 
           Remove-Item -LiteralPath $certificatePath -Force
 
-      - name: Package release
+      - name: Recreate zips after binary signing
         shell: pwsh
         run: |
-          $zipPath = "artifacts/PimaxVrcSupervisor-$env:RELEASE_VERSION.zip"
-          $checksumPath = "$zipPath.sha256"
+          $packageDirs = @(
+            Join-Path $env:ARTIFACT_DIR "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-with-dotnet9"
+            Join-Path $env:ARTIFACT_DIR "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-no-dotnet9"
+          )
 
-          if (Test-Path -LiteralPath $zipPath) {
-            Remove-Item -LiteralPath $zipPath -Force
+          foreach ($dir in $packageDirs) {
+            if (-not (Test-Path -LiteralPath $dir)) {
+              throw "Missing package directory: $dir"
+            }
+
+            $zip = "$dir.zip"
+            if (Test-Path -LiteralPath $zip) {
+              Remove-Item -LiteralPath $zip -Force
+            }
+
+            Compress-Archive -Path (Join-Path $dir "*") -DestinationPath $zip -CompressionLevel Optimal
           }
 
-          Compress-Archive -Path "$env:RELEASE_DIR\*" -DestinationPath $zipPath -CompressionLevel Optimal
-          $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $(Split-Path -Leaf $zipPath)" | Out-File -FilePath $checksumPath -Encoding ascii
+      - name: Verify package inventories
+        shell: pwsh
+        run: |
+          $required = @(
+            "PimaxVrcSupervisor.exe",
+            "PimaxVrcSupervisorConfigurator.exe",
+            "PimaxVrcSupervisorSteamVrHost.exe",
+            "PimaxVrcSupervisorTui.exe",
+            "PimaxVrcSupervisorStartupHelper.exe",
+            "PimaxVrcSupervisorWatcher.exe",
+            "supervisor.config.json",
+            "README.md",
+            "RELEASE_NOTES.md",
+            "Assets/vr-overlay-icon.png"
+          )
 
-          "ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "CHECKSUM_PATH=$checksumPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $zips = @(
+            Join-Path $env:ARTIFACT_DIR "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-with-dotnet9.zip"
+            Join-Path $env:ARTIFACT_DIR "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-no-dotnet9.zip"
+          )
+
+          foreach ($zip in $zips) {
+            if (-not (Test-Path -LiteralPath $zip)) {
+              throw "Missing zip: $zip"
+            }
+
+            $entries = @(tar -tf $zip)
+            foreach ($file in $required) {
+              if ($entries -notcontains $file) {
+                throw "Missing required package file in $zip`: $file"
+              }
+            }
+
+            if ($entries | Select-String "1\.3\.0-test|v1\.3\.0-test") {
+              throw "Stale test name found in $zip."
+            }
+
+            if ($entries | Select-String '(^|/)(cs|de|es|fr|it|ja|ko|pl|pt-BR|ru|tr|zh-Hans|zh-Hant)/') {
+              throw "Satellite culture folder found in $zip."
+            }
+          }
+
+      - name: Create SHA256 checksums
+        shell: pwsh
+        run: |
+          $zips = Get-ChildItem -Path $env:ARTIFACT_DIR -Filter "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-*.zip" -File
+          if ($zips.Count -ne 2) {
+            throw "Expected exactly two release zips, found $($zips.Count)."
+          }
+
+          foreach ($zip in $zips) {
+            $checksumPath = "$($zip.FullName).sha256"
+            $hash = (Get-FileHash -Path $zip.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($zip.Name)" | Out-File -FilePath $checksumPath -Encoding ascii
+          }
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
-      - name: Sigstore-sign release zip
+      - name: Sigstore-sign release zips
         shell: pwsh
         run: |
-          $bundlePath = "$env:ZIP_PATH.sigstore.json"
-          cosign sign-blob --yes --bundle $bundlePath $env:ZIP_PATH
+          $zips = Get-ChildItem -Path $env:ARTIFACT_DIR -Filter "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-*.zip" -File
+          foreach ($zip in $zips) {
+            $bundlePath = "$($zip.FullName).sigstore.json"
+            cosign sign-blob --yes --bundle $bundlePath $zip.FullName
 
-          cosign verify-blob $env:ZIP_PATH `
-            --bundle $bundlePath `
-            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/(heads|tags)/.+$" `
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+            cosign verify-blob $zip.FullName `
+              --bundle $bundlePath `
+              --certificate-identity-regexp "^https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/(heads|tags)/.+$" `
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+          }
 
-          "SIGSTORE_BUNDLE_PATH=$bundlePath" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      - name: Attest release zip
-        uses: actions/attest@v4
+      - name: Attest release zips
+        uses: actions/attest-build-provenance@v2
         with:
-          subject-path: ${{ env.ZIP_PATH }}
+          subject-path: artifacts/PimaxVrcSupervisor-${{ env.RELEASE_VERSION }}-win-x64-*.zip
 
       - name: Create or update GitHub release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $releaseFiles = @(
+            Get-ChildItem -Path $env:ARTIFACT_DIR -Filter "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-*.zip" -File
+            Get-ChildItem -Path $env:ARTIFACT_DIR -Filter "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-*.zip.sha256" -File
+            Get-ChildItem -Path $env:ARTIFACT_DIR -Filter "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-*.zip.sigstore.json" -File
+          ) | ForEach-Object { $_.FullName }
+
+          if ($releaseFiles.Count -ne 6) {
+            throw "Expected 6 release upload files, found $($releaseFiles.Count)."
+          }
+
           gh release view $env:RELEASE_VERSION *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:RELEASE_VERSION $env:ZIP_PATH $env:CHECKSUM_PATH $env:SIGSTORE_BUNDLE_PATH --clobber
+            gh release upload $env:RELEASE_VERSION @releaseFiles --clobber
           } else {
-            gh release create $env:RELEASE_VERSION $env:ZIP_PATH $env:CHECKSUM_PATH $env:SIGSTORE_BUNDLE_PATH --title "Pimax VRC Supervisor $env:RELEASE_VERSION" --generate-notes --target $env:GITHUB_SHA
+            gh release create $env:RELEASE_VERSION @releaseFiles --title "Pimax VRC Supervisor $env:RELEASE_VERSION" --generate-notes --target $env:GITHUB_SHA
           }

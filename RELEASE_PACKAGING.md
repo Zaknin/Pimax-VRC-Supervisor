@@ -1,19 +1,15 @@
 # Release Packaging Layout
 
-Use this prompt for the previous flat release layout, with cleanup only.
-
-Create cleaned release folders/zips for `PimaxVrcSupervisor` version `vX.Y.Z` using the previous flat release layout we tested.
-
-Use the existing tested release output as the source. Do not rebuild or change application code unless explicitly requested.
+Use `scripts/package-release.ps1` to build the final flat Windows release folders and zip files.
 
 ## Zip Variants
 
 Create both release variants when requested:
 
-- `PimaxVrcSupervisor-vX.Y.Z.zip`: full self-contained release for users who do not have .NET 9 installed.
-- `PimaxVrcSupervisor-vX.Y.Z_noNET9.zip`: smaller release for users who already have the .NET 9 Windows Desktop Runtime x64 installed.
+- `PimaxVrcSupervisor-v1.3.0-win-x64-with-dotnet9.zip`: full self-contained release for users who do not have .NET 9 installed.
+- `PimaxVrcSupervisor-v1.3.0-win-x64-no-dotnet9.zip`: smaller release for users who already have the .NET 9 Windows Desktop Runtime x64 installed.
 
-The `_noNET9` package requires the Windows Desktop Runtime, not only the base .NET runtime, because the supervisor and configurator use Windows Forms.
+The `no-dotnet9` package requires the Windows Desktop Runtime, not only the base .NET runtime, because the supervisor and configurator use Windows Forms.
 
 ## Flat Folder Shape
 
@@ -85,9 +81,9 @@ WinRT.Runtime.dll
 
 Do not hand-pick individual `System.*` or `Microsoft.*` runtime assemblies unless the build process has an automated dependency check. For the full release, the safe rule is to keep the self-contained publish runtime DLLs and remove only the explicit exclusions below.
 
-## NoNET9 Release: .NET 9 Already Installed
+## No-Dotnet9 Release: .NET 9 Already Installed
 
-For the `_noNET9` release, do not include bundled .NET runtime files. It should contain only the common app files and third-party dependency DLLs needed by the app.
+For the `no-dotnet9` release, do not include bundled .NET runtime files. Keep the framework-dependent app files produced by publish, including `.deps.json`, `.runtimeconfig.json`, application DLLs, and third-party DLLs.
 
 Users of this zip must install:
 
@@ -142,9 +138,9 @@ The `.ico` files are embedded into the executables at build time and are not nee
 
 The language folders are .NET/Windows Forms satellite resources. They are not required while the app is English-only and no interface/software translation is planned.
 
-## Rust Desktop TUI Packaging
+## Rust Terminal UI Packaging
 
-For the `cli-ui2` / `1.3.0-test` line, include the desktop TUI executable:
+Include the Terminal UI executable:
 
 ```text
 PimaxVrcSupervisorTui.exe
@@ -156,12 +152,10 @@ Build it with the Rust stable MSVC toolchain:
 cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release
 ```
 
-After the C# publish output is prepared, copy the Rust release binary into the same flat local test release folder:
+The packaging script builds this binary and copies it into both release variants.
 
 ```powershell
-Copy-Item .\PimaxVrcSupervisor.Tui\target\release\PimaxVrcSupervisorTui.exe `
-  .\release\PimaxVrcSupervisor-v1.3.0-test\PimaxVrcSupervisorTui.exe `
-  -Force
+.\scripts\package-release.ps1
 ```
 
 Generated output rules:

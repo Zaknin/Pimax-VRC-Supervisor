@@ -9,7 +9,7 @@ Depending on your settings, Supervisor can watch:
 - Pimax headset state
 - PiService logs
 - Windows device events
-- mouth tracker reconnects
+- Vive Face Tracker reconnects
 
 ## What It Can Do
 

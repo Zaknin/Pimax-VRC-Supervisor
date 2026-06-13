@@ -19,7 +19,7 @@ Choose autostart mode, Terminal UI default behavior, monitor handling, diagnosti
 
 ### Face Tracking
 
-Configure Broken Eye, VRCFaceTracking, mouth tracker options, and reconnect detection.
+Configure Broken Eye, VRCFaceTracking, Vive Face Tracker options, and reconnect detection.
 
 ### Base Stations
 

@@ -1,25 +1,30 @@
-# Pimax VRC Supervisor v1.3.0-test Release Candidate Notes
+# Pimax VRC Supervisor v1.3.0 Release Notes
 
-This is a local release-candidate package for Windows x64 testing before merging the Terminal UI work toward the main release line.
-
-## Current Version
-
-- Package version: `v1.3.0-test`
-- App version: `1.3.0-test`
-- Assembly/file version: `1.3.0.0`
-- Platform: Windows x64
-- Runtime variants: with bundled .NET 9 and without bundled .NET 9
+Pimax VRC Supervisor v1.3.0 is a Windows x64 release for Pimax VRChat sessions. It includes the Configurator, Supervisor, Terminal UI, SteamVR Overlay host, startup helper, watcher, default config, and release notes in one flat folder.
 
 ## Package Variants
 
-- `PimaxVrcSupervisor-v1.3.0-test-win-x64-with-dotnet9.zip`
+- `PimaxVrcSupervisor-v1.3.0-win-x64-with-dotnet9.zip`
   - Self-contained package.
   - Includes the .NET 9 Windows Desktop runtime files.
   - Recommended if you are not sure whether .NET 9 is installed.
 
-- `PimaxVrcSupervisor-v1.3.0-test-win-x64-no-dotnet9.zip`
+- `PimaxVrcSupervisor-v1.3.0-win-x64-no-dotnet9.zip`
   - Smaller framework-dependent package.
   - Requires the .NET 9 Windows Desktop Runtime x64 to be installed.
+
+## Highlights
+
+- Terminal UI is the default desktop control surface from Configurator.
+- Terminal Mode can start the Supervisor hidden and open Terminal UI during SteamVR sessions.
+- Terminal UI provides confirmed controls for the six normal Supervisor session actions.
+- Connected Terminal UI shutdown requests Supervisor cleanup; window close is best-effort and unconfirmed.
+- Autostart-launched Terminal UI closes after its paired Supervisor exits.
+- SteamVR Overlay mode remains available and separate from Terminal Mode.
+- Base-station startup no longer requires a prior Configurator scan.
+- Unsupported, read-unsupported, or temporarily unavailable Base Station 2.0 devices no longer block startup indefinitely.
+- Configurator now uses Vive Face Tracker wording and keeps Windows PnP fast reconnect detection off by default.
+- Optional Terminal UI diagnostics can write lightweight interval summaries when enabled.
 
 ## Included Apps
 
@@ -32,17 +37,6 @@ This is a local release-candidate package for Windows x64 testing before merging
 - `supervisor.config.json` - default documented config.
 - `README.md` and `RELEASE_NOTES.md`.
 - `Assets\vr-overlay-icon.png` for the SteamVR Overlay.
-
-## Highlights
-
-- Terminal UI is the primary Configurator launch interface by default.
-- Terminal Mode can start the Supervisor hidden and open Terminal UI for SteamVR sessions.
-- Terminal UI supports confirmed actions for the six regular Supervisor session controls.
-- Terminal UI connected shutdown requests Supervisor cleanup; window close is best-effort and unconfirmed.
-- Autostart-launched Terminal UI closes after its paired Supervisor exits.
-- Configurator uses a single **Autostart mode** selector: Off, Terminal Mode, or SteamVR Overlay.
-- Optional Terminal UI diagnostics can write lightweight interval summaries when enabled.
-- SteamVR Overlay mode remains available and separate from Terminal Mode.
 
 ## Install
 
@@ -58,13 +52,17 @@ This is a local release-candidate package for Windows x64 testing before merging
 ## Upgrade
 
 1. Close the Supervisor, Configurator, Terminal UI, and SteamVR host if they are running.
-2. Extract the new package into a fresh folder or over a previous test folder.
-3. Keep your existing `supervisor.config.json` if it contains your preferred settings.
-4. Open the Configurator and press **Validate** before launching a session.
+2. Extract the new package into a fresh folder or over your previous folder.
+3. Keep your existing config if it contains your preferred settings.
+4. Open Configurator from the final folder and press **Validate** before launching a session.
+5. If you use Terminal Mode autostart, re-register startup integration from the final folder so the scheduled task points at the new path.
+
+## Release Security
+
+The public release workflow signs the final zip packages with Sigstore, creates checksum files, and generates GitHub artifact attestations. Local packages built from source are not a substitute for final signed release assets.
 
 ## Notes
 
-- The application is English-only; satellite language folders are intentionally excluded from these local packages.
+- The application is English-only; satellite language folders are intentionally excluded from release packages.
 - The `.ico` files are embedded into executables and are not included as runtime assets.
 - The SteamVR overlay PNG asset is required and remains in `Assets\`.
-- These local packages are not signed release artifacts and do not create a GitHub Release or tag.
