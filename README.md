@@ -24,11 +24,20 @@ It is built for users who want less manual startup work and a cleaner SteamVR/VR
 
 ## Recommended For
 
-- Pimax headset users.
-- VRChat users.
-- VRCFaceTracking and Broken Eye users.
+- Pimax Crystal headset users.
 - Users who want SteamVR startup automation without maintaining scripts.
 - Users who want base-station power and session cleanup helpers.
+
+## Requirements
+
+- Windows 10/11
+- No separate .NET install when using the self-contained release zip
+- Pimax Crystal-compatible headset
+- [Broken Eye](https://github.com/ghostiam/BrokenEye)
+- [VRCFaceTracking](https://docs.vrcft.io/docs/vrcft-software/vrcft)
+- Optional: Vive mouth tracker exposed as `HTC Multimedia Camera`
+- Optional: [Intiface](https://intiface.com/#intiface-central) + [OscGoesBrrr](https://osc.toys/) for Lovense workflows
+
 
 ## Download
 
