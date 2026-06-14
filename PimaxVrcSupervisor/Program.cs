@@ -1229,8 +1229,8 @@ internal enum SupervisorLifecyclePhase
 
 internal enum SteamVrTerminationState
 {
-    Running,
-    NotStarted,
+    NotObserved,
+    ObservedRunning,
     NormalExit,
     UnexpectedTermination
 }
@@ -1423,6 +1423,7 @@ internal sealed class AppSupervisor
     private SupervisorLifecyclePhase _lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChat;
     private int _gracefulShutdownRequested;
     private readonly Dictionary<int, Process> _steamVrServerProcessHandles = new();
+    private bool _steamVrServerObservedRunning;
     private string? _operatorWarning;
     private bool _steamVrUnexpectedTerminationLatched;
 
@@ -5229,17 +5230,19 @@ internal sealed class AppSupervisor
     {
         if (!ShouldExitWithSteamVr())
         {
-            return SteamVrTerminationState.NotStarted;
+            return SteamVrTerminationState.NotObserved;
         }
 
         var currentProcesses = GetProcesses(_config.SteamVrServerProcessNames);
         if (currentProcesses.Count > 0)
         {
+            _steamVrServerObservedRunning = true;
             foreach (var process in currentProcesses)
             {
                 if (!_steamVrServerProcessHandles.ContainsKey(process.Id))
                 {
                     _steamVrServerProcessHandles[process.Id] = process;
+                    Console.WriteLine($"Observed SteamVR server process: PID {process.Id}.");
                 }
                 else
                 {
@@ -5247,12 +5250,12 @@ internal sealed class AppSupervisor
                 }
             }
 
-            return SteamVrTerminationState.Running;
+            return SteamVrTerminationState.ObservedRunning;
         }
 
-        if (_steamVrServerProcessHandles.Count == 0)
+        if (!_steamVrServerObservedRunning || _steamVrServerProcessHandles.Count == 0)
         {
-            return SteamVrTerminationState.NotStarted;
+            return SteamVrTerminationState.NotObserved;
         }
 
         var sawExitCode = false;
@@ -5263,7 +5266,7 @@ internal sealed class AppSupervisor
             {
                 if (!process.HasExited)
                 {
-                    return SteamVrTerminationState.Running;
+                    return SteamVrTerminationState.ObservedRunning;
                 }
 
                 sawExitCode = true;
@@ -7753,10 +7756,24 @@ internal static class ScheduledTaskInstaller
         string Executable,
         string Arguments,
         string WorkingDirectory,
-        bool UseDesktopTuiDefaultInterface,
-        string[] UnknownArguments);
+        ParsedWatcherArguments ParsedArguments,
+        bool HasLogonTrigger,
+        bool UsesInteractiveToken,
+        bool UsesHighestAvailableRunLevel,
+        bool IgnoreNewInstances,
+        bool StartWhenAvailable,
+        bool AllowStartOnDemand,
+        bool Enabled,
+        bool Hidden,
+        bool ExecutionTimeLimitUnlimited);
 
-    private sealed record ParsedWatcherArguments(bool UseDesktopTuiDefaultInterface, string[] UnknownArguments);
+    private sealed record ParsedWatcherArguments(
+        bool WatcherMode,
+        bool SkipCurrentSteamVrSession,
+        bool UseDesktopTuiDefaultInterface,
+        string? ConfigPath,
+        string[] UnknownArguments,
+        string? UnsupportedReason);
 
     public static async Task<bool> ExistsAsync(CancellationToken cancellationToken)
     {
@@ -7802,7 +7819,13 @@ internal static class ScheduledTaskInstaller
             TaskName,
             watcherPath,
             ScheduledTaskPathValidator.GetCurrentExecutableDirectory());
-        var preservedUnknownArguments = existingTask?.UnknownArguments ?? [];
+        if (existingTask?.ParsedArguments.UnsupportedReason is { Length: > 0 } unsupportedReason)
+        {
+            Console.WriteLine($"Existing watcher arguments cannot be preserved safely: {unsupportedReason}");
+            throw new InvalidOperationException("Existing scheduled task contains unsupported watcher arguments. The task was not rewritten.");
+        }
+
+        var preservedUnknownArguments = existingTask?.ParsedArguments.UnknownArguments ?? [];
         if (preservedUnknownArguments.Length > 0)
         {
             Console.WriteLine("Unknown watcher arguments preserved: " + string.Join(" ", preservedUnknownArguments));
@@ -7812,11 +7835,18 @@ internal static class ScheduledTaskInstaller
             selectedInterface,
             configPath,
             preservedUnknownArguments);
+        var desiredParsedArguments = ParseWatcherArguments(desiredArguments);
+        if (desiredParsedArguments.UnsupportedReason is { Length: > 0 } desiredUnsupportedReason)
+        {
+            throw new InvalidOperationException($"Generated watcher arguments were invalid: {desiredUnsupportedReason}");
+        }
+
         if (IsExistingTaskSemanticallyValid(
             existingTask,
             watcherPath,
             supervisorWorkingDirectory,
-            desiredArguments))
+            desiredParsedArguments,
+            out var mismatchReason))
         {
             Console.WriteLine("Scheduled task already valid; no changes made.");
             if (startWatcherImmediately)
@@ -7842,7 +7872,7 @@ internal static class ScheduledTaskInstaller
         }
         else
         {
-            Console.WriteLine("Scheduled task repaired: action, working directory, or watcher arguments did not match the expected v1.3.0 task.");
+            Console.WriteLine($"Scheduled task repaired: {mismatchReason}");
             Console.WriteLine($"Old action: {existingTask.Executable} {existingTask.Arguments}".Trim());
             Console.WriteLine($"New action: {watcherPath} {desiredArguments}".Trim());
         }
@@ -7941,7 +7971,7 @@ internal static class ScheduledTaskInstaller
         if (existingTask is not null)
         {
             source = "existing scheduled task";
-            return existingTask.UseDesktopTuiDefaultInterface;
+            return existingTask.ParsedArguments.UseDesktopTuiDefaultInterface;
         }
 
         source = "documented product default";
@@ -7952,19 +7982,83 @@ internal static class ScheduledTaskInstaller
         ExistingWatcherTask? existingTask,
         string watcherPath,
         string workingDirectory,
-        string desiredArguments)
+        ParsedWatcherArguments desiredArguments,
+        out string mismatchReason)
     {
         if (existingTask is null)
         {
+            mismatchReason = "task does not exist.";
             return false;
         }
 
-        return PathsEqual(existingTask.Executable, watcherPath)
-            && PathsEqual(existingTask.WorkingDirectory, workingDirectory)
-            && string.Equals(
-                NormalizeArguments(existingTask.Arguments),
-                NormalizeArguments(desiredArguments),
-                StringComparison.Ordinal);
+        if (!PathsEqual(existingTask.Executable, watcherPath))
+        {
+            mismatchReason = "task executable path did not match the expected watcher.";
+            return false;
+        }
+
+        if (!PathsEqual(existingTask.WorkingDirectory, workingDirectory))
+        {
+            mismatchReason = "task working directory did not match the expected release folder.";
+            return false;
+        }
+
+        var existingArguments = existingTask.ParsedArguments;
+        if (!existingArguments.WatcherMode)
+        {
+            mismatchReason = "watcher mode argument was missing.";
+            return false;
+        }
+
+        if (existingArguments.SkipCurrentSteamVrSession != desiredArguments.SkipCurrentSteamVrSession)
+        {
+            mismatchReason = "skip-current-session setting did not match.";
+            return false;
+        }
+
+        if (existingArguments.UseDesktopTuiDefaultInterface != desiredArguments.UseDesktopTuiDefaultInterface)
+        {
+            mismatchReason = "Terminal UI default-interface setting did not match the persistent preference.";
+            return false;
+        }
+
+        if (!PathsEqual(existingArguments.ConfigPath, desiredArguments.ConfigPath))
+        {
+            mismatchReason = "config path did not match.";
+            return false;
+        }
+
+        if (!StringArraysEqual(existingArguments.UnknownArguments, desiredArguments.UnknownArguments))
+        {
+            mismatchReason = "unknown watcher arguments did not match the preserved argument set.";
+            return false;
+        }
+
+        if (!existingTask.HasLogonTrigger)
+        {
+            mismatchReason = "logon trigger was missing.";
+            return false;
+        }
+
+        if (!existingTask.UsesInteractiveToken || !existingTask.UsesHighestAvailableRunLevel)
+        {
+            mismatchReason = "principal or run level did not match.";
+            return false;
+        }
+
+        if (!existingTask.IgnoreNewInstances
+            || !existingTask.StartWhenAvailable
+            || !existingTask.AllowStartOnDemand
+            || !existingTask.Enabled
+            || !existingTask.Hidden
+            || !existingTask.ExecutionTimeLimitUnlimited)
+        {
+            mismatchReason = "task settings did not match the expected hidden watcher settings.";
+            return false;
+        }
+
+        mismatchReason = "";
+        return true;
     }
 
     private static async Task<ExistingWatcherTask?> TryReadExistingWatcherTaskAsync(CancellationToken cancellationToken)
@@ -8004,8 +8098,16 @@ internal static class ScheduledTaskInstaller
                 executable ?? "",
                 arguments,
                 workingDirectory ?? "",
-                parsed.UseDesktopTuiDefaultInterface,
-                parsed.UnknownArguments);
+                parsed,
+                HasTaskElement(document, "LogonTrigger"),
+                TaskElementEquals(document, "LogonType", "InteractiveToken"),
+                TaskElementEquals(document, "RunLevel", "HighestAvailable"),
+                TaskElementEquals(document, "MultipleInstancesPolicy", "IgnoreNew"),
+                TaskElementEquals(document, "StartWhenAvailable", "true"),
+                TaskElementEquals(document, "AllowStartOnDemand", "true"),
+                TaskElementEquals(document, "Enabled", "true"),
+                TaskElementEquals(document, "Hidden", "true"),
+                TaskElementEquals(document, "ExecutionTimeLimit", "PT0S"));
         }
         catch (Exception ex)
         {
@@ -8014,17 +8116,50 @@ internal static class ScheduledTaskInstaller
         }
     }
 
+    private static bool HasTaskElement(XDocument document, string localName)
+        => document
+            .Descendants()
+            .Any(element => element.Name.LocalName == localName);
+
+    private static bool TaskElementEquals(XDocument document, string localName, string expected)
+        => document
+            .Descendants()
+            .FirstOrDefault(element => element.Name.LocalName == localName)
+            ?.Value
+            .Trim()
+            .Equals(expected, StringComparison.OrdinalIgnoreCase) == true;
+
     private static ParsedWatcherArguments ParseWatcherArguments(string arguments)
     {
+        if (!HasBalancedQuotes(arguments))
+        {
+            return new ParsedWatcherArguments(
+                WatcherMode: false,
+                SkipCurrentSteamVrSession: false,
+                UseDesktopTuiDefaultInterface: false,
+                ConfigPath: null,
+                UnknownArguments: [],
+                UnsupportedReason: "unbalanced quotes in watcher arguments.");
+        }
+
         var tokens = SplitCommandLine(arguments);
         var unknown = new List<string>();
+        var watcherMode = false;
+        var skipCurrentSteamVrSession = false;
         var useDesktopTuiDefaultInterface = false;
+        string? configPath = null;
         for (var index = 0; index < tokens.Count; index++)
         {
             var token = tokens[index];
-            if (string.Equals(token, WatcherArgument, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(token, "--skip-current-vrserver-session", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(token, WatcherArgument, StringComparison.OrdinalIgnoreCase))
             {
+                watcherMode = true;
+                continue;
+            }
+
+            if (string.Equals(token, "--skip-current-vrserver-session", StringComparison.OrdinalIgnoreCase))
+            {
+                skipCurrentSteamVrSession = true;
                 continue;
             }
 
@@ -8036,14 +8171,47 @@ internal static class ScheduledTaskInstaller
 
             if (string.Equals(token, "--config", StringComparison.OrdinalIgnoreCase))
             {
+                if (index + 1 >= tokens.Count)
+                {
+                    unknown.Add(token);
+                    continue;
+                }
+
                 index++;
+                configPath = tokens[index];
+                continue;
+            }
+
+            if (token.StartsWith("--config=", StringComparison.OrdinalIgnoreCase))
+            {
+                configPath = token["--config=".Length..];
                 continue;
             }
 
             unknown.Add(QuoteArgumentIfNeeded(token));
         }
 
-        return new ParsedWatcherArguments(useDesktopTuiDefaultInterface, unknown.ToArray());
+        return new ParsedWatcherArguments(
+            watcherMode,
+            skipCurrentSteamVrSession,
+            useDesktopTuiDefaultInterface,
+            configPath,
+            unknown.ToArray(),
+            null);
+    }
+
+    private static bool HasBalancedQuotes(string value)
+    {
+        var inQuotes = false;
+        foreach (var character in value)
+        {
+            if (character == '"')
+            {
+                inQuotes = !inQuotes;
+            }
+        }
+
+        return !inQuotes;
     }
 
     private static List<string> SplitCommandLine(string arguments)
@@ -8082,8 +8250,23 @@ internal static class ScheduledTaskInstaller
         return tokens;
     }
 
-    private static string NormalizeArguments(string arguments)
-        => string.Join(" ", SplitCommandLine(arguments).Select(QuoteArgumentIfNeeded));
+    private static bool StringArraysEqual(IReadOnlyList<string> left, IReadOnlyList<string> right)
+    {
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < left.Count; index++)
+        {
+            if (!string.Equals(left[index], right[index], StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     private static string QuoteArgumentIfNeeded(string argument)
         => argument.Any(char.IsWhiteSpace) ? QuoteArgument(argument) : argument;
