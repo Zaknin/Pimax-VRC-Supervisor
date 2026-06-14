@@ -3,6 +3,7 @@ mod bridge;
 mod console_close;
 mod diagnostics;
 mod models;
+mod supervisor_process;
 mod theme;
 mod ui;
 
@@ -44,7 +45,23 @@ fn main() -> Result<()> {
     let exit_when_supervisor_exits = args
         .iter()
         .any(|arg| arg == OsStr::new("--exit-when-supervisor-exits"));
+    let supervisor_process = supervisor_process::from_args(&args);
     let diagnostics = diagnostics::TuiDiagnostics::from_args(args);
+
+    let mut supervisor_process_notice = None;
+    let supervisor_monitor = match supervisor_process {
+        supervisor_process::SupervisorPidArgument::AlreadyExited(message) => {
+            eprintln!("{message}");
+            return Ok(());
+        }
+        supervisor_process::SupervisorPidArgument::Monitor(monitor) => Some(monitor),
+        supervisor_process::SupervisorPidArgument::Fallback(message) => {
+            eprintln!("{message}");
+            supervisor_process_notice = Some(message);
+            None
+        }
+        supervisor_process::SupervisorPidArgument::None => None,
+    };
 
     let (console_close_guard, console_close_error) = match console_close::install() {
         Ok(guard) => (Some(guard), None),
@@ -73,6 +90,8 @@ fn main() -> Result<()> {
         console_close_error,
         diagnostics,
         exit_when_supervisor_exits,
+        supervisor_monitor,
+        supervisor_process_notice,
     );
 
     restore_terminal(&mut terminal)?;
@@ -113,16 +132,27 @@ fn run(
     console_close_error: Option<String>,
     diagnostics: diagnostics::TuiDiagnostics,
     exit_when_supervisor_exits: bool,
+    supervisor_monitor: Option<supervisor_process::SupervisorProcessMonitor>,
+    supervisor_process_notice: Option<String>,
 ) -> Result<()> {
-    let mut app = App::new(diagnostics, exit_when_supervisor_exits);
+    let bridge_disconnect_auto_exit = exit_when_supervisor_exits && supervisor_monitor.is_none();
+    let mut app = App::new(diagnostics, bridge_disconnect_auto_exit);
     app.set_mouse_status(
         mouse_capture_error.is_none(),
         mouse_capture_error.map(|error| format!("Mouse disabled; keyboard-only mode: {error}")),
     );
     app.set_console_close_status(console_close_error.is_none(), console_close_error);
+    app.set_supervisor_process_notice(supervisor_process_notice);
     app.refresh(Instant::now());
 
     loop {
+        if supervisor_monitor
+            .as_ref()
+            .is_some_and(|monitor| monitor.try_recv_exit())
+        {
+            break;
+        }
+
         app.drain_action_results();
         app.drain_shutdown_result();
         let now = Instant::now();

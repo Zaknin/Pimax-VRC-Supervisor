@@ -2577,27 +2577,7 @@ internal sealed class ConfigEditorForm : Form
     }
 
     private static void SaveActiveConfigSelection(string path)
-    {
-        try
-        {
-            var fullPath = Path.GetFullPath(path);
-            var appDirectory = Path.GetFullPath(AppContext.BaseDirectory)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var configDirectory = Path.GetDirectoryName(fullPath)?
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var value = string.Equals(appDirectory, configDirectory, StringComparison.OrdinalIgnoreCase)
-                ? Path.GetFileName(fullPath)
-                : fullPath;
-            File.WriteAllText(
-                Path.Combine(AppContext.BaseDirectory, ActiveConfigSelectionFileName),
-                value,
-                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        }
-        catch
-        {
-            // Direct launch falls back to supervisor.config.json if this convenience marker cannot be written.
-        }
-    }
+        => ConfigMigrationSupport.TrySaveActiveConfigSelection(AppContext.BaseDirectory, path);
 
     private void RefreshConfigSelector(string? currentDisplayNameOverride = null)
     {
@@ -6967,23 +6947,13 @@ internal sealed class ConfigEditorForm : Form
 
     private static string CopyExternalConfigToCurrentRelease(string lastConfigPath)
     {
-        var currentReleaseFolder = GetCurrentConfigEditorDirectory();
-        var fileName = Path.GetFileName(lastConfigPath);
-        if (string.Equals(fileName, DefaultConfigFileName, StringComparison.OrdinalIgnoreCase))
+        var result = ConfigMigrationSupport.ImportConfig(lastConfigPath, GetCurrentConfigEditorDirectory());
+        if (result.Outcome != ConfigMigrationOutcome.Imported || string.IsNullOrWhiteSpace(result.DestinationPath))
         {
-            fileName = "supervisor_moved.config.json";
+            throw new IOException(result.Message);
         }
 
-        var destinationPath = Path.Combine(currentReleaseFolder, fileName);
-        if (File.Exists(destinationPath))
-        {
-            destinationPath = Path.Combine(
-                currentReleaseFolder,
-                Path.GetFileNameWithoutExtension(fileName) + "_" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + Path.GetExtension(fileName));
-        }
-
-        File.Copy(lastConfigPath, destinationPath, overwrite: false);
-        return destinationPath;
+        return result.DestinationPath;
     }
 
     private ExternalConfigChoice ShowExternalLastConfigPathDialog(string lastConfigPath)

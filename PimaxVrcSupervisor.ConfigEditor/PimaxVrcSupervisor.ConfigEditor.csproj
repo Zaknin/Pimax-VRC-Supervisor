@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <Compile Include="..\PimaxVrcSupervisor\BaseStationSupport.cs" Link="BaseStationSupport.cs" />
+    <Compile Include="..\PimaxVrcSupervisor\MigrationSupport.cs" Link="MigrationSupport.cs" />
     <Compile Include="..\PimaxVrcSupervisor\ScheduledTaskPathValidation.cs" Link="ScheduledTaskPathValidation.cs" />
     <None Include="..\PimaxVrcSupervisor\supervisor.config.json" Link="supervisor.config.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

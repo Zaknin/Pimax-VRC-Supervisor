@@ -770,25 +770,18 @@ fn render_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Ins
 
 fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     let mut lines = Vec::new();
-    let label_width: usize = if area.width >= FULL_MIN_WIDTH { 12 } else { 10 };
-    let label = |text: &str| {
-        Span::styled(
-            format!("{text:<width$}", width = label_width),
-            theme::label_style(),
-        )
-    };
-    let detail_gap = if area.width >= FULL_MIN_WIDTH {
-        "  "
-    } else {
-        " "
-    };
+    let label = |text: &str| Span::styled(format!("{text:<10}"), theme::label_style());
+    let separator = Span::raw("  ");
+    let detail_gap = "  ";
     match app.connection {
         ConnectionState::Connected => lines.push(Line::from(vec![
             label("Supervisor"),
+            separator.clone(),
             theme::badge("OK", theme::badge_success_style()),
         ])),
         ConnectionState::Disconnected => lines.push(Line::from(vec![
             label("Supervisor"),
+            separator.clone(),
             theme::badge("DISCONNECTED", theme::badge_error_style()),
         ])),
     }
@@ -799,6 +792,7 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
             .unwrap_or_else(|| "unknown time".to_string());
         lines.push(Line::from(vec![
             label("Status"),
+            separator.clone(),
             theme::badge("ERROR", theme::badge_error_style()),
             Span::raw(format!("{detail_gap}{when}: ")),
             Span::raw(truncate(&operator_error_message(error), 84)),
@@ -806,6 +800,7 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     } else {
         lines.push(Line::from(vec![
             label("Status"),
+            separator.clone(),
             Span::styled("none", theme::secondary_style()),
         ]));
     }
@@ -813,11 +808,13 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     if let Some(notice) = &app.mouse_notice {
         lines.push(Line::from(vec![
             label("Mouse"),
+            separator.clone(),
             Span::styled(truncate(notice, 84), theme::warning_style()),
         ]));
     } else {
         lines.push(Line::from(vec![
             label("Mouse"),
+            separator.clone(),
             Span::styled(
                 if app.mouse_enabled {
                     "enabled"
@@ -832,11 +829,13 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     if let Some(notice) = &app.console_close_notice {
         lines.push(Line::from(vec![
             label("Window"),
+            separator.clone(),
             Span::styled(truncate(notice, 84), theme::warning_style()),
         ]));
     } else {
         lines.push(Line::from(vec![
             label("Window"),
+            separator.clone(),
             Span::styled(
                 if app.console_close_enabled {
                     "close requests Supervisor shutdown"
@@ -848,6 +847,14 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         ]));
     }
 
+    if let Some(notice) = &app.supervisor_process_notice {
+        lines.push(Line::from(vec![
+            label("Parent"),
+            separator.clone(),
+            Span::styled(truncate(notice, 84), theme::warning_style()),
+        ]));
+    }
+
     if app.shutdown_in_progress {
         let message = app
             .shutdown_message
@@ -855,6 +862,7 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
             .unwrap_or("Shutdown requested. Closing managed apps...");
         lines.push(Line::from(vec![
             label("Shutdown"),
+            separator.clone(),
             theme::badge("RUNNING", theme::badge_warning_style()),
             Span::raw(detail_gap),
             Span::raw(truncate(message, 84)),
@@ -862,6 +870,7 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     } else if let Some(error) = &app.shutdown_error {
         lines.push(Line::from(vec![
             label("Shutdown"),
+            separator,
             theme::badge("ERROR", theme::badge_error_style()),
             Span::raw(detail_gap),
             Span::raw(truncate(&operator_error_message(error), 84)),
