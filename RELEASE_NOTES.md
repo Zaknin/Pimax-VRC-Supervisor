@@ -1,32 +1,31 @@
-# Pimax VRC Supervisor v1.3.0 Release Notes
+# Pimax VRC Supervisor v1.3.1 Release Notes
 
-Pimax VRC Supervisor v1.3.0 is a Windows x64 release for Pimax VRChat sessions. It includes the Configurator, Supervisor, Terminal UI, SteamVR Overlay host, startup helper, watcher, default config, and release notes in one flat folder.
-
-## Asset Republication Notice
-
-Release assets updated on 2026-06-13 22:02:09 UTC:
-
-- Corrected Terminal UI startup ordering so the Supervisor dashboard bridge is ready before Terminal UI opens.
-- Corrected scheduled-task preservation of the Terminal UI preference.
-- Corrected repeated-session fallback to Classic Console.
-- Corrected initial Terminal UI window sizing.
-- Improved full-layout System panel spacing.
-- Added warning and manual-exit handling for unexpected SteamVR termination.
-
-The version remains v1.3.0. Previous downloadable hashes are superseded by the checksums and Sigstore bundles attached to the current release.
+Pimax VRC Supervisor v1.3.1 is a Windows x64 maintenance release for Pimax VRChat sessions. It keeps the same application layout as v1.3.0 and focuses on SteamVR lifecycle reliability, Terminal UI startup ownership, and startup-task safety.
 
 ## Package Variants
 
-- `PimaxVrcSupervisor-v1.3.0-win-x64-with-dotnet9.zip`
+- `PimaxVrcSupervisor-v1.3.1-win-x64-with-dotnet9.zip`
   - Self-contained package.
   - Includes the .NET 9 Windows Desktop runtime files.
   - Recommended if you are not sure whether .NET 9 is installed.
 
-- `PimaxVrcSupervisor-v1.3.0-win-x64-no-dotnet9.zip`
+- `PimaxVrcSupervisor-v1.3.1-win-x64-no-dotnet9.zip`
   - Smaller framework-dependent package.
   - Requires the .NET 9 Windows Desktop Runtime x64 to be installed.
 
-## Highlights
+## What Changed Since v1.3.0
+
+- Refactored SteamVR lifecycle ownership so only watcher-launched sessions are treated as managed SteamVR sessions.
+- Normal SteamVR UI Exit no longer gets reported as a crash.
+- External SteamVR disappearance without reliable abnormal evidence now uses safe normal cleanup instead of a persistent crash warning.
+- OpenVR startup probes used by base-station checks are isolated from managed-session ownership, so transient probe-created `vrserver.exe` processes do not trigger cleanup or warnings.
+- Terminal Mode still uses the validated watcher -> Supervisor -> dashboard bridge -> Terminal UI startup flow.
+- The Supervisor now owns Terminal UI launch after dashboard readiness; the watcher does not launch Terminal UI directly.
+- Normal Supervisor startup validates scheduled-task state read-only and no longer deploys or overwrites the watcher during runtime.
+- Startup task preference parsing continues to preserve the Terminal UI/default interface setting and unknown safe arguments.
+- Structured diagnostics now record decisive SteamVR lifecycle decisions and scheduled-task validation results.
+
+## Current Behavior
 
 - Terminal UI is the default desktop control surface from Configurator.
 - Terminal Mode can start the Supervisor hidden and open Terminal UI during SteamVR sessions.
@@ -34,9 +33,8 @@ The version remains v1.3.0. Previous downloadable hashes are superseded by the c
 - Connected Terminal UI shutdown requests Supervisor cleanup; window close is best-effort and unconfirmed.
 - Autostart-launched Terminal UI closes after its paired Supervisor exits.
 - SteamVR Overlay mode remains available and separate from Terminal Mode.
-- Base-station startup no longer requires a prior Configurator scan.
-- Unsupported, read-unsupported, or temporarily unavailable Base Station 2.0 devices no longer block startup indefinitely.
-- Configurator now uses Vive Face Tracker wording and keeps Windows PnP fast reconnect detection off by default.
+- Base-station startup does not require a prior Configurator scan.
+- Unsupported, read-unsupported, or temporarily unavailable Base Station 2.0 devices do not block startup indefinitely.
 - Optional Terminal UI diagnostics can write lightweight interval summaries when enabled.
 
 ## Included Apps
@@ -72,7 +70,7 @@ The version remains v1.3.0. Previous downloadable hashes are superseded by the c
 
 ## Release Security
 
-The public release workflow signs the final zip packages with Sigstore, creates checksum files, and generates GitHub artifact attestations. Local packages built from source are not a substitute for final signed release assets.
+The public release workflow signs final zip packages with Sigstore, creates checksum files, and generates GitHub artifact attestations. Local packages built from source are not a substitute for final signed release assets.
 
 ## Notes
 
