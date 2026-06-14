@@ -770,6 +770,13 @@ fn render_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Ins
 
 fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     let mut lines = Vec::new();
+    let label_width: usize = if area.width >= FULL_MIN_WIDTH { 12 } else { 10 };
+    let label = |text: &str| {
+        Span::styled(
+            format!("{text:<width$}", width = label_width),
+            theme::label_style(),
+        )
+    };
     let detail_gap = if area.width >= FULL_MIN_WIDTH {
         "  "
     } else {
@@ -777,11 +784,11 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     };
     match app.connection {
         ConnectionState::Connected => lines.push(Line::from(vec![
-            Span::styled(format!("{:<10}", "Supervisor"), theme::label_style()),
+            label("Supervisor"),
             theme::badge("OK", theme::badge_success_style()),
         ])),
         ConnectionState::Disconnected => lines.push(Line::from(vec![
-            Span::styled(format!("{:<10}", "Supervisor"), theme::label_style()),
+            label("Supervisor"),
             theme::badge("DISCONNECTED", theme::badge_error_style()),
         ])),
     }
@@ -791,26 +798,26 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
             .last_error_label(now)
             .unwrap_or_else(|| "unknown time".to_string());
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<10}", "Status"), theme::label_style()),
+            label("Status"),
             theme::badge("ERROR", theme::badge_error_style()),
             Span::raw(format!("{detail_gap}{when}: ")),
             Span::raw(truncate(&operator_error_message(error), 84)),
         ]));
     } else {
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<10}", "Status"), theme::label_style()),
+            label("Status"),
             Span::styled("none", theme::secondary_style()),
         ]));
     }
 
     if let Some(notice) = &app.mouse_notice {
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<10}", "Mouse"), theme::label_style()),
+            label("Mouse"),
             Span::styled(truncate(notice, 84), theme::warning_style()),
         ]));
     } else {
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<10}", "Mouse"), theme::label_style()),
+            label("Mouse"),
             Span::styled(
                 if app.mouse_enabled {
                     "enabled"
@@ -824,12 +831,12 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
 
     if let Some(notice) = &app.console_close_notice {
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<10}", "Window"), theme::label_style()),
+            label("Window"),
             Span::styled(truncate(notice, 84), theme::warning_style()),
         ]));
     } else {
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<10}", "Window"), theme::label_style()),
+            label("Window"),
             Span::styled(
                 if app.console_close_enabled {
                     "close requests Supervisor shutdown"
@@ -847,14 +854,14 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
             .as_deref()
             .unwrap_or("Shutdown requested. Closing managed apps...");
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<10}", "Shutdown"), theme::label_style()),
+            label("Shutdown"),
             theme::badge("RUNNING", theme::badge_warning_style()),
             Span::raw(detail_gap),
             Span::raw(truncate(message, 84)),
         ]));
     } else if let Some(error) = &app.shutdown_error {
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<10}", "Shutdown"), theme::label_style()),
+            label("Shutdown"),
             theme::badge("ERROR", theme::badge_error_style()),
             Span::raw(detail_gap),
             Span::raw(truncate(&operator_error_message(error), 84)),
