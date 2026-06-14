@@ -1231,10 +1231,34 @@ internal enum SupervisorLifecyclePhase
 internal enum BaseStationWakeRoutineResult
 {
     Ran,
+    RanExhausted,
     NoopAlreadyComplete,
     NoopNoStations,
     NoopSteamVrNotRunning,
     NoopWaitingForRetry
+}
+
+internal enum BaseStationStartupSchedulerState
+{
+    Disabled,
+    WaitingForSteamVr,
+    Stabilizing,
+    Scheduled,
+    Running,
+    Completed,
+    Exhausted,
+    Cancelled
+}
+
+internal sealed record SteamVrBaseStationEpoch(
+    int Pid,
+    string ProcessName,
+    DateTimeOffset? ProcessStartTime,
+    DateTimeOffset FirstDetectedAt)
+{
+    public string Identity => ProcessStartTime is { } startTime
+        ? $"{ProcessName}:{Pid}:start:{startTime:O}"
+        : $"{ProcessName}:{Pid}:detected:{FirstDetectedAt:O}";
 }
 
 internal struct ConsoleHotkeys
@@ -1351,7 +1375,8 @@ internal sealed class AppSupervisor
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
     private static readonly TimeSpan BrokenEyeStartupCheckDelay = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan SteamVrBaseStationStartupDelay = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan SteamVrBaseStationMinimumProcessAge = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan SteamVrBaseStationFallbackStabilization = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan LovenseBluetoothRegistryRecentWindow = TimeSpan.FromHours(1);
     private static readonly TimeSpan DashboardReadinessTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan TerminalUiImmediateExitObservation = TimeSpan.FromMilliseconds(750);
@@ -1392,6 +1417,12 @@ internal sealed class AppSupervisor
     private DateTimeOffset? _lastBaseStationPowerOnSkippedLogAt;
     private DateTimeOffset? _nextBaseStationPowerOnAttemptAt;
     private DateTimeOffset? _baseStationSecondPowerOnPassCompletedAt;
+    private BaseStationStartupSchedulerState _baseStationStartupSchedulerState = BaseStationStartupSchedulerState.WaitingForSteamVr;
+    private SteamVrBaseStationEpoch? _baseStationStartupEpoch;
+    private DateTimeOffset? _baseStationStartupScheduledAt;
+    private bool _baseStationStartupInitialWakeSentForEpoch;
+    private bool _baseStationStartupStabilizationWaitLoggedForEpoch;
+    private bool _baseStationStartupAlreadyScheduledLoggedForEpoch;
     private DateTimeOffset? _shutdownBlockedBySteamVrSince;
     private string? _shutdownProgress;
     private DateTimeOffset? _shutdownProgressSince;
@@ -1507,8 +1538,10 @@ internal sealed class AppSupervisor
             _lastPimaxConnected = await WaitForPimaxOnStartupAsync(cancellationToken);
             WriteDiagnosticEvent($"lifecycle; pimax startup wait complete; connected={_lastPimaxConnected}");
 
-            await WaitForSteamVrBaseStationStartupWindowAsync(cancellationToken);
-            await TryPowerOnBaseStationsBeforeWatchedProcessAsync(cancellationToken);
+            await ObserveAndRunBaseStationStartupSchedulerAsync(
+                "startup-before-watched-process",
+                initialPassOnly: true,
+                cancellationToken);
             var startupSteamVrDecision = ObserveSteamVrLifecycle("startup-before-watched-process");
             if (await ApplySteamVrLifecycleDecisionAsync(
                 startupSteamVrDecision,
@@ -1592,7 +1625,10 @@ internal sealed class AppSupervisor
 
                     if (_lastPimaxConnected == true)
                     {
-                        await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
+                        await ObserveAndRunBaseStationStartupSchedulerAsync(
+                            "main-loop",
+                            initialPassOnly: false,
+                            cancellationToken);
                     }
 
                     var steamVrDecision = ObserveSteamVrLifecycle("main-loop");
@@ -2541,6 +2577,10 @@ internal sealed class AppSupervisor
         while (!cancellationToken.IsCancellationRequested)
         {
             await Task.Delay(_pollInterval, cancellationToken);
+            await ObserveAndRunBaseStationStartupSchedulerAsync(
+                "watched-process-startup-wait",
+                initialPassOnly: true,
+                cancellationToken);
             var steamVrDecision = ObserveSteamVrLifecycle("watched-process-startup-wait");
             if (await ApplySteamVrLifecycleDecisionAsync(
                 steamVrDecision,
@@ -4204,7 +4244,7 @@ internal sealed class AppSupervisor
         }
     }
 
-    private async Task TryPowerOnBaseStationsForSessionAsync(
+    private async Task<BaseStationWakeRoutineResult> TryPowerOnBaseStationsForSessionAsync(
         int targetPowerOnPasses,
         CancellationToken cancellationToken,
         bool manualOverride = false,
@@ -4217,7 +4257,7 @@ internal sealed class AppSupervisor
             manualOverride,
             waitForSteamVrTrackingConfirmation);
         var elapsed = Stopwatch.GetElapsedTime(startedAt);
-        if (result == BaseStationWakeRoutineResult.Ran)
+        if (result is BaseStationWakeRoutineResult.Ran or BaseStationWakeRoutineResult.RanExhausted)
         {
             _diagnostics.RecordBaseStationWakeRoutine(elapsed);
         }
@@ -4226,39 +4266,250 @@ internal sealed class AppSupervisor
             _diagnostics.RecordBaseStationWakeNoop(elapsed);
             _diagnostics.WriteVerbose($"base-station wake noop; reason={result}; elapsedMs={elapsed.TotalMilliseconds:0.0}");
         }
+
+        return result;
     }
 
-    private async Task WaitForSteamVrBaseStationStartupWindowAsync(CancellationToken cancellationToken)
+    private async Task ObserveAndRunBaseStationStartupSchedulerAsync(
+        string caller,
+        bool initialPassOnly,
+        CancellationToken cancellationToken)
     {
         if (!_config.BaseStationsEnabled || GetEnabledBaseStations().Length == 0)
         {
+            TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Disabled, caller, "base-station startup disabled or no enabled stations");
             return;
         }
 
-        var latestSteamVrStart = TryGetLatestProcessStartTime(_config.SteamVrServerProcessNames);
-        if (latestSteamVrStart is null)
+        if (_baseStationPowerOnComplete)
+        {
+            if (_baseStationStartupSchedulerState == BaseStationStartupSchedulerState.Exhausted)
+            {
+                return;
+            }
+
+            TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Completed, caller, "base-station startup already complete");
+            return;
+        }
+
+        if (_baseStationStartupSchedulerState == BaseStationStartupSchedulerState.Running)
         {
             return;
         }
 
-        var elapsed = DateTimeOffset.Now - latestSteamVrStart.Value;
-        var remaining = SteamVrBaseStationStartupDelay - elapsed;
-        if (remaining <= TimeSpan.Zero)
+        if (_steamVrLifecycle.ProbeActive)
         {
-            WriteDiagnosticEvent($"base-station startup delay skipped; steamVrAgeSeconds={elapsed.TotalSeconds:0.0}");
             return;
         }
 
-        Console.WriteLine($"Waiting {remaining.TotalSeconds:0} seconds for SteamVR base-station startup before power-on...");
-        WriteDiagnosticEvent($"base-station startup delay begin; remainingSeconds={remaining.TotalSeconds:0.0}; steamVrStartedAt={latestSteamVrStart.Value:O}");
-        await Task.Delay(remaining, cancellationToken);
-        WriteDiagnosticEvent("base-station startup delay complete");
+        var now = DateTimeOffset.Now;
+        var epoch = TryGetCurrentSteamVrBaseStationEpoch(now);
+        if (epoch is null)
+        {
+            if (_baseStationStartupEpoch is not null
+                && _baseStationStartupSchedulerState is BaseStationStartupSchedulerState.Stabilizing
+                    or BaseStationStartupSchedulerState.Scheduled)
+            {
+                TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Cancelled, caller, "SteamVR disappeared before base-station startup executed");
+            }
+
+            _baseStationStartupEpoch = null;
+            _baseStationStartupScheduledAt = null;
+            _baseStationStartupInitialWakeSentForEpoch = false;
+            _baseStationStartupStabilizationWaitLoggedForEpoch = false;
+            _baseStationStartupAlreadyScheduledLoggedForEpoch = false;
+            TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.WaitingForSteamVr, caller, "waiting for SteamVR server");
+            return;
+        }
+
+        if (_baseStationStartupEpoch?.Identity != epoch.Identity)
+        {
+            var previousPresence = _baseStationStartupEpoch is null ? "absent" : "present";
+            _baseStationStartupEpoch = epoch;
+            _baseStationStartupScheduledAt = CalculateBaseStationStartupDueAt(epoch, now);
+            _baseStationStartupInitialWakeSentForEpoch = false;
+            _baseStationStartupStabilizationWaitLoggedForEpoch = false;
+            _baseStationStartupAlreadyScheduledLoggedForEpoch = false;
+            WriteDiagnosticEvent(
+                "steamvr_presence_transition"
+                + $"; previousPresence={previousPresence}"
+                + "; currentPresence=present"
+                + $"; stateBefore={_baseStationStartupSchedulerState}"
+                + "; stateAfter=Stabilizing"
+                + $"; vrserverPid={epoch.Pid}"
+                + $"; vrserverStartTime={FormatOptionalTimestamp(epoch.ProcessStartTime)}"
+                + $"; firstDetectedAt={epoch.FirstDetectedAt:O}"
+                + $"; epoch={epoch.Identity}"
+                + $"; caller={caller}");
+            TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Stabilizing, caller, "SteamVR server detected");
+        }
+
+        var dueAt = _baseStationStartupScheduledAt ?? now;
+        if (now < dueAt)
+        {
+            var remaining = dueAt - now;
+            if (_baseStationStartupSchedulerState != BaseStationStartupSchedulerState.Stabilizing)
+            {
+                TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Stabilizing, caller, "waiting for SteamVR stabilization");
+            }
+
+            if (!_baseStationStartupStabilizationWaitLoggedForEpoch)
+            {
+                _baseStationStartupStabilizationWaitLoggedForEpoch = true;
+                WriteDiagnosticEvent(
+                    "base_station_stabilization_wait"
+                    + $"; state={_baseStationStartupSchedulerState}"
+                    + $"; vrserverPid={epoch.Pid}"
+                    + $"; vrserverStartTime={FormatOptionalTimestamp(epoch.ProcessStartTime)}"
+                    + $"; firstDetectedAt={epoch.FirstDetectedAt:O}"
+                    + $"; epoch={epoch.Identity}"
+                    + $"; minimumDelaySeconds={SteamVrBaseStationMinimumProcessAge.TotalSeconds:0.0}"
+                    + $"; fallbackMaximumSeconds={SteamVrBaseStationFallbackStabilization.TotalSeconds:0.0}"
+                    + $"; processAgeSeconds={GetEpochAge(epoch, now).TotalSeconds:0.0}"
+                    + $"; remainingDelaySeconds={remaining.TotalSeconds:0.0}"
+                    + $"; caller={caller}");
+            }
+
+            return;
+        }
+
+        if (initialPassOnly && _baseStationStartupInitialWakeSentForEpoch)
+        {
+            if (!_baseStationStartupAlreadyScheduledLoggedForEpoch)
+            {
+                _baseStationStartupAlreadyScheduledLoggedForEpoch = true;
+                WriteDiagnosticEvent(
+                    "base_station_startup_scheduling"
+                    + "; alreadyScheduled=True"
+                    + $"; alreadyRunning={_baseStationStartupSchedulerState == BaseStationStartupSchedulerState.Running}"
+                    + $"; alreadyCompleted={_baseStationPowerOnComplete}"
+                    + $"; state={_baseStationStartupSchedulerState}"
+                    + $"; epoch={epoch.Identity}"
+                    + $"; caller={caller}");
+            }
+
+            return;
+        }
+
+        TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Scheduled, caller, initialPassOnly ? "initial base-station wake pass scheduled" : "base-station startup follow-up scheduled");
+        await RunScheduledBaseStationStartupAsync(epoch, caller, initialPassOnly, cancellationToken);
     }
 
-    private static DateTimeOffset? TryGetLatestProcessStartTime(IEnumerable<string> processNames)
+    private async Task RunScheduledBaseStationStartupAsync(
+        SteamVrBaseStationEpoch epoch,
+        string caller,
+        bool initialPassOnly,
+        CancellationToken cancellationToken)
     {
-        DateTimeOffset? latestStartTime = null;
-        foreach (var processName in processNames)
+        TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Running, caller, initialPassOnly ? "running initial base-station wake pass" : "running base-station startup routine");
+        WriteDiagnosticEvent(
+            "base_station_startup_execution"
+            + "; phase=begin"
+            + $"; initialPassOnly={initialPassOnly}"
+            + $"; vrserverPid={epoch.Pid}"
+            + $"; vrserverStartTime={FormatOptionalTimestamp(epoch.ProcessStartTime)}"
+            + $"; firstDetectedAt={epoch.FirstDetectedAt:O}"
+            + $"; epoch={epoch.Identity}"
+            + $"; caller={caller}");
+
+        try
+        {
+            BaseStationWakeRoutineResult result;
+            if (initialPassOnly)
+            {
+                await TryPowerOnBaseStationsBeforeWatchedProcessAsync(cancellationToken);
+                _baseStationStartupInitialWakeSentForEpoch = true;
+                result = _baseStationPowerOnComplete
+                    ? BaseStationWakeRoutineResult.Ran
+                    : BaseStationWakeRoutineResult.NoopWaitingForRetry;
+            }
+            else
+            {
+                result = await TryPowerOnBaseStationsForSessionAsync(
+                    BaseStationCommandTiming.PowerOnPasses,
+                    cancellationToken);
+            }
+
+            var nextState = _baseStationPowerOnComplete
+                ? result == BaseStationWakeRoutineResult.RanExhausted
+                    ? BaseStationStartupSchedulerState.Exhausted
+                    : BaseStationStartupSchedulerState.Completed
+                : result switch
+                {
+                    BaseStationWakeRoutineResult.NoopSteamVrNotRunning => BaseStationStartupSchedulerState.WaitingForSteamVr,
+                    BaseStationWakeRoutineResult.NoopWaitingForRetry => BaseStationStartupSchedulerState.Scheduled,
+                    BaseStationWakeRoutineResult.NoopNoStations => BaseStationStartupSchedulerState.Disabled,
+                    BaseStationWakeRoutineResult.NoopAlreadyComplete => BaseStationStartupSchedulerState.Completed,
+                    _ => BaseStationStartupSchedulerState.Scheduled
+                };
+
+            TransitionBaseStationStartupScheduler(nextState, caller, $"base-station startup execution result={result}");
+            WriteDiagnosticEvent(
+                "base_station_startup_execution"
+                + "; phase=complete"
+                + $"; result={result}"
+                + $"; state={_baseStationStartupSchedulerState}"
+                + $"; completed={_baseStationPowerOnComplete}"
+                + $"; passesCompleted={_baseStationPowerOnPassesCompleted}"
+                + $"; commandSucceeded={_baseStationPowerOnCommandSucceeded.Count}"
+                + $"; epoch={epoch.Identity}"
+                + $"; caller={caller}");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Cancelled, caller, "base-station startup cancelled");
+            WriteDiagnosticEvent(
+                "base_station_startup_execution"
+                + "; phase=cancelled"
+                + "; cancellationReason=shutdown"
+                + $"; epoch={epoch.Identity}"
+                + $"; caller={caller}");
+            throw;
+        }
+    }
+
+    private void TransitionBaseStationStartupScheduler(
+        BaseStationStartupSchedulerState nextState,
+        string caller,
+        string reason)
+    {
+        var previousState = _baseStationStartupSchedulerState;
+        if (previousState == nextState)
+        {
+            return;
+        }
+
+        _baseStationStartupSchedulerState = nextState;
+        WriteDiagnosticEvent(
+            "base_station_startup_scheduling"
+            + $"; stateBefore={previousState}"
+            + $"; stateAfter={nextState}"
+            + $"; reason={reason}"
+            + $"; alreadyCompleted={_baseStationPowerOnComplete}"
+            + $"; alreadyRunning={nextState == BaseStationStartupSchedulerState.Running}"
+            + $"; epoch={_baseStationStartupEpoch?.Identity ?? "none"}"
+            + $"; caller={caller}");
+    }
+
+    private DateTimeOffset CalculateBaseStationStartupDueAt(SteamVrBaseStationEpoch epoch, DateTimeOffset now)
+    {
+        if (epoch.ProcessStartTime is { } startTime)
+        {
+            var dueAt = startTime.Add(SteamVrBaseStationMinimumProcessAge);
+            return dueAt <= now ? now : dueAt;
+        }
+
+        var fallbackDueAt = epoch.FirstDetectedAt.Add(SteamVrBaseStationFallbackStabilization);
+        return fallbackDueAt <= now ? now : fallbackDueAt;
+    }
+
+    private static TimeSpan GetEpochAge(SteamVrBaseStationEpoch epoch, DateTimeOffset now)
+        => now - (epoch.ProcessStartTime ?? epoch.FirstDetectedAt);
+
+    private SteamVrBaseStationEpoch? TryGetCurrentSteamVrBaseStationEpoch(DateTimeOffset detectedAt)
+    {
+        SteamVrBaseStationEpoch? latestEpoch = null;
+        foreach (var processName in _config.SteamVrServerProcessNames)
         {
             Process[] processes;
             try
@@ -4274,24 +4525,80 @@ internal sealed class AppSupervisor
             {
                 using (process)
                 {
+                    var pid = 0;
+                    var observedProcessName = processName;
+                    DateTimeOffset? startTime = null;
                     try
                     {
-                        var startTime = new DateTimeOffset(process.StartTime);
-                        if (latestStartTime is null || startTime > latestStartTime.Value)
+                        pid = process.Id;
+                        observedProcessName = process.ProcessName;
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        var candidateStartTime = new DateTimeOffset(process.StartTime);
+                        if (candidateStartTime <= detectedAt.AddSeconds(1))
                         {
-                            latestStartTime = startTime;
+                            startTime = candidateStartTime;
                         }
                     }
                     catch
                     {
                         // Process may exit or deny StartTime access while we are checking.
                     }
+
+                    var firstDetectedAt = _baseStationStartupEpoch is { } existing
+                        && existing.Pid == pid
+                        && Nullable.Equals(existing.ProcessStartTime, startTime)
+                        ? existing.FirstDetectedAt
+                        : detectedAt;
+                    var epoch = new SteamVrBaseStationEpoch(
+                        pid,
+                        observedProcessName,
+                        startTime,
+                        firstDetectedAt);
+                    latestEpoch = SelectLatestSteamVrBaseStationEpoch(latestEpoch, epoch);
                 }
             }
         }
 
-        return latestStartTime;
+        return latestEpoch;
     }
+
+    private static SteamVrBaseStationEpoch SelectLatestSteamVrBaseStationEpoch(
+        SteamVrBaseStationEpoch? current,
+        SteamVrBaseStationEpoch candidate)
+    {
+        if (current is null)
+        {
+            return candidate;
+        }
+
+        if (candidate.ProcessStartTime is { } candidateStart
+            && current.ProcessStartTime is { } currentStart)
+        {
+            return candidateStart > currentStart ? candidate : current;
+        }
+
+        if (candidate.ProcessStartTime is not null && current.ProcessStartTime is null)
+        {
+            return candidate;
+        }
+
+        if (candidate.ProcessStartTime is null && current.ProcessStartTime is not null)
+        {
+            return current;
+        }
+
+        return candidate.FirstDetectedAt > current.FirstDetectedAt ? candidate : current;
+    }
+
+    private static string FormatOptionalTimestamp(DateTimeOffset? timestamp)
+        => timestamp is { } value ? value.ToString("O") : "unknown";
 
     private async Task TryPowerOnBaseStationsBeforeWatchedProcessAsync(CancellationToken cancellationToken)
     {
@@ -4517,7 +4824,7 @@ internal sealed class AppSupervisor
         LogSkippedBaseStationsAfterPowerOn(baseStations, finalStates, confirmedOrCommandSucceeded);
         _baseStationPowerOnComplete = true;
         WriteDiagnosticEvent($"base-station wake routine complete; result=skipped-unavailable; elapsedMs={Stopwatch.GetElapsedTime(routineStartedAt).TotalMilliseconds:0.0}");
-        return BaseStationWakeRoutineResult.Ran;
+        return BaseStationWakeRoutineResult.RanExhausted;
     }
 
     private async Task<BaseStationDevice[]> RefreshIncompleteBaseStationMetadataAsync(
