@@ -1230,7 +1230,9 @@ internal enum SupervisorLifecyclePhase
 internal enum SteamVrTerminationState
 {
     NotObserved,
-    ObservedRunning,
+    StartupProcessObserved,
+    StartupEnded,
+    ManagedSessionEstablished,
     NormalExit,
     UnexpectedTermination
 }
@@ -1273,6 +1275,18 @@ internal sealed record SupervisorStatusSnapshot(
     string? ShutdownBlockedElapsed,
     string? BlockingProcesses,
     string? OperatorWarning);
+
+internal enum SteamVrProcessOrigin
+{
+    AlreadyRunningAtSupervisorStartup,
+    ExternalAfterSupervisorStartup,
+    SupervisorOpenVrStartupProbe
+}
+
+internal sealed record ObservedSteamVrProcess(
+    Process Process,
+    SteamVrProcessOrigin Origin,
+    DateTimeOffset ObservedAt);
 
 internal sealed record SupervisorCommandDefinition(
     string Name,
@@ -1362,6 +1376,7 @@ internal sealed class AppSupervisor
     private static readonly TimeSpan LovenseBluetoothRegistryRecentWindow = TimeSpan.FromHours(1);
     private static readonly TimeSpan DashboardReadinessTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan TerminalUiImmediateExitObservation = TimeSpan.FromMilliseconds(750);
+    private static readonly TimeSpan SteamVrManagedSessionQualification = TimeSpan.FromSeconds(30);
 
     private readonly SupervisorConfig _config;
     private readonly bool _steamVrStart;
@@ -1422,8 +1437,11 @@ internal sealed class AppSupervisor
     private volatile bool _forcedManualReloadRequested;
     private SupervisorLifecyclePhase _lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChat;
     private int _gracefulShutdownRequested;
-    private readonly Dictionary<int, Process> _steamVrServerProcessHandles = new();
+    private readonly Dictionary<int, ObservedSteamVrProcess> _steamVrServerProcesses = new();
+    private bool _steamVrStartupObservationCompleted;
     private bool _steamVrServerObservedRunning;
+    private bool _steamVrManagedSessionEstablished;
+    private bool _steamVrOpenVrStartupProbeActive;
     private string? _operatorWarning;
     private bool _steamVrUnexpectedTerminationLatched;
 
@@ -4652,7 +4670,10 @@ internal sealed class AppSupervisor
         try
         {
             var startedAt = Stopwatch.GetTimestamp();
+            _steamVrOpenVrStartupProbeActive = true;
+            ObserveSteamVrTerminationState();
             var trackingReferences = _steamVrTrackingReferenceReader.ReadActiveTrackingReferences();
+            ObserveSteamVrTerminationState();
             var elapsed = Stopwatch.GetElapsedTime(startedAt);
             var match = SteamVrBaseStationMatcher.Match(baseStations, trackingReferences);
             foreach (var address in match.ExactMatchedBluetoothAddresses)
@@ -4694,6 +4715,10 @@ internal sealed class AppSupervisor
             }
 
             return null;
+        }
+        finally
+        {
+            _steamVrOpenVrStartupProbeActive = false;
         }
     }
 
@@ -5239,10 +5264,14 @@ internal sealed class AppSupervisor
             _steamVrServerObservedRunning = true;
             foreach (var process in currentProcesses)
             {
-                if (!_steamVrServerProcessHandles.ContainsKey(process.Id))
+                if (!_steamVrServerProcesses.ContainsKey(process.Id))
                 {
-                    _steamVrServerProcessHandles[process.Id] = process;
-                    Console.WriteLine($"Observed SteamVR server process: PID {process.Id}.");
+                    var origin = GetSteamVrProcessOrigin();
+                    _steamVrServerProcesses[process.Id] = new ObservedSteamVrProcess(
+                        process,
+                        origin,
+                        DateTimeOffset.UtcNow);
+                    Console.WriteLine($"Observed SteamVR server process: PID {process.Id}; origin={DescribeSteamVrProcessOrigin(origin)}.");
                 }
                 else
                 {
@@ -5250,25 +5279,44 @@ internal sealed class AppSupervisor
                 }
             }
 
-            return SteamVrTerminationState.ObservedRunning;
+            _steamVrStartupObservationCompleted = true;
+            if (!_steamVrManagedSessionEstablished
+                && _steamVrServerProcesses.Values.Any(observed => DateTimeOffset.UtcNow - observed.ObservedAt >= SteamVrManagedSessionQualification))
+            {
+                _steamVrManagedSessionEstablished = true;
+                Console.WriteLine("SteamVR managed session established.");
+            }
+
+            return _steamVrManagedSessionEstablished
+                ? SteamVrTerminationState.ManagedSessionEstablished
+                : SteamVrTerminationState.StartupProcessObserved;
         }
 
-        if (!_steamVrServerObservedRunning || _steamVrServerProcessHandles.Count == 0)
+        _steamVrStartupObservationCompleted = true;
+        if (!_steamVrServerObservedRunning || _steamVrServerProcesses.Count == 0)
         {
             return SteamVrTerminationState.NotObserved;
         }
 
         var sawExitCode = false;
         var sawAbnormalExit = false;
-        foreach (var process in _steamVrServerProcessHandles.Values)
+        foreach (var observed in _steamVrServerProcesses.Values)
         {
+            var process = observed.Process;
             try
             {
                 if (!process.HasExited)
                 {
-                    return SteamVrTerminationState.ObservedRunning;
+                    process.Refresh();
+                    if (!process.HasExited)
+                    {
+                        return _steamVrManagedSessionEstablished
+                            ? SteamVrTerminationState.ManagedSessionEstablished
+                            : SteamVrTerminationState.StartupProcessObserved;
+                    }
                 }
 
+                process.WaitForExit(milliseconds: 250);
                 sawExitCode = true;
                 if (process.ExitCode != 0)
                 {
@@ -5277,14 +5325,50 @@ internal sealed class AppSupervisor
             }
             catch
             {
-                sawAbnormalExit = true;
+                if (_steamVrManagedSessionEstablished)
+                {
+                    sawAbnormalExit = true;
+                }
             }
         }
 
-        return sawExitCode && !sawAbnormalExit
-            ? SteamVrTerminationState.NormalExit
-            : SteamVrTerminationState.UnexpectedTermination;
+        if (!sawExitCode && !_steamVrManagedSessionEstablished)
+        {
+            Console.WriteLine("SteamVR startup process ended before a managed session was established.");
+            return SteamVrTerminationState.StartupEnded;
+        }
+
+        if (!sawAbnormalExit)
+        {
+            return _steamVrManagedSessionEstablished
+                ? SteamVrTerminationState.NormalExit
+                : SteamVrTerminationState.StartupEnded;
+        }
+
+        return _steamVrManagedSessionEstablished
+            ? SteamVrTerminationState.UnexpectedTermination
+            : SteamVrTerminationState.StartupEnded;
     }
+
+    private SteamVrProcessOrigin GetSteamVrProcessOrigin()
+    {
+        if (_steamVrOpenVrStartupProbeActive)
+        {
+            return SteamVrProcessOrigin.SupervisorOpenVrStartupProbe;
+        }
+
+        return !_steamVrStartupObservationCompleted && _steamVrServerProcesses.Count == 0
+            ? SteamVrProcessOrigin.AlreadyRunningAtSupervisorStartup
+            : SteamVrProcessOrigin.ExternalAfterSupervisorStartup;
+    }
+
+    private static string DescribeSteamVrProcessOrigin(SteamVrProcessOrigin origin) => origin switch
+    {
+        SteamVrProcessOrigin.AlreadyRunningAtSupervisorStartup => "already-running",
+        SteamVrProcessOrigin.ExternalAfterSupervisorStartup => "external-after-startup",
+        SteamVrProcessOrigin.SupervisorOpenVrStartupProbe => "supervisor-openvr-startup-probe",
+        _ => origin.ToString()
+    };
 
     private bool LatchUnexpectedSteamVrTerminationIfNeeded(SteamVrTerminationState state)
     {
@@ -7765,7 +7849,8 @@ internal static class ScheduledTaskInstaller
         bool AllowStartOnDemand,
         bool Enabled,
         bool Hidden,
-        bool ExecutionTimeLimitUnlimited);
+        bool ExecutionTimeLimitUnlimited,
+        string[] SettingMismatches);
 
     private sealed record ParsedWatcherArguments(
         bool WatcherMode,
@@ -7910,6 +7995,18 @@ internal static class ScheduledTaskInstaller
             throw new InvalidOperationException("schtasks.exe reported success, but the task could not be queried afterward.");
         }
 
+        var verifiedTask = await TryReadExistingWatcherTaskAsync(cancellationToken);
+        if (!IsExistingTaskSemanticallyValid(
+            verifiedTask,
+            watcherPath,
+            supervisorWorkingDirectory,
+            desiredParsedArguments,
+            out var verificationMismatch))
+        {
+            Console.WriteLine($"Scheduled task verification failed after registration: {verificationMismatch}");
+            throw new InvalidOperationException("Scheduled task was registered, but its effective settings still do not match the expected hidden watcher task.");
+        }
+
         if (startWatcherImmediately)
         {
             if (skipCurrentSteamVrSession)
@@ -8034,26 +8131,10 @@ internal static class ScheduledTaskInstaller
             return false;
         }
 
-        if (!existingTask.HasLogonTrigger)
+        if (existingTask.SettingMismatches.Length > 0)
         {
-            mismatchReason = "logon trigger was missing.";
-            return false;
-        }
-
-        if (!existingTask.UsesInteractiveToken || !existingTask.UsesHighestAvailableRunLevel)
-        {
-            mismatchReason = "principal or run level did not match.";
-            return false;
-        }
-
-        if (!existingTask.IgnoreNewInstances
-            || !existingTask.StartWhenAvailable
-            || !existingTask.AllowStartOnDemand
-            || !existingTask.Enabled
-            || !existingTask.Hidden
-            || !existingTask.ExecutionTimeLimitUnlimited)
-        {
-            mismatchReason = "task settings did not match the expected hidden watcher settings.";
+            mismatchReason = "task settings did not match the expected hidden watcher settings. "
+                + string.Join("; ", existingTask.SettingMismatches);
             return false;
         }
 
@@ -8094,6 +8175,7 @@ internal static class ScheduledTaskInstaller
                 ?.Value
                 .Trim();
             var parsed = ParseWatcherArguments(arguments);
+            var settingMismatches = GetWatcherTaskSettingMismatches(document);
             return new ExistingWatcherTask(
                 executable ?? "",
                 arguments,
@@ -8107,7 +8189,8 @@ internal static class ScheduledTaskInstaller
                 TaskElementEquals(document, "AllowStartOnDemand", "true"),
                 TaskElementEquals(document, "Enabled", "true"),
                 TaskElementEquals(document, "Hidden", "true"),
-                TaskElementEquals(document, "ExecutionTimeLimit", "PT0S"));
+                TaskElementEquals(document, "ExecutionTimeLimit", "PT0S"),
+                settingMismatches);
         }
         catch (Exception ex)
         {
@@ -8128,6 +8211,82 @@ internal static class ScheduledTaskInstaller
             ?.Value
             .Trim()
             .Equals(expected, StringComparison.OrdinalIgnoreCase) == true;
+
+    private static string[] GetWatcherTaskSettingMismatches(XDocument document)
+    {
+        var mismatches = new List<string>();
+        var task = document
+            .Descendants()
+            .FirstOrDefault(element => element.Name.LocalName == "Task");
+        var principal = task?
+            .Descendants()
+            .FirstOrDefault(element => element.Name.LocalName == "Principal");
+        var settings = task?
+            .Descendants()
+            .FirstOrDefault(element => element.Name.LocalName == "Settings");
+        var logonTrigger = task?
+            .Descendants()
+            .FirstOrDefault(element => element.Name.LocalName == "LogonTrigger");
+
+        AddEffectiveMismatch(mismatches, "TriggerType", logonTrigger is null ? null : "LogonTrigger", "LogonTrigger", defaultWhenMissing: null);
+        AddEffectiveMismatch(mismatches, "TriggerEnabled", GetChildValue(logonTrigger, "Enabled"), "true", defaultWhenMissing: "true");
+        AddEffectiveMismatch(mismatches, "LogonType", GetChildValue(principal, "LogonType"), "InteractiveToken", defaultWhenMissing: null);
+        AddEffectiveMismatch(mismatches, "RunLevel", GetChildValue(principal, "RunLevel"), "HighestAvailable", defaultWhenMissing: null);
+        AddEffectiveMismatch(mismatches, "MultipleInstancesPolicy", GetChildValue(settings, "MultipleInstancesPolicy"), "IgnoreNew", defaultWhenMissing: "IgnoreNew");
+        AddEffectiveMismatch(mismatches, "DisallowStartIfOnBatteries", GetChildValue(settings, "DisallowStartIfOnBatteries"), "false", defaultWhenMissing: "false");
+        AddEffectiveMismatch(mismatches, "StopIfGoingOnBatteries", GetChildValue(settings, "StopIfGoingOnBatteries"), "false", defaultWhenMissing: "false");
+        AddEffectiveMismatch(mismatches, "AllowHardTerminate", GetChildValue(settings, "AllowHardTerminate"), "true", defaultWhenMissing: "true");
+        AddEffectiveMismatch(mismatches, "StartWhenAvailable", GetChildValue(settings, "StartWhenAvailable"), "true", defaultWhenMissing: "true");
+        AddEffectiveMismatch(mismatches, "RunOnlyIfNetworkAvailable", GetChildValue(settings, "RunOnlyIfNetworkAvailable"), "false", defaultWhenMissing: "false");
+        AddEffectiveMismatch(mismatches, "AllowStartOnDemand", GetChildValue(settings, "AllowStartOnDemand"), "true", defaultWhenMissing: "true");
+        AddEffectiveMismatch(mismatches, "Enabled", GetChildValue(settings, "Enabled"), "true", defaultWhenMissing: "true");
+        AddEffectiveMismatch(mismatches, "Hidden", GetChildValue(settings, "Hidden"), "true", defaultWhenMissing: "false");
+        AddEffectiveMismatch(mismatches, "RunOnlyIfIdle", GetChildValue(settings, "RunOnlyIfIdle"), "false", defaultWhenMissing: "false");
+        AddEffectiveMismatch(mismatches, "WakeToRun", GetChildValue(settings, "WakeToRun"), "false", defaultWhenMissing: "false");
+        AddEffectiveMismatch(mismatches, "ExecutionTimeLimit", NormalizeTaskDuration(GetChildValue(settings, "ExecutionTimeLimit")), "PT0S", defaultWhenMissing: "PT0S");
+        AddEffectiveMismatch(mismatches, "Priority", GetChildValue(settings, "Priority"), "7", defaultWhenMissing: "7");
+
+        var restartOnFailure = settings?
+            .Elements()
+            .FirstOrDefault(element => element.Name.LocalName == "RestartOnFailure");
+        AddEffectiveMismatch(mismatches, "RestartInterval", NormalizeTaskDuration(GetChildValue(restartOnFailure, "Interval")), "PT1M", defaultWhenMissing: "PT1M");
+        AddEffectiveMismatch(mismatches, "RestartCount", GetChildValue(restartOnFailure, "Count"), "3", defaultWhenMissing: "3");
+
+        return mismatches.ToArray();
+    }
+
+    private static void AddEffectiveMismatch(List<string> mismatches, string name, string? existing, string expected, string? defaultWhenMissing)
+    {
+        var effectiveExisting = string.IsNullOrWhiteSpace(existing)
+            ? defaultWhenMissing
+            : existing.Trim();
+        if (effectiveExisting is not null
+            && string.Equals(effectiveExisting, expected, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        mismatches.Add($"Setting: {name}; Existing: {effectiveExisting ?? "<missing>"}; Expected: {expected}");
+    }
+
+    private static string? GetChildValue(XElement? parent, string localName)
+        => parent?
+            .Elements()
+            .FirstOrDefault(element => element.Name.LocalName == localName)
+            ?.Value
+            .Trim();
+
+    private static string? NormalizeTaskDuration(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return value;
+        }
+
+        return value.Trim().Equals("P0D", StringComparison.OrdinalIgnoreCase)
+            ? "PT0S"
+            : value.Trim();
+    }
 
     private static ParsedWatcherArguments ParseWatcherArguments(string arguments)
     {
