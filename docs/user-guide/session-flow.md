@@ -7,7 +7,7 @@ This page explains what usually happens during a VRChat session.
 1. SteamVR starts.
 2. Supervisor starts through your chosen startup mode or manual launch.
 3. Supervisor waits for the Pimax headset and VRChat conditions.
-4. Enabled base stations can be powered on.
+4. Enabled base stations can be powered on after SteamVR is available.
 5. Face-tracking and helper tools start.
 6. Optional OSC and OscGoesBrrr workflows start.
 

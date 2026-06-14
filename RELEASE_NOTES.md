@@ -19,6 +19,8 @@ Pimax VRC Supervisor v1.3.1 is a Windows x64 maintenance release for Pimax VRCha
 - Normal SteamVR UI Exit no longer gets reported as a crash.
 - External SteamVR disappearance without reliable abnormal evidence now uses safe normal cleanup instead of a persistent crash warning.
 - OpenVR startup probes used by base-station checks are isolated from managed-session ownership, so transient probe-created `vrserver.exe` processes do not trigger cleanup or warnings.
+- Base-station startup now re-arms when SteamVR starts after the Supervisor is already waiting for VRChat.
+- The old fixed startup wait has been replaced with an adaptive SteamVR stabilization window before base-station power-on.
 - Terminal Mode still uses the validated watcher -> Supervisor -> dashboard bridge -> Terminal UI startup flow.
 - The Supervisor now owns Terminal UI launch after dashboard readiness; the watcher does not launch Terminal UI directly.
 - Normal Supervisor startup validates scheduled-task state read-only and no longer deploys or overwrites the watcher during runtime.
@@ -34,6 +36,7 @@ Pimax VRC Supervisor v1.3.1 is a Windows x64 maintenance release for Pimax VRCha
 - Autostart-launched Terminal UI closes after its paired Supervisor exits.
 - SteamVR Overlay mode remains available and separate from Terminal Mode.
 - Base-station startup does not require a prior Configurator scan.
+- Manual Supervisor startup can wait for SteamVR and still wake configured base stations once SteamVR appears.
 - Unsupported, read-unsupported, or temporarily unavailable Base Station 2.0 devices do not block startup indefinitely.
 - Optional Terminal UI diagnostics can write lightweight interval summaries when enabled.
 

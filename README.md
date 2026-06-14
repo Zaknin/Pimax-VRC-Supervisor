@@ -17,7 +17,7 @@ It is built for users who want less manual startup work and a cleaner SteamVR/VR
 - Opens autostart Terminal UI only after the Supervisor dashboard is ready.
 - Supports a SteamVR Overlay mode for in-headset controls.
 - Treats normal SteamVR UI Exit as a normal cleanup event.
-- Powers SteamVR Base Stations on and off when configured.
+- Powers SteamVR Base Stations on when SteamVR becomes available, even if the Supervisor started first.
 - Skips unsupported or unavailable base stations without blocking startup indefinitely.
 - Restores monitor/session state during cleanup.
 - Runs an optional OSC Router for local OSC fan-out.
@@ -31,7 +31,7 @@ It is built for users who want less manual startup work and a cleaner SteamVR/VR
 - Pimax Crystal-compatible headset
 - [Broken Eye](https://github.com/ghostiam/BrokenEye)
 - [VRCFaceTracking](https://docs.vrcft.io/docs/vrcft-software/vrcft)
-- Optional: Vive mouth tracker exposed as `HTC Multimedia Camera`
+- Optional: Vive Face Tracker exposed as `HTC Multimedia Camera`
 - Optional: [Intiface](https://intiface.com/#intiface-central) + [OscGoesBrrr](https://osc.toys/) for Lovense workflows
 
 
