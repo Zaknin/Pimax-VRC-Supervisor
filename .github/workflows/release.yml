@@ -6,9 +6,17 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
-      version:
+      tag:
         description: "Release tag/name, for example v1.3.0"
         required: true
+        type: string
+      replace_existing_assets:
+        description: "Type REPLACE to replace all assets on an existing release"
+        required: false
+        type: string
+      replacement_reason:
+        description: "Required reason when replacing existing assets"
+        required: false
         type: string
 
 permissions:
@@ -36,7 +44,7 @@ jobs:
       - name: Resolve release version
         shell: pwsh
         run: |
-          $version = "${{ github.event.inputs.version }}"
+          $version = "${{ github.event.inputs.tag }}"
           if ([string]::IsNullOrWhiteSpace($version)) {
             $version = "${{ github.ref_name }}"
           }
@@ -55,13 +63,46 @@ jobs:
 
           "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
           "ARTIFACT_DIR=artifacts" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "SKIP_EXISTING_RELEASE=false" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "REPLACEMENT_MODE=false" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Check existing release policy
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $replace = "${{ github.event.inputs.replace_existing_assets }}"
+          $reason = "${{ github.event.inputs.replacement_reason }}"
+          $isDispatch = "${{ github.event_name }}" -eq "workflow_dispatch"
+          gh release view $env:RELEASE_VERSION *> $null
+          $releaseExists = $LASTEXITCODE -eq 0
+
+          if ($releaseExists -and -not $isDispatch) {
+            Write-Host "Existing release detected for $env:RELEASE_VERSION."
+            Write-Host "No release assets were modified."
+            Write-Host "Use workflow_dispatch replacement mode to replace existing assets."
+            "SKIP_EXISTING_RELEASE=true" | Out-File -FilePath $env:GITHUB_ENV -Append
+            exit 0
+          }
+
+          if ($releaseExists) {
+            if ($env:RELEASE_VERSION -ne "v1.3.0" -or $replace -ne "REPLACE" -or [string]::IsNullOrWhiteSpace($reason)) {
+              throw "Existing release replacement requires tag=v1.3.0, replace_existing_assets=REPLACE, and a non-empty replacement_reason."
+            }
+
+            Write-Host "Existing release replacement mode confirmed for $env:RELEASE_VERSION."
+            Write-Host "Replacement reason: $reason"
+            "REPLACEMENT_MODE=true" | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
 
       - name: Build package directories
+        if: env.SKIP_EXISTING_RELEASE != 'true'
         shell: pwsh
         run: |
           .\scripts\package-release.ps1 -Version $env:RELEASE_VERSION -Runtime win-x64 -Configuration Release -ReleaseRoot .\artifacts
 
       - name: Authenticode-sign app binaries
+        if: env.SKIP_EXISTING_RELEASE != 'true'
         shell: pwsh
         env:
           WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
@@ -112,6 +153,7 @@ jobs:
           Remove-Item -LiteralPath $certificatePath -Force
 
       - name: Recreate zips after binary signing
+        if: env.SKIP_EXISTING_RELEASE != 'true'
         shell: pwsh
         run: |
           $packageDirs = @(
@@ -133,6 +175,7 @@ jobs:
           }
 
       - name: Verify package inventories
+        if: env.SKIP_EXISTING_RELEASE != 'true'
         shell: pwsh
         run: |
           $required = @(
@@ -175,6 +218,7 @@ jobs:
           }
 
       - name: Create SHA256 checksums
+        if: env.SKIP_EXISTING_RELEASE != 'true'
         shell: pwsh
         run: |
           $zips = Get-ChildItem -Path $env:ARTIFACT_DIR -Filter "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-*.zip" -File
@@ -189,9 +233,11 @@ jobs:
           }
 
       - name: Install cosign
+        if: env.SKIP_EXISTING_RELEASE != 'true'
         uses: sigstore/cosign-installer@v3
 
       - name: Sigstore-sign release zips
+        if: env.SKIP_EXISTING_RELEASE != 'true'
         shell: pwsh
         run: |
           $zips = Get-ChildItem -Path $env:ARTIFACT_DIR -Filter "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-*.zip" -File
@@ -206,11 +252,13 @@ jobs:
           }
 
       - name: Attest release zips
+        if: env.SKIP_EXISTING_RELEASE != 'true'
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: artifacts/PimaxVrcSupervisor-${{ env.RELEASE_VERSION }}-win-x64-*.zip
 
       - name: Create or update GitHub release
+        if: env.SKIP_EXISTING_RELEASE != 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -227,7 +275,13 @@ jobs:
 
           gh release view $env:RELEASE_VERSION *> $null
           if ($LASTEXITCODE -eq 0) {
+            if ($env:REPLACEMENT_MODE -ne "true") {
+              throw "Existing release detected outside replacement mode. No release assets were modified."
+            }
+
             gh release upload $env:RELEASE_VERSION @releaseFiles --clobber
+            $releaseNotes = Get-Content -LiteralPath .\RELEASE_NOTES.md -Raw
+            gh release edit $env:RELEASE_VERSION --notes "$releaseNotes"
           } else {
             gh release create $env:RELEASE_VERSION @releaseFiles --title "Pimax VRC Supervisor $env:RELEASE_VERSION" --generate-notes --target $env:GITHUB_SHA
           }

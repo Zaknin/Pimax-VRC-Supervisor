@@ -34,6 +34,8 @@ When Terminal Mode opens Terminal UI automatically, Terminal UI waits for its fi
 
 Manual Terminal UI launches stay open while disconnected until you exit.
 
+If SteamVR crashes or terminates unexpectedly, Terminal UI shows a persistent warning and the Supervisor remains open. Exit the Supervisor manually when you have reviewed the session state.
+
 ## Actions
 
 Terminal UI can run the same normal session actions as the classic console:

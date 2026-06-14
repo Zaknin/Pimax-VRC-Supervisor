@@ -17,7 +17,10 @@ use crossterm::{
         MouseButton, MouseEvent, MouseEventKind,
     },
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, SetSize, disable_raw_mode, enable_raw_mode,
+        size,
+    },
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 
@@ -55,6 +58,7 @@ fn main() -> Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
+    request_initial_full_layout_size(&mut stdout);
     execute!(stdout, EnterAlternateScreen)?;
     let mouse_capture_error = match execute!(stdout, EnableMouseCapture) {
         Ok(()) => None,
@@ -76,6 +80,20 @@ fn main() -> Result<()> {
     drop(console_close_guard);
 
     result
+}
+
+fn request_initial_full_layout_size(stdout: &mut io::Stdout) {
+    let Ok((width, height)) = size() else {
+        return;
+    };
+
+    let requested_width = width.max(ui::FULL_MIN_WIDTH);
+    let requested_height = height.max(ui::FULL_MIN_HEIGHT);
+    if requested_width == width && requested_height == height {
+        return;
+    }
+
+    let _ = execute!(stdout, SetSize(requested_width, requested_height));
 }
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {

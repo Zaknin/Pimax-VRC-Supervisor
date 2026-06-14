@@ -17,8 +17,8 @@ use crate::{
     theme,
 };
 
-const FULL_MIN_WIDTH: u16 = 120;
-const FULL_MIN_HEIGHT: u16 = 32;
+pub const FULL_MIN_WIDTH: u16 = 120;
+pub const FULL_MIN_HEIGHT: u16 = 32;
 const COMPACT_MIN_WIDTH: u16 = 100;
 const COMPACT_MIN_HEIGHT: u16 = 26;
 const SMALL_MIN_WIDTH: u16 = 80;
@@ -341,6 +341,17 @@ fn render_compact_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now:
 
 fn render_compact_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     let mut lines = Vec::new();
+
+    if !app.status.operator_warning.is_empty() {
+        lines.push(Line::from(vec![
+            theme::badge("WARN", theme::badge_warning_style()),
+            Span::raw(" "),
+            Span::styled(
+                truncate(&app.status.operator_warning, 110),
+                theme::warning_style(),
+            ),
+        ]));
+    }
 
     if app.running_actions.is_empty() {
         lines.push(Line::from(vec![
@@ -669,6 +680,18 @@ fn render_action_card(
 fn render_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     let mut lines = vec![Line::from(Span::styled("Running", theme::title_style()))];
 
+    if !app.status.operator_warning.is_empty() {
+        lines.push(Line::from(vec![
+            theme::badge("WARN", theme::badge_warning_style()),
+            Span::raw(" "),
+            Span::styled(
+                truncate(&app.status.operator_warning, 110),
+                theme::warning_style(),
+            ),
+        ]));
+        lines.push(Line::from(""));
+    }
+
     if app.running_actions.is_empty() {
         lines.push(Line::from(Span::styled(
             "No running actions.",
@@ -747,6 +770,11 @@ fn render_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Ins
 
 fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     let mut lines = Vec::new();
+    let detail_gap = if area.width >= FULL_MIN_WIDTH {
+        "  "
+    } else {
+        " "
+    };
     match app.connection {
         ConnectionState::Connected => lines.push(Line::from(vec![
             Span::styled(format!("{:<10}", "Supervisor"), theme::label_style()),
@@ -765,7 +793,7 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         lines.push(Line::from(vec![
             Span::styled(format!("{:<10}", "Status"), theme::label_style()),
             theme::badge("ERROR", theme::badge_error_style()),
-            Span::raw(format!(" {when}: ")),
+            Span::raw(format!("{detail_gap}{when}: ")),
             Span::raw(truncate(&operator_error_message(error), 84)),
         ]));
     } else {
@@ -821,14 +849,14 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         lines.push(Line::from(vec![
             Span::styled(format!("{:<10}", "Shutdown"), theme::label_style()),
             theme::badge("RUNNING", theme::badge_warning_style()),
-            Span::raw(" "),
+            Span::raw(detail_gap),
             Span::raw(truncate(message, 84)),
         ]));
     } else if let Some(error) = &app.shutdown_error {
         lines.push(Line::from(vec![
             Span::styled(format!("{:<10}", "Shutdown"), theme::label_style()),
             theme::badge("ERROR", theme::badge_error_style()),
-            Span::raw(" "),
+            Span::raw(detail_gap),
             Span::raw(truncate(&operator_error_message(error), 84)),
         ]));
     }

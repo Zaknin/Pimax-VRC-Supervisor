@@ -24,6 +24,7 @@ using var consoleLog = SupervisorConsoleLog.Install();
 
 var commandLineArgs = Environment.GetCommandLineArgs().Skip(1).ToArray();
 var desktopTuiStart = commandLineArgs.Any(arg => string.Equals(arg, "--desktop-tui-start", StringComparison.OrdinalIgnoreCase));
+var launchDesktopTuiAfterReady = commandLineArgs.Any(arg => string.Equals(arg, "--launch-desktop-tui-after-ready", StringComparison.OrdinalIgnoreCase));
 var steamVrStart = commandLineArgs.Any(arg => string.Equals(arg, "--steamvr-start", StringComparison.OrdinalIgnoreCase));
 var watchVrchatAutoLaunch = commandLineArgs.Any(arg => string.Equals(arg, "--watch-vrchat-auto-launch", StringComparison.OrdinalIgnoreCase));
 var applyStartupIntegration = commandLineArgs.Any(arg => string.Equals(arg, "--apply-startup-integration", StringComparison.OrdinalIgnoreCase));
@@ -31,6 +32,7 @@ var showStartupIntegrationResult = commandLineArgs.Any(arg => string.Equals(arg,
 var hideStartupIntegrationHelperWindow = commandLineArgs.Any(arg => string.Equals(arg, "--hide-startup-helper", StringComparison.OrdinalIgnoreCase));
 var desktopTuiDefaultInterface = commandLineArgs.Any(arg => string.Equals(arg, "--desktop-tui-default-interface", StringComparison.OrdinalIgnoreCase));
 if (desktopTuiStart
+    || launchDesktopTuiAfterReady
     || steamVrStart
     || watchVrchatAutoLaunch
     || (applyStartupIntegration && hideStartupIntegrationHelperWindow && !showStartupIntegrationResult))
@@ -122,7 +124,7 @@ if (!ownsSupervisorMutex)
 
 var diagnosticsOptions = DiagnosticsOptions.ForSupervisor(config, commandLineArgs);
 using var diagnostics = SupervisorDiagnosticsSession.Start(diagnosticsOptions);
-var supervisor = new AppSupervisor(config, steamVrStart, diagnostics, shutdown);
+var supervisor = new AppSupervisor(config, steamVrStart, launchDesktopTuiAfterReady, diagnostics, shutdown);
 var supervisorStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 Console.CancelKeyPress += (_, eventArgs) =>
 {
@@ -190,7 +192,7 @@ static async Task InstallAutoLaunchScheduledTaskFromCommandLineAsync(SupervisorC
     var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(
         startWatcherImmediately: true,
         skipCurrentSteamVrSession: true,
-        useDesktopTuiDefaultInterface: false,
+        useDesktopTuiDefaultInterface: null,
         config.LoadedFromPath,
         cancellationToken);
     config.SetAutoLaunchScheduledTask(true);
@@ -703,6 +705,7 @@ internal sealed class SupervisorDiagnosticsSession : IDisposable
 internal static class ConsoleWindow
 {
     private const int ShowWindowHide = 0;
+    private const int ShowWindowShow = 5;
 
     public static void HideIfPresent()
     {
@@ -715,6 +718,20 @@ internal static class ConsoleWindow
         if (consoleWindow != IntPtr.Zero)
         {
             ShowWindow(consoleWindow, ShowWindowHide);
+        }
+    }
+
+    public static void ShowIfPresent()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var consoleWindow = GetConsoleWindow();
+        if (consoleWindow != IntPtr.Zero)
+        {
+            ShowWindow(consoleWindow, ShowWindowShow);
         }
     }
 
@@ -1210,6 +1227,14 @@ internal enum SupervisorLifecyclePhase
     ShutdownRoutineRunning
 }
 
+internal enum SteamVrTerminationState
+{
+    Running,
+    NotStarted,
+    NormalExit,
+    UnexpectedTermination
+}
+
 internal enum BaseStationWakeRoutineResult
 {
     Ran,
@@ -1246,7 +1271,8 @@ internal sealed record SupervisorStatusSnapshot(
     string? ShutdownProgressElapsed,
     string? ShutdownBlockedBy,
     string? ShutdownBlockedElapsed,
-    string? BlockingProcesses);
+    string? BlockingProcesses,
+    string? OperatorWarning);
 
 internal sealed record SupervisorCommandDefinition(
     string Name,
@@ -1334,9 +1360,12 @@ internal sealed class AppSupervisor
     private static readonly TimeSpan BrokenEyeStartupCheckDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan SteamVrBaseStationStartupDelay = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan LovenseBluetoothRegistryRecentWindow = TimeSpan.FromHours(1);
+    private static readonly TimeSpan DashboardReadinessTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan TerminalUiImmediateExitObservation = TimeSpan.FromMilliseconds(750);
 
     private readonly SupervisorConfig _config;
     private readonly bool _steamVrStart;
+    private readonly bool _launchDesktopTuiAfterReady;
     private readonly BaseStationGattClient _baseStationGattClient = new();
     private readonly SteamVrTrackingReferenceReader _steamVrTrackingReferenceReader = new();
     private readonly MonitorLayoutController _monitorLayout = new();
@@ -1393,11 +1422,15 @@ internal sealed class AppSupervisor
     private volatile bool _forcedManualReloadRequested;
     private SupervisorLifecyclePhase _lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChat;
     private int _gracefulShutdownRequested;
+    private readonly Dictionary<int, Process> _steamVrServerProcessHandles = new();
+    private string? _operatorWarning;
+    private bool _steamVrUnexpectedTerminationLatched;
 
-    public AppSupervisor(SupervisorConfig config, bool steamVrStart, SupervisorDiagnosticsSession diagnostics, CancellationTokenSource shutdown)
+    public AppSupervisor(SupervisorConfig config, bool steamVrStart, bool launchDesktopTuiAfterReady, SupervisorDiagnosticsSession diagnostics, CancellationTokenSource shutdown)
     {
         _config = config;
         _steamVrStart = steamVrStart;
+        _launchDesktopTuiAfterReady = launchDesktopTuiAfterReady;
         _diagnostics = diagnostics;
         _shutdown = shutdown;
         _pollInterval = TimeSpan.FromSeconds(Math.Max(1, config.PollIntervalSeconds));
@@ -1454,6 +1487,11 @@ internal sealed class AppSupervisor
             _config.SaveInitialSetupQuestionsComplete();
         }
         _commandServer = SupervisorCommandServer.Start(this, cancellationToken);
+        if (_launchDesktopTuiAfterReady)
+        {
+            Console.WriteLine("Supervisor received startup interface: Terminal UI.");
+            await LaunchTerminalUiAfterDashboardReadyAsync(cancellationToken);
+        }
         var restartedFromForcedManualReload = TryConsumeForcedManualReloadMarker();
 
         try
@@ -1465,6 +1503,7 @@ internal sealed class AppSupervisor
             }
             if (ShouldExitWithSteamVr())
             {
+                _ = ObserveSteamVrTerminationState();
                 WriteDiagnosticEvent("lifecycle; steamvr detected at startup; processes=" + DescribeRunningProcesses(_config.SteamVrServerProcessNames));
             }
 
@@ -1474,10 +1513,16 @@ internal sealed class AppSupervisor
 
             await WaitForSteamVrBaseStationStartupWindowAsync(cancellationToken);
             await TryPowerOnBaseStationsBeforeWatchedProcessAsync(cancellationToken);
-            if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+            var startupSteamVrState = ObserveSteamVrTerminationState();
+            if (startupSteamVrState == SteamVrTerminationState.NormalExit)
             {
                 Console.WriteLine("SteamVR shut down before VRChat started. Powering down base stations and exiting.");
                 await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
+                return;
+            }
+            if (LatchUnexpectedSteamVrTerminationIfNeeded(startupSteamVrState))
+            {
+                await WaitUntilManualSupervisorExitAsync(cancellationToken);
                 return;
             }
 
@@ -1531,7 +1576,8 @@ internal sealed class AppSupervisor
                     await HandleConsoleHotkeysAsync(cancellationToken);
                     if (_lifecyclePhase == SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit)
                     {
-                        if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+                        var waitingSteamVrState = ObserveSteamVrTerminationState();
+                        if (waitingSteamVrState == SteamVrTerminationState.NormalExit)
                         {
                             _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
                             _shutdownBlockedBySteamVrSince = null;
@@ -1539,6 +1585,10 @@ internal sealed class AppSupervisor
                             Console.WriteLine("SteamVR exited; running shutdown routine.");
                             await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
                             return;
+                        }
+                        if (LatchUnexpectedSteamVrTerminationIfNeeded(waitingSteamVrState))
+                        {
+                            continue;
                         }
 
                         if (ObserveWatchedShutdownProcesses() == WatchedProcessState.Running)
@@ -1559,7 +1609,8 @@ internal sealed class AppSupervisor
                         await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
                     }
 
-                    if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+                    var steamVrState = ObserveSteamVrTerminationState();
+                    if (steamVrState == SteamVrTerminationState.NormalExit)
                     {
                         var previousLifecyclePhase = _lifecyclePhase;
                         _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
@@ -1570,6 +1621,10 @@ internal sealed class AppSupervisor
                             : "SteamVR has shut down. Restoring monitors, closing managed apps, and exiting.");
                         await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
                         return;
+                    }
+                    if (LatchUnexpectedSteamVrTerminationIfNeeded(steamVrState))
+                    {
+                        continue;
                     }
 
                     var watchedProcessState = ObserveWatchedShutdownProcesses();
@@ -2028,7 +2083,7 @@ internal sealed class AppSupervisor
                 var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(
                     startWatcherImmediately: true,
                     skipCurrentSteamVrSession: true,
-                    useDesktopTuiDefaultInterface: false,
+                    useDesktopTuiDefaultInterface: null,
                     _config.LoadedFromPath,
                     cancellationToken);
                 _config.SetAutoLaunchScheduledTask(true);
@@ -2154,6 +2209,105 @@ internal sealed class AppSupervisor
         }
     }
 
+    private async Task LaunchTerminalUiAfterDashboardReadyAsync(CancellationToken cancellationToken)
+    {
+        if (_commandServer is null)
+        {
+            Console.WriteLine("Terminal UI startup requested, but the dashboard bridge is not initialized. Falling back to Classic Console.");
+            ConsoleWindow.ShowIfPresent();
+            return;
+        }
+
+        Console.WriteLine("Terminal UI startup requested.");
+        Console.WriteLine("Waiting for dashboard bridge readiness.");
+        var startedAt = Stopwatch.GetTimestamp();
+        try
+        {
+            var readyTask = _commandServer.Ready;
+            var completed = await Task.WhenAny(readyTask, Task.Delay(DashboardReadinessTimeout, cancellationToken));
+            if (completed != readyTask)
+            {
+                Console.WriteLine($"Terminal UI launch failed after 0 attempt(s): dashboard bridge was not ready within {DashboardReadinessTimeout.TotalSeconds:0} seconds. Falling back to Classic Console.");
+                ConsoleWindow.ShowIfPresent();
+                return;
+            }
+
+            await readyTask;
+            var readinessProbe = await ExecuteSupervisorCommandAsync(
+                "query-json {\"resource\":\"status\"}",
+                cancellationToken);
+            if (!readinessProbe.Contains("\"success\":true", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine("Terminal UI launch failed after 0 attempt(s): dashboard status snapshot was not serviceable. Falling back to Classic Console.");
+                ConsoleWindow.ShowIfPresent();
+                return;
+            }
+
+            Console.WriteLine($"Dashboard bridge ready after {Stopwatch.GetElapsedTime(startedAt).TotalSeconds:0.0}s.");
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            Console.WriteLine($"Terminal UI launch failed after 0 attempt(s): {ex.Message}. Falling back to Classic Console.");
+            ConsoleWindow.ShowIfPresent();
+            return;
+        }
+
+        var lastFailure = "";
+        for (var attempt = 1; attempt <= 2; attempt++)
+        {
+            try
+            {
+                Console.WriteLine("Launching Terminal UI.");
+                using var process = StartTerminalUiProcess();
+                Console.WriteLine($"Terminal UI process started with PID {process.Id}.");
+                await Task.Delay(TerminalUiImmediateExitObservation, cancellationToken);
+                if (!process.HasExited)
+                {
+                    return;
+                }
+
+                lastFailure = $"Terminal UI exited immediately with code {process.ExitCode}.";
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                lastFailure = ex.Message;
+            }
+        }
+
+        Console.WriteLine($"Terminal UI launch failed after 2 attempt(s): {lastFailure} Falling back to Classic Console.");
+        ConsoleWindow.ShowIfPresent();
+    }
+
+    private Process StartTerminalUiProcess()
+    {
+        var supervisorPath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+        var supervisorDirectory = string.IsNullOrWhiteSpace(supervisorPath)
+            ? AppContext.BaseDirectory
+            : Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory;
+        var tuiPath = Path.Combine(supervisorDirectory, "PimaxVrcSupervisorTui.exe");
+        if (!File.Exists(tuiPath))
+        {
+            throw new FileNotFoundException("Terminal UI executable was not found.", tuiPath);
+        }
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = tuiPath,
+            WorkingDirectory = supervisorDirectory,
+            UseShellExecute = true,
+            WindowStyle = ProcessWindowStyle.Normal
+        };
+        if (!string.IsNullOrWhiteSpace(_config.LoadedFromPath))
+        {
+            startInfo.ArgumentList.Add("--config");
+            startInfo.ArgumentList.Add(_config.LoadedFromPath);
+        }
+
+        startInfo.ArgumentList.Add("--exit-when-supervisor-exits");
+        return Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Terminal UI process could not be started.");
+    }
+
     private async Task EnsureAutoLaunchScheduledTaskInstalledAsync(CancellationToken cancellationToken)
     {
         Console.WriteLine("Ensuring elevated auto-launch scheduled task is installed.");
@@ -2162,7 +2316,7 @@ internal sealed class AppSupervisor
             var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(
                 startWatcherImmediately: true,
                 skipCurrentSteamVrSession: true,
-                useDesktopTuiDefaultInterface: false,
+                useDesktopTuiDefaultInterface: null,
                 _config.LoadedFromPath,
                 cancellationToken);
             Console.WriteLine($"Installed elevated auto-launch scheduled task: {taskDetails.TaskName}");
@@ -2408,12 +2562,17 @@ internal sealed class AppSupervisor
         while (!cancellationToken.IsCancellationRequested)
         {
             await Task.Delay(_pollInterval, cancellationToken);
-            if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+            var steamVrState = ObserveSteamVrTerminationState();
+            if (steamVrState == SteamVrTerminationState.NormalExit)
             {
                 Console.WriteLine("SteamVR shut down while waiting for VRChat.");
                 await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 return false;
+            }
+            if (LatchUnexpectedSteamVrTerminationIfNeeded(steamVrState))
+            {
+                continue;
             }
 
             if (ObserveWatchedShutdownProcesses() == WatchedProcessState.Running)
@@ -3120,7 +3279,10 @@ internal sealed class AppSupervisor
         var blockedBySteamVr = snapshot.ShutdownBlockedBy is null || snapshot.ShutdownBlockedElapsed is null || snapshot.BlockingProcesses is null
             ? ""
             : $"; ShutdownBlockedBy={snapshot.ShutdownBlockedBy}({snapshot.ShutdownBlockedElapsed}); BlockingProcesses={snapshot.BlockingProcesses}";
-        return $"Mode={snapshot.Mode}; SteamVR={snapshot.SteamVr}; Lifecycle={snapshot.Lifecycle}; CoreApps={snapshot.CoreApps}; BaseStations={snapshot.BaseStations}; OscRouter={snapshot.OscRouter}; OscGoesBrrr={snapshot.OscGoesBrrr}{shutdownProgress}{blockedBySteamVr}";
+        var operatorWarning = string.IsNullOrWhiteSpace(snapshot.OperatorWarning)
+            ? ""
+            : $"; Warning={snapshot.OperatorWarning}";
+        return $"Mode={snapshot.Mode}; SteamVR={snapshot.SteamVr}; Lifecycle={snapshot.Lifecycle}; CoreApps={snapshot.CoreApps}; BaseStations={snapshot.BaseStations}; OscRouter={snapshot.OscRouter}; OscGoesBrrr={snapshot.OscGoesBrrr}{shutdownProgress}{blockedBySteamVr}{operatorWarning}";
     }
 
     private SupervisorStatusSnapshot BuildSupervisorStatusSnapshot()
@@ -3171,7 +3333,8 @@ internal sealed class AppSupervisor
             shutdownProgressElapsed,
             _shutdownBlockedBySteamVrSince is null ? null : "SteamVR",
             shutdownBlockedElapsed,
-            blockingProcesses);
+            blockingProcesses,
+            _operatorWarning);
     }
 
     private SupervisorCommandCapabilitiesSnapshot BuildSupervisorCommandCapabilitiesSnapshot()
@@ -4181,7 +4344,12 @@ internal sealed class AppSupervisor
                 await Task.Delay(delay, cancellationToken);
             }
 
-            if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+            var steamVrState = ObserveSteamVrTerminationState();
+            if (steamVrState == SteamVrTerminationState.NormalExit)
+            {
+                return;
+            }
+            if (LatchUnexpectedSteamVrTerminationIfNeeded(steamVrState))
             {
                 return;
             }
@@ -5056,6 +5224,94 @@ internal sealed class AppSupervisor
 
     private bool ShouldExitWithSteamVr()
         => _steamVrStart || _config.GetEffectiveStartupLaunchMode() == StartupLaunchMode.ScheduledTask;
+
+    private SteamVrTerminationState ObserveSteamVrTerminationState()
+    {
+        if (!ShouldExitWithSteamVr())
+        {
+            return SteamVrTerminationState.NotStarted;
+        }
+
+        var currentProcesses = GetProcesses(_config.SteamVrServerProcessNames);
+        if (currentProcesses.Count > 0)
+        {
+            foreach (var process in currentProcesses)
+            {
+                if (!_steamVrServerProcessHandles.ContainsKey(process.Id))
+                {
+                    _steamVrServerProcessHandles[process.Id] = process;
+                }
+                else
+                {
+                    process.Dispose();
+                }
+            }
+
+            return SteamVrTerminationState.Running;
+        }
+
+        if (_steamVrServerProcessHandles.Count == 0)
+        {
+            return SteamVrTerminationState.NotStarted;
+        }
+
+        var sawExitCode = false;
+        var sawAbnormalExit = false;
+        foreach (var process in _steamVrServerProcessHandles.Values)
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    return SteamVrTerminationState.Running;
+                }
+
+                sawExitCode = true;
+                if (process.ExitCode != 0)
+                {
+                    sawAbnormalExit = true;
+                }
+            }
+            catch
+            {
+                sawAbnormalExit = true;
+            }
+        }
+
+        return sawExitCode && !sawAbnormalExit
+            ? SteamVrTerminationState.NormalExit
+            : SteamVrTerminationState.UnexpectedTermination;
+    }
+
+    private bool LatchUnexpectedSteamVrTerminationIfNeeded(SteamVrTerminationState state)
+    {
+        if (state != SteamVrTerminationState.UnexpectedTermination)
+        {
+            return false;
+        }
+
+        if (_steamVrUnexpectedTerminationLatched)
+        {
+            return true;
+        }
+
+        _steamVrUnexpectedTerminationLatched = true;
+        _operatorWarning = "SteamVR crashed or terminated unexpectedly. Supervisor will remain open. Exit Supervisor manually.";
+        Console.WriteLine("SteamVR process terminated without a normal shutdown signal.");
+        Console.WriteLine("SteamVR session classified as unexpected termination.");
+        Console.WriteLine("Supervisor will remain open until manually exited.");
+        WriteDiagnosticEvent("steamvr; unexpected termination; supervisor remains open");
+        return true;
+    }
+
+    private async Task WaitUntilManualSupervisorExitAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await Task.Delay(_pollInterval, cancellationToken);
+            await HandleConsoleHotkeysAsync(cancellationToken);
+        }
+    }
 
     private async Task TryRestoreMonitorsAndStopManagedAppsAsync(bool waitForSteamVrServerExit, CancellationToken cancellationToken)
     {
@@ -6607,13 +6863,16 @@ internal sealed class SupervisorCommandServer : IDisposable
     public const int TcpPort = 37957;
     private readonly AppSupervisor _supervisor;
     private readonly CancellationTokenSource _shutdown = new();
+    private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Task _serverTask;
 
     private SupervisorCommandServer(AppSupervisor supervisor)
     {
         _supervisor = supervisor;
-        _serverTask = Task.Run(() => RunTcpAsync(supervisor, _shutdown.Token), CancellationToken.None);
+        _serverTask = Task.Run(() => RunTcpAsync(supervisor, _ready, _shutdown.Token), CancellationToken.None);
     }
+
+    public Task Ready => _ready.Task;
 
     public static SupervisorCommandServer Start(AppSupervisor supervisor, CancellationToken cancellationToken)
     {
@@ -6643,7 +6902,7 @@ internal sealed class SupervisorCommandServer : IDisposable
         _shutdown.Dispose();
     }
 
-    private static async Task RunTcpAsync(AppSupervisor supervisor, CancellationToken cancellationToken)
+    private static async Task RunTcpAsync(AppSupervisor supervisor, TaskCompletionSource ready, CancellationToken cancellationToken)
     {
         var listener = new TcpListener(IPAddress.Loopback, TcpPort);
         try
@@ -6651,6 +6910,7 @@ internal sealed class SupervisorCommandServer : IDisposable
             listener.Start();
             Console.WriteLine($"Dashboard command TCP endpoint ready: 127.0.0.1:{TcpPort}");
             supervisor.WriteDebug($"command bridge TCP endpoint ready; endpoint=127.0.0.1:{TcpPort}");
+            ready.TrySetResult();
             while (!cancellationToken.IsCancellationRequested)
             {
                 var client = await listener.AcceptTcpClientAsync(cancellationToken);
@@ -6661,11 +6921,13 @@ internal sealed class SupervisorCommandServer : IDisposable
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            ready.TrySetCanceled(cancellationToken);
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Dashboard command TCP endpoint error: {ex.Message}");
             supervisor.WriteDebug("command bridge TCP endpoint error: " + ex.Message);
+            ready.TrySetException(ex);
         }
         finally
         {
@@ -7362,12 +7624,10 @@ internal static class AutoLaunchWatcher
             {
                 if (!supervisorRunning)
                 {
+                    Console.WriteLine(useDesktopTuiDefaultInterface
+                        ? "Watcher selected startup interface: Terminal UI."
+                        : "Watcher selected startup interface: Classic Console.");
                     StartSupervisor(supervisorPath, configPath, useDesktopTuiDefaultInterface);
-                }
-
-                if (useDesktopTuiDefaultInterface)
-                {
-                    StartDesktopTuiIfNeeded(supervisorPath, configPath);
                 }
 
                 launchedForCurrentSteamVrSession = true;
@@ -7434,50 +7694,12 @@ internal static class AutoLaunchWatcher
 
         if (useDesktopTuiDefaultInterface)
         {
+            Console.WriteLine("Starting Supervisor with Terminal UI startup intent.");
             startInfo.ArgumentList.Add("--desktop-tui-start");
+            startInfo.ArgumentList.Add("--launch-desktop-tui-after-ready");
         }
 
         Process.Start(startInfo);
-    }
-
-    private static void StartDesktopTuiIfNeeded(string supervisorPath, string? configPath)
-    {
-        const string tuiProcessName = "PimaxVrcSupervisorTui";
-        if (IsProcessRunning(tuiProcessName))
-        {
-            return;
-        }
-
-        try
-        {
-            var supervisorDirectory = Path.GetDirectoryName(supervisorPath) ?? Environment.CurrentDirectory;
-            var tuiPath = Path.Combine(supervisorDirectory, "PimaxVrcSupervisorTui.exe");
-            if (!File.Exists(tuiPath))
-            {
-                Console.WriteLine($"Terminal UI executable was not found: {tuiPath}");
-                return;
-            }
-
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = tuiPath,
-                WorkingDirectory = supervisorDirectory,
-                UseShellExecute = true,
-                WindowStyle = ProcessWindowStyle.Normal
-            };
-            if (!string.IsNullOrWhiteSpace(configPath))
-            {
-                startInfo.ArgumentList.Add("--config");
-                startInfo.ArgumentList.Add(configPath);
-            }
-            startInfo.ArgumentList.Add("--exit-when-supervisor-exits");
-
-            Process.Start(startInfo);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Could not start Terminal UI: {ex.Message}");
-        }
     }
 
     public static void RequestSkipCurrentSteamVrSession()
@@ -7527,6 +7749,15 @@ internal static class ScheduledTaskInstaller
     private const string SteamVrStartArgument = "--steamvr-start";
     private static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(10);
 
+    private sealed record ExistingWatcherTask(
+        string Executable,
+        string Arguments,
+        string WorkingDirectory,
+        bool UseDesktopTuiDefaultInterface,
+        string[] UnknownArguments);
+
+    private sealed record ParsedWatcherArguments(bool UseDesktopTuiDefaultInterface, string[] UnknownArguments);
+
     public static async Task<bool> ExistsAsync(CancellationToken cancellationToken)
     {
         var result = await RunProcessCaptureAsync(
@@ -7550,7 +7781,7 @@ internal static class ScheduledTaskInstaller
     public static async Task<ScheduledTaskDetails> CreateOrUpdateAsync(
         bool startWatcherImmediately,
         bool skipCurrentSteamVrSession,
-        bool useDesktopTuiDefaultInterface,
+        bool? useDesktopTuiDefaultInterface,
         string? configPath,
         CancellationToken cancellationToken)
     {
@@ -7560,17 +7791,67 @@ internal static class ScheduledTaskInstaller
             TaskName,
             supervisorPath,
             ScheduledTaskPathValidator.GetCurrentExecutableDirectory());
-        await StopAutoLaunchWatcherAsync(cancellationToken);
+        var existingTask = await TryReadExistingWatcherTaskAsync(cancellationToken);
+        var selectedInterface = ResolvePersistentInterface(
+            useDesktopTuiDefaultInterface,
+            existingTask,
+            out var persistentInterfaceSource);
+        Console.WriteLine($"Persistent interface source: {persistentInterfaceSource}.");
         var watcherPath = CreateOrUpdateWatcherExecutable(supervisorPath);
         ScheduledTaskPathValidator.ThrowIfInvalidScheduledTaskExecutablePath(
             TaskName,
             watcherPath,
             ScheduledTaskPathValidator.GetCurrentExecutableDirectory());
+        var preservedUnknownArguments = existingTask?.UnknownArguments ?? [];
+        if (preservedUnknownArguments.Length > 0)
+        {
+            Console.WriteLine("Unknown watcher arguments preserved: " + string.Join(" ", preservedUnknownArguments));
+        }
+        var desiredArguments = BuildWatcherArguments(
+            skipCurrentSteamVrSession,
+            selectedInterface,
+            configPath,
+            preservedUnknownArguments);
+        if (IsExistingTaskSemanticallyValid(
+            existingTask,
+            watcherPath,
+            supervisorWorkingDirectory,
+            desiredArguments))
+        {
+            Console.WriteLine("Scheduled task already valid; no changes made.");
+            if (startWatcherImmediately)
+            {
+                if (skipCurrentSteamVrSession)
+                {
+                    AutoLaunchWatcher.RequestSkipCurrentSteamVrSession();
+                }
+
+                await RunProcessAsync(
+                    "schtasks.exe",
+                    ["/Run", "/TN", TaskName],
+                    cancellationToken);
+            }
+
+            return new ScheduledTaskDetails(TaskName, "Hidden elevated watcher at Windows sign-in; launches supervisor when vrserver.exe is running.");
+        }
+
+        await StopAutoLaunchWatcherAsync(cancellationToken);
+        if (existingTask is null)
+        {
+            Console.WriteLine("Scheduled task created.");
+        }
+        else
+        {
+            Console.WriteLine("Scheduled task repaired: action, working directory, or watcher arguments did not match the expected v1.3.0 task.");
+            Console.WriteLine($"Old action: {existingTask.Executable} {existingTask.Arguments}".Trim());
+            Console.WriteLine($"New action: {watcherPath} {desiredArguments}".Trim());
+        }
+
         var taskXml = BuildTaskXml(
             watcherPath,
             supervisorWorkingDirectory,
             "Runs an elevated hidden watcher that starts Pimax VRC Supervisor when vrserver.exe is running.",
-            BuildWatcherArguments(skipCurrentSteamVrSession, useDesktopTuiDefaultInterface, configPath),
+            desiredArguments,
             includeLogonTrigger: true);
         var taskXmlPath = Path.Combine(Path.GetTempPath(), $"PimaxVrcSupervisorAutoLaunch-{Guid.NewGuid():N}.xml");
 
@@ -7618,7 +7899,8 @@ internal static class ScheduledTaskInstaller
     private static string BuildWatcherArguments(
         bool skipCurrentSteamVrSession,
         bool useDesktopTuiDefaultInterface,
-        string? configPath)
+        string? configPath,
+        IReadOnlyList<string>? preservedUnknownArguments = null)
     {
         var arguments = new List<string> { WatcherArgument };
         if (skipCurrentSteamVrSession)
@@ -7637,7 +7919,186 @@ internal static class ScheduledTaskInstaller
             arguments.Add("--desktop-tui-default-interface");
         }
 
+        if (preservedUnknownArguments is not null)
+        {
+            arguments.AddRange(preservedUnknownArguments);
+        }
+
         return string.Join(' ', arguments);
+    }
+
+    private static bool ResolvePersistentInterface(
+        bool? requestedDesktopTuiDefaultInterface,
+        ExistingWatcherTask? existingTask,
+        out string source)
+    {
+        if (requestedDesktopTuiDefaultInterface is { } requested)
+        {
+            source = "Configurator selection";
+            return requested;
+        }
+
+        if (existingTask is not null)
+        {
+            source = "existing scheduled task";
+            return existingTask.UseDesktopTuiDefaultInterface;
+        }
+
+        source = "documented product default";
+        return true;
+    }
+
+    private static bool IsExistingTaskSemanticallyValid(
+        ExistingWatcherTask? existingTask,
+        string watcherPath,
+        string workingDirectory,
+        string desiredArguments)
+    {
+        if (existingTask is null)
+        {
+            return false;
+        }
+
+        return PathsEqual(existingTask.Executable, watcherPath)
+            && PathsEqual(existingTask.WorkingDirectory, workingDirectory)
+            && string.Equals(
+                NormalizeArguments(existingTask.Arguments),
+                NormalizeArguments(desiredArguments),
+                StringComparison.Ordinal);
+    }
+
+    private static async Task<ExistingWatcherTask?> TryReadExistingWatcherTaskAsync(CancellationToken cancellationToken)
+    {
+        var result = await RunProcessCaptureAsync(
+            "schtasks.exe",
+            ["/Query", "/TN", TaskName, "/XML"],
+            cancellationToken);
+        if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output))
+        {
+            return null;
+        }
+
+        try
+        {
+            var document = XDocument.Parse(result.Output);
+            var action = document
+                .Descendants()
+                .FirstOrDefault(element => element.Name.LocalName == "Exec");
+            var executable = action?
+                .Elements()
+                .FirstOrDefault(element => element.Name.LocalName == "Command")
+                ?.Value
+                .Trim();
+            var arguments = action?
+                .Elements()
+                .FirstOrDefault(element => element.Name.LocalName == "Arguments")
+                ?.Value
+                .Trim() ?? "";
+            var workingDirectory = action?
+                .Elements()
+                .FirstOrDefault(element => element.Name.LocalName == "WorkingDirectory")
+                ?.Value
+                .Trim();
+            var parsed = ParseWatcherArguments(arguments);
+            return new ExistingWatcherTask(
+                executable ?? "",
+                arguments,
+                workingDirectory ?? "",
+                parsed.UseDesktopTuiDefaultInterface,
+                parsed.UnknownArguments);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not parse existing scheduled task XML; it will be repaired if needed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static ParsedWatcherArguments ParseWatcherArguments(string arguments)
+    {
+        var tokens = SplitCommandLine(arguments);
+        var unknown = new List<string>();
+        var useDesktopTuiDefaultInterface = false;
+        for (var index = 0; index < tokens.Count; index++)
+        {
+            var token = tokens[index];
+            if (string.Equals(token, WatcherArgument, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(token, "--skip-current-vrserver-session", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (string.Equals(token, "--desktop-tui-default-interface", StringComparison.OrdinalIgnoreCase))
+            {
+                useDesktopTuiDefaultInterface = true;
+                continue;
+            }
+
+            if (string.Equals(token, "--config", StringComparison.OrdinalIgnoreCase))
+            {
+                index++;
+                continue;
+            }
+
+            unknown.Add(QuoteArgumentIfNeeded(token));
+        }
+
+        return new ParsedWatcherArguments(useDesktopTuiDefaultInterface, unknown.ToArray());
+    }
+
+    private static List<string> SplitCommandLine(string arguments)
+    {
+        var tokens = new List<string>();
+        var builder = new StringBuilder();
+        var inQuotes = false;
+        for (var index = 0; index < arguments.Length; index++)
+        {
+            var character = arguments[index];
+            if (character == '"')
+            {
+                inQuotes = !inQuotes;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(character) && !inQuotes)
+            {
+                if (builder.Length > 0)
+                {
+                    tokens.Add(builder.ToString());
+                    builder.Clear();
+                }
+
+                continue;
+            }
+
+            builder.Append(character);
+        }
+
+        if (builder.Length > 0)
+        {
+            tokens.Add(builder.ToString());
+        }
+
+        return tokens;
+    }
+
+    private static string NormalizeArguments(string arguments)
+        => string.Join(" ", SplitCommandLine(arguments).Select(QuoteArgumentIfNeeded));
+
+    private static string QuoteArgumentIfNeeded(string argument)
+        => argument.Any(char.IsWhiteSpace) ? QuoteArgument(argument) : argument;
+
+    private static bool PathsEqual(string? left, string? right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+        {
+            return string.IsNullOrWhiteSpace(left) && string.IsNullOrWhiteSpace(right);
+        }
+
+        return string.Equals(
+            Path.GetFullPath(Environment.ExpandEnvironmentVariables(left)),
+            Path.GetFullPath(Environment.ExpandEnvironmentVariables(right)),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static string QuoteArgument(string argument)

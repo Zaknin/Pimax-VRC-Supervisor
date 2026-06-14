@@ -2,6 +2,19 @@
 
 Pimax VRC Supervisor v1.3.0 is a Windows x64 release for Pimax VRChat sessions. It includes the Configurator, Supervisor, Terminal UI, SteamVR Overlay host, startup helper, watcher, default config, and release notes in one flat folder.
 
+## Asset Republication Notice
+
+Release assets updated on 2026-06-13 22:02:09 UTC:
+
+- Corrected Terminal UI startup ordering so the Supervisor dashboard bridge is ready before Terminal UI opens.
+- Corrected scheduled-task preservation of the Terminal UI preference.
+- Corrected repeated-session fallback to Classic Console.
+- Corrected initial Terminal UI window sizing.
+- Improved full-layout System panel spacing.
+- Added warning and manual-exit handling for unexpected SteamVR termination.
+
+The version remains v1.3.0. Previous downloadable hashes are superseded by the checksums and Sigstore bundles attached to the current release.
+
 ## Package Variants
 
 - `PimaxVrcSupervisor-v1.3.0-win-x64-with-dotnet9.zip`

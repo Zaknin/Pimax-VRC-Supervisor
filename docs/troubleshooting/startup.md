@@ -21,3 +21,5 @@ Open the intended config in Configurator and save/apply startup mode again. The 
 ## Classic Console Opens Instead Of Terminal UI
 
 Check **Use Terminal UI as default interface**. If it is unchecked, Terminal Mode preserves classic console behavior.
+
+If it is checked and Classic Console still opens, re-save startup integration from the current release folder. The scheduled task should keep the Terminal UI preference after repair.

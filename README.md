@@ -14,6 +14,7 @@ It is built for users who want less manual startup work and a cleaner SteamVR/VR
 - Starts Broken Eye and VRCFaceTracking in the right order.
 - Restarts face-tracking tools after headset, Vive Face Tracker, or Pimax runtime reconnects.
 - Opens a Terminal UI dashboard for monitoring and confirmed session actions.
+- Opens autostart Terminal UI only after the Supervisor dashboard is ready.
 - Supports a SteamVR Overlay mode for in-headset controls.
 - Powers SteamVR Base Stations on and off when configured.
 - Skips unsupported or unavailable base stations without blocking startup indefinitely.
