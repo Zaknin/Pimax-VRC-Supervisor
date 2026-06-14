@@ -3080,20 +3080,29 @@ internal sealed class ConfigEditorForm : Form
             return;
         }
 
-        if (LaunchSupervisorProcess(supervisorPath, configPath, desktopTuiStart: true, successStatus: null))
+        if (tuiRunning)
         {
-            var tuiResult = tuiRunning
-                ? DesktopTuiLaunchResult.AlreadyRunning
-                : LaunchDesktopTui(showAlreadyOpenMessage: false);
+            if (LaunchSupervisorProcess(
+                supervisorPath,
+                configPath,
+                desktopTuiStart: true,
+                launchDesktopTuiAfterReady: false,
+                successStatus: null))
+            {
+                SetStatus("Started Supervisor. Existing Terminal UI will reconnect.");
+            }
 
-            if (tuiResult == DesktopTuiLaunchResult.Launched)
-            {
-                SetStatus("Started Supervisor and Terminal UI.");
-            }
-            else if (tuiResult == DesktopTuiLaunchResult.AlreadyRunning)
-            {
-                SetStatus("Started Supervisor. Terminal UI is already open.");
-            }
+            return;
+        }
+
+        if (LaunchSupervisorProcess(
+            supervisorPath,
+            configPath,
+            desktopTuiStart: true,
+            launchDesktopTuiAfterReady: true,
+            successStatus: null))
+        {
+            SetStatus("Started Supervisor. Terminal UI will open after dashboard readiness.");
         }
     }
 
@@ -3131,7 +3140,12 @@ internal sealed class ConfigEditorForm : Form
         return true;
     }
 
-    private bool LaunchSupervisorProcess(string supervisorPath, string configPath, bool desktopTuiStart = false, string? successStatus = "Started Supervisor.")
+    private bool LaunchSupervisorProcess(
+        string supervisorPath,
+        string configPath,
+        bool desktopTuiStart = false,
+        bool launchDesktopTuiAfterReady = false,
+        string? successStatus = "Started Supervisor.")
     {
         try
         {
@@ -3149,6 +3163,10 @@ internal sealed class ConfigEditorForm : Form
             {
                 startInfo.ArgumentList.Add("--desktop-tui-start");
                 startInfo.WindowStyle = ProcessWindowStyle.Hidden;
+            }
+            if (launchDesktopTuiAfterReady)
+            {
+                startInfo.ArgumentList.Add("--launch-desktop-tui-after-ready");
             }
 
             if (!IsAdministrator())
