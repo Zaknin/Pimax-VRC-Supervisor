@@ -13,11 +13,12 @@ internal sealed record StartupExecutionContext(
     bool DesktopTuiDefaultInterface,
     bool InstallAutoLaunchTask,
     bool EmergencyBaseStationCleanup,
+    bool ExplicitConfigOptionPresent,
     string? ExplicitConfigPath,
     string? EmergencyBaseStationCleanupConfigPath,
     int EmergencyBaseStationCleanupDelaySeconds)
 {
-    public bool ExplicitConfigSupplied => ExplicitConfigPath is not null;
+    public bool ExplicitConfigSupplied => ExplicitConfigOptionPresent;
 
     public bool ShouldHideConsole
         => DesktopTuiStart
@@ -53,6 +54,8 @@ internal sealed record StartupExecutionContext(
             && int.TryParse(delayText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedDelay)
                 ? Math.Max(0, parsedDelay)
                 : 0;
+        var explicitConfigOptionPresent =
+            TryGetCommandOption(commandLineArgs, "--config", out var explicitConfigPath);
 
         return new StartupExecutionContext(
             commandLineArgs,
@@ -67,7 +70,8 @@ internal sealed record StartupExecutionContext(
             HasFlag(commandLineArgs, "--desktop-tui-default-interface"),
             HasFlag(commandLineArgs, "--install-auto-launch-task"),
             emergencyBaseStationCleanup,
-            TryGetCommandOption(commandLineArgs, "--config", out var explicitConfigPath) ? explicitConfigPath : null,
+            explicitConfigOptionPresent,
+            explicitConfigPath,
             emergencyConfigPath,
             cleanupDelaySeconds);
     }

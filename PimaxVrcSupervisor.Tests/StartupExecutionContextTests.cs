@@ -10,6 +10,17 @@ public sealed class StartupExecutionContextTests
         Assert.True(context.IsInteractiveSupervisorLaunch);
         Assert.False(context.ShouldHideConsole);
         Assert.False(context.CanApplyStartupIntegration);
+        Assert.False(context.ExplicitConfigSupplied);
+        Assert.Null(context.ExplicitConfigPath);
+    }
+
+    [Fact]
+    public void ConfigOptionWithoutValueRemainsExplicitlySupplied()
+    {
+        var context = StartupExecutionContext.Parse(["--config"]);
+
+        Assert.True(context.ExplicitConfigSupplied);
+        Assert.Null(context.ExplicitConfigPath);
     }
 
     [Fact]
