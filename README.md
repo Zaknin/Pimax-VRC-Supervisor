@@ -23,6 +23,7 @@ It is built for users who want less manual startup work and a cleaner SteamVR/VR
 - Runs an optional OSC Router for local OSC fan-out.
 - Starts OscGoesBrrr and Intiface workflows when configured.
 - Writes optional diagnostics for troubleshooting.
+- Collects a read-only Pimax Client connectivity snapshot when you need to compare Windows USB, Pimax runtime, and log evidence.
 
 ## Requirements
 
@@ -95,6 +96,7 @@ For most users, start with **Terminal Mode** and keep **Use Terminal UI as defau
 - Terminal UI actions are confirmation-gated because they can restart apps or change session state.
 - Connected Terminal UI shutdown runs Supervisor cleanup and may close managed apps.
 - Use Diagnostics when troubleshooting; leave extra diagnostics off during normal use unless needed.
+- If Pimax Client stops detecting a connected headset, collect diagnostics before restarting Pimax Client or reconnecting USB so the failed layer can be compared later.
 
 ## Build From Source
 

@@ -64,6 +64,7 @@ nav:
       - Overview: troubleshooting/index.md
       - Installation Issues: troubleshooting/installation.md
       - Startup / Autostart Issues: troubleshooting/startup.md
+      - Pimax Client Issues: troubleshooting/pimax-client.md
       - Terminal UI Issues: troubleshooting/terminal-ui.md
       - SteamVR Overlay Issues: troubleshooting/steamvr-overlay.md
       - Base Station Issues: troubleshooting/base-stations.md
