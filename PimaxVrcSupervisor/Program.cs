@@ -32,13 +32,21 @@ var watchVrchatAutoLaunch = startupContext.WatchVrchatAutoLaunch;
 var applyStartupIntegration = startupContext.ApplyStartupIntegration;
 var showStartupIntegrationResult = startupContext.ShowStartupIntegrationResult;
 var desktopTuiDefaultInterface = startupContext.DesktopTuiDefaultInterface;
+var explicitConfigSupplied = startupContext.ExplicitConfigSupplied;
+var configPath = startupContext.ExplicitConfigPath;
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-connectivity-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var diagnosticConfig = SupervisorConfig.Load(configPath);
+    var snapshot = await new PimaxConnectivitySnapshotCollector().CollectAsync(diagnosticConfig, shutdown.Token);
+    Console.WriteLine(JsonSerializer.Serialize(snapshot, PimaxConnectivityJson.Options));
+    return;
+}
+
 if (startupContext.ShouldHideConsole)
 {
     ConsoleWindow.HideIfPresent();
 }
 
-var explicitConfigSupplied = startupContext.ExplicitConfigSupplied;
-var configPath = startupContext.ExplicitConfigPath;
 if (startupContext.EmergencyBaseStationCleanup)
 {
     var emergencyConfig = SupervisorConfig.Load(startupContext.EmergencyBaseStationCleanupConfigPath);
@@ -3569,7 +3577,7 @@ internal sealed class AppSupervisor
         {
             if (string.Equals(commandVerb, "query-json", StringComparison.Ordinal))
             {
-                var result = ExecuteReadOnlyJsonQuery(GetCommandPayload(rawCommand));
+                var result = await ExecuteReadOnlyJsonQueryAsync(GetCommandPayload(rawCommand), cancellationToken);
                 response = JsonSerializer.Serialize(result, CommandBridgeJsonOptions);
                 success = result.Success;
                 return response;
@@ -3598,6 +3606,7 @@ internal sealed class AppSupervisor
                 "log" => JsonSerializer.Serialize(SupervisorConsoleLog.GetRecentLines(14)),
                 "log-json" => JsonSerializer.Serialize(BuildSupervisorRecentLogSnapshot(14), CommandBridgeJsonOptions),
                 "commands-json" => JsonSerializer.Serialize(BuildSupervisorCommandCapabilitiesSnapshot(), CommandBridgeJsonOptions),
+                "pimax-connectivity-json" => JsonSerializer.Serialize(await BuildPimaxConnectivitySnapshotAsync(cancellationToken), PimaxConnectivityJson.Options),
                 "restart-core-apps" => await RestartCoreAppsCommandAsync(cancellationToken),
                 "start-osc-goes-brrr" => await StartOscGoesBrrrCommandAsync(cancellationToken),
                 "base-stations-on" => await ManualPowerOnBaseStationsCommandAsync(cancellationToken),
@@ -3783,10 +3792,17 @@ internal sealed class AppSupervisor
                 CommandDefinition(
                     "query-json",
                     "Read-only JSON Query",
-                    "Executes a structured read-only JSON query for status, command capabilities, or recent logs.",
+                    "Executes a structured read-only JSON query for status, command capabilities, recent logs, or explicit diagnostics.",
                     "Status",
                     "Json",
                     "Read-only JSON request envelope for future Terminal UI clients. Does not execute action commands."),
+                CommandDefinition(
+                    "pimax-connectivity-json",
+                    "Pimax Connectivity JSON",
+                    "Collects a one-shot read-only Pimax Client connectivity diagnostic snapshot.",
+                    "Diagnostics",
+                    "Json",
+                    "Explicit diagnostic query. May take several seconds and does not restart processes, services, SteamVR, or USB devices."),
                 CommandDefinition(
                     "action-json",
                     "Structured Action JSON",
@@ -3923,7 +3939,7 @@ internal sealed class AppSupervisor
             tuiExecutable,
             blockedReason);
 
-    private SupervisorCommandResult ExecuteReadOnlyJsonQuery(string payload)
+    private async Task<SupervisorCommandResult> ExecuteReadOnlyJsonQueryAsync(string payload, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(payload))
         {
@@ -3976,7 +3992,7 @@ internal sealed class AppSupervisor
                 message: "query-json request requires a resource.",
                 resultType: "error",
                 data: null,
-                error: "Missing resource. Supported resources: status, commands, log.");
+                error: "Missing resource. Supported resources: status, commands, log, pimax-connectivity.");
         }
 
         return resource.ToLowerInvariant() switch
@@ -4002,15 +4018,25 @@ internal sealed class AppSupervisor
                 resultType: "log",
                 data: BuildSupervisorRecentLogSnapshot(Math.Clamp(request?.MaxLines ?? 14, 1, 80)),
                 error: null),
+            "pimax-connectivity" => ReadOnlyJsonQueryResult(
+                requestId,
+                success: true,
+                message: "Pimax Client connectivity snapshot returned.",
+                resultType: "pimaxConnectivity",
+                data: await BuildPimaxConnectivitySnapshotAsync(cancellationToken),
+                error: null),
             _ => ReadOnlyJsonQueryResult(
                 requestId,
                 success: false,
                 message: $"Unsupported query-json resource: {resource}.",
                 resultType: "error",
                 data: null,
-                error: "Supported resources: status, commands, log.")
+                error: "Supported resources: status, commands, log, pimax-connectivity.")
         };
     }
+
+    private async Task<PimaxConnectivitySnapshot> BuildPimaxConnectivitySnapshotAsync(CancellationToken cancellationToken)
+        => await new PimaxConnectivitySnapshotCollector().CollectAsync(_config, cancellationToken);
 
     private static SupervisorCommandResult ReadOnlyJsonQueryResult(
         string? requestId,
@@ -4115,7 +4141,7 @@ internal sealed class AppSupervisor
             "base-stations-off" => await ExecuteConfirmedBaseStationActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ManualPowerDownBaseStationsAsync, cancellationToken),
             "restart-osc-router" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, RestartOscRouterCommandAsync, cancellationToken),
             "reload-autostart-apps" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ReloadAutostartAppsCommandAsync, cancellationToken),
-            "status" or "status-json" or "commands-json" or "log" or "log-json" or "query-json" => ActionJsonResult(
+            "status" or "status-json" or "commands-json" or "log" or "log-json" or "query-json" or "pimax-connectivity-json" => ActionJsonResult(
                 request.RequestId,
                 canonicalCommand,
                 success: false,
