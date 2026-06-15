@@ -1,0 +1,63 @@
+name: Validate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install documentation dependencies
+        run: python -m pip install mkdocs-material
+
+      - name: Build C# projects
+        shell: pwsh
+        run: |
+          dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release
+          dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release
+          dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release
+
+      - name: Run C# regression tests
+        shell: pwsh
+        run: dotnet test .\PimaxVrcSupervisor.Tests\PimaxVrcSupervisor.Tests.csproj -c Release
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --check
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml
+
+      - name: Build Rust release binary
+        run: cargo build --manifest-path .\PimaxVrcSupervisor.Tui\Cargo.toml --release
+
+      - name: Build documentation
+        run: python -m mkdocs build --strict
