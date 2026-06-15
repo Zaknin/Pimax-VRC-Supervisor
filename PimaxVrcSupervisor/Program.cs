@@ -122,6 +122,7 @@ if (!ownsSupervisorMutex)
     return;
 }
 
+DirectLaunchMigrationResult? migrationResultForStartup = null;
 if (IsInteractiveSupervisorLaunch(
     desktopTuiStart,
     launchDesktopTuiAfterReady,
@@ -141,12 +142,20 @@ if (IsInteractiveSupervisorLaunch(
         return;
     }
 
+    migrationResultForStartup = migrationResult;
     config = migrationResult.Config;
 }
 
 var diagnosticsOptions = DiagnosticsOptions.ForSupervisor(config, commandLineArgs);
 using var diagnostics = SupervisorDiagnosticsSession.Start(diagnosticsOptions);
-var supervisor = new AppSupervisor(config, steamVrStart, managedSteamVrSession, launchDesktopTuiAfterReady, diagnostics, shutdown);
+var supervisor = new AppSupervisor(
+    config,
+    steamVrStart,
+    managedSteamVrSession,
+    launchDesktopTuiAfterReady,
+    migrationResultForStartup?.AutoLaunchTaskBindingDeferredByUser ?? false,
+    diagnostics,
+    shutdown);
 var supervisorStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 Console.CancelKeyPress += (_, eventArgs) =>
 {
@@ -249,7 +258,35 @@ internal static class AppVersion
         ?? "unknown";
 }
 
-internal sealed record DirectLaunchMigrationResult(SupervisorConfig Config, bool ContinueLaunch);
+internal sealed record DirectLaunchMigrationResult(
+    SupervisorConfig Config,
+    bool ContinueLaunch,
+    bool AutoLaunchTaskBindingDeferredByUser);
+
+internal enum TaskMigrationDecision
+{
+    None,
+    Deferred,
+    Rebound,
+    RemovedOrDisabled
+}
+
+internal sealed record DirectLaunchTaskMigrationResult(
+    TaskMigrationDecision Decision,
+    bool AutoLaunchTaskBindingDeferredByUser)
+{
+    public static DirectLaunchTaskMigrationResult None { get; } = new(
+        TaskMigrationDecision.None,
+        AutoLaunchTaskBindingDeferredByUser: false);
+
+    public static DirectLaunchTaskMigrationResult Rebound { get; } = new(
+        TaskMigrationDecision.Rebound,
+        AutoLaunchTaskBindingDeferredByUser: false);
+
+    public static DirectLaunchTaskMigrationResult RemovedOrDisabled { get; } = new(
+        TaskMigrationDecision.RemovedOrDisabled,
+        AutoLaunchTaskBindingDeferredByUser: false);
+}
 
 internal static class DirectLaunchMigration
 {
@@ -267,11 +304,17 @@ internal static class DirectLaunchMigration
         var resolvedConfig = await ResolveConfigAsync(config, explicitConfigSupplied, explicitConfigPath, cancellationToken);
         if (resolvedConfig is null)
         {
-            return new DirectLaunchMigrationResult(new SupervisorConfig(), ContinueLaunch: false);
+            return new DirectLaunchMigrationResult(
+                new SupervisorConfig(),
+                ContinueLaunch: false,
+                AutoLaunchTaskBindingDeferredByUser: false);
         }
 
-        await ResolveScheduledTasksAsync(resolvedConfig, cancellationToken);
-        return new DirectLaunchMigrationResult(resolvedConfig, ContinueLaunch: true);
+        var taskResult = await ResolveScheduledTasksAsync(resolvedConfig, cancellationToken);
+        return new DirectLaunchMigrationResult(
+            resolvedConfig,
+            ContinueLaunch: true,
+            AutoLaunchTaskBindingDeferredByUser: taskResult.AutoLaunchTaskBindingDeferredByUser);
     }
 
     private static async Task<SupervisorConfig?> ResolveConfigAsync(
@@ -383,11 +426,11 @@ internal static class DirectLaunchMigration
         return SupervisorConfig.Load(import.DestinationPath);
     }
 
-    private static async Task ResolveScheduledTasksAsync(SupervisorConfig config, CancellationToken cancellationToken)
+    private static async Task<DirectLaunchTaskMigrationResult> ResolveScheduledTasksAsync(SupervisorConfig config, CancellationToken cancellationToken)
     {
         if (!OperatingSystem.IsWindows())
         {
-            return;
+            return DirectLaunchTaskMigrationResult.None;
         }
 
         var currentDirectory = ScheduledTaskPathValidator.GetCurrentExecutableDirectory();
@@ -398,7 +441,7 @@ internal static class DirectLaunchMigration
         if (recognizedIssues.Length == 0)
         {
             Console.WriteLine("task_migration; result=no-managed-task-issues");
-            return;
+            return DirectLaunchTaskMigrationResult.None;
         }
 
         Console.WriteLine("task_migration; recognizedIssues=" + string.Join(" | ", recognizedIssues.Select(FormatTaskIssue)));
@@ -410,13 +453,16 @@ internal static class DirectLaunchMigration
         {
             case TaskMigrationChoice.Rebind:
                 await RebindTasksAsync(config, recognizedIssues, cancellationToken);
-                break;
+                return DirectLaunchTaskMigrationResult.Rebound;
             case TaskMigrationChoice.TurnOff:
                 await TurnOffTasksAsync(config, recognizedIssues, cancellationToken);
-                break;
+                return DirectLaunchTaskMigrationResult.RemovedOrDisabled;
             default:
                 Console.WriteLine("task_migration; result=deferred");
-                break;
+                return new DirectLaunchTaskMigrationResult(
+                    TaskMigrationDecision.Deferred,
+                    AutoLaunchTaskBindingDeferredByUser: recognizedIssues.Any(issue =>
+                        string.Equals(issue.TaskName, ScheduledTaskPathValidator.AutoLaunchTaskName, StringComparison.OrdinalIgnoreCase)));
         }
     }
 
@@ -1742,6 +1788,7 @@ internal sealed class AppSupervisor
     private readonly bool _steamVrStart;
     private readonly bool _managedSteamVrSession;
     private readonly bool _launchDesktopTuiAfterReady;
+    private readonly bool _autoLaunchTaskBindingDeferredByUser;
     private readonly BaseStationGattClient _baseStationGattClient = new();
     private readonly SteamVrTrackingReferenceReader _steamVrTrackingReferenceReader = new();
     private readonly MonitorLayoutController _monitorLayout = new();
@@ -1807,12 +1854,20 @@ internal sealed class AppSupervisor
     private int _gracefulShutdownRequested;
     private string? _operatorWarning;
 
-    public AppSupervisor(SupervisorConfig config, bool steamVrStart, bool managedSteamVrSession, bool launchDesktopTuiAfterReady, SupervisorDiagnosticsSession diagnostics, CancellationTokenSource shutdown)
+    public AppSupervisor(
+        SupervisorConfig config,
+        bool steamVrStart,
+        bool managedSteamVrSession,
+        bool launchDesktopTuiAfterReady,
+        bool autoLaunchTaskBindingDeferredByUser,
+        SupervisorDiagnosticsSession diagnostics,
+        CancellationTokenSource shutdown)
     {
         _config = config;
         _steamVrStart = steamVrStart;
         _managedSteamVrSession = managedSteamVrSession;
         _launchDesktopTuiAfterReady = launchDesktopTuiAfterReady;
+        _autoLaunchTaskBindingDeferredByUser = autoLaunchTaskBindingDeferredByUser;
         _diagnostics = diagnostics;
         _shutdown = shutdown;
         _steamVrLifecycle = new SteamVrLifecycleCoordinator(managedSteamVrSession, Environment.ProcessId);
@@ -2694,13 +2749,41 @@ internal sealed class AppSupervisor
                 cancellationToken);
             if (!valid)
             {
-                Console.WriteLine("Scheduled task needs repair. Open Configurator and apply Startup integration to update it.");
+                if (_autoLaunchTaskBindingDeferredByUser
+                    && await IsDeferredAutoLaunchTaskStillBoundToAnotherReleaseAsync(cancellationToken))
+                {
+                    Console.WriteLine("Autostart remains bound to another release by your choice.");
+                    Console.WriteLine("The current release will not modify it. You can rebind it later in Configurator.");
+                }
+                else
+                {
+                    Console.WriteLine("Scheduled task needs repair. Open Configurator and apply Startup integration to update it.");
+                }
             }
         }
         catch (Exception ex)
         {
             Console.WriteLine("Could not validate elevated auto-launch scheduled task:");
             Console.WriteLine(ex.Message);
+        }
+    }
+
+    private static async Task<bool> IsDeferredAutoLaunchTaskStillBoundToAnotherReleaseAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await ScheduledTaskPathValidator.ValidateExistingTaskExecutableAsync(
+                ScheduledTaskPathValidator.AutoLaunchTaskName,
+                ScheduledTaskPathValidator.GetCurrentExecutableDirectory(),
+                cancellationToken);
+            return result is { Exists: true, PointsToCurrentDirectory: false, Issue: not null }
+                && string.Equals(result.Issue.TaskName, ScheduledTaskPathValidator.AutoLaunchTaskName, StringComparison.OrdinalIgnoreCase)
+                && result.Issue.Message.Contains("another release folder", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not confirm deferred autostart task binding: {ex.Message}");
+            return false;
         }
     }
 
