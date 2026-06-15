@@ -48,6 +48,15 @@ internal sealed record SteamVrProcessDiagnostic(
     int? ExitCode,
     string? ExitCodeError);
 
+internal sealed record SteamVrProcessSnapshot(
+    int Pid,
+    string ProcessName,
+    DateTimeOffset? ProcessStartTime,
+    bool HasExited = false,
+    bool ExitCodeAvailable = false,
+    int? ExitCode = null,
+    string? ExitCodeError = null);
+
 internal sealed record SteamVrTerminationDecision(
     Guid SessionId,
     int SupervisorPid,
@@ -128,7 +137,37 @@ internal sealed class SteamVrLifecycleCoordinator : IDisposable
             {
                 ObserveRunningProcess(process, probeActive, startedAt);
             }
+        }
 
+        return CompleteObservation(currentProcesses.Count, stateBefore, caller, startedAt, probeActive);
+    }
+
+    public SteamVrTerminationDecision ObserveSnapshots(IReadOnlyList<SteamVrProcessSnapshot> currentProcesses, string caller)
+    {
+        var startedAt = DateTimeOffset.UtcNow;
+        var stateBefore = _state;
+        var probeActive = ProbeActive;
+
+        if (currentProcesses.Count > 0)
+        {
+            foreach (var process in currentProcesses)
+            {
+                ObserveRunningProcess(process, probeActive, startedAt);
+            }
+        }
+
+        return CompleteObservation(currentProcesses.Count, stateBefore, caller, startedAt, probeActive);
+    }
+
+    private SteamVrTerminationDecision CompleteObservation(
+        int currentProcessCount,
+        SteamVrSessionState stateBefore,
+        string caller,
+        DateTimeOffset startedAt,
+        bool probeActive)
+    {
+        if (currentProcessCount > 0)
+        {
             if (_runtimeSessionOwned && _hasObservedNonProbeProcess && _state != SteamVrSessionState.ShutdownRequested)
             {
                 _state = SteamVrSessionState.Running;
@@ -256,6 +295,27 @@ internal sealed class SteamVrLifecycleCoordinator : IDisposable
         }
     }
 
+    private void ObserveRunningProcess(SteamVrProcessSnapshot process, bool probeActive, DateTimeOffset observedAt)
+    {
+        if (_processes.TryGetValue(process.Pid, out var existing))
+        {
+            existing.UpdateFromSnapshot(process, observedAt);
+            return;
+        }
+
+        var origin = probeActive
+            ? SteamVrProcessOrigin.SupervisorOpenVrProbe
+            : _hasObservedNonProbeProcess
+                ? SteamVrProcessOrigin.ExternalAfterManagedSessionStart
+                : SteamVrProcessOrigin.ExistingAtManagedSessionStart;
+        var observed = new ObservedSteamVrProcessState(process, origin, observedAt);
+        _processes[process.Pid] = observed;
+        if (origin != SteamVrProcessOrigin.SupervisorOpenVrProbe)
+        {
+            _hasObservedNonProbeProcess = true;
+        }
+    }
+
     private void CaptureExitInformation()
     {
         foreach (var process in _processes.Values)
@@ -302,17 +362,35 @@ internal sealed class SteamVrLifecycleCoordinator : IDisposable
 
     private sealed class ObservedSteamVrProcessState : IDisposable
     {
-        private readonly Process _process;
+        private readonly Process? _process;
+        private readonly int _pid;
         private bool _exitCaptured;
 
         public ObservedSteamVrProcessState(Process process, SteamVrProcessOrigin origin, DateTimeOffset observedAt)
         {
             _process = process;
+            _pid = process.Id;
             Origin = origin;
             FirstObservedAt = observedAt;
             LastObservedAt = observedAt;
             ProcessName = SafeGetProcessName(process);
             ProcessStartTime = SafeGetStartTime(process);
+        }
+
+        public ObservedSteamVrProcessState(SteamVrProcessSnapshot process, SteamVrProcessOrigin origin, DateTimeOffset observedAt)
+        {
+            _process = null;
+            _pid = process.Pid;
+            Origin = origin;
+            FirstObservedAt = observedAt;
+            LastObservedAt = observedAt;
+            ProcessName = process.ProcessName;
+            ProcessStartTime = process.ProcessStartTime;
+            HasExited = process.HasExited;
+            ExitCodeAvailable = process.ExitCodeAvailable;
+            ExitCode = process.ExitCode;
+            ExitCodeError = process.ExitCodeError;
+            _exitCaptured = process.HasExited || process.ExitCodeAvailable || process.ExitCodeError is not null;
         }
 
         public string ProcessName { get; }
@@ -333,9 +411,24 @@ internal sealed class SteamVrLifecycleCoordinator : IDisposable
 
         public string? ExitCodeError { get; private set; }
 
+        public void UpdateFromSnapshot(SteamVrProcessSnapshot process, DateTimeOffset observedAt)
+        {
+            LastObservedAt = observedAt;
+            HasExited = process.HasExited;
+            ExitCodeAvailable = process.ExitCodeAvailable;
+            ExitCode = process.ExitCode;
+            ExitCodeError = process.ExitCodeError;
+            _exitCaptured = process.HasExited || process.ExitCodeAvailable || process.ExitCodeError is not null;
+        }
+
         public void CaptureExitInformation()
         {
             if (_exitCaptured)
+            {
+                return;
+            }
+
+            if (_process is null)
             {
                 return;
             }
@@ -368,7 +461,7 @@ internal sealed class SteamVrLifecycleCoordinator : IDisposable
 
         public SteamVrProcessDiagnostic ToDiagnostic()
             => new(
-                _process.Id,
+                _pid,
                 ProcessName,
                 ProcessStartTime,
                 Origin,
@@ -379,7 +472,7 @@ internal sealed class SteamVrLifecycleCoordinator : IDisposable
                 ExitCode,
                 ExitCodeError);
 
-        public void Dispose() => _process.Dispose();
+        public void Dispose() => _process?.Dispose();
 
         private static string SafeGetProcessName(Process process)
         {
