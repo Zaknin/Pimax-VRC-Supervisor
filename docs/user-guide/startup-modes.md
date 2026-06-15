@@ -20,6 +20,8 @@ When Terminal UI is opened by this autostart path, it opens after the Supervisor
 
 During normal startup, the Supervisor only validates the saved startup task and reports if it needs attention. It does not overwrite the watcher while a session is already running; use Configurator to reapply startup integration when you intentionally move or repair the install.
 
+When a new release is started interactively for the first time, config import and autostart migration are separate choices. Keeping an existing autostart task leaves it bound to the previous release until you rebind it later in Configurator.
+
 ## SteamVR Overlay
 
 Use this if you want controls inside SteamVR instead of a terminal dashboard.

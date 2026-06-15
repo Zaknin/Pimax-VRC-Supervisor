@@ -6,8 +6,8 @@ Use `scripts/package-release.ps1` to build the final flat Windows release folder
 
 Create both release variants when requested:
 
-- `PimaxVrcSupervisor-v1.3.0-win-x64-with-dotnet9.zip`: full self-contained release for users who do not have .NET 9 installed.
-- `PimaxVrcSupervisor-v1.3.0-win-x64-no-dotnet9.zip`: smaller release for users who already have the .NET 9 Windows Desktop Runtime x64 installed.
+- `PimaxVrcSupervisor-v1.3.1-win-x64-with-dotnet9.zip`: full self-contained release for users who do not have .NET 9 installed.
+- `PimaxVrcSupervisor-v1.3.1-win-x64-no-dotnet9.zip`: smaller release for users who already have the .NET 9 Windows Desktop Runtime x64 installed.
 
 The `no-dotnet9` package requires the Windows Desktop Runtime, not only the base .NET runtime, because the supervisor and configurator use Windows Forms.
 

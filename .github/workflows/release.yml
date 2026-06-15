@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag/name, for example v1.3.0"
+        description: "Release tag/name, for example v1.3.1"
         required: true
         type: string
       replace_existing_assets:
@@ -58,7 +58,7 @@ jobs:
           }
 
           if ($version -notmatch "^v\d+\.\d+\.\d+$") {
-            throw "Release version must look like v1.3.0. Received: $version"
+            throw "Release version must look like v1.3.1. Received: $version"
           }
 
           "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
@@ -86,8 +86,8 @@ jobs:
           }
 
           if ($releaseExists) {
-            if ($env:RELEASE_VERSION -ne "v1.3.0" -or $replace -ne "REPLACE" -or [string]::IsNullOrWhiteSpace($reason)) {
-              throw "Existing release replacement requires tag=v1.3.0, replace_existing_assets=REPLACE, and a non-empty replacement_reason."
+            if ($replace -ne "REPLACE" -or [string]::IsNullOrWhiteSpace($reason)) {
+              throw "Existing release replacement requires replace_existing_assets=REPLACE and a non-empty replacement_reason."
             }
 
             Write-Host "Existing release replacement mode confirmed for $env:RELEASE_VERSION."
@@ -257,7 +257,7 @@ jobs:
         with:
           subject-path: artifacts/PimaxVrcSupervisor-${{ env.RELEASE_VERSION }}-win-x64-*.zip
 
-      - name: Create or update GitHub release
+      - name: Create or update draft GitHub release
         if: env.SKIP_EXISTING_RELEASE != 'true'
         shell: pwsh
         env:
@@ -283,5 +283,5 @@ jobs:
             $releaseNotes = Get-Content -LiteralPath .\RELEASE_NOTES.md -Raw
             gh release edit $env:RELEASE_VERSION --notes "$releaseNotes"
           } else {
-            gh release create $env:RELEASE_VERSION @releaseFiles --title "Pimax VRC Supervisor $env:RELEASE_VERSION" --generate-notes --target $env:GITHUB_SHA
+            gh release create $env:RELEASE_VERSION @releaseFiles --title "Pimax VRC Supervisor $env:RELEASE_VERSION" --notes-file RELEASE_NOTES.md --draft --target $env:GITHUB_SHA
           }

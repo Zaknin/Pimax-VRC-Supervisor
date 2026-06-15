@@ -30,7 +30,7 @@ When Terminal UI is disconnected, `Q` exits only Terminal UI. It does not start 
 
 ## Autostart Behavior
 
-When Terminal Mode opens Terminal UI automatically, Terminal UI waits for its first Supervisor connection. After that, it closes when the paired Supervisor exits.
+When Terminal Mode opens Terminal UI automatically, the Supervisor starts Terminal UI after the dashboard is ready. Terminal UI follows that paired Supervisor process and closes when it exits.
 
 Manual Terminal UI launches stay open while disconnected until you exit.
 

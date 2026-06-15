@@ -27,3 +27,5 @@ If it is checked and Classic Console still opens, re-save startup integration fr
 ## Startup Task Needs Repair
 
 If the Supervisor says startup integration needs repair, open Configurator from the release folder you want to use, load your config, and save/apply startup integration again. Normal Supervisor startup checks the task read-only so it will not overwrite the watcher during an active session.
+
+If you chose to keep autostart bound to another release during direct-launch migration, the Supervisor will acknowledge that choice instead of repairing the task. Rebind later in Configurator when you are ready for the new release to own autostart.
