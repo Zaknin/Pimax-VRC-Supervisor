@@ -52,6 +52,25 @@ public sealed class PimaxConnectivityAssessmentTests
     }
 
     [Fact]
+    public void StoppedPiServiceLauncherDoesNotOverrideConnected()
+    {
+        var result = PimaxConnectivityAssessment.Evaluate(
+            Installed(),
+            Processes("PimaxClient"),
+            new PimaxServiceObservation(
+                PimaxProbeStatus.Available,
+                [new PimaxServiceInfo("PiServiceLauncher", "PiServiceLauncher", "STOPPED", "auto", null, @"C:\Program Files\Pimax\Runtime\PiServiceLauncher.exe", "CoreServiceCandidate")],
+                [],
+                []),
+            HealthyCrystalDevices(),
+            Runtime(ConnectedEvent(DateTimeOffset.Now.AddSeconds(-5))),
+            SteamVrDriver(PimaxProbeStatus.Available));
+
+        Assert.Equal(PimaxConnectivityAssessmentValue.Connected, result.Value);
+        Assert.Equal(PimaxConnectivityConfidence.Confirmed, result.Confidence);
+    }
+
+    [Fact]
     public void AirLinkOnlyDoesNotCountAsWiredCrystal()
     {
         var result = PimaxConnectivityAssessment.Evaluate(
@@ -117,6 +136,133 @@ public sealed class PimaxConnectivityAssessmentTests
         Assert.Equal(PimaxConnectivityAssessmentValue.ConflictingEvidence, result.Value);
     }
 
+    [Fact]
+    public void OlderConnectedAndNewerDisconnectedDoesNotProduceConnected()
+    {
+        var now = DateTimeOffset.Now;
+        var result = PimaxConnectivityAssessment.Evaluate(
+            Installed(),
+            Processes("PimaxClient"),
+            Services(),
+            HealthyCrystalDevices(),
+            Runtime(
+                ConnectedEvent(now.AddSeconds(-70)),
+                DisconnectedEvent(now.AddSeconds(-10))),
+            SteamVrDriver(PimaxProbeStatus.Available));
+
+        Assert.Equal(PimaxConnectivityAssessmentValue.WindowsDevicesPresentRuntimeNotConfirmed, result.Value);
+    }
+
+    [Fact]
+    public void OlderDisconnectedAndNewerConnectedProducesConnected()
+    {
+        var now = DateTimeOffset.Now;
+        var result = PimaxConnectivityAssessment.Evaluate(
+            Installed(),
+            Processes("PimaxClient"),
+            Services(),
+            HealthyCrystalDevices(),
+            Runtime(
+                ConnectedEvent(now.AddSeconds(-10)),
+                DisconnectedEvent(now.AddSeconds(-70))),
+            SteamVrDriver(PimaxProbeStatus.Available));
+
+        Assert.Equal(PimaxConnectivityAssessmentValue.Connected, result.Value);
+        Assert.Equal(PimaxConnectivityConfidence.Confirmed, result.Confidence);
+    }
+
+    [Fact]
+    public void EqualDecisiveTimestampsProduceConflict()
+    {
+        var now = DateTimeOffset.Now.AddSeconds(-10);
+        var result = PimaxConnectivityAssessment.Evaluate(
+            Installed(),
+            Processes("PimaxClient"),
+            Services(),
+            HealthyCrystalDevices(),
+            Runtime(ConnectedEvent(now), DisconnectedEvent(now)),
+            SteamVrDriver(PimaxProbeStatus.Available));
+
+        Assert.Equal(PimaxConnectivityAssessmentValue.ConflictingEvidence, result.Value);
+    }
+
+    [Fact]
+    public void UnreliableConnectedCandidateDoesNotOverrideReliableDisconnected()
+    {
+        var now = DateTimeOffset.Now;
+        var result = PimaxConnectivityAssessment.Evaluate(
+            Installed(),
+            Processes("PimaxClient"),
+            Services(),
+            HealthyCrystalDevices(),
+            Runtime(
+                ConnectedEvent(null),
+                DisconnectedEvent(now.AddSeconds(-10))),
+            SteamVrDriver(PimaxProbeStatus.Available));
+
+        Assert.Equal(PimaxConnectivityAssessmentValue.ConflictingEvidence, result.Value);
+    }
+
+    [Fact]
+    public void UnreliableDisconnectedCandidateDoesNotAllowConfirmedConnected()
+    {
+        var now = DateTimeOffset.Now;
+        var result = PimaxConnectivityAssessment.Evaluate(
+            Installed(),
+            Processes("PimaxClient"),
+            Services(),
+            HealthyCrystalDevices(),
+            Runtime(
+                ConnectedEvent(now.AddSeconds(-10)),
+                DisconnectedEvent(null)),
+            SteamVrDriver(PimaxProbeStatus.Available));
+
+        Assert.Equal(PimaxConnectivityAssessmentValue.ConflictingEvidence, result.Value);
+    }
+
+    [Fact]
+    public void StaleDecisiveEventsDoNotProduceConnected()
+    {
+        var now = DateTimeOffset.Now.AddMinutes(-10);
+        var result = PimaxConnectivityAssessment.Evaluate(
+            Installed(),
+            Processes("PimaxClient"),
+            Services(),
+            HealthyCrystalDevices(),
+            Runtime(
+                ConnectedEvent(now, isFresh: false),
+                DisconnectedEvent(now.AddSeconds(10), isFresh: false)),
+            SteamVrDriver(PimaxProbeStatus.Available));
+
+        Assert.Equal(PimaxConnectivityAssessmentValue.WindowsDevicesPresentRuntimeNotConfirmed, result.Value);
+    }
+
+    [Fact]
+    public void SteamVrDriverStateDoesNotChangePrimaryOrderingResult()
+    {
+        var now = DateTimeOffset.Now;
+        var runtime = Runtime(
+            ConnectedEvent(now.AddSeconds(-70)),
+            DisconnectedEvent(now.AddSeconds(-10)));
+
+        var available = PimaxConnectivityAssessment.Evaluate(
+            Installed(),
+            Processes("PimaxClient"),
+            Services(),
+            HealthyCrystalDevices(),
+            runtime,
+            SteamVrDriver(PimaxProbeStatus.Available));
+        var missing = PimaxConnectivityAssessment.Evaluate(
+            Installed(),
+            Processes("PimaxClient"),
+            Services(),
+            HealthyCrystalDevices(),
+            runtime,
+            SteamVrDriver(PimaxProbeStatus.NotFound));
+
+        Assert.Equal(available.Value, missing.Value);
+    }
+
     private static PimaxInstallationObservation Installed()
         => new(
             PimaxProbeStatus.Available,
@@ -176,6 +322,44 @@ public sealed class PimaxConnectivityAssessmentTests
             [],
             []);
     }
+
+    private static PimaxRuntimeEvidenceObservation Runtime(
+        PimaxRuntimeEvidenceEvent? connected,
+        PimaxRuntimeEvidenceEvent? disconnected = null)
+    {
+        var now = DateTimeOffset.Now;
+        return new PimaxRuntimeEvidenceObservation(
+            connected is null && disconnected is null ? PimaxProbeStatus.Inconclusive : PimaxProbeStatus.Available,
+            now.AddMinutes(-5),
+            300,
+            new[] { connected, disconnected }.Where(ev => ev is not null).Select(ev => ev!).ToArray(),
+            connected,
+            disconnected,
+            [],
+            []);
+    }
+
+    private static PimaxRuntimeEvidenceEvent ConnectedEvent(DateTimeOffset? timestamp, bool isFresh = true)
+        => new(
+            "PimaxClient",
+            PimaxRuntimeEvidenceState.Connected,
+            timestamp,
+            DateTimeOffset.Now,
+            timestamp is null ? null : Math.Max(0, (DateTimeOffset.Now - timestamp.Value).TotalSeconds),
+            isFresh,
+            timestamp is null ? "unavailable" : "parsed",
+            "HMD_hmdName: 'Pimax Crystal'");
+
+    private static PimaxRuntimeEvidenceEvent DisconnectedEvent(DateTimeOffset? timestamp, bool isFresh = true)
+        => new(
+            "PimaxClient",
+            PimaxRuntimeEvidenceState.DisconnectedOrError,
+            timestamp,
+            DateTimeOffset.Now,
+            timestamp is null ? null : Math.Max(0, (DateTimeOffset.Now - timestamp.Value).TotalSeconds),
+            isFresh,
+            timestamp is null ? "unavailable" : "parsed",
+            "HMD_errorCode change: 10600");
 
     private static PimaxSteamVrDriverObservation SteamVrDriver(string status)
         => new(status, [], false, [], []);

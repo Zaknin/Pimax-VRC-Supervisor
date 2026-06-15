@@ -1,5 +1,13 @@
 internal static class PimaxConnectivityAssessment
 {
+    internal enum PimaxRuntimeResolvedState
+    {
+        Connected,
+        DisconnectedOrError,
+        Conflict,
+        Unavailable
+    }
+
     public static PimaxConnectivityAssessmentResult Evaluate(
         PimaxInstallationObservation installation,
         PimaxProcessObservation processes,
@@ -62,8 +70,7 @@ internal static class PimaxConnectivityAssessment
                 warnings);
         }
 
-        var hasFreshConnectedRuntime = runtimeEvidence.FreshConnectedEvent is not null;
-        var hasFreshDisconnectedRuntime = runtimeEvidence.FreshDisconnectedOrErrorEvent is not null;
+        var runtimeState = ResolveRuntimeState(runtimeEvidence);
 
         if (devices.WiredCrystalCompositePresent)
         {
@@ -72,7 +79,7 @@ internal static class PimaxConnectivityAssessment
 
         if (devices.HasRelevantProblem || devices.MissingObservedHealthyInterfaceRoles.Length > 0)
         {
-            if (hasFreshConnectedRuntime)
+            if (runtimeState is PimaxRuntimeResolvedState.Connected or PimaxRuntimeResolvedState.Conflict)
             {
                 warnings.Add("Runtime reports a fresh connected marker, but the observed Windows device profile is incomplete or has a problem.");
                 return Result(
@@ -94,7 +101,7 @@ internal static class PimaxConnectivityAssessment
                 warnings);
         }
 
-        if (devices.WiredCrystalCompositeHealthy && hasFreshConnectedRuntime)
+        if (devices.WiredCrystalCompositeHealthy && runtimeState == PimaxRuntimeResolvedState.Connected)
         {
             supportingEvidence.Add("Recent runtime logs explicitly report a connected Pimax headset.");
             AddSecondarySteamVrWarning(steamVrDriver, warnings);
@@ -109,7 +116,19 @@ internal static class PimaxConnectivityAssessment
 
         if (devices.WiredCrystalCompositeHealthy)
         {
-            if (hasFreshDisconnectedRuntime)
+            if (runtimeState == PimaxRuntimeResolvedState.Conflict)
+            {
+                warnings.Add("Runtime connected and disconnected/error evidence could not be ordered safely.");
+                return Result(
+                    PimaxConnectivityAssessmentValue.ConflictingEvidence,
+                    PimaxConnectivityConfidence.Inconclusive,
+                    "Fresh runtime evidence is conflicting or cannot be ordered safely.",
+                    supportingEvidence,
+                    missingEvidence,
+                    warnings);
+            }
+
+            if (runtimeState == PimaxRuntimeResolvedState.DisconnectedOrError)
             {
                 supportingEvidence.Add("Windows reports the wired Crystal USB profile, but recent runtime evidence reports a disconnected or error state.");
             }
@@ -130,7 +149,7 @@ internal static class PimaxConnectivityAssessment
 
         if (devices.Status == PimaxProbeStatus.Available && devices.RelevantDevices.Length == 0)
         {
-            if (hasFreshConnectedRuntime)
+            if (runtimeState is PimaxRuntimeResolvedState.Connected or PimaxRuntimeResolvedState.Conflict)
             {
                 warnings.Add("Runtime reports a fresh connected marker, but no wired Crystal PnP device was found.");
                 return Result(
@@ -188,4 +207,57 @@ internal static class PimaxConnectivityAssessment
             warnings.Add("Pimax SteamVR driver registration was not confirmed. This is secondary integration evidence and does not override Pimax Client connectivity.");
         }
     }
+
+    internal static PimaxRuntimeResolvedState ResolveRuntimeState(PimaxRuntimeEvidenceObservation runtimeEvidence)
+    {
+        var connected = GetReliableDecisiveEvent(runtimeEvidence.FreshConnectedEvent);
+        var disconnected = GetReliableDecisiveEvent(runtimeEvidence.FreshDisconnectedOrErrorEvent);
+        var hasConnectedReference = IsFreshDecisiveReference(runtimeEvidence.FreshConnectedEvent);
+        var hasDisconnectedReference = IsFreshDecisiveReference(runtimeEvidence.FreshDisconnectedOrErrorEvent);
+
+        if (connected is null && disconnected is null)
+        {
+            return hasConnectedReference || hasDisconnectedReference
+                ? PimaxRuntimeResolvedState.Conflict
+                : PimaxRuntimeResolvedState.Unavailable;
+        }
+
+        if (connected is not null && disconnected is null)
+        {
+            return hasDisconnectedReference
+                ? PimaxRuntimeResolvedState.Conflict
+                : PimaxRuntimeResolvedState.Connected;
+        }
+
+        if (connected is null && disconnected is not null)
+        {
+            return hasConnectedReference
+                ? PimaxRuntimeResolvedState.Conflict
+                : PimaxRuntimeResolvedState.DisconnectedOrError;
+        }
+
+        var comparison = DateTimeOffset.Compare(connected!.EventTimestamp!.Value, disconnected!.EventTimestamp!.Value);
+        return comparison switch
+        {
+            > 0 => PimaxRuntimeResolvedState.Connected,
+            < 0 => PimaxRuntimeResolvedState.DisconnectedOrError,
+            _ => PimaxRuntimeResolvedState.Conflict
+        };
+    }
+
+    private static PimaxRuntimeEvidenceEvent? GetReliableDecisiveEvent(PimaxRuntimeEvidenceEvent? candidate)
+    {
+        if (candidate is null
+            || !IsFreshDecisiveReference(candidate)
+            || candidate.EventTimestamp is null
+            || !string.Equals(candidate.TimestampReliability, "parsed", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return candidate;
+    }
+
+    private static bool IsFreshDecisiveReference(PimaxRuntimeEvidenceEvent? candidate)
+        => candidate is not null && candidate.IsFresh;
 }

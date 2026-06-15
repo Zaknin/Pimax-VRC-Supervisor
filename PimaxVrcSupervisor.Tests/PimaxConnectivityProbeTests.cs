@@ -49,32 +49,56 @@ public sealed class PimaxConnectivityProbeTests
     [Fact]
     public void RuntimeLogParserUsesFreshnessWindow()
     {
-        var tempRoot = Path.Combine(Path.GetTempPath(), "PimaxConnectivityProbeTests", Guid.NewGuid().ToString("N"));
-        var piServiceRoot = Path.Combine(tempRoot, "PiService");
-        Directory.CreateDirectory(piServiceRoot);
-        try
-        {
-            File.WriteAllText(
-                Path.Combine(piServiceRoot, "PiService__2026-06-15-17.log"),
-                """
-                2026-06-15 17:57:26.684 I 26704 [System::SetHidStatus] connected hmd name:Pimax Crystal
-                """);
-            var config = new SupervisorConfig
-            {
-                PimaxServiceLogDirectory = piServiceRoot
-            };
-            var offset = TimeZoneInfo.Local.GetUtcOffset(new DateTime(2026, 6, 15, 17, 58, 0));
+        using var freshTemp = TempPiServiceLog(DateTimeOffset.Now.AddSeconds(-30), "connected hmd name:Pimax Crystal");
+        using var staleTemp = TempPiServiceLog(DateTimeOffset.Now.AddMinutes(-10), "connected hmd name:Pimax Crystal");
 
-            var fresh = PimaxRuntimeEvidenceProbe.Collect(config, new DateTimeOffset(2026, 6, 15, 17, 58, 0, offset));
-            var stale = PimaxRuntimeEvidenceProbe.Collect(config, new DateTimeOffset(2026, 6, 15, 18, 10, 0, offset));
+        var fresh = PimaxRuntimeEvidenceProbe.Collect(freshTemp.Config, DateTimeOffset.Now);
+        var stale = PimaxRuntimeEvidenceProbe.Collect(staleTemp.Config, DateTimeOffset.Now);
 
-            Assert.NotNull(fresh.FreshConnectedEvent);
-            Assert.Null(stale.FreshConnectedEvent);
-        }
-        finally
-        {
-            Directory.Delete(tempRoot, recursive: true);
-        }
+        var freshPiServiceEvent = Assert.Single(fresh.Events, IsTempPiServiceConnectedEvent);
+        var stalePiServiceEvent = Assert.Single(stale.Events, IsTempPiServiceConnectedEvent);
+        Assert.True(freshPiServiceEvent.IsFresh);
+        Assert.False(stalePiServiceEvent.IsFresh);
+    }
+
+    [Fact]
+    public void RuntimeLogParserClampsSlightFutureEventAgeAndKeepsItFresh()
+    {
+        var eventTime = DateTimeOffset.Now.AddSeconds(2);
+        using var temp = TempPiServiceLog(eventTime, "connected hmd name:Pimax Crystal");
+
+        var evidence = PimaxRuntimeEvidenceProbe.Collect(temp.Config, DateTimeOffset.Now);
+        var ev = Assert.Single(evidence.Events, IsTempPiServiceConnectedEvent);
+
+        Assert.True(ev.IsFresh);
+        Assert.True(ev.EventAgeSeconds >= 0);
+    }
+
+    [Fact]
+    public void RuntimeLogParserRejectsImplausiblyFutureEventAsFresh()
+    {
+        var eventTime = DateTimeOffset.Now.AddSeconds(45);
+        using var temp = TempPiServiceLog(eventTime, "connected hmd name:Pimax Crystal");
+
+        var evidence = PimaxRuntimeEvidenceProbe.Collect(temp.Config, DateTimeOffset.Now);
+        var ev = Assert.Single(evidence.Events, IsTempPiServiceConnectedEvent);
+
+        Assert.False(ev.IsFresh);
+        Assert.True(ev.EventAgeSeconds >= 0);
+    }
+
+    [Fact]
+    public void RuntimeLogParserKeepsNormalPastEventAgeAndFreshnessWindow()
+    {
+        var eventTime = DateTimeOffset.Now.AddSeconds(-120);
+        using var temp = TempPiServiceLog(eventTime, "connected hmd name:Pimax Crystal");
+
+        var evidence = PimaxRuntimeEvidenceProbe.Collect(temp.Config, DateTimeOffset.Now);
+        var ev = Assert.Single(evidence.Events, IsTempPiServiceConnectedEvent);
+
+        Assert.True(ev.IsFresh);
+        Assert.InRange(ev.EventAgeSeconds ?? -1, 110, 130);
+        Assert.Equal(300, evidence.FreshnessWindowSeconds);
     }
 
     [Fact]
@@ -154,4 +178,37 @@ public sealed class PimaxConnectivityProbeTests
         Manufacturer Name:          Pimax Technologies
         Status:                     Started
         """;
+
+    private static TempRuntimeLog TempPiServiceLog(DateTimeOffset eventTime, string marker)
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "PimaxConnectivityProbeTests", Guid.NewGuid().ToString("N"));
+        var piServiceRoot = Path.Combine(tempRoot, "PiService");
+        Directory.CreateDirectory(piServiceRoot);
+        File.WriteAllText(
+            Path.Combine(piServiceRoot, "PiService__2026-06-15-17.log"),
+            $"{eventTime.LocalDateTime:yyyy-MM-dd HH:mm:ss.fff} I 26704 [System::SetHidStatus] {marker}{Environment.NewLine}");
+        return new TempRuntimeLog(
+            tempRoot,
+            new SupervisorConfig
+            {
+                PimaxServiceLogDirectory = piServiceRoot
+            });
+    }
+
+    private static bool IsTempPiServiceConnectedEvent(PimaxRuntimeEvidenceEvent ev)
+        => ev.Source == "PiService"
+            && ev.SanitizedMessage.Contains("connected hmd name", StringComparison.OrdinalIgnoreCase);
+
+    private sealed class TempRuntimeLog(string root, SupervisorConfig config) : IDisposable
+    {
+        public SupervisorConfig Config { get; } = config;
+
+        public void Dispose()
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
 }

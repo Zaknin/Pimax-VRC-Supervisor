@@ -886,7 +886,9 @@ internal static class PimaxRuntimeEvidenceProbe
                 .OrderByDescending(file => file.LastWriteTimeUtc)
                 .Take(MaxFilesPerSource))
             {
-                var sourceEvents = ParseLines(source, file, ReadTailLines(file.FullName, MaxTailBytes), parser, collectedAt)
+                var lines = ReadTailLines(file.FullName, MaxTailBytes);
+                var ageReference = DateTimeOffset.Now;
+                var sourceEvents = ParseLines(source, file, lines, parser, ageReference)
                     .TakeLast(MaxEventsPerSource);
                 events.AddRange(sourceEvents);
             }
@@ -906,7 +908,7 @@ internal static class PimaxRuntimeEvidenceProbe
         FileInfo file,
         string[] lines,
         Func<string, DateTimeOffset?, (string State, string Message)?> parser,
-        DateTimeOffset collectedAt)
+        DateTimeOffset ageReference)
     {
         DateTimeOffset? currentTimestamp = null;
         foreach (var line in lines)
@@ -923,14 +925,15 @@ internal static class PimaxRuntimeEvidenceProbe
                 continue;
             }
 
-            var eventAge = currentTimestamp is null ? (double?)null : (collectedAt - currentTimestamp.Value).TotalSeconds;
+            var rawAge = currentTimestamp is null ? (double?)null : (ageReference - currentTimestamp.Value).TotalSeconds;
+            var eventAge = rawAge is null ? (double?)null : Math.Max(0, rawAge.Value);
             yield return new PimaxRuntimeEvidenceEvent(
                 source,
                 parsed.Value.State,
                 currentTimestamp,
                 file.LastWriteTimeUtc,
                 eventAge,
-                currentTimestamp is not null && collectedAt - currentTimestamp.Value <= FreshnessWindow && currentTimestamp.Value <= collectedAt.AddSeconds(30),
+                currentTimestamp is not null && ageReference - currentTimestamp.Value <= FreshnessWindow && currentTimestamp.Value <= ageReference.AddSeconds(30),
                 currentTimestamp is null ? "unavailable" : "parsed",
                 PimaxConnectivityRedactor.SanitizeMessage(parsed.Value.Message));
         }
