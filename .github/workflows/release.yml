@@ -32,6 +32,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          fetch-depth: 0
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
@@ -62,9 +65,33 @@ jobs:
           }
 
           "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RELEASE_TAG=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
           "ARTIFACT_DIR=artifacts" | Out-File -FilePath $env:GITHUB_ENV -Append
           "SKIP_EXISTING_RELEASE=false" | Out-File -FilePath $env:GITHUB_ENV -Append
           "REPLACEMENT_MODE=false" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+          $tagRef = "refs/tags/$version"
+          git show-ref --verify --quiet $tagRef
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release tag does not exist locally after checkout: $tagRef"
+          }
+
+          $headCommit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to resolve checked-out HEAD."
+          }
+
+          $tagCommit = git rev-list -n 1 $version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to resolve release tag $version."
+          }
+
+          if ($headCommit -ne $tagCommit) {
+            throw "Checked-out commit $headCommit does not match tag commit $tagCommit."
+          }
+
+          Write-Host "release_tag=$version"
+          Write-Host "release_commit=$tagCommit"
 
       - name: Check existing release policy
         shell: pwsh
@@ -74,8 +101,25 @@ jobs:
           $replace = "${{ github.event.inputs.replace_existing_assets }}"
           $reason = "${{ github.event.inputs.replacement_reason }}"
           $isDispatch = "${{ github.event_name }}" -eq "workflow_dispatch"
-          gh release view $env:RELEASE_VERSION *> $null
-          $releaseExists = $LASTEXITCODE -eq 0
+          $releaseListJson = gh release list --limit 1000 --json tagName,isDraft,isPrerelease 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to query GitHub releases. gh release list failed: $releaseListJson"
+          }
+
+          try {
+            $releases = @($releaseListJson | ConvertFrom-Json)
+          } catch {
+            throw "Unable to parse GitHub release list JSON. $($_.Exception.Message)"
+          }
+
+          $existingRelease = $releases |
+            Where-Object { $_.tagName -eq $env:RELEASE_VERSION } |
+            Select-Object -First 1
+
+          $releaseExists = $null -ne $existingRelease
+          if (-not $releaseExists) {
+            Write-Host "No existing release detected for $env:RELEASE_VERSION."
+          }
 
           if ($releaseExists -and -not $isDispatch) {
             Write-Host "Existing release detected for $env:RELEASE_VERSION."
@@ -86,6 +130,10 @@ jobs:
           }
 
           if ($releaseExists) {
+            if (-not $existingRelease.isDraft) {
+              throw "Existing published release detected for $env:RELEASE_VERSION. Published releases are not replaced by this workflow."
+            }
+
             if ($replace -ne "REPLACE" -or [string]::IsNullOrWhiteSpace($reason)) {
               throw "Existing release replacement requires replace_existing_assets=REPLACE and a non-empty replacement_reason."
             }
@@ -273,15 +321,20 @@ jobs:
             throw "Expected 6 release upload files, found $($releaseFiles.Count)."
           }
 
-          gh release view $env:RELEASE_VERSION *> $null
-          if ($LASTEXITCODE -eq 0) {
-            if ($env:REPLACEMENT_MODE -ne "true") {
-              throw "Existing release detected outside replacement mode. No release assets were modified."
+          if ($env:REPLACEMENT_MODE -eq "true") {
+            gh release upload $env:RELEASE_VERSION @releaseFiles --clobber
+            if ($LASTEXITCODE -ne 0) {
+              throw "Release asset upload failed for $env:RELEASE_VERSION."
             }
 
-            gh release upload $env:RELEASE_VERSION @releaseFiles --clobber
             $releaseNotes = Get-Content -LiteralPath .\RELEASE_NOTES.md -Raw
             gh release edit $env:RELEASE_VERSION --notes "$releaseNotes"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Release note update failed for $env:RELEASE_VERSION."
+            }
           } else {
-            gh release create $env:RELEASE_VERSION @releaseFiles --title "Pimax VRC Supervisor $env:RELEASE_VERSION" --notes-file RELEASE_NOTES.md --draft --target $env:GITHUB_SHA
+            gh release create $env:RELEASE_VERSION @releaseFiles --title "Pimax VRC Supervisor $env:RELEASE_VERSION" --notes-file RELEASE_NOTES.md --draft --verify-tag
+            if ($LASTEXITCODE -ne 0) {
+              throw "Draft release creation failed for $env:RELEASE_VERSION."
+            }
           }
