@@ -956,3 +956,90 @@ fn format_duration(duration: Duration) -> String {
         format!("{minutes}m {remainder}s")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app(exit_when_supervisor_exits: bool) -> App {
+        App::new(TuiDiagnostics::disabled(), exit_when_supervisor_exits)
+    }
+
+    #[test]
+    fn manual_disconnected_tui_does_not_auto_exit() {
+        let now = Instant::now();
+        let mut app = app(false);
+
+        app.connection = ConnectionState::Disconnected;
+        app.update_supervisor_disconnect_auto_exit(now);
+
+        assert!(!app.should_exit_after_supervisor_disconnect(
+            now + SUPERVISOR_DISCONNECT_AUTO_EXIT_DELAY + Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn fallback_auto_exit_does_not_exit_before_first_connection() {
+        let now = Instant::now();
+        let mut app = app(true);
+
+        app.connection = ConnectionState::Disconnected;
+        app.update_supervisor_disconnect_auto_exit(now);
+
+        assert!(!app.should_exit_after_supervisor_disconnect(
+            now + SUPERVISOR_DISCONNECT_AUTO_EXIT_DELAY + Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn fallback_auto_exit_exits_after_previous_connection_disconnects_for_grace_period() {
+        let now = Instant::now();
+        let mut app = app(true);
+
+        app.connection = ConnectionState::Connected;
+        app.update_supervisor_disconnect_auto_exit(now);
+        app.connection = ConnectionState::Disconnected;
+        app.update_supervisor_disconnect_auto_exit(now + Duration::from_secs(1));
+
+        assert!(!app.should_exit_after_supervisor_disconnect(
+            now + Duration::from_secs(1) + SUPERVISOR_DISCONNECT_AUTO_EXIT_DELAY
+                - Duration::from_millis(1)
+        ));
+        assert!(app.should_exit_after_supervisor_disconnect(
+            now + Duration::from_secs(1) + SUPERVISOR_DISCONNECT_AUTO_EXIT_DELAY
+        ));
+    }
+
+    #[test]
+    fn reconnection_clears_fallback_auto_exit_timer() {
+        let now = Instant::now();
+        let mut app = app(true);
+
+        app.connection = ConnectionState::Connected;
+        app.update_supervisor_disconnect_auto_exit(now);
+        app.connection = ConnectionState::Disconnected;
+        app.update_supervisor_disconnect_auto_exit(now + Duration::from_secs(1));
+        app.connection = ConnectionState::Connected;
+        app.update_supervisor_disconnect_auto_exit(now + Duration::from_secs(2));
+
+        assert!(!app.should_exit_after_supervisor_disconnect(
+            now + Duration::from_secs(2) + SUPERVISOR_DISCONNECT_AUTO_EXIT_DELAY
+        ));
+    }
+
+    #[test]
+    fn shutdown_in_progress_suppresses_fallback_auto_exit() {
+        let now = Instant::now();
+        let mut app = app(true);
+
+        app.connection = ConnectionState::Connected;
+        app.update_supervisor_disconnect_auto_exit(now);
+        app.connection = ConnectionState::Disconnected;
+        app.update_supervisor_disconnect_auto_exit(now + Duration::from_secs(1));
+        app.shutdown_in_progress = true;
+
+        assert!(!app.should_exit_after_supervisor_disconnect(
+            now + Duration::from_secs(1) + SUPERVISOR_DISCONNECT_AUTO_EXIT_DELAY
+        ));
+    }
+}
