@@ -30,9 +30,11 @@ When Terminal UI is disconnected, `Q` exits only Terminal UI. It does not start 
 
 ## Autostart Behavior
 
-When Terminal Mode opens Terminal UI automatically, Terminal UI waits for its first Supervisor connection. After that, it closes when the paired Supervisor exits.
+When Terminal Mode opens Terminal UI automatically, the Supervisor starts Terminal UI after the dashboard is ready. Terminal UI follows that paired Supervisor process and closes when it exits.
 
 Manual Terminal UI launches stay open while disconnected until you exit.
+
+When SteamVR exits from the normal SteamVR UI, the Supervisor treats the session as ending normally, runs cleanup, and exits. If SteamVR disappears in a way the Supervisor cannot reliably classify, the Supervisor uses the same safe cleanup path instead of showing a crash warning.
 
 ## Actions
 

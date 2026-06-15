@@ -2577,27 +2577,7 @@ internal sealed class ConfigEditorForm : Form
     }
 
     private static void SaveActiveConfigSelection(string path)
-    {
-        try
-        {
-            var fullPath = Path.GetFullPath(path);
-            var appDirectory = Path.GetFullPath(AppContext.BaseDirectory)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var configDirectory = Path.GetDirectoryName(fullPath)?
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var value = string.Equals(appDirectory, configDirectory, StringComparison.OrdinalIgnoreCase)
-                ? Path.GetFileName(fullPath)
-                : fullPath;
-            File.WriteAllText(
-                Path.Combine(AppContext.BaseDirectory, ActiveConfigSelectionFileName),
-                value,
-                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        }
-        catch
-        {
-            // Direct launch falls back to supervisor.config.json if this convenience marker cannot be written.
-        }
-    }
+        => ConfigMigrationSupport.TrySaveActiveConfigSelection(AppContext.BaseDirectory, path);
 
     private void RefreshConfigSelector(string? currentDisplayNameOverride = null)
     {
@@ -3080,20 +3060,29 @@ internal sealed class ConfigEditorForm : Form
             return;
         }
 
-        if (LaunchSupervisorProcess(supervisorPath, configPath, desktopTuiStart: true, successStatus: null))
+        if (tuiRunning)
         {
-            var tuiResult = tuiRunning
-                ? DesktopTuiLaunchResult.AlreadyRunning
-                : LaunchDesktopTui(showAlreadyOpenMessage: false);
+            if (LaunchSupervisorProcess(
+                supervisorPath,
+                configPath,
+                desktopTuiStart: true,
+                launchDesktopTuiAfterReady: false,
+                successStatus: null))
+            {
+                SetStatus("Started Supervisor. Existing Terminal UI will reconnect.");
+            }
 
-            if (tuiResult == DesktopTuiLaunchResult.Launched)
-            {
-                SetStatus("Started Supervisor and Terminal UI.");
-            }
-            else if (tuiResult == DesktopTuiLaunchResult.AlreadyRunning)
-            {
-                SetStatus("Started Supervisor. Terminal UI is already open.");
-            }
+            return;
+        }
+
+        if (LaunchSupervisorProcess(
+            supervisorPath,
+            configPath,
+            desktopTuiStart: true,
+            launchDesktopTuiAfterReady: true,
+            successStatus: null))
+        {
+            SetStatus("Started Supervisor. Terminal UI will open after dashboard readiness.");
         }
     }
 
@@ -3131,7 +3120,12 @@ internal sealed class ConfigEditorForm : Form
         return true;
     }
 
-    private bool LaunchSupervisorProcess(string supervisorPath, string configPath, bool desktopTuiStart = false, string? successStatus = "Started Supervisor.")
+    private bool LaunchSupervisorProcess(
+        string supervisorPath,
+        string configPath,
+        bool desktopTuiStart = false,
+        bool launchDesktopTuiAfterReady = false,
+        string? successStatus = "Started Supervisor.")
     {
         try
         {
@@ -3149,6 +3143,10 @@ internal sealed class ConfigEditorForm : Form
             {
                 startInfo.ArgumentList.Add("--desktop-tui-start");
                 startInfo.WindowStyle = ProcessWindowStyle.Hidden;
+            }
+            if (launchDesktopTuiAfterReady)
+            {
+                startInfo.ArgumentList.Add("--launch-desktop-tui-after-ready");
             }
 
             if (!IsAdministrator())
@@ -6949,23 +6947,13 @@ internal sealed class ConfigEditorForm : Form
 
     private static string CopyExternalConfigToCurrentRelease(string lastConfigPath)
     {
-        var currentReleaseFolder = GetCurrentConfigEditorDirectory();
-        var fileName = Path.GetFileName(lastConfigPath);
-        if (string.Equals(fileName, DefaultConfigFileName, StringComparison.OrdinalIgnoreCase))
+        var result = ConfigMigrationSupport.ImportConfig(lastConfigPath, GetCurrentConfigEditorDirectory());
+        if (result.Outcome != ConfigMigrationOutcome.Imported || string.IsNullOrWhiteSpace(result.DestinationPath))
         {
-            fileName = "supervisor_moved.config.json";
+            throw new IOException(result.Message);
         }
 
-        var destinationPath = Path.Combine(currentReleaseFolder, fileName);
-        if (File.Exists(destinationPath))
-        {
-            destinationPath = Path.Combine(
-                currentReleaseFolder,
-                Path.GetFileNameWithoutExtension(fileName) + "_" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + Path.GetExtension(fileName));
-        }
-
-        File.Copy(lastConfigPath, destinationPath, overwrite: false);
-        return destinationPath;
+        return result.DestinationPath;
     }
 
     private ExternalConfigChoice ShowExternalLastConfigPathDialog(string lastConfigPath)

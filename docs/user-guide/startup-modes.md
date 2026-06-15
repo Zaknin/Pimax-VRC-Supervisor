@@ -16,7 +16,11 @@ Terminal Mode starts a watcher when SteamVR is running. If **Use Terminal UI as 
 
 If **Use Terminal UI as default interface** is unchecked, Terminal Mode keeps the classic visible console behavior.
 
-When Terminal UI is opened by this autostart path, it closes automatically after the paired Supervisor exits.
+When Terminal UI is opened by this autostart path, it opens after the Supervisor dashboard is ready and closes automatically after the paired Supervisor exits. Saving or repairing startup integration preserves the selected Terminal UI or classic console preference.
+
+During normal startup, the Supervisor only validates the saved startup task and reports if it needs attention. It does not overwrite the watcher while a session is already running; use Configurator to reapply startup integration when you intentionally move or repair the install.
+
+When a new release is started interactively for the first time, config import and autostart migration are separate choices. Keeping an existing autostart task leaves it bound to the previous release until you rebind it later in Configurator.
 
 ## SteamVR Overlay
 

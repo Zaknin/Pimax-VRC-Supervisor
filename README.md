@@ -1,6 +1,6 @@
 # Pimax VRC Supervisor
 
-![Version](https://img.shields.io/badge/version-1.3.0-blue)
+![Version](https://img.shields.io/badge/version-1.3.1-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-teal)
 ![.NET](https://img.shields.io/badge/.NET-9.0-512BD4)
 ![Release](https://img.shields.io/badge/release-signed%20%2B%20attested-brightgreen)
@@ -14,8 +14,10 @@ It is built for users who want less manual startup work and a cleaner SteamVR/VR
 - Starts Broken Eye and VRCFaceTracking in the right order.
 - Restarts face-tracking tools after headset, Vive Face Tracker, or Pimax runtime reconnects.
 - Opens a Terminal UI dashboard for monitoring and confirmed session actions.
+- Opens autostart Terminal UI only after the Supervisor dashboard is ready.
 - Supports a SteamVR Overlay mode for in-headset controls.
-- Powers SteamVR Base Stations on and off when configured.
+- Treats normal SteamVR UI Exit as a normal cleanup event.
+- Powers SteamVR Base Stations on when SteamVR becomes available, even if the Supervisor started first.
 - Skips unsupported or unavailable base stations without blocking startup indefinitely.
 - Restores monitor/session state during cleanup.
 - Runs an optional OSC Router for local OSC fan-out.
@@ -29,7 +31,7 @@ It is built for users who want less manual startup work and a cleaner SteamVR/VR
 - Pimax Crystal-compatible headset
 - [Broken Eye](https://github.com/ghostiam/BrokenEye)
 - [VRCFaceTracking](https://docs.vrcft.io/docs/vrcft-software/vrcft)
-- Optional: Vive mouth tracker exposed as `HTC Multimedia Camera`
+- Optional: Vive Face Tracker exposed as `HTC Multimedia Camera`
 - Optional: [Intiface](https://intiface.com/#intiface-central) + [OscGoesBrrr](https://osc.toys/) for Lovense workflows
 
 

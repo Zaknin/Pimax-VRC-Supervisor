@@ -2,6 +2,10 @@
 
 Base station power automation can wake and sleep supported SteamVR Base Stations.
 
+If the Supervisor starts before SteamVR, it waits for SteamVR to appear and then runs the configured base-station startup routine. You do not need to open Configurator or run a manual scan first.
+
+Startup timing is adaptive. The Supervisor waits for SteamVR readiness and a short stabilization window instead of using one fixed long delay for every system.
+
 ## Configure
 
 Open **Base Stations** in Configurator.
@@ -17,4 +21,4 @@ Only enable stations that belong to your play space. Manual on/off actions can a
 
 ## Troubleshooting
 
-If base stations do not respond, check Bluetooth availability, base-station firmware support, SteamVR state, and whether the station is enabled in the table.
+If base stations do not respond, check Bluetooth availability, base-station firmware support, SteamVR state, and whether the station is enabled in the table. Unsupported or temporarily unavailable stations are skipped with a warning instead of blocking startup indefinitely.

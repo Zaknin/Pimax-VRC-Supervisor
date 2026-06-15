@@ -114,6 +114,7 @@ pub struct App {
     pub mouse_notice: Option<String>,
     pub console_close_enabled: bool,
     pub console_close_notice: Option<String>,
+    pub supervisor_process_notice: Option<String>,
     exit_when_supervisor_exits: bool,
     was_connected_once: bool,
     supervisor_disconnect_seen_at: Option<Instant>,
@@ -181,6 +182,7 @@ impl App {
             mouse_notice: None,
             console_close_enabled: false,
             console_close_notice: None,
+            supervisor_process_notice: None,
             exit_when_supervisor_exits,
             was_connected_once: false,
             supervisor_disconnect_seen_at: None,
@@ -366,6 +368,11 @@ impl App {
     pub fn set_console_close_status(&mut self, enabled: bool, notice: Option<String>) {
         self.console_close_enabled = enabled;
         self.console_close_notice = notice;
+        self.mark_render_needed();
+    }
+
+    pub fn set_supervisor_process_notice(&mut self, notice: Option<String>) {
+        self.supervisor_process_notice = notice;
         self.mark_render_needed();
     }
 

@@ -24,13 +24,16 @@ using var consoleLog = SupervisorConsoleLog.Install();
 
 var commandLineArgs = Environment.GetCommandLineArgs().Skip(1).ToArray();
 var desktopTuiStart = commandLineArgs.Any(arg => string.Equals(arg, "--desktop-tui-start", StringComparison.OrdinalIgnoreCase));
+var launchDesktopTuiAfterReady = commandLineArgs.Any(arg => string.Equals(arg, "--launch-desktop-tui-after-ready", StringComparison.OrdinalIgnoreCase));
 var steamVrStart = commandLineArgs.Any(arg => string.Equals(arg, "--steamvr-start", StringComparison.OrdinalIgnoreCase));
+var managedSteamVrSession = steamVrStart || commandLineArgs.Any(arg => string.Equals(arg, "--managed-steamvr-session", StringComparison.OrdinalIgnoreCase));
 var watchVrchatAutoLaunch = commandLineArgs.Any(arg => string.Equals(arg, "--watch-vrchat-auto-launch", StringComparison.OrdinalIgnoreCase));
 var applyStartupIntegration = commandLineArgs.Any(arg => string.Equals(arg, "--apply-startup-integration", StringComparison.OrdinalIgnoreCase));
 var showStartupIntegrationResult = commandLineArgs.Any(arg => string.Equals(arg, "--show-result", StringComparison.OrdinalIgnoreCase));
 var hideStartupIntegrationHelperWindow = commandLineArgs.Any(arg => string.Equals(arg, "--hide-startup-helper", StringComparison.OrdinalIgnoreCase));
 var desktopTuiDefaultInterface = commandLineArgs.Any(arg => string.Equals(arg, "--desktop-tui-default-interface", StringComparison.OrdinalIgnoreCase));
 if (desktopTuiStart
+    || launchDesktopTuiAfterReady
     || steamVrStart
     || watchVrchatAutoLaunch
     || (applyStartupIntegration && hideStartupIntegrationHelperWindow && !showStartupIntegrationResult))
@@ -38,9 +41,8 @@ if (desktopTuiStart
     ConsoleWindow.HideIfPresent();
 }
 
-var configPath = TryGetCommandOption(commandLineArgs, "--config", out var requestedConfigPath)
-    ? requestedConfigPath
-    : null;
+var explicitConfigSupplied = TryGetCommandOption(commandLineArgs, "--config", out var requestedConfigPath);
+var configPath = explicitConfigSupplied ? requestedConfigPath : null;
 if (TryGetCommandOption(commandLineArgs, "--emergency-base-station-cleanup", out var emergencyConfigPath))
 {
     var initialDelaySeconds = TryGetCommandOption(commandLineArgs, "--delay-seconds", out var delayText)
@@ -120,9 +122,40 @@ if (!ownsSupervisorMutex)
     return;
 }
 
+DirectLaunchMigrationResult? migrationResultForStartup = null;
+if (IsInteractiveSupervisorLaunch(
+    desktopTuiStart,
+    launchDesktopTuiAfterReady,
+    steamVrStart,
+    managedSteamVrSession,
+    watchVrchatAutoLaunch,
+    applyStartupIntegration,
+    commandLineArgs))
+{
+    var migrationResult = await DirectLaunchMigration.RunAsync(
+        config,
+        explicitConfigSupplied,
+        configPath,
+        shutdown.Token);
+    if (!migrationResult.ContinueLaunch)
+    {
+        return;
+    }
+
+    migrationResultForStartup = migrationResult;
+    config = migrationResult.Config;
+}
+
 var diagnosticsOptions = DiagnosticsOptions.ForSupervisor(config, commandLineArgs);
 using var diagnostics = SupervisorDiagnosticsSession.Start(diagnosticsOptions);
-var supervisor = new AppSupervisor(config, steamVrStart, diagnostics, shutdown);
+var supervisor = new AppSupervisor(
+    config,
+    steamVrStart,
+    managedSteamVrSession,
+    launchDesktopTuiAfterReady,
+    migrationResultForStartup?.AutoLaunchTaskBindingDeferredByUser ?? false,
+    diagnostics,
+    shutdown);
 var supervisorStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 Console.CancelKeyPress += (_, eventArgs) =>
 {
@@ -157,6 +190,23 @@ static void RunBlockingGracefulShutdown(AppSupervisor supervisor, Task superviso
     }
 }
 
+static bool IsInteractiveSupervisorLaunch(
+    bool desktopTuiStart,
+    bool launchDesktopTuiAfterReady,
+    bool steamVrStart,
+    bool managedSteamVrSession,
+    bool watchVrchatAutoLaunch,
+    bool applyStartupIntegration,
+    string[] args)
+    => !desktopTuiStart
+        && !launchDesktopTuiAfterReady
+        && !steamVrStart
+        && !managedSteamVrSession
+        && !watchVrchatAutoLaunch
+        && !applyStartupIntegration
+        && !args.Any(arg => string.Equals(arg, "--install-auto-launch-task", StringComparison.OrdinalIgnoreCase))
+        && !args.Any(arg => string.Equals(arg, "--emergency-base-station-cleanup", StringComparison.OrdinalIgnoreCase));
+
 static bool TryGetCommandOption(string[] args, string name, out string? value)
 {
     value = null;
@@ -187,16 +237,17 @@ static async Task InstallAutoLaunchScheduledTaskFromCommandLineAsync(SupervisorC
     }
 
     Console.WriteLine("Installing elevated auto-launch scheduled task...");
-    var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(
+    var taskResult = await ScheduledTaskInstaller.CreateOrUpdateAsync(
         startWatcherImmediately: true,
         skipCurrentSteamVrSession: true,
-        useDesktopTuiDefaultInterface: false,
+        useDesktopTuiDefaultInterface: null,
         config.LoadedFromPath,
         cancellationToken);
     config.SetAutoLaunchScheduledTask(true);
     config.SaveAutoLaunchScheduledTaskPreference();
-    Console.WriteLine($"Installed scheduled task: {taskDetails.TaskName}");
-    Console.WriteLine($"Trigger: {taskDetails.TriggerDescription}");
+    Console.WriteLine(taskResult.OperatorMessage);
+    Console.WriteLine($"Task: {taskResult.TaskName}");
+    Console.WriteLine($"Trigger: {taskResult.TriggerDescription}");
 }
 
 internal static class AppVersion
@@ -205,6 +256,361 @@ internal static class AppVersion
         typeof(AppVersion).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
         ?? typeof(AppVersion).Assembly.GetName().Version?.ToString()
         ?? "unknown";
+}
+
+internal sealed record DirectLaunchMigrationResult(
+    SupervisorConfig Config,
+    bool ContinueLaunch,
+    bool AutoLaunchTaskBindingDeferredByUser);
+
+internal enum TaskMigrationDecision
+{
+    None,
+    Deferred,
+    Rebound,
+    RemovedOrDisabled
+}
+
+internal sealed record DirectLaunchTaskMigrationResult(
+    TaskMigrationDecision Decision,
+    bool AutoLaunchTaskBindingDeferredByUser)
+{
+    public static DirectLaunchTaskMigrationResult None { get; } = new(
+        TaskMigrationDecision.None,
+        AutoLaunchTaskBindingDeferredByUser: false);
+
+    public static DirectLaunchTaskMigrationResult Rebound { get; } = new(
+        TaskMigrationDecision.Rebound,
+        AutoLaunchTaskBindingDeferredByUser: false);
+
+    public static DirectLaunchTaskMigrationResult RemovedOrDisabled { get; } = new(
+        TaskMigrationDecision.RemovedOrDisabled,
+        AutoLaunchTaskBindingDeferredByUser: false);
+}
+
+internal static class DirectLaunchMigration
+{
+    public static async Task<DirectLaunchMigrationResult> RunAsync(
+        SupervisorConfig config,
+        bool explicitConfigSupplied,
+        string? explicitConfigPath,
+        CancellationToken cancellationToken)
+    {
+        Console.WriteLine(
+            "direct_launch_migration; interactive=True"
+            + $"; explicitConfigSupplied={explicitConfigSupplied}"
+            + $"; loadedConfig={FormatPath(config.LoadedFromPath)}");
+
+        var resolvedConfig = await ResolveConfigAsync(config, explicitConfigSupplied, explicitConfigPath, cancellationToken);
+        if (resolvedConfig is null)
+        {
+            return new DirectLaunchMigrationResult(
+                new SupervisorConfig(),
+                ContinueLaunch: false,
+                AutoLaunchTaskBindingDeferredByUser: false);
+        }
+
+        var taskResult = await ResolveScheduledTasksAsync(resolvedConfig, cancellationToken);
+        return new DirectLaunchMigrationResult(
+            resolvedConfig,
+            ContinueLaunch: true,
+            AutoLaunchTaskBindingDeferredByUser: taskResult.AutoLaunchTaskBindingDeferredByUser);
+    }
+
+    private static async Task<SupervisorConfig?> ResolveConfigAsync(
+        SupervisorConfig config,
+        bool explicitConfigSupplied,
+        string? explicitConfigPath,
+        CancellationToken cancellationToken)
+    {
+        var releaseDirectory = AppContext.BaseDirectory;
+        var loadedExternal = !string.IsNullOrWhiteSpace(config.LoadedFromPath)
+            && !ConfigMigrationSupport.IsPathInDirectory(config.LoadedFromPath, releaseDirectory);
+
+        if (explicitConfigSupplied)
+        {
+            Console.WriteLine(
+                "config_migration; origin=explicit"
+                + $"; supplied={FormatPath(explicitConfigPath)}"
+                + $"; loaded={FormatPath(config.LoadedFromPath)}"
+                + $"; external={loadedExternal}");
+            if (!loadedExternal || string.IsNullOrWhiteSpace(config.LoadedFromPath))
+            {
+                return config;
+            }
+
+            var choice = await ShowConfigMigrationPromptAsync(
+                "Use the configuration from another folder?",
+                "The Supervisor was started with an explicit configuration file outside this release folder.\r\n\r\nYou can import a copy into this release, or keep using the supplied file for this launch.",
+                "Import Copy",
+                "Use Supplied File",
+                cancellationToken);
+            if (choice == ConfigMigrationChoice.Cancel)
+            {
+                Console.WriteLine("config_migration; result=cancelled");
+                return null;
+            }
+
+            if (choice == ConfigMigrationChoice.KeepExternal)
+            {
+                Console.WriteLine("config_migration; result=kept-explicit; path=" + FormatPath(config.LoadedFromPath));
+                return config;
+            }
+
+            return ImportAndReload(config.LoadedFromPath, releaseDirectory);
+        }
+
+        var currentConfigIncomplete = string.IsNullOrWhiteSpace(config.LoadedFromPath)
+            || (config.RunInitialSetupQuestions && !config.AreInitialSetupQuestionsComplete());
+        if (!currentConfigIncomplete)
+        {
+            Console.WriteLine("config_migration; result=current-config-complete; path=" + FormatPath(config.LoadedFromPath));
+            return config;
+        }
+
+        var candidates = ConfigMigrationSupport.FindCandidates(
+            releaseDirectory,
+            explicitConfigPath: null,
+            additionalCandidates: [config.LoadedFromPath]);
+        var candidate = candidates.FirstOrDefault();
+        Console.WriteLine(
+            "config_migration; result=candidate-scan"
+            + $"; candidateFound={candidate is not null}"
+            + $"; candidate={FormatPath(candidate?.Path)}"
+            + $"; source={candidate?.Source ?? "none"}");
+        if (candidate is null)
+        {
+            return config;
+        }
+
+        var importChoice = await ShowConfigMigrationPromptAsync(
+            "Import an existing configuration?",
+            $"This release does not have a completed setup yet.\r\n\r\nA previous configuration was found:\r\n{candidate.Path}\r\n\r\nImport a copy into this release folder?",
+            "Import Copy",
+            "Start New",
+            cancellationToken);
+        if (importChoice == ConfigMigrationChoice.Cancel)
+        {
+            Console.WriteLine("config_migration; result=cancelled");
+            return null;
+        }
+
+        if (importChoice == ConfigMigrationChoice.KeepExternal)
+        {
+            Console.WriteLine("config_migration; result=start-new");
+            return config;
+        }
+
+        return ImportAndReload(candidate.Path, releaseDirectory);
+    }
+
+    private static SupervisorConfig? ImportAndReload(string sourcePath, string releaseDirectory)
+    {
+        var import = ConfigMigrationSupport.ImportConfig(sourcePath, releaseDirectory);
+        Console.WriteLine(
+            "config_migration; result=" + import.Outcome
+            + $"; source={FormatPath(import.SourcePath)}"
+            + $"; destination={FormatPath(import.DestinationPath)}"
+            + $"; message={import.Message}");
+        if (import.Outcome != ConfigMigrationOutcome.Imported
+            || string.IsNullOrWhiteSpace(import.DestinationPath))
+        {
+            ThemedPrompt.Show(
+                import.Message,
+                "Could not import configuration",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return null;
+        }
+
+        return SupervisorConfig.Load(import.DestinationPath);
+    }
+
+    private static async Task<DirectLaunchTaskMigrationResult> ResolveScheduledTasksAsync(SupervisorConfig config, CancellationToken cancellationToken)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return DirectLaunchTaskMigrationResult.None;
+        }
+
+        var currentDirectory = ScheduledTaskPathValidator.GetCurrentExecutableDirectory();
+        var issues = await ScheduledTaskPathValidator.ValidateExistingManagedTasksAsync(currentDirectory, cancellationToken);
+        var recognizedIssues = issues
+            .Where(issue => ScheduledTaskPathValidator.ManagedTaskNames.Contains(issue.TaskName, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+        if (recognizedIssues.Length == 0)
+        {
+            Console.WriteLine("task_migration; result=no-managed-task-issues");
+            return DirectLaunchTaskMigrationResult.None;
+        }
+
+        Console.WriteLine("task_migration; recognizedIssues=" + string.Join(" | ", recognizedIssues.Select(FormatTaskIssue)));
+        var message = "These Pimax VRC Supervisor startup tasks point to another release folder:\r\n\r\n"
+            + string.Join("\r\n", recognizedIssues.Select(issue => $"- {issue.TaskName}: {issue.TaskExecutablePath}"))
+            + "\r\n\r\nRebind updates recognized Pimax tasks to this release. Turn Off disables only the listed Pimax startup integrations.";
+        var choice = await ShowTaskMigrationPromptAsync(message, cancellationToken);
+        switch (choice)
+        {
+            case TaskMigrationChoice.Rebind:
+                await RebindTasksAsync(config, recognizedIssues, cancellationToken);
+                return DirectLaunchTaskMigrationResult.Rebound;
+            case TaskMigrationChoice.TurnOff:
+                await TurnOffTasksAsync(config, recognizedIssues, cancellationToken);
+                return DirectLaunchTaskMigrationResult.RemovedOrDisabled;
+            default:
+                Console.WriteLine("task_migration; result=deferred");
+                return new DirectLaunchTaskMigrationResult(
+                    TaskMigrationDecision.Deferred,
+                    AutoLaunchTaskBindingDeferredByUser: recognizedIssues.Any(issue =>
+                        string.Equals(issue.TaskName, ScheduledTaskPathValidator.AutoLaunchTaskName, StringComparison.OrdinalIgnoreCase)));
+        }
+    }
+
+    private static async Task RebindTasksAsync(
+        SupervisorConfig config,
+        IReadOnlyCollection<ScheduledTaskPathValidationIssue> issues,
+        CancellationToken cancellationToken)
+    {
+        if (issues.Any(issue => string.Equals(issue.TaskName, ScheduledTaskPathValidator.SteamVrStartTaskName, StringComparison.OrdinalIgnoreCase))
+            && !issues.Any(issue => string.Equals(issue.TaskName, ScheduledTaskPathValidator.AutoLaunchTaskName, StringComparison.OrdinalIgnoreCase)))
+        {
+            config.AutoLaunchScheduledTask = JsonSerializer.SerializeToElement(false);
+            config.StartupLaunchMode = StartupLaunchMode.SteamVrManifest;
+            config.StopWithSteamVr = true;
+            config.SaveAutoLaunchScheduledTaskPreference();
+            await ScheduledTaskInstaller.DeleteAutoLaunchTaskAsync(cancellationToken);
+            var details = await SteamVrStartupInstaller.CreateOrUpdateAsync(cancellationToken);
+            Console.WriteLine($"task_migration; outcome=Rebound; task={details.AppKey}; manifest={details.ManifestPath}");
+            return;
+        }
+
+        config.SetAutoLaunchScheduledTask(true);
+        config.SaveAutoLaunchScheduledTaskPreference();
+        await SteamVrStartupInstaller.DisableAsync(cancellationToken);
+        await ScheduledTaskInstaller.DeleteSteamVrStartHelperAsync(cancellationToken);
+        var result = await ScheduledTaskInstaller.CreateOrUpdateAsync(
+            startWatcherImmediately: false,
+            skipCurrentSteamVrSession: true,
+            useDesktopTuiDefaultInterface: null,
+            config.LoadedFromPath,
+            cancellationToken);
+        Console.WriteLine("task_migration; outcome=" + result.Outcome + $"; task={result.TaskName}; message={result.OperatorMessage}");
+    }
+
+    private static async Task TurnOffTasksAsync(
+        SupervisorConfig config,
+        IReadOnlyCollection<ScheduledTaskPathValidationIssue> issues,
+        CancellationToken cancellationToken)
+    {
+        if (issues.Any(issue => string.Equals(issue.TaskName, ScheduledTaskPathValidator.AutoLaunchTaskName, StringComparison.OrdinalIgnoreCase)))
+        {
+            await ScheduledTaskInstaller.DeleteAutoLaunchTaskAsync(cancellationToken);
+            Console.WriteLine("task_migration; outcome=RemovedOrDisabled; task=" + ScheduledTaskPathValidator.AutoLaunchTaskName);
+        }
+
+        if (issues.Any(issue => string.Equals(issue.TaskName, ScheduledTaskPathValidator.SteamVrStartTaskName, StringComparison.OrdinalIgnoreCase)))
+        {
+            await SteamVrStartupInstaller.DisableAsync(cancellationToken);
+            await ScheduledTaskInstaller.DeleteSteamVrStartHelperAsync(cancellationToken);
+            Console.WriteLine("task_migration; outcome=RemovedOrDisabled; task=" + ScheduledTaskPathValidator.SteamVrStartTaskName);
+        }
+
+        config.StartupLaunchMode = StartupLaunchMode.None;
+        config.SetAutoLaunchScheduledTask(false);
+        config.SaveAutoLaunchScheduledTaskPreference();
+    }
+
+    private static Task<ConfigMigrationChoice> ShowConfigMigrationPromptAsync(
+        string title,
+        string message,
+        string acceptText,
+        string declineText,
+        CancellationToken cancellationToken)
+        => ShowPromptAsync(
+            () => ThemedPrompt.Show(
+                message,
+                title,
+                [
+                    new(acceptText, DialogResult.Yes),
+                    new(declineText, DialogResult.No),
+                    new("Cancel", DialogResult.Cancel)
+                ],
+                MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button1),
+            result => result switch
+            {
+                DialogResult.Yes => ConfigMigrationChoice.Import,
+                DialogResult.No => ConfigMigrationChoice.KeepExternal,
+                _ => ConfigMigrationChoice.Cancel
+            },
+            cancellationToken);
+
+    private static Task<TaskMigrationChoice> ShowTaskMigrationPromptAsync(
+        string message,
+        CancellationToken cancellationToken)
+        => ShowPromptAsync(
+            () => ThemedPrompt.Show(
+                message,
+                "Startup Integration",
+                [
+                    new("Rebind", DialogResult.Yes),
+                    new("Turn Off", DialogResult.No),
+                    new("Later", DialogResult.Cancel)
+                ],
+                MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button1),
+            result => result switch
+            {
+                DialogResult.Yes => TaskMigrationChoice.Rebind,
+                DialogResult.No => TaskMigrationChoice.TurnOff,
+                _ => TaskMigrationChoice.Defer
+            },
+            cancellationToken);
+
+    private static Task<T> ShowPromptAsync<T>(
+        Func<DialogResult> showPrompt,
+        Func<DialogResult, T> mapResult,
+        CancellationToken cancellationToken)
+    {
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                Application.EnableVisualStyles();
+                completion.TrySetResult(mapResult(showPrompt()));
+            }
+            catch (Exception ex)
+            {
+                completion.TrySetException(ex);
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+        cancellationToken.Register(() => completion.TrySetCanceled(cancellationToken));
+        return completion.Task;
+    }
+
+    private static string FormatTaskIssue(ScheduledTaskPathValidationIssue issue)
+        => $"{issue.TaskName}: {issue.TaskExecutablePath} -> {issue.Message}";
+
+    private static string FormatPath(string? path)
+        => string.IsNullOrWhiteSpace(path) ? "(none)" : path;
+
+    private enum ConfigMigrationChoice
+    {
+        Import,
+        KeepExternal,
+        Cancel
+    }
+
+    private enum TaskMigrationChoice
+    {
+        Rebind,
+        TurnOff,
+        Defer
+    }
 }
 
 internal sealed record DiagnosticsOptions(
@@ -703,6 +1109,7 @@ internal sealed class SupervisorDiagnosticsSession : IDisposable
 internal static class ConsoleWindow
 {
     private const int ShowWindowHide = 0;
+    private const int ShowWindowShow = 5;
 
     public static void HideIfPresent()
     {
@@ -715,6 +1122,20 @@ internal static class ConsoleWindow
         if (consoleWindow != IntPtr.Zero)
         {
             ShowWindow(consoleWindow, ShowWindowHide);
+        }
+    }
+
+    public static void ShowIfPresent()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var consoleWindow = GetConsoleWindow();
+        if (consoleWindow != IntPtr.Zero)
+        {
+            ShowWindow(consoleWindow, ShowWindowShow);
         }
     }
 
@@ -1213,10 +1634,34 @@ internal enum SupervisorLifecyclePhase
 internal enum BaseStationWakeRoutineResult
 {
     Ran,
+    RanExhausted,
     NoopAlreadyComplete,
     NoopNoStations,
     NoopSteamVrNotRunning,
     NoopWaitingForRetry
+}
+
+internal enum BaseStationStartupSchedulerState
+{
+    Disabled,
+    WaitingForSteamVr,
+    Stabilizing,
+    Scheduled,
+    Running,
+    Completed,
+    Exhausted,
+    Cancelled
+}
+
+internal sealed record SteamVrBaseStationEpoch(
+    int Pid,
+    string ProcessName,
+    DateTimeOffset? ProcessStartTime,
+    DateTimeOffset FirstDetectedAt)
+{
+    public string Identity => ProcessStartTime is { } startTime
+        ? $"{ProcessName}:{Pid}:start:{startTime:O}"
+        : $"{ProcessName}:{Pid}:detected:{FirstDetectedAt:O}";
 }
 
 internal struct ConsoleHotkeys
@@ -1246,7 +1691,8 @@ internal sealed record SupervisorStatusSnapshot(
     string? ShutdownProgressElapsed,
     string? ShutdownBlockedBy,
     string? ShutdownBlockedElapsed,
-    string? BlockingProcesses);
+    string? BlockingProcesses,
+    string? OperatorWarning);
 
 internal sealed record SupervisorCommandDefinition(
     string Name,
@@ -1332,17 +1778,24 @@ internal sealed class AppSupervisor
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
     private static readonly TimeSpan BrokenEyeStartupCheckDelay = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan SteamVrBaseStationStartupDelay = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan SteamVrBaseStationMinimumProcessAge = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan SteamVrBaseStationFallbackStabilization = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan LovenseBluetoothRegistryRecentWindow = TimeSpan.FromHours(1);
+    private static readonly TimeSpan DashboardReadinessTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan TerminalUiImmediateExitObservation = TimeSpan.FromMilliseconds(750);
 
     private readonly SupervisorConfig _config;
     private readonly bool _steamVrStart;
+    private readonly bool _managedSteamVrSession;
+    private readonly bool _launchDesktopTuiAfterReady;
+    private readonly bool _autoLaunchTaskBindingDeferredByUser;
     private readonly BaseStationGattClient _baseStationGattClient = new();
     private readonly SteamVrTrackingReferenceReader _steamVrTrackingReferenceReader = new();
     private readonly MonitorLayoutController _monitorLayout = new();
     private readonly TimeSpan _pollInterval;
     private readonly SupervisorDiagnosticsSession _diagnostics;
     private readonly CancellationTokenSource _shutdown;
+    private readonly SteamVrLifecycleCoordinator _steamVrLifecycle;
     private readonly Dictionary<int, Process> _watchedProcessHandles = new();
     private readonly SemaphoreSlim _oscGoesBrrrLaunchLock = new(1, 1);
     private readonly SemaphoreSlim _oscRouterLaunchLock = new(1, 1);
@@ -1368,6 +1821,12 @@ internal sealed class AppSupervisor
     private DateTimeOffset? _lastBaseStationPowerOnSkippedLogAt;
     private DateTimeOffset? _nextBaseStationPowerOnAttemptAt;
     private DateTimeOffset? _baseStationSecondPowerOnPassCompletedAt;
+    private BaseStationStartupSchedulerState _baseStationStartupSchedulerState = BaseStationStartupSchedulerState.WaitingForSteamVr;
+    private SteamVrBaseStationEpoch? _baseStationStartupEpoch;
+    private DateTimeOffset? _baseStationStartupScheduledAt;
+    private bool _baseStationStartupInitialWakeSentForEpoch;
+    private bool _baseStationStartupStabilizationWaitLoggedForEpoch;
+    private bool _baseStationStartupAlreadyScheduledLoggedForEpoch;
     private DateTimeOffset? _shutdownBlockedBySteamVrSince;
     private string? _shutdownProgress;
     private DateTimeOffset? _shutdownProgressSince;
@@ -1393,13 +1852,25 @@ internal sealed class AppSupervisor
     private volatile bool _forcedManualReloadRequested;
     private SupervisorLifecyclePhase _lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChat;
     private int _gracefulShutdownRequested;
+    private string? _operatorWarning;
 
-    public AppSupervisor(SupervisorConfig config, bool steamVrStart, SupervisorDiagnosticsSession diagnostics, CancellationTokenSource shutdown)
+    public AppSupervisor(
+        SupervisorConfig config,
+        bool steamVrStart,
+        bool managedSteamVrSession,
+        bool launchDesktopTuiAfterReady,
+        bool autoLaunchTaskBindingDeferredByUser,
+        SupervisorDiagnosticsSession diagnostics,
+        CancellationTokenSource shutdown)
     {
         _config = config;
         _steamVrStart = steamVrStart;
+        _managedSteamVrSession = managedSteamVrSession;
+        _launchDesktopTuiAfterReady = launchDesktopTuiAfterReady;
+        _autoLaunchTaskBindingDeferredByUser = autoLaunchTaskBindingDeferredByUser;
         _diagnostics = diagnostics;
         _shutdown = shutdown;
+        _steamVrLifecycle = new SteamVrLifecycleCoordinator(managedSteamVrSession, Environment.ProcessId);
         _pollInterval = TimeSpan.FromSeconds(Math.Max(1, config.PollIntervalSeconds));
     }
 
@@ -1421,6 +1892,7 @@ internal sealed class AppSupervisor
             + $"; config={(string.IsNullOrWhiteSpace(_config.DisplayName) ? "default" : _config.DisplayName)}"
             + $"; configPath={(_config.LoadedFromPath ?? "none")}"
             + $"; steamVrStart={_steamVrStart}"
+            + $"; managedSteamVrSession={_managedSteamVrSession}"
             + $"; diagnosticsFile={(_diagnostics.DiagnosticsPath ?? "none")}"
             + $"; debugFile={(_diagnostics.DebugPath ?? "none")}");
 
@@ -1454,6 +1926,11 @@ internal sealed class AppSupervisor
             _config.SaveInitialSetupQuestionsComplete();
         }
         _commandServer = SupervisorCommandServer.Start(this, cancellationToken);
+        if (_launchDesktopTuiAfterReady)
+        {
+            Console.WriteLine("Supervisor received startup interface: Terminal UI.");
+            await LaunchTerminalUiAfterDashboardReadyAsync(cancellationToken);
+        }
         var restartedFromForcedManualReload = TryConsumeForcedManualReloadMarker();
 
         try
@@ -1465,6 +1942,7 @@ internal sealed class AppSupervisor
             }
             if (ShouldExitWithSteamVr())
             {
+                _ = ObserveSteamVrLifecycle("startup-initial-observation");
                 WriteDiagnosticEvent("lifecycle; steamvr detected at startup; processes=" + DescribeRunningProcesses(_config.SteamVrServerProcessNames));
             }
 
@@ -1472,12 +1950,16 @@ internal sealed class AppSupervisor
             _lastPimaxConnected = await WaitForPimaxOnStartupAsync(cancellationToken);
             WriteDiagnosticEvent($"lifecycle; pimax startup wait complete; connected={_lastPimaxConnected}");
 
-            await WaitForSteamVrBaseStationStartupWindowAsync(cancellationToken);
-            await TryPowerOnBaseStationsBeforeWatchedProcessAsync(cancellationToken);
-            if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+            await ObserveAndRunBaseStationStartupSchedulerAsync(
+                "startup-before-watched-process",
+                initialPassOnly: true,
+                cancellationToken);
+            var startupSteamVrDecision = ObserveSteamVrLifecycle("startup-before-watched-process");
+            if (await ApplySteamVrLifecycleDecisionAsync(
+                startupSteamVrDecision,
+                "SteamVR shut down before VRChat started. Powering down base stations and exiting.",
+                cancellationToken))
             {
-                Console.WriteLine("SteamVR shut down before VRChat started. Powering down base stations and exiting.");
-                await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
                 return;
             }
 
@@ -1531,13 +2013,12 @@ internal sealed class AppSupervisor
                     await HandleConsoleHotkeysAsync(cancellationToken);
                     if (_lifecyclePhase == SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit)
                     {
-                        if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+                        var waitingSteamVrDecision = ObserveSteamVrLifecycle("waiting-for-vrchat-restart-or-steamvr-exit");
+                        if (await ApplySteamVrLifecycleDecisionAsync(
+                            waitingSteamVrDecision,
+                            "SteamVR exited; running shutdown routine.",
+                            cancellationToken))
                         {
-                            _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
-                            _shutdownBlockedBySteamVrSince = null;
-                            SetShutdownProgress("running cleanup after SteamVR exit");
-                            Console.WriteLine("SteamVR exited; running shutdown routine.");
-                            await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
                             return;
                         }
 
@@ -1556,19 +2037,20 @@ internal sealed class AppSupervisor
 
                     if (_lastPimaxConnected == true)
                     {
-                        await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken);
+                        await ObserveAndRunBaseStationStartupSchedulerAsync(
+                            "main-loop",
+                            initialPassOnly: false,
+                            cancellationToken);
                     }
 
-                    if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
-                    {
-                        var previousLifecyclePhase = _lifecyclePhase;
-                        _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
-                        _shutdownBlockedBySteamVrSince = null;
-                        SetShutdownProgress("running cleanup after SteamVR exit");
-                        Console.WriteLine(previousLifecyclePhase == SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit
+                    var steamVrDecision = ObserveSteamVrLifecycle("main-loop");
+                    if (await ApplySteamVrLifecycleDecisionAsync(
+                        steamVrDecision,
+                        _lifecyclePhase == SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit
                             ? "SteamVR exited; running shutdown routine."
-                            : "SteamVR has shut down. Restoring monitors, closing managed apps, and exiting.");
-                        await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
+                            : "SteamVR has shut down. Restoring monitors, closing managed apps, and exiting.",
+                        cancellationToken))
+                    {
                         return;
                     }
 
@@ -2025,10 +2507,10 @@ internal sealed class AppSupervisor
         {
             try
             {
-                var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(
+                var taskResult = await ScheduledTaskInstaller.CreateOrUpdateAsync(
                     startWatcherImmediately: true,
                     skipCurrentSteamVrSession: true,
-                    useDesktopTuiDefaultInterface: false,
+                    useDesktopTuiDefaultInterface: null,
                     _config.LoadedFromPath,
                     cancellationToken);
                 _config.SetAutoLaunchScheduledTask(true);
@@ -2036,8 +2518,9 @@ internal sealed class AppSupervisor
                 _config.SaveAutoLaunchScheduledTaskPreference();
                 await SteamVrStartupInstaller.DisableAsync(cancellationToken);
                 await ScheduledTaskInstaller.DeleteSteamVrStartHelperAsync(cancellationToken);
-                Console.WriteLine($"Created elevated auto-launch scheduled task: {taskDetails.TaskName}");
-                Console.WriteLine($"Trigger: {taskDetails.TriggerDescription}");
+                Console.WriteLine(taskResult.OperatorMessage);
+                Console.WriteLine($"Task: {taskResult.TaskName}");
+                Console.WriteLine($"Trigger: {taskResult.TriggerDescription}");
                 Console.WriteLine("Supervisor will start with the console workflow.");
             }
             catch (Exception ex)
@@ -2154,24 +2637,153 @@ internal sealed class AppSupervisor
         }
     }
 
-    private async Task EnsureAutoLaunchScheduledTaskInstalledAsync(CancellationToken cancellationToken)
+    private async Task LaunchTerminalUiAfterDashboardReadyAsync(CancellationToken cancellationToken)
     {
-        Console.WriteLine("Ensuring elevated auto-launch scheduled task is installed.");
+        if (_commandServer is null)
+        {
+            Console.WriteLine("Terminal UI startup requested, but the dashboard bridge is not initialized. Falling back to Classic Console.");
+            ConsoleWindow.ShowIfPresent();
+            return;
+        }
+
+        Console.WriteLine("Terminal UI startup requested.");
+        Console.WriteLine("Waiting for dashboard bridge readiness.");
+        var startedAt = Stopwatch.GetTimestamp();
         try
         {
-            var taskDetails = await ScheduledTaskInstaller.CreateOrUpdateAsync(
-                startWatcherImmediately: true,
-                skipCurrentSteamVrSession: true,
-                useDesktopTuiDefaultInterface: false,
+            var readyTask = _commandServer.Ready;
+            var completed = await Task.WhenAny(readyTask, Task.Delay(DashboardReadinessTimeout, cancellationToken));
+            if (completed != readyTask)
+            {
+                Console.WriteLine($"Terminal UI launch failed after 0 attempt(s): dashboard bridge was not ready within {DashboardReadinessTimeout.TotalSeconds:0} seconds. Falling back to Classic Console.");
+                ConsoleWindow.ShowIfPresent();
+                return;
+            }
+
+            await readyTask;
+            var readinessProbe = await ExecuteSupervisorCommandAsync(
+                "query-json {\"resource\":\"status\"}",
+                cancellationToken);
+            if (!readinessProbe.Contains("\"success\":true", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine("Terminal UI launch failed after 0 attempt(s): dashboard status snapshot was not serviceable. Falling back to Classic Console.");
+                ConsoleWindow.ShowIfPresent();
+                return;
+            }
+
+            Console.WriteLine($"Dashboard bridge ready after {Stopwatch.GetElapsedTime(startedAt).TotalSeconds:0.0}s.");
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            Console.WriteLine($"Terminal UI launch failed after 0 attempt(s): {ex.Message}. Falling back to Classic Console.");
+            ConsoleWindow.ShowIfPresent();
+            return;
+        }
+
+        var lastFailure = "";
+        for (var attempt = 1; attempt <= 2; attempt++)
+        {
+            try
+            {
+                Console.WriteLine("Launching Terminal UI.");
+                using var process = StartTerminalUiProcess();
+                Console.WriteLine($"Terminal UI process started with PID {process.Id}.");
+                await Task.Delay(TerminalUiImmediateExitObservation, cancellationToken);
+                if (!process.HasExited)
+                {
+                    return;
+                }
+
+                lastFailure = $"Terminal UI exited immediately with code {process.ExitCode}.";
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                lastFailure = ex.Message;
+            }
+        }
+
+        Console.WriteLine($"Terminal UI launch failed after 2 attempt(s): {lastFailure} Falling back to Classic Console.");
+        ConsoleWindow.ShowIfPresent();
+    }
+
+    private Process StartTerminalUiProcess()
+    {
+        var supervisorPath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+        var supervisorDirectory = string.IsNullOrWhiteSpace(supervisorPath)
+            ? AppContext.BaseDirectory
+            : Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory;
+        var tuiPath = Path.Combine(supervisorDirectory, "PimaxVrcSupervisorTui.exe");
+        if (!File.Exists(tuiPath))
+        {
+            throw new FileNotFoundException("Terminal UI executable was not found.", tuiPath);
+        }
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = tuiPath,
+            WorkingDirectory = supervisorDirectory,
+            UseShellExecute = true,
+            WindowStyle = ProcessWindowStyle.Normal
+        };
+        if (!string.IsNullOrWhiteSpace(_config.LoadedFromPath))
+        {
+            startInfo.ArgumentList.Add("--config");
+            startInfo.ArgumentList.Add(_config.LoadedFromPath);
+        }
+
+        startInfo.ArgumentList.Add("--exit-when-supervisor-exits");
+        startInfo.ArgumentList.Add("--supervisor-pid");
+        startInfo.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+        return Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Terminal UI process could not be started.");
+    }
+
+    private async Task EnsureAutoLaunchScheduledTaskInstalledAsync(CancellationToken cancellationToken)
+    {
+        Console.WriteLine("Validating elevated auto-launch scheduled task.");
+        try
+        {
+            var valid = await ScheduledTaskInstaller.ValidateAutoLaunchTaskAsync(
+                useDesktopTuiDefaultInterface: null,
                 _config.LoadedFromPath,
                 cancellationToken);
-            Console.WriteLine($"Installed elevated auto-launch scheduled task: {taskDetails.TaskName}");
-            Console.WriteLine($"Trigger: {taskDetails.TriggerDescription}");
+            if (!valid)
+            {
+                if (_autoLaunchTaskBindingDeferredByUser
+                    && await IsDeferredAutoLaunchTaskStillBoundToAnotherReleaseAsync(cancellationToken))
+                {
+                    Console.WriteLine("Autostart remains bound to another release by your choice.");
+                    Console.WriteLine("The current release will not modify it. You can rebind it later in Configurator.");
+                }
+                else
+                {
+                    Console.WriteLine("Scheduled task needs repair. Open Configurator and apply Startup integration to update it.");
+                }
+            }
         }
         catch (Exception ex)
         {
-            Console.WriteLine("Could not install elevated auto-launch scheduled task:");
+            Console.WriteLine("Could not validate elevated auto-launch scheduled task:");
             Console.WriteLine(ex.Message);
+        }
+    }
+
+    private static async Task<bool> IsDeferredAutoLaunchTaskStillBoundToAnotherReleaseAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await ScheduledTaskPathValidator.ValidateExistingTaskExecutableAsync(
+                ScheduledTaskPathValidator.AutoLaunchTaskName,
+                ScheduledTaskPathValidator.GetCurrentExecutableDirectory(),
+                cancellationToken);
+            return result is { Exists: true, PointsToCurrentDirectory: false, Issue: not null }
+                && string.Equals(result.Issue.TaskName, ScheduledTaskPathValidator.AutoLaunchTaskName, StringComparison.OrdinalIgnoreCase)
+                && result.Issue.Message.Contains("another release folder", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not confirm deferred autostart task binding: {ex.Message}");
+            return false;
         }
     }
 
@@ -2408,10 +3020,16 @@ internal sealed class AppSupervisor
         while (!cancellationToken.IsCancellationRequested)
         {
             await Task.Delay(_pollInterval, cancellationToken);
-            if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+            await ObserveAndRunBaseStationStartupSchedulerAsync(
+                "watched-process-startup-wait",
+                initialPassOnly: true,
+                cancellationToken);
+            var steamVrDecision = ObserveSteamVrLifecycle("watched-process-startup-wait");
+            if (await ApplySteamVrLifecycleDecisionAsync(
+                steamVrDecision,
+                "SteamVR shut down while waiting for VRChat.",
+                cancellationToken))
             {
-                Console.WriteLine("SteamVR shut down while waiting for VRChat.");
-                await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 return false;
             }
@@ -3120,13 +3738,16 @@ internal sealed class AppSupervisor
         var blockedBySteamVr = snapshot.ShutdownBlockedBy is null || snapshot.ShutdownBlockedElapsed is null || snapshot.BlockingProcesses is null
             ? ""
             : $"; ShutdownBlockedBy={snapshot.ShutdownBlockedBy}({snapshot.ShutdownBlockedElapsed}); BlockingProcesses={snapshot.BlockingProcesses}";
-        return $"Mode={snapshot.Mode}; SteamVR={snapshot.SteamVr}; Lifecycle={snapshot.Lifecycle}; CoreApps={snapshot.CoreApps}; BaseStations={snapshot.BaseStations}; OscRouter={snapshot.OscRouter}; OscGoesBrrr={snapshot.OscGoesBrrr}{shutdownProgress}{blockedBySteamVr}";
+        var operatorWarning = string.IsNullOrWhiteSpace(snapshot.OperatorWarning)
+            ? ""
+            : $"; Warning={snapshot.OperatorWarning}";
+        return $"Mode={snapshot.Mode}; SteamVR={snapshot.SteamVr}; Lifecycle={snapshot.Lifecycle}; CoreApps={snapshot.CoreApps}; BaseStations={snapshot.BaseStations}; OscRouter={snapshot.OscRouter}; OscGoesBrrr={snapshot.OscGoesBrrr}{shutdownProgress}{blockedBySteamVr}{operatorWarning}";
     }
 
     private SupervisorStatusSnapshot BuildSupervisorStatusSnapshot()
     {
         var now = DateTimeOffset.UtcNow;
-        var mode = _steamVrStart ? "SteamVR" : "VRChat";
+        var mode = _managedSteamVrSession ? "SteamVR" : "VRChat";
         var steamVrRunning = IsAnyProcessRunning(_config.SteamVrServerProcessNames) ? "running" : "not running";
         var coreApps = !_config.FaceTrackerAutomationEnabled
             ? "automation disabled"
@@ -3171,7 +3792,8 @@ internal sealed class AppSupervisor
             shutdownProgressElapsed,
             _shutdownBlockedBySteamVrSince is null ? null : "SteamVR",
             shutdownBlockedElapsed,
-            blockingProcesses);
+            blockingProcesses,
+            _operatorWarning);
     }
 
     private SupervisorCommandCapabilitiesSnapshot BuildSupervisorCommandCapabilitiesSnapshot()
@@ -4065,7 +4687,7 @@ internal sealed class AppSupervisor
         }
     }
 
-    private async Task TryPowerOnBaseStationsForSessionAsync(
+    private async Task<BaseStationWakeRoutineResult> TryPowerOnBaseStationsForSessionAsync(
         int targetPowerOnPasses,
         CancellationToken cancellationToken,
         bool manualOverride = false,
@@ -4078,7 +4700,7 @@ internal sealed class AppSupervisor
             manualOverride,
             waitForSteamVrTrackingConfirmation);
         var elapsed = Stopwatch.GetElapsedTime(startedAt);
-        if (result == BaseStationWakeRoutineResult.Ran)
+        if (result is BaseStationWakeRoutineResult.Ran or BaseStationWakeRoutineResult.RanExhausted)
         {
             _diagnostics.RecordBaseStationWakeRoutine(elapsed);
         }
@@ -4087,39 +4709,250 @@ internal sealed class AppSupervisor
             _diagnostics.RecordBaseStationWakeNoop(elapsed);
             _diagnostics.WriteVerbose($"base-station wake noop; reason={result}; elapsedMs={elapsed.TotalMilliseconds:0.0}");
         }
+
+        return result;
     }
 
-    private async Task WaitForSteamVrBaseStationStartupWindowAsync(CancellationToken cancellationToken)
+    private async Task ObserveAndRunBaseStationStartupSchedulerAsync(
+        string caller,
+        bool initialPassOnly,
+        CancellationToken cancellationToken)
     {
         if (!_config.BaseStationsEnabled || GetEnabledBaseStations().Length == 0)
         {
+            TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Disabled, caller, "base-station startup disabled or no enabled stations");
             return;
         }
 
-        var latestSteamVrStart = TryGetLatestProcessStartTime(_config.SteamVrServerProcessNames);
-        if (latestSteamVrStart is null)
+        if (_baseStationPowerOnComplete)
+        {
+            if (_baseStationStartupSchedulerState == BaseStationStartupSchedulerState.Exhausted)
+            {
+                return;
+            }
+
+            TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Completed, caller, "base-station startup already complete");
+            return;
+        }
+
+        if (_baseStationStartupSchedulerState == BaseStationStartupSchedulerState.Running)
         {
             return;
         }
 
-        var elapsed = DateTimeOffset.Now - latestSteamVrStart.Value;
-        var remaining = SteamVrBaseStationStartupDelay - elapsed;
-        if (remaining <= TimeSpan.Zero)
+        if (_steamVrLifecycle.ProbeActive)
         {
-            WriteDiagnosticEvent($"base-station startup delay skipped; steamVrAgeSeconds={elapsed.TotalSeconds:0.0}");
             return;
         }
 
-        Console.WriteLine($"Waiting {remaining.TotalSeconds:0} seconds for SteamVR base-station startup before power-on...");
-        WriteDiagnosticEvent($"base-station startup delay begin; remainingSeconds={remaining.TotalSeconds:0.0}; steamVrStartedAt={latestSteamVrStart.Value:O}");
-        await Task.Delay(remaining, cancellationToken);
-        WriteDiagnosticEvent("base-station startup delay complete");
+        var now = DateTimeOffset.Now;
+        var epoch = TryGetCurrentSteamVrBaseStationEpoch(now);
+        if (epoch is null)
+        {
+            if (_baseStationStartupEpoch is not null
+                && _baseStationStartupSchedulerState is BaseStationStartupSchedulerState.Stabilizing
+                    or BaseStationStartupSchedulerState.Scheduled)
+            {
+                TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Cancelled, caller, "SteamVR disappeared before base-station startup executed");
+            }
+
+            _baseStationStartupEpoch = null;
+            _baseStationStartupScheduledAt = null;
+            _baseStationStartupInitialWakeSentForEpoch = false;
+            _baseStationStartupStabilizationWaitLoggedForEpoch = false;
+            _baseStationStartupAlreadyScheduledLoggedForEpoch = false;
+            TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.WaitingForSteamVr, caller, "waiting for SteamVR server");
+            return;
+        }
+
+        if (_baseStationStartupEpoch?.Identity != epoch.Identity)
+        {
+            var previousPresence = _baseStationStartupEpoch is null ? "absent" : "present";
+            _baseStationStartupEpoch = epoch;
+            _baseStationStartupScheduledAt = CalculateBaseStationStartupDueAt(epoch, now);
+            _baseStationStartupInitialWakeSentForEpoch = false;
+            _baseStationStartupStabilizationWaitLoggedForEpoch = false;
+            _baseStationStartupAlreadyScheduledLoggedForEpoch = false;
+            WriteDiagnosticEvent(
+                "steamvr_presence_transition"
+                + $"; previousPresence={previousPresence}"
+                + "; currentPresence=present"
+                + $"; stateBefore={_baseStationStartupSchedulerState}"
+                + "; stateAfter=Stabilizing"
+                + $"; vrserverPid={epoch.Pid}"
+                + $"; vrserverStartTime={FormatOptionalTimestamp(epoch.ProcessStartTime)}"
+                + $"; firstDetectedAt={epoch.FirstDetectedAt:O}"
+                + $"; epoch={epoch.Identity}"
+                + $"; caller={caller}");
+            TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Stabilizing, caller, "SteamVR server detected");
+        }
+
+        var dueAt = _baseStationStartupScheduledAt ?? now;
+        if (now < dueAt)
+        {
+            var remaining = dueAt - now;
+            if (_baseStationStartupSchedulerState != BaseStationStartupSchedulerState.Stabilizing)
+            {
+                TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Stabilizing, caller, "waiting for SteamVR stabilization");
+            }
+
+            if (!_baseStationStartupStabilizationWaitLoggedForEpoch)
+            {
+                _baseStationStartupStabilizationWaitLoggedForEpoch = true;
+                WriteDiagnosticEvent(
+                    "base_station_stabilization_wait"
+                    + $"; state={_baseStationStartupSchedulerState}"
+                    + $"; vrserverPid={epoch.Pid}"
+                    + $"; vrserverStartTime={FormatOptionalTimestamp(epoch.ProcessStartTime)}"
+                    + $"; firstDetectedAt={epoch.FirstDetectedAt:O}"
+                    + $"; epoch={epoch.Identity}"
+                    + $"; minimumDelaySeconds={SteamVrBaseStationMinimumProcessAge.TotalSeconds:0.0}"
+                    + $"; fallbackMaximumSeconds={SteamVrBaseStationFallbackStabilization.TotalSeconds:0.0}"
+                    + $"; processAgeSeconds={GetEpochAge(epoch, now).TotalSeconds:0.0}"
+                    + $"; remainingDelaySeconds={remaining.TotalSeconds:0.0}"
+                    + $"; caller={caller}");
+            }
+
+            return;
+        }
+
+        if (initialPassOnly && _baseStationStartupInitialWakeSentForEpoch)
+        {
+            if (!_baseStationStartupAlreadyScheduledLoggedForEpoch)
+            {
+                _baseStationStartupAlreadyScheduledLoggedForEpoch = true;
+                WriteDiagnosticEvent(
+                    "base_station_startup_scheduling"
+                    + "; alreadyScheduled=True"
+                    + $"; alreadyRunning={_baseStationStartupSchedulerState == BaseStationStartupSchedulerState.Running}"
+                    + $"; alreadyCompleted={_baseStationPowerOnComplete}"
+                    + $"; state={_baseStationStartupSchedulerState}"
+                    + $"; epoch={epoch.Identity}"
+                    + $"; caller={caller}");
+            }
+
+            return;
+        }
+
+        TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Scheduled, caller, initialPassOnly ? "initial base-station wake pass scheduled" : "base-station startup follow-up scheduled");
+        await RunScheduledBaseStationStartupAsync(epoch, caller, initialPassOnly, cancellationToken);
     }
 
-    private static DateTimeOffset? TryGetLatestProcessStartTime(IEnumerable<string> processNames)
+    private async Task RunScheduledBaseStationStartupAsync(
+        SteamVrBaseStationEpoch epoch,
+        string caller,
+        bool initialPassOnly,
+        CancellationToken cancellationToken)
     {
-        DateTimeOffset? latestStartTime = null;
-        foreach (var processName in processNames)
+        TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Running, caller, initialPassOnly ? "running initial base-station wake pass" : "running base-station startup routine");
+        WriteDiagnosticEvent(
+            "base_station_startup_execution"
+            + "; phase=begin"
+            + $"; initialPassOnly={initialPassOnly}"
+            + $"; vrserverPid={epoch.Pid}"
+            + $"; vrserverStartTime={FormatOptionalTimestamp(epoch.ProcessStartTime)}"
+            + $"; firstDetectedAt={epoch.FirstDetectedAt:O}"
+            + $"; epoch={epoch.Identity}"
+            + $"; caller={caller}");
+
+        try
+        {
+            BaseStationWakeRoutineResult result;
+            if (initialPassOnly)
+            {
+                await TryPowerOnBaseStationsBeforeWatchedProcessAsync(cancellationToken);
+                _baseStationStartupInitialWakeSentForEpoch = true;
+                result = _baseStationPowerOnComplete
+                    ? BaseStationWakeRoutineResult.Ran
+                    : BaseStationWakeRoutineResult.NoopWaitingForRetry;
+            }
+            else
+            {
+                result = await TryPowerOnBaseStationsForSessionAsync(
+                    BaseStationCommandTiming.PowerOnPasses,
+                    cancellationToken);
+            }
+
+            var nextState = _baseStationPowerOnComplete
+                ? result == BaseStationWakeRoutineResult.RanExhausted
+                    ? BaseStationStartupSchedulerState.Exhausted
+                    : BaseStationStartupSchedulerState.Completed
+                : result switch
+                {
+                    BaseStationWakeRoutineResult.NoopSteamVrNotRunning => BaseStationStartupSchedulerState.WaitingForSteamVr,
+                    BaseStationWakeRoutineResult.NoopWaitingForRetry => BaseStationStartupSchedulerState.Scheduled,
+                    BaseStationWakeRoutineResult.NoopNoStations => BaseStationStartupSchedulerState.Disabled,
+                    BaseStationWakeRoutineResult.NoopAlreadyComplete => BaseStationStartupSchedulerState.Completed,
+                    _ => BaseStationStartupSchedulerState.Scheduled
+                };
+
+            TransitionBaseStationStartupScheduler(nextState, caller, $"base-station startup execution result={result}");
+            WriteDiagnosticEvent(
+                "base_station_startup_execution"
+                + "; phase=complete"
+                + $"; result={result}"
+                + $"; state={_baseStationStartupSchedulerState}"
+                + $"; completed={_baseStationPowerOnComplete}"
+                + $"; passesCompleted={_baseStationPowerOnPassesCompleted}"
+                + $"; commandSucceeded={_baseStationPowerOnCommandSucceeded.Count}"
+                + $"; epoch={epoch.Identity}"
+                + $"; caller={caller}");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Cancelled, caller, "base-station startup cancelled");
+            WriteDiagnosticEvent(
+                "base_station_startup_execution"
+                + "; phase=cancelled"
+                + "; cancellationReason=shutdown"
+                + $"; epoch={epoch.Identity}"
+                + $"; caller={caller}");
+            throw;
+        }
+    }
+
+    private void TransitionBaseStationStartupScheduler(
+        BaseStationStartupSchedulerState nextState,
+        string caller,
+        string reason)
+    {
+        var previousState = _baseStationStartupSchedulerState;
+        if (previousState == nextState)
+        {
+            return;
+        }
+
+        _baseStationStartupSchedulerState = nextState;
+        WriteDiagnosticEvent(
+            "base_station_startup_scheduling"
+            + $"; stateBefore={previousState}"
+            + $"; stateAfter={nextState}"
+            + $"; reason={reason}"
+            + $"; alreadyCompleted={_baseStationPowerOnComplete}"
+            + $"; alreadyRunning={nextState == BaseStationStartupSchedulerState.Running}"
+            + $"; epoch={_baseStationStartupEpoch?.Identity ?? "none"}"
+            + $"; caller={caller}");
+    }
+
+    private DateTimeOffset CalculateBaseStationStartupDueAt(SteamVrBaseStationEpoch epoch, DateTimeOffset now)
+    {
+        if (epoch.ProcessStartTime is { } startTime)
+        {
+            var dueAt = startTime.Add(SteamVrBaseStationMinimumProcessAge);
+            return dueAt <= now ? now : dueAt;
+        }
+
+        var fallbackDueAt = epoch.FirstDetectedAt.Add(SteamVrBaseStationFallbackStabilization);
+        return fallbackDueAt <= now ? now : fallbackDueAt;
+    }
+
+    private static TimeSpan GetEpochAge(SteamVrBaseStationEpoch epoch, DateTimeOffset now)
+        => now - (epoch.ProcessStartTime ?? epoch.FirstDetectedAt);
+
+    private SteamVrBaseStationEpoch? TryGetCurrentSteamVrBaseStationEpoch(DateTimeOffset detectedAt)
+    {
+        SteamVrBaseStationEpoch? latestEpoch = null;
+        foreach (var processName in _config.SteamVrServerProcessNames)
         {
             Process[] processes;
             try
@@ -4135,24 +4968,80 @@ internal sealed class AppSupervisor
             {
                 using (process)
                 {
+                    var pid = 0;
+                    var observedProcessName = processName;
+                    DateTimeOffset? startTime = null;
                     try
                     {
-                        var startTime = new DateTimeOffset(process.StartTime);
-                        if (latestStartTime is null || startTime > latestStartTime.Value)
+                        pid = process.Id;
+                        observedProcessName = process.ProcessName;
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        var candidateStartTime = new DateTimeOffset(process.StartTime);
+                        if (candidateStartTime <= detectedAt.AddSeconds(1))
                         {
-                            latestStartTime = startTime;
+                            startTime = candidateStartTime;
                         }
                     }
                     catch
                     {
                         // Process may exit or deny StartTime access while we are checking.
                     }
+
+                    var firstDetectedAt = _baseStationStartupEpoch is { } existing
+                        && existing.Pid == pid
+                        && Nullable.Equals(existing.ProcessStartTime, startTime)
+                        ? existing.FirstDetectedAt
+                        : detectedAt;
+                    var epoch = new SteamVrBaseStationEpoch(
+                        pid,
+                        observedProcessName,
+                        startTime,
+                        firstDetectedAt);
+                    latestEpoch = SelectLatestSteamVrBaseStationEpoch(latestEpoch, epoch);
                 }
             }
         }
 
-        return latestStartTime;
+        return latestEpoch;
     }
+
+    private static SteamVrBaseStationEpoch SelectLatestSteamVrBaseStationEpoch(
+        SteamVrBaseStationEpoch? current,
+        SteamVrBaseStationEpoch candidate)
+    {
+        if (current is null)
+        {
+            return candidate;
+        }
+
+        if (candidate.ProcessStartTime is { } candidateStart
+            && current.ProcessStartTime is { } currentStart)
+        {
+            return candidateStart > currentStart ? candidate : current;
+        }
+
+        if (candidate.ProcessStartTime is not null && current.ProcessStartTime is null)
+        {
+            return candidate;
+        }
+
+        if (candidate.ProcessStartTime is null && current.ProcessStartTime is not null)
+        {
+            return current;
+        }
+
+        return candidate.FirstDetectedAt > current.FirstDetectedAt ? candidate : current;
+    }
+
+    private static string FormatOptionalTimestamp(DateTimeOffset? timestamp)
+        => timestamp is { } value ? value.ToString("O") : "unknown";
 
     private async Task TryPowerOnBaseStationsBeforeWatchedProcessAsync(CancellationToken cancellationToken)
     {
@@ -4181,7 +5070,8 @@ internal sealed class AppSupervisor
                 await Task.Delay(delay, cancellationToken);
             }
 
-            if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+            var steamVrDecision = ObserveSteamVrLifecycle("base-station-startup-delay");
+            if (steamVrDecision.Classification != SteamVrTerminationClassification.None)
             {
                 return;
             }
@@ -4377,7 +5267,7 @@ internal sealed class AppSupervisor
         LogSkippedBaseStationsAfterPowerOn(baseStations, finalStates, confirmedOrCommandSucceeded);
         _baseStationPowerOnComplete = true;
         WriteDiagnosticEvent($"base-station wake routine complete; result=skipped-unavailable; elapsedMs={Stopwatch.GetElapsedTime(routineStartedAt).TotalMilliseconds:0.0}");
-        return BaseStationWakeRoutineResult.Ran;
+        return BaseStationWakeRoutineResult.RanExhausted;
     }
 
     private async Task<BaseStationDevice[]> RefreshIncompleteBaseStationMetadataAsync(
@@ -4483,7 +5373,10 @@ internal sealed class AppSupervisor
         try
         {
             var startedAt = Stopwatch.GetTimestamp();
+            using var probe = BeginOpenVrProbe();
+            _ = ObserveSteamVrLifecycle("base-station-openvr-probe-before");
             var trackingReferences = _steamVrTrackingReferenceReader.ReadActiveTrackingReferences();
+            _ = ObserveSteamVrLifecycle("base-station-openvr-probe-after");
             var elapsed = Stopwatch.GetElapsedTime(startedAt);
             var match = SteamVrBaseStationMatcher.Match(baseStations, trackingReferences);
             foreach (var address in match.ExactMatchedBluetoothAddresses)
@@ -4624,6 +5517,7 @@ internal sealed class AppSupervisor
 
         Console.WriteLine(message);
         WriteDiagnosticEvent("shutdown; graceful request; source=" + source);
+        MarkSteamVrShutdownIntent(source);
         _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
         _shutdownBlockedBySteamVrSince = null;
         SetShutdownProgress("graceful shutdown requested by " + source);
@@ -5055,7 +5949,102 @@ internal sealed class AppSupervisor
     }
 
     private bool ShouldExitWithSteamVr()
-        => _steamVrStart || _config.GetEffectiveStartupLaunchMode() == StartupLaunchMode.ScheduledTask;
+        => _managedSteamVrSession;
+
+    private SteamVrTerminationDecision ObserveSteamVrLifecycle(string caller)
+    {
+        var decision = _steamVrLifecycle.Observe(GetProcesses(_config.SteamVrServerProcessNames), caller);
+        if (decision.Classification != SteamVrTerminationClassification.None)
+        {
+            WriteSteamVrLifecycleDecision(decision);
+        }
+
+        return decision;
+    }
+
+    private async Task<bool> ApplySteamVrLifecycleDecisionAsync(
+        SteamVrTerminationDecision decision,
+        string cleanupMessage,
+        CancellationToken cancellationToken)
+    {
+        if (decision.Classification == SteamVrTerminationClassification.None)
+        {
+            return false;
+        }
+
+        if (decision.ShowPersistentWarning)
+        {
+            _operatorWarning = decision.Reason;
+            Console.WriteLine(decision.Reason);
+            return false;
+        }
+
+        if (decision.CleanupPolicy != SteamVrCleanupPolicy.NormalCleanup)
+        {
+            return false;
+        }
+
+        _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
+        _steamVrLifecycle.MarkCleanupStarted();
+        _shutdownBlockedBySteamVrSince = null;
+        SetShutdownProgress("running cleanup after SteamVR exit");
+        Console.WriteLine(cleanupMessage);
+        await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
+        _steamVrLifecycle.MarkCompleted();
+        return true;
+    }
+
+    private void WriteSteamVrLifecycleDecision(SteamVrTerminationDecision decision)
+    {
+        var payload = new
+        {
+            @event = "steamvr_lifecycle_decision",
+            timestamp = DateTimeOffset.UtcNow,
+            sessionId = decision.SessionId,
+            supervisorPid = decision.SupervisorPid,
+            runtimeSessionOwned = decision.RuntimeSessionOwned,
+            stateBefore = decision.StateBefore.ToString(),
+            stateAfter = decision.StateAfter.ToString(),
+            decision = decision.Classification.ToString(),
+            decisionReason = decision.Reason,
+            cleanupPolicy = decision.CleanupPolicy.ToString(),
+            persistentWarning = decision.ShowPersistentWarning,
+            shutdownIntent = decision.ShutdownIntentSource is not null,
+            shutdownIntentSource = decision.ShutdownIntentSource,
+            probeActive = decision.ProbeActive,
+            observedProcesses = decision.ObservedProcesses.Select(process => new
+            {
+                pid = process.Pid,
+                processName = process.ProcessName,
+                processStartTime = process.ProcessStartTime,
+                origin = process.Origin.ToString(),
+                firstObservedAt = process.FirstObservedAt,
+                lastObservedAt = process.LastObservedAt,
+                hasExited = process.HasExited,
+                exitCodeAvailable = process.ExitCodeAvailable,
+                exitCode = process.ExitCode,
+                exitCodeError = process.ExitCodeError
+            }).ToArray(),
+            companionProcesses = DescribeSteamVrCompanionProcesses(),
+            caller = decision.Caller,
+            classificationWindowStartedAt = decision.ClassificationWindowStartedAt,
+            classificationWindowCompletedAt = decision.ClassificationWindowCompletedAt
+        };
+        WriteDiagnosticEvent(JsonSerializer.Serialize(payload, CommandBridgeJsonOptions));
+    }
+
+    private Dictionary<string, string> DescribeSteamVrCompanionProcesses()
+        => new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["vrserver"] = DescribeRunningProcesses(["vrserver"]),
+            ["vrmonitor"] = DescribeRunningProcesses(["vrmonitor"]),
+            ["vrcompositor"] = DescribeRunningProcesses(["vrcompositor"]),
+            ["vrdashboard"] = DescribeRunningProcesses(["vrdashboard"])
+        };
+
+    private IDisposable BeginOpenVrProbe() => _steamVrLifecycle.BeginOpenVrProbe();
+
+    private void MarkSteamVrShutdownIntent(string source) => _steamVrLifecycle.MarkSupervisorShutdownRequested(source);
 
     private async Task TryRestoreMonitorsAndStopManagedAppsAsync(bool waitForSteamVrServerExit, CancellationToken cancellationToken)
     {
@@ -6607,13 +7596,16 @@ internal sealed class SupervisorCommandServer : IDisposable
     public const int TcpPort = 37957;
     private readonly AppSupervisor _supervisor;
     private readonly CancellationTokenSource _shutdown = new();
+    private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Task _serverTask;
 
     private SupervisorCommandServer(AppSupervisor supervisor)
     {
         _supervisor = supervisor;
-        _serverTask = Task.Run(() => RunTcpAsync(supervisor, _shutdown.Token), CancellationToken.None);
+        _serverTask = Task.Run(() => RunTcpAsync(supervisor, _ready, _shutdown.Token), CancellationToken.None);
     }
+
+    public Task Ready => _ready.Task;
 
     public static SupervisorCommandServer Start(AppSupervisor supervisor, CancellationToken cancellationToken)
     {
@@ -6643,7 +7635,7 @@ internal sealed class SupervisorCommandServer : IDisposable
         _shutdown.Dispose();
     }
 
-    private static async Task RunTcpAsync(AppSupervisor supervisor, CancellationToken cancellationToken)
+    private static async Task RunTcpAsync(AppSupervisor supervisor, TaskCompletionSource ready, CancellationToken cancellationToken)
     {
         var listener = new TcpListener(IPAddress.Loopback, TcpPort);
         try
@@ -6651,6 +7643,7 @@ internal sealed class SupervisorCommandServer : IDisposable
             listener.Start();
             Console.WriteLine($"Dashboard command TCP endpoint ready: 127.0.0.1:{TcpPort}");
             supervisor.WriteDebug($"command bridge TCP endpoint ready; endpoint=127.0.0.1:{TcpPort}");
+            ready.TrySetResult();
             while (!cancellationToken.IsCancellationRequested)
             {
                 var client = await listener.AcceptTcpClientAsync(cancellationToken);
@@ -6661,11 +7654,13 @@ internal sealed class SupervisorCommandServer : IDisposable
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            ready.TrySetCanceled(cancellationToken);
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Dashboard command TCP endpoint error: {ex.Message}");
             supervisor.WriteDebug("command bridge TCP endpoint error: " + ex.Message);
+            ready.TrySetException(ex);
         }
         finally
         {
@@ -7362,12 +8357,10 @@ internal static class AutoLaunchWatcher
             {
                 if (!supervisorRunning)
                 {
+                    Console.WriteLine(useDesktopTuiDefaultInterface
+                        ? "Watcher selected startup interface: Terminal UI."
+                        : "Watcher selected startup interface: Classic Console.");
                     StartSupervisor(supervisorPath, configPath, useDesktopTuiDefaultInterface);
-                }
-
-                if (useDesktopTuiDefaultInterface)
-                {
-                    StartDesktopTuiIfNeeded(supervisorPath, configPath);
                 }
 
                 launchedForCurrentSteamVrSession = true;
@@ -7432,52 +8425,15 @@ internal static class AutoLaunchWatcher
             startInfo.ArgumentList.Add(configPath);
         }
 
+        startInfo.ArgumentList.Add("--managed-steamvr-session");
         if (useDesktopTuiDefaultInterface)
         {
+            Console.WriteLine("Starting Supervisor with Terminal UI startup intent.");
             startInfo.ArgumentList.Add("--desktop-tui-start");
+            startInfo.ArgumentList.Add("--launch-desktop-tui-after-ready");
         }
 
         Process.Start(startInfo);
-    }
-
-    private static void StartDesktopTuiIfNeeded(string supervisorPath, string? configPath)
-    {
-        const string tuiProcessName = "PimaxVrcSupervisorTui";
-        if (IsProcessRunning(tuiProcessName))
-        {
-            return;
-        }
-
-        try
-        {
-            var supervisorDirectory = Path.GetDirectoryName(supervisorPath) ?? Environment.CurrentDirectory;
-            var tuiPath = Path.Combine(supervisorDirectory, "PimaxVrcSupervisorTui.exe");
-            if (!File.Exists(tuiPath))
-            {
-                Console.WriteLine($"Terminal UI executable was not found: {tuiPath}");
-                return;
-            }
-
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = tuiPath,
-                WorkingDirectory = supervisorDirectory,
-                UseShellExecute = true,
-                WindowStyle = ProcessWindowStyle.Normal
-            };
-            if (!string.IsNullOrWhiteSpace(configPath))
-            {
-                startInfo.ArgumentList.Add("--config");
-                startInfo.ArgumentList.Add(configPath);
-            }
-            startInfo.ArgumentList.Add("--exit-when-supervisor-exits");
-
-            Process.Start(startInfo);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Could not start Terminal UI: {ex.Message}");
-        }
     }
 
     public static void RequestSkipCurrentSteamVrSession()
@@ -7513,6 +8469,50 @@ internal static class AutoLaunchWatcher
 
 internal sealed record ScheduledTaskDetails(string TaskName, string TriggerDescription);
 
+internal enum ScheduledTaskApplyOutcome
+{
+    AlreadyValid,
+    Created,
+    Repaired,
+    Rebound,
+    RemovedOrDisabled,
+    Deferred,
+    Failed
+}
+
+internal sealed record ScheduledTaskApplyResult(
+    ScheduledTaskApplyOutcome Outcome,
+    string TaskName,
+    string TriggerDescription,
+    string? MismatchReason = null,
+    string? OldAction = null,
+    string? NewAction = null)
+{
+    public string OperatorMessage => Outcome switch
+    {
+        ScheduledTaskApplyOutcome.AlreadyValid => "Scheduled task already valid; no changes made.",
+        ScheduledTaskApplyOutcome.Created => "Scheduled task created.",
+        ScheduledTaskApplyOutcome.Rebound => $"Scheduled task rebound to the current release: {MismatchReason}",
+        ScheduledTaskApplyOutcome.Repaired => $"Scheduled task repaired: {MismatchReason}",
+        ScheduledTaskApplyOutcome.RemovedOrDisabled => "Scheduled task removed or disabled.",
+        ScheduledTaskApplyOutcome.Deferred => "Scheduled task update deferred.",
+        ScheduledTaskApplyOutcome.Failed => $"Scheduled task update failed: {MismatchReason}",
+        _ => "Scheduled task update completed."
+    };
+
+    public string LogValue => Outcome switch
+    {
+        ScheduledTaskApplyOutcome.AlreadyValid => "already-valid",
+        ScheduledTaskApplyOutcome.Created => "created",
+        ScheduledTaskApplyOutcome.Rebound => "rebound",
+        ScheduledTaskApplyOutcome.Repaired => "repaired",
+        ScheduledTaskApplyOutcome.RemovedOrDisabled => "removed-or-disabled",
+        ScheduledTaskApplyOutcome.Deferred => "deferred",
+        ScheduledTaskApplyOutcome.Failed => "failed",
+        _ => "unknown"
+    };
+}
+
 internal sealed record PimaxServiceLogEvent(DateTimeOffset Timestamp, bool IsRemove, bool IsAdd);
 
 internal sealed record ProcessResult(int ExitCode, string Output, string Error);
@@ -7526,6 +8526,30 @@ internal static class ScheduledTaskInstaller
     private const string WatcherArgument = "--watch-vrchat-auto-launch";
     private const string SteamVrStartArgument = "--steamvr-start";
     private static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(10);
+
+    private sealed record ExistingWatcherTask(
+        string Executable,
+        string Arguments,
+        string WorkingDirectory,
+        ParsedWatcherArguments ParsedArguments,
+        bool HasLogonTrigger,
+        bool UsesInteractiveToken,
+        bool UsesHighestAvailableRunLevel,
+        bool IgnoreNewInstances,
+        bool StartWhenAvailable,
+        bool AllowStartOnDemand,
+        bool Enabled,
+        bool Hidden,
+        bool ExecutionTimeLimitUnlimited,
+        string[] SettingMismatches);
+
+    private sealed record ParsedWatcherArguments(
+        bool WatcherMode,
+        bool SkipCurrentSteamVrSession,
+        bool UseDesktopTuiDefaultInterface,
+        string? ConfigPath,
+        string[] UnknownArguments,
+        string? UnsupportedReason);
 
     public static async Task<bool> ExistsAsync(CancellationToken cancellationToken)
     {
@@ -7547,10 +8571,10 @@ internal static class ScheduledTaskInstaller
         return result.ExitCode == 0;
     }
 
-    public static async Task<ScheduledTaskDetails> CreateOrUpdateAsync(
+    public static async Task<ScheduledTaskApplyResult> CreateOrUpdateAsync(
         bool startWatcherImmediately,
         bool skipCurrentSteamVrSession,
-        bool useDesktopTuiDefaultInterface,
+        bool? useDesktopTuiDefaultInterface,
         string? configPath,
         CancellationToken cancellationToken)
     {
@@ -7560,17 +8584,90 @@ internal static class ScheduledTaskInstaller
             TaskName,
             supervisorPath,
             ScheduledTaskPathValidator.GetCurrentExecutableDirectory());
+        var existingTask = await TryReadExistingWatcherTaskAsync(cancellationToken);
+        var selectedInterface = ResolvePersistentInterface(
+            useDesktopTuiDefaultInterface,
+            existingTask,
+            out var persistentInterfaceSource);
+        Console.WriteLine($"Persistent interface source: {persistentInterfaceSource}.");
+        var watcherPath = GetWatcherExecutablePath(supervisorPath);
+        if (existingTask?.ParsedArguments.UnsupportedReason is { Length: > 0 } unsupportedReason)
+        {
+            Console.WriteLine($"Existing watcher arguments cannot be preserved safely: {unsupportedReason}");
+            throw new InvalidOperationException("Existing scheduled task contains unsupported watcher arguments. The task was not rewritten.");
+        }
+
+        var preservedUnknownArguments = existingTask?.ParsedArguments.UnknownArguments ?? [];
+        if (preservedUnknownArguments.Length > 0)
+        {
+            Console.WriteLine("Unknown watcher arguments preserved: " + string.Join(" ", preservedUnknownArguments));
+        }
+        var desiredArguments = BuildWatcherArguments(
+            skipCurrentSteamVrSession,
+            selectedInterface,
+            configPath,
+            preservedUnknownArguments);
+        var desiredParsedArguments = ParseWatcherArguments(desiredArguments);
+        if (desiredParsedArguments.UnsupportedReason is { Length: > 0 } desiredUnsupportedReason)
+        {
+            throw new InvalidOperationException($"Generated watcher arguments were invalid: {desiredUnsupportedReason}");
+        }
+
+        if (IsExistingTaskSemanticallyValid(
+            existingTask,
+            watcherPath,
+            supervisorWorkingDirectory,
+            desiredParsedArguments,
+            out var mismatchReason))
+        {
+            Console.WriteLine("scheduled_task_validation; operationMode=ApplyExplicitly; valid=True; mismatches=none; mutationAttempted=False; watcherDeploymentAttempted=False; result=already-valid");
+            if (startWatcherImmediately)
+            {
+                if (skipCurrentSteamVrSession)
+                {
+                    AutoLaunchWatcher.RequestSkipCurrentSteamVrSession();
+                }
+
+                await RunProcessAsync(
+                    "schtasks.exe",
+                    ["/Run", "/TN", TaskName],
+                    cancellationToken);
+            }
+
+            return new ScheduledTaskApplyResult(
+                ScheduledTaskApplyOutcome.AlreadyValid,
+                TaskName,
+                "Hidden elevated watcher at Windows sign-in; launches supervisor when vrserver.exe is running.");
+        }
+
         await StopAutoLaunchWatcherAsync(cancellationToken);
-        var watcherPath = CreateOrUpdateWatcherExecutable(supervisorPath);
+        watcherPath = CreateOrUpdateWatcherExecutable(supervisorPath);
         ScheduledTaskPathValidator.ThrowIfInvalidScheduledTaskExecutablePath(
             TaskName,
             watcherPath,
             ScheduledTaskPathValidator.GetCurrentExecutableDirectory());
+        var applyOutcome = existingTask is null
+            ? ScheduledTaskApplyOutcome.Created
+            : IsTaskRebound(existingTask, watcherPath, supervisorWorkingDirectory)
+                ? ScheduledTaskApplyOutcome.Rebound
+                : ScheduledTaskApplyOutcome.Repaired;
+        var oldAction = existingTask is null
+            ? null
+            : $"{existingTask.Executable} {existingTask.Arguments}".Trim();
+        var newAction = $"{watcherPath} {desiredArguments}".Trim();
+        if (existingTask is not null)
+        {
+            Console.WriteLine($"Old action: {oldAction}");
+            Console.WriteLine($"New action: {newAction}");
+        }
+
+        Console.WriteLine($"scheduled_task_validation; operationMode=ApplyExplicitly; valid=False; mismatches={mismatchReason}; mutationAttempted=True; watcherDeploymentAttempted=True; result={new ScheduledTaskApplyResult(applyOutcome, TaskName, "").LogValue}");
+
         var taskXml = BuildTaskXml(
             watcherPath,
             supervisorWorkingDirectory,
             "Runs an elevated hidden watcher that starts Pimax VRC Supervisor when vrserver.exe is running.",
-            BuildWatcherArguments(skipCurrentSteamVrSession, useDesktopTuiDefaultInterface, configPath),
+            desiredArguments,
             includeLogonTrigger: true);
         var taskXmlPath = Path.Combine(Path.GetTempPath(), $"PimaxVrcSupervisorAutoLaunch-{Guid.NewGuid():N}.xml");
 
@@ -7599,6 +8696,18 @@ internal static class ScheduledTaskInstaller
             throw new InvalidOperationException("schtasks.exe reported success, but the task could not be queried afterward.");
         }
 
+        var verifiedTask = await TryReadExistingWatcherTaskAsync(cancellationToken);
+        if (!IsExistingTaskSemanticallyValid(
+            verifiedTask,
+            watcherPath,
+            supervisorWorkingDirectory,
+            desiredParsedArguments,
+            out var verificationMismatch))
+        {
+            Console.WriteLine($"Scheduled task verification failed after registration: {verificationMismatch}");
+            throw new InvalidOperationException("Scheduled task was registered, but its effective settings still do not match the expected hidden watcher task.");
+        }
+
         if (startWatcherImmediately)
         {
             if (skipCurrentSteamVrSession)
@@ -7612,13 +8721,75 @@ internal static class ScheduledTaskInstaller
                 cancellationToken);
         }
 
-        return new ScheduledTaskDetails(TaskName, "Hidden elevated watcher at Windows sign-in; launches supervisor when vrserver.exe is running.");
+        return new ScheduledTaskApplyResult(
+            applyOutcome,
+            TaskName,
+            "Hidden elevated watcher at Windows sign-in; launches supervisor when vrserver.exe is running.",
+            mismatchReason,
+            oldAction,
+            newAction);
+    }
+
+    public static async Task<bool> ValidateAutoLaunchTaskAsync(
+        bool? useDesktopTuiDefaultInterface,
+        string? configPath,
+        CancellationToken cancellationToken)
+    {
+        var supervisorPath = GetSupervisorExecutablePath();
+        var supervisorWorkingDirectory = Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory;
+        var watcherPath = GetWatcherExecutablePath(supervisorPath);
+        var existingTask = await TryReadExistingWatcherTaskAsync(cancellationToken);
+        var selectedInterface = ResolvePersistentInterface(
+            useDesktopTuiDefaultInterface,
+            existingTask,
+            out var persistentInterfaceSource);
+        Console.WriteLine($"Persistent interface source: {persistentInterfaceSource}.");
+
+        if (existingTask?.ParsedArguments.UnsupportedReason is { Length: > 0 } unsupportedReason)
+        {
+            Console.WriteLine($"scheduled_task_validation; operationMode=ValidateOnly; valid=False; mismatches=unsupported-arguments:{unsupportedReason}; mutationAttempted=False; watcherDeploymentAttempted=False; result=unsupported-arguments");
+            Console.WriteLine($"Existing watcher arguments cannot be preserved safely: {unsupportedReason}");
+            return false;
+        }
+
+        var preservedUnknownArguments = existingTask?.ParsedArguments.UnknownArguments ?? [];
+        var desiredArguments = BuildWatcherArguments(
+            skipCurrentSteamVrSession: true,
+            selectedInterface,
+            configPath,
+            preservedUnknownArguments);
+        var desiredParsedArguments = ParseWatcherArguments(desiredArguments);
+        if (desiredParsedArguments.UnsupportedReason is { Length: > 0 } desiredUnsupportedReason)
+        {
+            Console.WriteLine($"scheduled_task_validation; operationMode=ValidateOnly; valid=False; mismatches=generated-arguments:{desiredUnsupportedReason}; mutationAttempted=False; watcherDeploymentAttempted=False; result=invalid-generated-arguments");
+            return false;
+        }
+
+        var valid = IsExistingTaskSemanticallyValid(
+            existingTask,
+            watcherPath,
+            supervisorWorkingDirectory,
+            desiredParsedArguments,
+            out var mismatchReason);
+        Console.WriteLine(valid
+            ? "Scheduled task already valid; no changes made."
+            : $"Scheduled task validation warning: {mismatchReason}");
+        Console.WriteLine(
+            "scheduled_task_validation"
+            + "; operationMode=ValidateOnly"
+            + $"; valid={valid}"
+            + $"; mismatches={(valid ? "none" : mismatchReason)}"
+            + "; mutationAttempted=False"
+            + "; watcherDeploymentAttempted=False"
+            + $"; result={(valid ? "valid" : "mismatch")}");
+        return valid;
     }
 
     private static string BuildWatcherArguments(
         bool skipCurrentSteamVrSession,
         bool useDesktopTuiDefaultInterface,
-        string? configPath)
+        string? configPath,
+        IReadOnlyList<string>? preservedUnknownArguments = null)
     {
         var arguments = new List<string> { WatcherArgument };
         if (skipCurrentSteamVrSession)
@@ -7637,7 +8808,414 @@ internal static class ScheduledTaskInstaller
             arguments.Add("--desktop-tui-default-interface");
         }
 
+        if (preservedUnknownArguments is not null)
+        {
+            arguments.AddRange(preservedUnknownArguments);
+        }
+
         return string.Join(' ', arguments);
+    }
+
+    private static bool ResolvePersistentInterface(
+        bool? requestedDesktopTuiDefaultInterface,
+        ExistingWatcherTask? existingTask,
+        out string source)
+    {
+        if (requestedDesktopTuiDefaultInterface is { } requested)
+        {
+            source = "Configurator selection";
+            return requested;
+        }
+
+        if (existingTask is not null)
+        {
+            source = "existing scheduled task";
+            return existingTask.ParsedArguments.UseDesktopTuiDefaultInterface;
+        }
+
+        source = "documented product default";
+        return true;
+    }
+
+    private static bool IsExistingTaskSemanticallyValid(
+        ExistingWatcherTask? existingTask,
+        string watcherPath,
+        string workingDirectory,
+        ParsedWatcherArguments desiredArguments,
+        out string mismatchReason)
+    {
+        if (existingTask is null)
+        {
+            mismatchReason = "task does not exist.";
+            return false;
+        }
+
+        if (!PathsEqual(existingTask.Executable, watcherPath))
+        {
+            mismatchReason = "task executable path did not match the expected watcher.";
+            return false;
+        }
+
+        if (!File.Exists(watcherPath))
+        {
+            mismatchReason = "expected watcher executable is missing.";
+            return false;
+        }
+
+        if (!PathsEqual(existingTask.WorkingDirectory, workingDirectory))
+        {
+            mismatchReason = "task working directory did not match the expected release folder.";
+            return false;
+        }
+
+        var existingArguments = existingTask.ParsedArguments;
+        if (!existingArguments.WatcherMode)
+        {
+            mismatchReason = "watcher mode argument was missing.";
+            return false;
+        }
+
+        if (existingArguments.SkipCurrentSteamVrSession != desiredArguments.SkipCurrentSteamVrSession)
+        {
+            mismatchReason = "skip-current-session setting did not match.";
+            return false;
+        }
+
+        if (existingArguments.UseDesktopTuiDefaultInterface != desiredArguments.UseDesktopTuiDefaultInterface)
+        {
+            mismatchReason = "Terminal UI default-interface setting did not match the persistent preference.";
+            return false;
+        }
+
+        if (!PathsEqual(existingArguments.ConfigPath, desiredArguments.ConfigPath))
+        {
+            mismatchReason = "config path did not match.";
+            return false;
+        }
+
+        if (!StringArraysEqual(existingArguments.UnknownArguments, desiredArguments.UnknownArguments))
+        {
+            mismatchReason = "unknown watcher arguments did not match the preserved argument set.";
+            return false;
+        }
+
+        if (existingTask.SettingMismatches.Length > 0)
+        {
+            mismatchReason = "task settings did not match the expected hidden watcher settings. "
+                + string.Join("; ", existingTask.SettingMismatches);
+            return false;
+        }
+
+        mismatchReason = "";
+        return true;
+    }
+
+    private static bool IsTaskRebound(
+        ExistingWatcherTask existingTask,
+        string watcherPath,
+        string workingDirectory)
+        => !PathsEqual(existingTask.Executable, watcherPath)
+            || !PathsEqual(existingTask.WorkingDirectory, workingDirectory);
+
+    private static async Task<ExistingWatcherTask?> TryReadExistingWatcherTaskAsync(CancellationToken cancellationToken)
+    {
+        var result = await RunProcessCaptureAsync(
+            "schtasks.exe",
+            ["/Query", "/TN", TaskName, "/XML"],
+            cancellationToken);
+        if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output))
+        {
+            return null;
+        }
+
+        try
+        {
+            var document = XDocument.Parse(result.Output);
+            var action = document
+                .Descendants()
+                .FirstOrDefault(element => element.Name.LocalName == "Exec");
+            var executable = action?
+                .Elements()
+                .FirstOrDefault(element => element.Name.LocalName == "Command")
+                ?.Value
+                .Trim();
+            var arguments = action?
+                .Elements()
+                .FirstOrDefault(element => element.Name.LocalName == "Arguments")
+                ?.Value
+                .Trim() ?? "";
+            var workingDirectory = action?
+                .Elements()
+                .FirstOrDefault(element => element.Name.LocalName == "WorkingDirectory")
+                ?.Value
+                .Trim();
+            var parsed = ParseWatcherArguments(arguments);
+            var settingMismatches = GetWatcherTaskSettingMismatches(document);
+            return new ExistingWatcherTask(
+                executable ?? "",
+                arguments,
+                workingDirectory ?? "",
+                parsed,
+                HasTaskElement(document, "LogonTrigger"),
+                TaskElementEquals(document, "LogonType", "InteractiveToken"),
+                TaskElementEquals(document, "RunLevel", "HighestAvailable"),
+                TaskElementEquals(document, "MultipleInstancesPolicy", "IgnoreNew"),
+                TaskElementEquals(document, "StartWhenAvailable", "true"),
+                TaskElementEquals(document, "AllowStartOnDemand", "true"),
+                TaskElementEquals(document, "Enabled", "true"),
+                TaskElementEquals(document, "Hidden", "true"),
+                TaskElementEquals(document, "ExecutionTimeLimit", "PT0S"),
+                settingMismatches);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not parse existing scheduled task XML; it will be repaired if needed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static bool HasTaskElement(XDocument document, string localName)
+        => document
+            .Descendants()
+            .Any(element => element.Name.LocalName == localName);
+
+    private static bool TaskElementEquals(XDocument document, string localName, string expected)
+        => document
+            .Descendants()
+            .FirstOrDefault(element => element.Name.LocalName == localName)
+            ?.Value
+            .Trim()
+            .Equals(expected, StringComparison.OrdinalIgnoreCase) == true;
+
+    private static string[] GetWatcherTaskSettingMismatches(XDocument document)
+    {
+        var mismatches = new List<string>();
+        var task = document
+            .Descendants()
+            .FirstOrDefault(element => element.Name.LocalName == "Task");
+        var principal = task?
+            .Descendants()
+            .FirstOrDefault(element => element.Name.LocalName == "Principal");
+        var settings = task?
+            .Descendants()
+            .FirstOrDefault(element => element.Name.LocalName == "Settings");
+        var logonTrigger = task?
+            .Descendants()
+            .FirstOrDefault(element => element.Name.LocalName == "LogonTrigger");
+
+        AddEffectiveMismatch(mismatches, "TriggerType", logonTrigger is null ? null : "LogonTrigger", "LogonTrigger", defaultWhenMissing: null);
+        AddEffectiveMismatch(mismatches, "TriggerEnabled", GetChildValue(logonTrigger, "Enabled"), "true", defaultWhenMissing: "true");
+        AddEffectiveMismatch(mismatches, "LogonType", GetChildValue(principal, "LogonType"), "InteractiveToken", defaultWhenMissing: null);
+        AddEffectiveMismatch(mismatches, "RunLevel", GetChildValue(principal, "RunLevel"), "HighestAvailable", defaultWhenMissing: null);
+        AddEffectiveMismatch(mismatches, "MultipleInstancesPolicy", GetChildValue(settings, "MultipleInstancesPolicy"), "IgnoreNew", defaultWhenMissing: "IgnoreNew");
+        AddEffectiveMismatch(mismatches, "DisallowStartIfOnBatteries", GetChildValue(settings, "DisallowStartIfOnBatteries"), "false", defaultWhenMissing: "false");
+        AddEffectiveMismatch(mismatches, "StopIfGoingOnBatteries", GetChildValue(settings, "StopIfGoingOnBatteries"), "false", defaultWhenMissing: "false");
+        AddEffectiveMismatch(mismatches, "AllowHardTerminate", GetChildValue(settings, "AllowHardTerminate"), "true", defaultWhenMissing: "true");
+        AddEffectiveMismatch(mismatches, "StartWhenAvailable", GetChildValue(settings, "StartWhenAvailable"), "true", defaultWhenMissing: "true");
+        AddEffectiveMismatch(mismatches, "RunOnlyIfNetworkAvailable", GetChildValue(settings, "RunOnlyIfNetworkAvailable"), "false", defaultWhenMissing: "false");
+        AddEffectiveMismatch(mismatches, "AllowStartOnDemand", GetChildValue(settings, "AllowStartOnDemand"), "true", defaultWhenMissing: "true");
+        AddEffectiveMismatch(mismatches, "Enabled", GetChildValue(settings, "Enabled"), "true", defaultWhenMissing: "true");
+        AddEffectiveMismatch(mismatches, "Hidden", GetChildValue(settings, "Hidden"), "true", defaultWhenMissing: "false");
+        AddEffectiveMismatch(mismatches, "RunOnlyIfIdle", GetChildValue(settings, "RunOnlyIfIdle"), "false", defaultWhenMissing: "false");
+        AddEffectiveMismatch(mismatches, "WakeToRun", GetChildValue(settings, "WakeToRun"), "false", defaultWhenMissing: "false");
+        AddEffectiveMismatch(mismatches, "ExecutionTimeLimit", NormalizeTaskDuration(GetChildValue(settings, "ExecutionTimeLimit")), "PT0S", defaultWhenMissing: "PT0S");
+        AddEffectiveMismatch(mismatches, "Priority", GetChildValue(settings, "Priority"), "7", defaultWhenMissing: "7");
+
+        var restartOnFailure = settings?
+            .Elements()
+            .FirstOrDefault(element => element.Name.LocalName == "RestartOnFailure");
+        AddEffectiveMismatch(mismatches, "RestartInterval", NormalizeTaskDuration(GetChildValue(restartOnFailure, "Interval")), "PT1M", defaultWhenMissing: "PT1M");
+        AddEffectiveMismatch(mismatches, "RestartCount", GetChildValue(restartOnFailure, "Count"), "3", defaultWhenMissing: "3");
+
+        return mismatches.ToArray();
+    }
+
+    private static void AddEffectiveMismatch(List<string> mismatches, string name, string? existing, string expected, string? defaultWhenMissing)
+    {
+        var effectiveExisting = string.IsNullOrWhiteSpace(existing)
+            ? defaultWhenMissing
+            : existing.Trim();
+        if (effectiveExisting is not null
+            && string.Equals(effectiveExisting, expected, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        mismatches.Add($"Setting: {name}; Existing: {effectiveExisting ?? "<missing>"}; Expected: {expected}");
+    }
+
+    private static string? GetChildValue(XElement? parent, string localName)
+        => parent?
+            .Elements()
+            .FirstOrDefault(element => element.Name.LocalName == localName)
+            ?.Value
+            .Trim();
+
+    private static string? NormalizeTaskDuration(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return value;
+        }
+
+        return value.Trim().Equals("P0D", StringComparison.OrdinalIgnoreCase)
+            ? "PT0S"
+            : value.Trim();
+    }
+
+    private static ParsedWatcherArguments ParseWatcherArguments(string arguments)
+    {
+        if (!HasBalancedQuotes(arguments))
+        {
+            return new ParsedWatcherArguments(
+                WatcherMode: false,
+                SkipCurrentSteamVrSession: false,
+                UseDesktopTuiDefaultInterface: false,
+                ConfigPath: null,
+                UnknownArguments: [],
+                UnsupportedReason: "unbalanced quotes in watcher arguments.");
+        }
+
+        var tokens = SplitCommandLine(arguments);
+        var unknown = new List<string>();
+        var watcherMode = false;
+        var skipCurrentSteamVrSession = false;
+        var useDesktopTuiDefaultInterface = false;
+        string? configPath = null;
+        for (var index = 0; index < tokens.Count; index++)
+        {
+            var token = tokens[index];
+            if (string.Equals(token, WatcherArgument, StringComparison.OrdinalIgnoreCase))
+            {
+                watcherMode = true;
+                continue;
+            }
+
+            if (string.Equals(token, "--skip-current-vrserver-session", StringComparison.OrdinalIgnoreCase))
+            {
+                skipCurrentSteamVrSession = true;
+                continue;
+            }
+
+            if (string.Equals(token, "--desktop-tui-default-interface", StringComparison.OrdinalIgnoreCase))
+            {
+                useDesktopTuiDefaultInterface = true;
+                continue;
+            }
+
+            if (string.Equals(token, "--config", StringComparison.OrdinalIgnoreCase))
+            {
+                if (index + 1 >= tokens.Count)
+                {
+                    unknown.Add(token);
+                    continue;
+                }
+
+                index++;
+                configPath = tokens[index];
+                continue;
+            }
+
+            if (token.StartsWith("--config=", StringComparison.OrdinalIgnoreCase))
+            {
+                configPath = token["--config=".Length..];
+                continue;
+            }
+
+            unknown.Add(QuoteArgumentIfNeeded(token));
+        }
+
+        return new ParsedWatcherArguments(
+            watcherMode,
+            skipCurrentSteamVrSession,
+            useDesktopTuiDefaultInterface,
+            configPath,
+            unknown.ToArray(),
+            null);
+    }
+
+    private static bool HasBalancedQuotes(string value)
+    {
+        var inQuotes = false;
+        foreach (var character in value)
+        {
+            if (character == '"')
+            {
+                inQuotes = !inQuotes;
+            }
+        }
+
+        return !inQuotes;
+    }
+
+    private static List<string> SplitCommandLine(string arguments)
+    {
+        var tokens = new List<string>();
+        var builder = new StringBuilder();
+        var inQuotes = false;
+        for (var index = 0; index < arguments.Length; index++)
+        {
+            var character = arguments[index];
+            if (character == '"')
+            {
+                inQuotes = !inQuotes;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(character) && !inQuotes)
+            {
+                if (builder.Length > 0)
+                {
+                    tokens.Add(builder.ToString());
+                    builder.Clear();
+                }
+
+                continue;
+            }
+
+            builder.Append(character);
+        }
+
+        if (builder.Length > 0)
+        {
+            tokens.Add(builder.ToString());
+        }
+
+        return tokens;
+    }
+
+    private static bool StringArraysEqual(IReadOnlyList<string> left, IReadOnlyList<string> right)
+    {
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < left.Count; index++)
+        {
+            if (!string.Equals(left[index], right[index], StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string QuoteArgumentIfNeeded(string argument)
+        => argument.Any(char.IsWhiteSpace) ? QuoteArgument(argument) : argument;
+
+    private static bool PathsEqual(string? left, string? right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+        {
+            return string.IsNullOrWhiteSpace(left) && string.IsNullOrWhiteSpace(right);
+        }
+
+        return string.Equals(
+            Path.GetFullPath(Environment.ExpandEnvironmentVariables(left)),
+            Path.GetFullPath(Environment.ExpandEnvironmentVariables(right)),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static string QuoteArgument(string argument)
@@ -7925,10 +9503,13 @@ internal static class ScheduledTaskInstaller
 
     private static string CreateOrUpdateWatcherExecutable(string supervisorPath)
     {
-        var watcherPath = Path.Combine(Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory, WatcherExecutableName);
+        var watcherPath = GetWatcherExecutablePath(supervisorPath);
         File.Copy(supervisorPath, watcherPath, overwrite: true);
         return watcherPath;
     }
+
+    private static string GetWatcherExecutablePath(string supervisorPath)
+        => Path.Combine(Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory, WatcherExecutableName);
 
     private static async Task RunProcessAsync(string fileName, string[] arguments, CancellationToken cancellationToken)
     {
@@ -8023,17 +9604,17 @@ internal static class StartupIntegration
         {
             case StartupLaunchMode.ScheduledTask:
                 LogStep("Creating or updating VRChat auto-launch scheduled task...");
-                await ScheduledTaskInstaller.CreateOrUpdateAsync(
+                var taskResult = await ScheduledTaskInstaller.CreateOrUpdateAsync(
                     startWatcherImmediately: true,
                     skipCurrentSteamVrSession: true,
                     useDesktopTuiDefaultInterface,
                     config.LoadedFromPath,
                     cancellationToken);
+                LogStep(taskResult.OperatorMessage);
                 LogStep("Disabling SteamVR startup manifest if present...");
                 await SteamVrStartupInstaller.DisableAsync(cancellationToken);
                 LogStep("Deleting SteamVR start helper scheduled task if present...");
                 await ScheduledTaskInstaller.DeleteSteamVrStartHelperAsync(cancellationToken);
-                LogStep("Scheduled Task startup is ready.");
                 break;
             case StartupLaunchMode.SteamVrManifest:
                 LogStep("Deleting VRChat auto-launch scheduled task if present...");

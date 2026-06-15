@@ -132,6 +132,7 @@ pub struct StatusSummary {
     pub base_stations: String,
     pub osc_router: String,
     pub osc_goes_brrr: String,
+    pub operator_warning: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -195,6 +196,7 @@ pub fn status_from_response(response: &QueryResponse) -> StatusSummary {
         base_stations: string_value(data, "baseStations"),
         osc_router: string_value(data, "oscRouter"),
         osc_goes_brrr: string_value(data, "oscGoesBrrr"),
+        operator_warning: string_value(data, "operatorWarning"),
     }
 }
 
