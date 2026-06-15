@@ -28,7 +28,7 @@ It is built for users who want less manual startup work and a cleaner SteamVR/VR
 
 - Windows 10/11
 - No separate .NET install when using the self-contained release zip
-- Pimax Crystal-compatible headset
+- OG Pimax Crystal (not required, but if was built specifically around it)
 - [Broken Eye](https://github.com/ghostiam/BrokenEye)
 - [VRCFaceTracking](https://docs.vrcft.io/docs/vrcft-software/vrcft)
 - Optional: Vive Face Tracker exposed as `HTC Multimedia Camera`
