@@ -171,3 +171,82 @@ mod windows_process {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn missing_supervisor_pid_flag_returns_none() {
+        assert!(matches!(from_args(&args(&[])), SupervisorPidArgument::None));
+    }
+
+    #[test]
+    fn missing_supervisor_pid_value_returns_fallback() {
+        let result = from_args(&args(&["--supervisor-pid"]));
+
+        assert!(
+            matches!(result, SupervisorPidArgument::Fallback(message) if message.contains("without a PID value"))
+        );
+    }
+
+    #[test]
+    fn non_numeric_supervisor_pid_returns_fallback() {
+        let result = from_args(&args(&["--supervisor-pid", "not-a-number"]));
+
+        assert!(
+            matches!(result, SupervisorPidArgument::Fallback(message) if message.contains("invalid --supervisor-pid value"))
+        );
+    }
+
+    #[test]
+    fn zero_supervisor_pid_returns_fallback() {
+        let result = from_args(&args(&["--supervisor-pid", "0"]));
+
+        assert!(
+            matches!(result, SupervisorPidArgument::Fallback(message) if message.contains("out-of-range --supervisor-pid value"))
+        );
+    }
+
+    #[test]
+    fn too_large_supervisor_pid_returns_fallback() {
+        let result = from_args(&args(&["--supervisor-pid", "4294967296"]));
+
+        assert!(
+            matches!(result, SupervisorPidArgument::Fallback(message) if message.contains("out-of-range --supervisor-pid value"))
+        );
+    }
+
+    #[test]
+    fn duplicate_supervisor_pid_uses_first_occurrence() {
+        let result = from_args(&args(&[
+            "--supervisor-pid",
+            "not-a-number",
+            "--supervisor-pid",
+            "1",
+        ]));
+
+        assert!(
+            matches!(result, SupervisorPidArgument::Fallback(message) if message.contains("invalid --supervisor-pid value"))
+        );
+    }
+
+    #[test]
+    fn valid_positive_supervisor_pid_uses_platform_monitor_path() {
+        let pid = std::process::id().to_string();
+        let result = from_args(&args(&["--supervisor-pid", pid.as_str()]));
+
+        #[cfg(windows)]
+        assert!(matches!(result, SupervisorPidArgument::Monitor(_)));
+
+        #[cfg(not(windows))]
+        assert!(
+            matches!(result, SupervisorPidArgument::Fallback(message) if message.contains("Windows-only"))
+        );
+    }
+}
