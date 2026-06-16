@@ -42,6 +42,13 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-connectivity-json", Str
     return;
 }
 
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-usb-enumeration-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var snapshot = new PimaxUsbEnumerationSnapshotCollector().Collect();
+    Console.WriteLine(JsonSerializer.Serialize(snapshot, PimaxUsbEnumerationJson.Options));
+    return;
+}
+
 if (startupContext.ShouldHideConsole)
 {
     ConsoleWindow.HideIfPresent();
