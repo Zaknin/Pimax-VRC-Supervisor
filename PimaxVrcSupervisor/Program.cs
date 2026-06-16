@@ -1760,6 +1760,7 @@ internal sealed class AppSupervisor
     private readonly bool _launchDesktopTuiAfterReady;
     private readonly bool _autoLaunchTaskBindingDeferredByUser;
     private readonly BaseStationGattClient _baseStationGattClient = new();
+    private readonly BaseStationDiagnosticSink _baseStationDiagnostics;
     private readonly SteamVrTrackingReferenceReader _steamVrTrackingReferenceReader = new();
     private readonly MonitorLayoutController _monitorLayout = new();
     private readonly TimeSpan _pollInterval;
@@ -1841,6 +1842,7 @@ internal sealed class AppSupervisor
         _diagnostics = diagnostics;
         _shutdown = shutdown;
         _steamVrLifecycle = new SteamVrLifecycleCoordinator(managedSteamVrSession, Environment.ProcessId);
+        _baseStationDiagnostics = BaseStationDiagnosticSink.ForProcess("Supervisor", AppVersion.Current);
         _pollInterval = TimeSpan.FromSeconds(Math.Max(1, config.PollIntervalSeconds));
     }
 
@@ -2528,7 +2530,13 @@ internal sealed class AppSupervisor
         Console.WriteLine("Base station power automation enabled. Scanning for base stations...");
         try
         {
-            var discovered = await BaseStationDiscovery.ScanAsync(TimeSpan.FromSeconds(10), cancellationToken);
+            var scanSessionId = BaseStationDiagnosticSink.CreateId("bs-metadata-scan");
+            var discovered = await BaseStationDiscovery.ScanAsync(
+                TimeSpan.FromSeconds(10),
+                cancellationToken,
+                _baseStationDiagnostics,
+                scanSessionId,
+                "SteamVR autostart");
             MergeDiscoveredBaseStations(discovered);
             Console.WriteLine($"Base station scan complete: {discovered.Count} station(s) found, {GetEnabledBaseStations().Length} enabled.");
         }
@@ -4702,6 +4710,13 @@ internal sealed class AppSupervisor
         bool initialPassOnly,
         CancellationToken cancellationToken)
     {
+        _baseStationDiagnostics.WriteEvent(
+            "startupTriggerReceived",
+            "SteamVR autostart",
+            configuredStationCount: GetEnabledBaseStations().Length,
+            currentStage: _baseStationStartupSchedulerState.ToString(),
+            outcome: caller);
+
         if (!_config.BaseStationsEnabled || GetEnabledBaseStations().Length == 0)
         {
             TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Disabled, caller, "base-station startup disabled or no enabled stations");
@@ -4818,6 +4833,12 @@ internal sealed class AppSupervisor
         }
 
         TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Scheduled, caller, initialPassOnly ? "initial base-station wake pass scheduled" : "base-station startup follow-up scheduled");
+        _baseStationDiagnostics.WriteEvent(
+            "schedulerArmed",
+            "SteamVR autostart",
+            configuredStationCount: GetEnabledBaseStations().Length,
+            currentStage: "scheduled",
+            outcome: initialPassOnly ? "initialPassOnly" : "fullRoutine");
         await RunScheduledBaseStationStartupAsync(epoch, caller, initialPassOnly, cancellationToken);
     }
 
@@ -4828,6 +4849,12 @@ internal sealed class AppSupervisor
         CancellationToken cancellationToken)
     {
         TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Running, caller, initialPassOnly ? "running initial base-station wake pass" : "running base-station startup routine");
+        _baseStationDiagnostics.WriteEvent(
+            "schedulerDelayCompleted",
+            "SteamVR autostart",
+            configuredStationCount: GetEnabledBaseStations().Length,
+            currentStage: "running",
+            outcome: "started");
         WriteDiagnosticEvent(
             "base_station_startup_execution"
             + "; phase=begin"
@@ -4869,6 +4896,12 @@ internal sealed class AppSupervisor
                 + $"; commandSucceeded={_baseStationPowerOnCommandSucceeded.Count}"
                 + $"; epoch={epoch.Identity}"
                 + $"; caller={caller}");
+            _baseStationDiagnostics.WriteEvent(
+                "sessionCompleted",
+                "SteamVR autostart",
+                configuredStationCount: GetEnabledBaseStations().Length,
+                currentStage: _baseStationStartupSchedulerState.ToString(),
+                outcome: result.ToString());
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -4895,6 +4928,12 @@ internal sealed class AppSupervisor
         }
 
         _baseStationStartupSchedulerState = nextState;
+        _baseStationDiagnostics.WriteEvent(
+            nextState is BaseStationStartupSchedulerState.Stabilizing ? "schedulerDelayStarted" : "schedulerStateChanged",
+            "SteamVR autostart",
+            configuredStationCount: GetEnabledBaseStations().Length,
+            currentStage: nextState.ToString(),
+            outcome: reason);
         WriteDiagnosticEvent(
             "base_station_startup_scheduling"
             + $"; stateBefore={previousState}"
@@ -5575,8 +5614,11 @@ internal sealed class AppSupervisor
     private async Task<int> SendBaseStationCommandsAsync(
         BaseStationDevice[] baseStations,
         string action,
-        Func<BaseStationDevice, CancellationToken, Task> commandAsync,
+        Func<BaseStationDevice, CancellationToken, BaseStationOperationDiagnostics?, Task> commandAsync,
         CancellationToken cancellationToken,
+        int burstNumber,
+        int totalBursts,
+        int retryNumber,
         int attemptsPerStation = 1,
         Action<int>? onSuccess = null)
     {
@@ -5592,13 +5634,32 @@ internal sealed class AppSupervisor
                 {
                     try
                     {
+                        var operation = _baseStationDiagnostics.CreateOperation(
+                            "SteamVR autostart",
+                            baseStation,
+                            burstNumber,
+                            retryNumber,
+                            baseStations.Length,
+                            BaseStationCommandTiming.PowerOnCommandTimeout);
+                        _baseStationDiagnostics.WriteEvent(
+                            "stationAttemptStarted",
+                            "SteamVR autostart",
+                            configuredStationCount: baseStations.Length,
+                            operationId: operation.OperationId,
+                            currentStage: "queued",
+                            burstNumber: burstNumber,
+                            retryNumber: retryNumber,
+                            station: baseStation,
+                            outcome: $"attempt {attempt}/{attemptsPerStation}; totalBursts={totalBursts}");
                         await RunBaseStationPowerOnCommandWithTimeoutAsync(
-                            token => commandAsync(baseStation, token),
-                            cancellationToken);
+                            token => commandAsync(baseStation, token, operation),
+                            cancellationToken,
+                            operation);
                         successes++;
                         onSuccess?.Invoke(index);
                         _baseStationPowerOnLastFailure.Remove(baseStation.BluetoothAddress);
                         lastException = null;
+                        operation.Succeeded();
                         Console.WriteLine($"Base station {baseStation.DisplayName}: {action} succeeded.");
                         break;
                     }
@@ -5635,7 +5696,8 @@ internal sealed class AppSupervisor
 
     private static async Task RunBaseStationPowerOnCommandWithTimeoutAsync(
         Func<CancellationToken, Task> action,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        BaseStationOperationDiagnostics? diagnostics)
     {
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(BaseStationCommandTiming.PowerOnCommandTimeout);
@@ -5645,7 +5707,19 @@ internal sealed class AppSupervisor
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutSource.IsCancellationRequested)
         {
-            throw new TimeoutException($"Bluetooth power-on command did not finish within {BaseStationCommandTiming.PowerOnCommandTimeout.TotalSeconds:0} seconds.");
+            var timeout = new TimeoutException($"Bluetooth power-on command did not finish within {BaseStationCommandTiming.PowerOnCommandTimeout.TotalSeconds:0} seconds. Stage: {diagnostics?.CurrentStage ?? "unknown"}.");
+            diagnostics?.TimedOut(timeout);
+            throw timeout;
+        }
+        catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+        {
+            diagnostics?.Cancelled(ex);
+            throw;
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            diagnostics?.Failed(ex, cancellationRequested: false);
+            throw;
         }
     }
 
@@ -5670,6 +5744,14 @@ internal sealed class AppSupervisor
             + $"; burstCycles={burstCycles}"
             + $"; burstDelayMs={(burstCycles > 1 ? BaseStationCommandTiming.UnsupportedV2PowerOnBurstDelay.TotalMilliseconds : 0):0}"
             + $"; stations={DescribeBaseStations(baseStations)}");
+        _baseStationDiagnostics.WriteEvent(
+            "burstStarted",
+            "SteamVR autostart",
+            configuredStationCount: baseStations.Length,
+            currentStage: "burst",
+            burstNumber: pass,
+            retryNumber: pass - 1,
+            outcome: $"pass {pass}/{totalPasses}; burstCycles={burstCycles}");
 
         for (var burstCycle = 1; burstCycle <= burstCycles; burstCycle++)
         {
@@ -5685,8 +5767,11 @@ internal sealed class AppSupervisor
             await SendBaseStationCommandsAsync(
                 baseStations,
                 GetBaseStationPowerOnAction(pass, burstCycles, burstCycle),
-                (baseStation, token) => _baseStationGattClient.PowerOnAsync(baseStation, token),
+                (baseStation, token, operation) => _baseStationGattClient.PowerOnAsync(baseStation, token, operation),
                 cancellationToken,
+                pass,
+                totalPasses,
+                pass - 1,
                 BaseStationCommandTiming.PowerOnAttempts,
                 index => stationSucceeded[index] = true);
 
@@ -5713,6 +5798,14 @@ internal sealed class AppSupervisor
             + $"; burstCycles={burstCycles}"
             + $"; elapsedMs={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.0}"
             + $"; successes={string.Join(",", baseStations.Where((_, index) => stationSucceeded[index]).Select(station => station.BluetoothAddress))}");
+        _baseStationDiagnostics.WriteEvent(
+            "burstCompleted",
+            "SteamVR autostart",
+            configuredStationCount: baseStations.Length,
+            currentStage: "burst",
+            burstNumber: pass,
+            retryNumber: pass - 1,
+            outcome: $"{stationSucceeded.Count(value => value)}/{baseStations.Length} succeeded");
 
         return stationSucceeded;
     }

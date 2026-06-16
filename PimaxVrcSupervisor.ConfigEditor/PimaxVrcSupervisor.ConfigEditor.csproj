@@ -17,6 +17,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="..\PimaxVrcSupervisor\BaseStationDiagnostics.cs" Link="BaseStationDiagnostics.cs" />
     <Compile Include="..\PimaxVrcSupervisor\BaseStationSupport.cs" Link="BaseStationSupport.cs" />
     <Compile Include="..\PimaxVrcSupervisor\MigrationSupport.cs" Link="MigrationSupport.cs" />
     <Compile Include="..\PimaxVrcSupervisor\ScheduledTaskPathValidation.cs" Link="ScheduledTaskPathValidation.cs" />

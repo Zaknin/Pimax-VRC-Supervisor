@@ -345,12 +345,44 @@ internal static class BaseStationDiscovery
         return adapter is not null && adapter.IsLowEnergySupported;
     }
 
-    public static async Task<IReadOnlyList<BaseStationDevice>> ScanAsync(TimeSpan duration, CancellationToken cancellationToken)
+    public static async Task<IReadOnlyList<BaseStationDevice>> ScanAsync(
+        TimeSpan duration,
+        CancellationToken cancellationToken,
+        BaseStationDiagnosticSink? diagnostics = null,
+        string? scanSessionId = null,
+        string trigger = "unspecified")
     {
+        scanSessionId ??= BaseStationDiagnosticSink.CreateId("bs-scan");
+        var isConfiguratorScan = string.Equals(trigger, "Configurator Scan", StringComparison.OrdinalIgnoreCase);
+        diagnostics?.WriteEvent(
+            isConfiguratorScan ? "configuratorScanStarted" : "discoveryScanStarted",
+            trigger,
+            scanSessionId: scanSessionId,
+            currentStage: "adapterLookup");
+        diagnostics?.WriteEvent(
+            "bluetoothAdapterLookupStarted",
+            trigger,
+            scanSessionId: scanSessionId,
+            currentStage: "adapterLookup");
         if (!await HasBluetoothLeAdapterAsync())
         {
+            diagnostics?.WriteEvent(
+                "bluetoothAdapterLookupCompleted",
+                trigger,
+                scanSessionId: scanSessionId,
+                currentStage: "adapterLookup",
+                adapterState: "unavailable",
+                outcome: "failed");
             throw new InvalidOperationException("Bluetooth LE adapter not found.");
         }
+
+        diagnostics?.WriteEvent(
+            "bluetoothAdapterLookupCompleted",
+            trigger,
+            scanSessionId: scanSessionId,
+            currentStage: "adapterLookup",
+            adapterState: "available",
+            outcome: "succeeded");
 
         var found = new ConcurrentDictionary<string, BaseStationDevice>(StringComparer.OrdinalIgnoreCase);
         string[] requestedProperties = ["System.Devices.Aep.DeviceAddress", "System.Devices.Aep.IsConnected"];
@@ -401,6 +433,15 @@ internal static class BaseStationDiscovery
                     Version = version,
                     Enabled = true
                 };
+                BaseStationObservationTracker.Record(found[address], DateTimeOffset.UtcNow);
+                diagnostics?.WriteEvent(
+                    isConfiguratorScan ? "configuratorStationObserved" : "discoveryStationObserved",
+                    trigger,
+                    scanSessionId: scanSessionId,
+                    currentStage: "deviceWatcher",
+                    station: found[address],
+                    discoveryState: "deviceWatcher",
+                    outcome: "observed");
             }
             catch
             {
@@ -426,6 +467,15 @@ internal static class BaseStationDiscovery
                 Version = version,
                 Enabled = true
             };
+            BaseStationObservationTracker.Record(found[address], DateTimeOffset.UtcNow);
+            diagnostics?.WriteEvent(
+                isConfiguratorScan ? "configuratorStationObserved" : "discoveryStationObserved",
+                trigger,
+                scanSessionId: scanSessionId,
+                currentStage: "advertisementWatcher",
+                station: found[address],
+                discoveryState: "advertisementWatcher",
+                outcome: "observed");
         }
 
         foreach (var watcher in watchers)
@@ -435,6 +485,12 @@ internal static class BaseStationDiscovery
         }
         advertisementWatcher.Received += OnAdvertisementReceived;
         advertisementWatcher.Start();
+        diagnostics?.WriteEvent(
+            isConfiguratorScan ? "configuratorWatcherStarted" : "discoveryWatcherStarted",
+            trigger,
+            scanSessionId: scanSessionId,
+            currentStage: "scan",
+            discoveryState: "started");
 
         try
         {
@@ -463,12 +519,26 @@ internal static class BaseStationDiscovery
             {
                 advertisementWatcher.Stop();
             }
+            diagnostics?.WriteEvent(
+                isConfiguratorScan ? "configuratorWatcherStopped" : "discoveryWatcherStopped",
+                trigger,
+                scanSessionId: scanSessionId,
+                currentStage: "scan",
+                discoveryState: "stopped");
         }
 
-        return found.Values
+        var result = found.Values
             .OrderBy(device => device.DisplayName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(device => device.BluetoothAddress, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        diagnostics?.WriteEvent(
+            isConfiguratorScan ? "configuratorScanCompleted" : "discoveryScanCompleted",
+            trigger,
+            scanSessionId: scanSessionId,
+            currentStage: "scan",
+            discoveryState: "complete",
+            outcome: "succeeded");
+        return result;
     }
 
     private static string TryReadBluetoothAddress(DeviceInformation deviceInfo)
@@ -500,23 +570,32 @@ internal sealed class BaseStationGattClient
     private static readonly Guid V2PowerCharacteristic = new("00001525-1212-efde-1523-785feabcd124");
     private static readonly Guid V2IdentifyCharacteristic = new("00008421-1212-efde-1523-785feabcd124");
 
-    public Task PowerOnAsync(BaseStationDevice baseStation, CancellationToken cancellationToken)
+    public Task PowerOnAsync(
+        BaseStationDevice baseStation,
+        CancellationToken cancellationToken,
+        BaseStationOperationDiagnostics? diagnostics = null)
     {
         var version = GetSupportedVersion(baseStation);
         return version == BaseStationVersion.V1
-            ? ControlV1Async(baseStation, powerOn: true, cancellationToken)
-            : WriteV2PowerCharacteristicAsync(baseStation, 0x01, cancellationToken);
+            ? ControlV1Async(baseStation, powerOn: true, cancellationToken, diagnostics)
+            : WriteV2PowerCharacteristicAsync(baseStation, 0x01, cancellationToken, diagnostics);
     }
 
-    public Task SleepAsync(BaseStationDevice baseStation, CancellationToken cancellationToken)
+    public Task SleepAsync(
+        BaseStationDevice baseStation,
+        CancellationToken cancellationToken,
+        BaseStationOperationDiagnostics? diagnostics = null)
     {
         var version = GetSupportedVersion(baseStation);
         return version == BaseStationVersion.V1
-            ? ControlV1Async(baseStation, powerOn: false, cancellationToken)
-            : WriteV2PowerCharacteristicAsync(baseStation, 0x00, cancellationToken);
+            ? ControlV1Async(baseStation, powerOn: false, cancellationToken, diagnostics)
+            : WriteV2PowerCharacteristicAsync(baseStation, 0x00, cancellationToken, diagnostics);
     }
 
-    public Task StandbyAsync(BaseStationDevice baseStation, CancellationToken cancellationToken)
+    public Task StandbyAsync(
+        BaseStationDevice baseStation,
+        CancellationToken cancellationToken,
+        BaseStationOperationDiagnostics? diagnostics = null)
     {
         var version = GetSupportedVersion(baseStation);
         if (version == BaseStationVersion.V1)
@@ -524,10 +603,13 @@ internal sealed class BaseStationGattClient
             throw new InvalidOperationException("Standby is not supported for Base Station 1.0.");
         }
 
-        return WriteV2PowerCharacteristicAsync(baseStation, 0x02, cancellationToken);
+        return WriteV2PowerCharacteristicAsync(baseStation, 0x02, cancellationToken, diagnostics);
     }
 
-    public Task IdentifyAsync(BaseStationDevice baseStation, CancellationToken cancellationToken)
+    public Task IdentifyAsync(
+        BaseStationDevice baseStation,
+        CancellationToken cancellationToken,
+        BaseStationOperationDiagnostics? diagnostics = null)
     {
         var version = GetSupportedVersion(baseStation);
         if (version == BaseStationVersion.V1)
@@ -535,7 +617,7 @@ internal sealed class BaseStationGattClient
             throw new InvalidOperationException("Identify is not supported for Base Station 1.0.");
         }
 
-        return WritePowerCharacteristicAsync(baseStation, V2ControlService, V2IdentifyCharacteristic, [0x01], cancellationToken);
+        return WritePowerCharacteristicAsync(baseStation, V2ControlService, V2IdentifyCharacteristic, [0x01], cancellationToken, diagnostics);
     }
 
     public Task PowerDownAsync(BaseStationDevice baseStation, BaseStationPowerDownMode mode, CancellationToken cancellationToken)
@@ -545,7 +627,10 @@ internal sealed class BaseStationGattClient
             : SleepAsync(baseStation, cancellationToken);
     }
 
-    public async Task<BaseStationPowerState> ReadPowerStateAsync(BaseStationDevice baseStation, CancellationToken cancellationToken)
+    public async Task<BaseStationPowerState> ReadPowerStateAsync(
+        BaseStationDevice baseStation,
+        CancellationToken cancellationToken,
+        BaseStationOperationDiagnostics? diagnostics = null)
     {
         var version = GetSupportedVersion(baseStation);
         if (version == BaseStationVersion.V1)
@@ -553,7 +638,7 @@ internal sealed class BaseStationGattClient
             return BaseStationPowerState.Unsupported;
         }
 
-        var data = await ReadPowerCharacteristicAsync(baseStation, V2ControlService, V2PowerCharacteristic, cancellationToken);
+        var data = await ReadPowerCharacteristicAsync(baseStation, V2ControlService, V2PowerCharacteristic, cancellationToken, diagnostics);
         if (data is null)
         {
             return BaseStationPowerState.Unsupported;
@@ -585,10 +670,18 @@ internal sealed class BaseStationGattClient
         return version;
     }
 
-    private static Task WriteV2PowerCharacteristicAsync(BaseStationDevice baseStation, byte value, CancellationToken cancellationToken)
-        => WritePowerCharacteristicAsync(baseStation, V2ControlService, V2PowerCharacteristic, [value], cancellationToken);
+    private static Task WriteV2PowerCharacteristicAsync(
+        BaseStationDevice baseStation,
+        byte value,
+        CancellationToken cancellationToken,
+        BaseStationOperationDiagnostics? diagnostics)
+        => WritePowerCharacteristicAsync(baseStation, V2ControlService, V2PowerCharacteristic, [value], cancellationToken, diagnostics);
 
-    private static Task ControlV1Async(BaseStationDevice baseStation, bool powerOn, CancellationToken cancellationToken)
+    private static Task ControlV1Async(
+        BaseStationDevice baseStation,
+        bool powerOn,
+        CancellationToken cancellationToken,
+        BaseStationOperationDiagnostics? diagnostics)
     {
         var id = baseStation.Id.Trim();
         if (id.Length != 8)
@@ -607,7 +700,7 @@ internal sealed class BaseStationGattClient
             .Concat(Enumerable.Repeat<byte>(0x00, 12))
             .ToArray();
 
-        return WritePowerCharacteristicAsync(baseStation, V1ControlService, V1PowerCharacteristic, data, cancellationToken);
+        return WritePowerCharacteristicAsync(baseStation, V1ControlService, V1PowerCharacteristic, data, cancellationToken, diagnostics);
     }
 
     private static async Task WritePowerCharacteristicAsync(
@@ -615,12 +708,15 @@ internal sealed class BaseStationGattClient
         Guid serviceGuid,
         Guid characteristicGuid,
         byte[] data,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        BaseStationOperationDiagnostics? diagnostics = null)
     {
+        diagnostics?.BeginStage("bluetoothAdapterLookup");
         if (!await BaseStationDiscovery.HasBluetoothLeAdapterAsync())
         {
             throw new InvalidOperationException("Bluetooth LE adapter not found.");
         }
+        diagnostics?.CompleteStage("bluetoothAdapterLookup");
 
         const int retryCount = 10;
         Exception? lastException = null;
@@ -629,10 +725,18 @@ internal sealed class BaseStationGattClient
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
+                diagnostics?.BeginStage("deviceResolution");
                 using var device = await GetBluetoothLeDeviceAsync(baseStation.BluetoothAddressValue, cancellationToken);
+                diagnostics?.CompleteStage("deviceResolution", deviceResolutionResult: "succeeded");
+                diagnostics?.BeginStage("gattServiceQuery");
                 using var service = await GetServiceAsync(device, serviceGuid, cancellationToken);
+                diagnostics?.CompleteStage("gattServiceQuery", gattServiceResult: "succeeded");
+                diagnostics?.BeginStage("characteristicResolution");
                 var characteristic = await GetCharacteristicAsync(service, characteristicGuid, cancellationToken);
+                diagnostics?.CompleteStage("characteristicResolution", characteristicResult: "succeeded");
+                diagnostics?.BeginStage("powerWrite");
                 await WriteCharacteristicAsync(characteristic, data, cancellationToken);
+                diagnostics?.CompleteStage("powerWrite", writeResult: "succeeded");
                 return;
             }
             catch (Exception ex) when (attempt < retryCount && !cancellationToken.IsCancellationRequested)
@@ -653,12 +757,15 @@ internal sealed class BaseStationGattClient
         BaseStationDevice baseStation,
         Guid serviceGuid,
         Guid characteristicGuid,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        BaseStationOperationDiagnostics? diagnostics = null)
     {
+        diagnostics?.BeginStage("bluetoothAdapterLookup");
         if (!await BaseStationDiscovery.HasBluetoothLeAdapterAsync())
         {
             throw new InvalidOperationException("Bluetooth LE adapter not found.");
         }
+        diagnostics?.CompleteStage("bluetoothAdapterLookup");
 
         const int retryCount = 5;
         Exception? lastException = null;
@@ -667,9 +774,15 @@ internal sealed class BaseStationGattClient
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
+                diagnostics?.BeginStage("deviceResolution");
                 using var device = await GetBluetoothLeDeviceAsync(baseStation.BluetoothAddressValue, cancellationToken);
+                diagnostics?.CompleteStage("deviceResolution", deviceResolutionResult: "succeeded");
+                diagnostics?.BeginStage("gattServiceQuery");
                 using var service = await GetServiceAsync(device, serviceGuid, cancellationToken);
+                diagnostics?.CompleteStage("gattServiceQuery", gattServiceResult: "succeeded");
+                diagnostics?.BeginStage("characteristicResolution");
                 var characteristic = await GetCharacteristicAsync(service, characteristicGuid, cancellationToken);
+                diagnostics?.CompleteStage("characteristicResolution", characteristicResult: "succeeded");
                 if (!characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.Read))
                 {
                     return null;
