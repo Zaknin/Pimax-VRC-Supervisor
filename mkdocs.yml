@@ -73,5 +73,6 @@ nav:
       - Overview: reference/index.md
       - Config File: reference/config-file.md
       - Pimax USB Enumeration Diagnostics: reference/pimax-usb-enumeration-diagnostics.md
+      - Pimax Registration Recovery Experiments: development/pimax-registration-recovery-experiments.md
       - Shortcuts: reference/shortcuts.md
       - Release Packaging: reference/release-packaging.md
