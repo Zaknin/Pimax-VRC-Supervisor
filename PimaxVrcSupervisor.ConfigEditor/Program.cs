@@ -126,6 +126,7 @@ internal sealed class ConfigEditorForm : Form
     private readonly CheckBox _mouthTrackerRestartOnReconnectCheckBox = new ThemedCheckBox { Text = "Enable automatic restart on face tracker reconnects", AutoSize = true };
     private readonly CheckBox _useDesktopTuiAsDefaultInterfaceCheckBox = new ThemedCheckBox { Text = "Use Terminal UI as default interface", AutoSize = true };
     private readonly TextBox _diagnosticsLogDirectoryTextBox = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right };
+    private readonly BaseStationDiagnosticSink _baseStationDiagnostics = BaseStationDiagnosticSink.ForProcess("Configurator", AppVersion.Current);
     private readonly DataGridView _autoLaunchAppsGrid = new()
     {
         Dock = DockStyle.Fill,
@@ -909,20 +910,47 @@ internal sealed class ConfigEditorForm : Form
 
     private async Task ScanBaseStationsAsync()
     {
+        var scanSessionId = BaseStationDiagnosticSink.CreateId("bs-configurator-scan");
+        var scanStartedAt = Stopwatch.GetTimestamp();
         try
         {
             SetActiveOperationStatus("Scanning for base stations...");
-            var discovered = await BaseStationDiscovery.ScanAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
-            var existingAddresses = ReadBaseStationsGrid()
+            var existingStations = ReadBaseStationsGrid();
+            var existingAddresses = existingStations
                 .Select(station => station.BluetoothAddress)
                 .Where(address => !string.IsNullOrWhiteSpace(address))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            _baseStationDiagnostics.WriteEvent(
+                "configuratorScanStarted",
+                "Configurator Scan",
+                configuredStationCount: existingStations.Count(station => station.Enabled),
+                scanSessionId: scanSessionId,
+                currentStage: "scan");
+            var discovered = await BaseStationDiscovery.ScanAsync(
+                TimeSpan.FromSeconds(10),
+                CancellationToken.None,
+                _baseStationDiagnostics,
+                scanSessionId,
+                "Configurator Scan");
             var newCount = 0;
+            var matchedCount = 0;
             foreach (var baseStation in discovered)
             {
                 if (!existingAddresses.Contains(baseStation.BluetoothAddress))
                 {
                     newCount++;
+                }
+                else
+                {
+                    matchedCount++;
+                    _baseStationDiagnostics.WriteEvent(
+                        "configuratorSavedStationMatched",
+                        "Configurator Scan",
+                        configuredStationCount: existingStations.Count(station => station.Enabled),
+                        scanSessionId: scanSessionId,
+                        currentStage: "scan",
+                        station: baseStation,
+                        outcome: "matched");
                 }
 
                 UpsertBaseStationGridRow(baseStation.WithDefaults());
@@ -930,10 +958,32 @@ internal sealed class ConfigEditorForm : Form
 
             UpdateBaseStationRowWarnings();
             var enabledCount = ReadBaseStationsGrid().Count(station => station.Enabled);
+            _baseStationDiagnostics.Write(new BaseStationDiagnosticEvent
+            {
+                EventType = "configuratorScanCompleted",
+                ScanSessionId = scanSessionId,
+                Trigger = "Configurator Scan",
+                CurrentStage = "scan",
+                ConfiguredStationCount = enabledCount,
+                Outcome = $"found={discovered.Count}; matched={matchedCount}; new={newCount}",
+                TotalAttemptDurationMilliseconds = Stopwatch.GetElapsedTime(scanStartedAt).TotalMilliseconds
+            });
             SetStatus($"Scan complete: {discovered.Count} base stations found, {enabledCount} enabled, {newCount} new.");
         }
         catch (Exception ex)
         {
+            _baseStationDiagnostics.Write(new BaseStationDiagnosticEvent
+            {
+                EventType = "configuratorScanCompleted",
+                ScanSessionId = scanSessionId,
+                Trigger = "Configurator Scan",
+                CurrentStage = "scan",
+                Outcome = "failed",
+                TotalAttemptDurationMilliseconds = Stopwatch.GetElapsedTime(scanStartedAt).TotalMilliseconds,
+                ErrorCategory = "exception",
+                ExceptionType = ex.GetType().Name,
+                SanitizedErrorMessage = BaseStationDiagnosticSink.SanitizeMessage(ex.Message)
+            });
             ShowThemedMessageBox(ex.Message, "Base station scan failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
             SetStatus("Base station scan failed.");
         }
