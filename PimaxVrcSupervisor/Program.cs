@@ -57,6 +57,19 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-registration-assessment
     return;
 }
 
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-recovery-experiment-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var diagnosticConfig = SupervisorConfig.Load(configPath);
+    var request = BuildPimaxRecoveryExperimentRequest(commandLineArgs);
+    var runner = new PimaxRecoveryExperimentRunner(
+        new DefaultPimaxRegistrationAssessmentCollector(diagnosticConfig),
+        new WindowsPimaxClientProcessController(),
+        new DefaultPimaxRecoveryEnvironment());
+    var result = await runner.RunAsync(request, shutdown.Token);
+    Console.WriteLine(JsonSerializer.Serialize(result, PimaxRecoveryExperimentJson.Options));
+    return;
+}
+
 if (startupContext.ShouldHideConsole)
 {
     ConsoleWindow.HideIfPresent();
@@ -218,6 +231,61 @@ static async Task InstallAutoLaunchScheduledTaskFromCommandLineAsync(SupervisorC
     Console.WriteLine(taskResult.OperatorMessage);
     Console.WriteLine($"Task: {taskResult.TaskName}");
     Console.WriteLine($"Trigger: {taskResult.TriggerDescription}");
+}
+
+static PimaxRecoveryExperimentRequest BuildPimaxRecoveryExperimentRequest(string[] args)
+{
+    var experiment = TryGetTopLevelCommandOption(args, "--experiment", out var experimentValue)
+        && !string.IsNullOrWhiteSpace(experimentValue)
+        ? experimentValue.Trim()
+        : PimaxRecoveryExperimentKind.WaitControl;
+    var duration = TryGetTopLevelCommandOption(args, "--duration-seconds", out var durationText)
+        && int.TryParse(durationText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedDuration)
+        ? parsedDuration
+        : 30;
+    var token = TryGetTopLevelCommandOption(args, "--confirmation-token", out var tokenValue)
+        ? tokenValue
+        : null;
+    var evidenceDirectory = TryGetTopLevelCommandOption(args, "--evidence-dir", out var evidenceDirectoryValue)
+        ? evidenceDirectoryValue
+        : null;
+    return new PimaxRecoveryExperimentRequest(
+        experiment,
+        HasTopLevelFlag(args, "--confirm"),
+        token,
+        duration,
+        evidenceDirectory);
+}
+
+static bool HasTopLevelFlag(string[] args, string name)
+    => args.Any(arg => string.Equals(arg, name, StringComparison.OrdinalIgnoreCase));
+
+static bool TryGetTopLevelCommandOption(string[] args, string name, out string? value)
+{
+    value = null;
+    var prefix = name + "=";
+    for (var index = 0; index < args.Length; index++)
+    {
+        if (args[index].StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            value = args[index][prefix.Length..];
+            return true;
+        }
+
+        if (!string.Equals(args[index], name, StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+
+        if (index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
+        {
+            value = args[index + 1];
+        }
+
+        return true;
+    }
+
+    return false;
 }
 
 internal static class AppVersion
