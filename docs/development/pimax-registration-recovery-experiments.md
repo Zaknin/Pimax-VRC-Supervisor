@@ -1,6 +1,6 @@
 # Pimax Registration Recovery Experiments
 
-This page defines controlled, read-only-first recovery experiments for a later phase. Phase 28B does not implement these actions.
+This page defines controlled, read-only-first recovery experiments for Pimax headset registration. The first implemented recovery experiment is a CLI-only, operator-confirmed Pimax Play client restart test. It is intentionally not automatic recovery.
 
 ## Evidence States
 
@@ -14,16 +14,20 @@ LED colors remain user-observed physical context. The software state names above
 
 Phase 28A5 found that the white-to-blue transition is visible in static USB/PnP evidence through the Generic USB Hub `VID_05E3/PID_0608` and Valve/Pimax-adjacent HID/composite records `VID_28DE/PID_2101` and `VID_28DE/PID_2300`. Crystal runtime evidence appears after the USB-assisted registration path and includes Crystal `VID_34A4/PID_0012` records, the `MI_00` camera, `MI_02` HID, `MI_03` audio, related audio endpoint records, and EyeChip `VID_2104/PID_0220`. The filtered Phase 28A4 green capture contained six relevant Crystal devices, not seven.
 
-## Safety Model For Future Recovery
+## Safety Model
 
-Future recovery experiments must require explicit manual confirmation, run one experiment at a time, avoid uncontrolled retries, support cancellation, apply timeouts to every step, identify the exact process/service/device target, assess before and after each action, and skip execution during Supervisor cleanup or active SteamVR use unless the operator explicitly approves. No broad USB host-controller reset is allowed.
+Recovery experiments must require explicit manual confirmation before mutation, run one experiment at a time, avoid uncontrolled retries, support cancellation, apply timeouts to every step, identify the exact process/service/device target, assess before and after each action, and skip execution during Supervisor cleanup or active SteamVR use unless the operator explicitly approves. No broad USB host-controller reset is allowed.
+
+The implemented client-restart experiment is limited to the verified Pimax Play UI/client process. It does not restart Pimax services, manipulate USB/PnP devices, automate Connect, start SteamVR, add a bridge command, add a Terminal UI action, or run in the background.
+
+The first controlled client-restart trial did not recover registration for the captured blue/unregistered failure. The verified Pimax Play UI/client closed and relaunched, but the assessment remained `LikelyPoweredOnAwaitingRegistration` through the bounded observation window. The experiment framework was then hardened so the relaunched GUI process cannot contaminate CLI JSON stdout.
 
 ## Experiment Matrix
 
 | Order | Experiment | Prerequisite state | Action | Expected transition | Success criterion | Failure criterion | Timeout | Rollback | Admin | SteamVR guard | Risk | Evidence captured | Status |
 |---:|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | Wait-only control | `LikelyPoweredOnAwaitingRegistration` | Do nothing except repeat assessment. | None, or spontaneous registration. | State becomes `RegisteredReady` without mutation. | State remains awaiting registration. | 60s | None | No | SteamVR closed preferred. | Low | Before/after assessment and logs. | Not implemented |
-| 2 | Restart Pimax Play UI/client only | Awaiting registration, Pimax services running. | Close and restart only the user-facing Pimax Play client. | Runtime client re-registers already-present devices. | `RegisteredReady`. | Client restarts but state remains awaiting registration. | 90s | Relaunch client if needed. | Maybe | Do not run during active SteamVR. | Medium | Process list, assessment before/after. | Not implemented |
+| 1 | Wait-only control | `LikelyPoweredOnAwaitingRegistration` | Do nothing except repeat assessment. | None, or spontaneous registration. | State becomes `RegisteredReady` without mutation. | State remains awaiting registration. | Bounded by request, clamped by implementation. | None | No | SteamVR closed preferred. | Low | Assessment timeline. | Implemented as `pimax-recovery-experiment-json --experiment wait-control` |
+| 2 | Restart Pimax Play UI/client only | Awaiting registration, Pimax services running. | Close and restart only the user-facing Pimax Play client after dry-run token confirmation. | Runtime client re-registers already-present devices. | `RegisteredReady`. | Client restarts but state remains awaiting registration. | Bounded; one restart only. | Relaunch client once if needed. | Maybe | Refuses while SteamVR is running. | Medium | Process target, safety checks, stage timeline, assessment timeline. | Implemented; first controlled trial did not recover the captured failure |
 | 3 | Restart relevant Pimax runtime/service only | Awaiting registration, exact service identity known. | Restart only the narrow runtime/service target. | Service re-reads present power-on devices. | `RegisteredReady`. | Service fails or state unchanged. | 90s | Restore service running. | Yes | SteamVR must be closed unless approved. | Medium-high | Service status, assessment before/after. | Not implemented |
 | 4 | Restart service, wait, then client | Awaiting registration. | Restart service, wait for readiness, restart client. | Runtime stack reinitializes in order. | `RegisteredReady`. | Timeout or state unchanged. | 120s | Restore service/client running. | Yes | SteamVR closed. | Medium-high | Service/process state, assessment before/after. | Not implemented |
 | 5 | Initiate Pimax Connect scanning only | Awaiting registration, supported safe UI/API method exists. | Start Connect scan without USB manipulation. | Scan recognizes already-present power-on evidence. | `RegisteredReady`. | Scan times out. | 90s | Stop scan if supported. | Unknown | SteamVR closed. | Medium | Assessment before/during/after scan. | Not implemented |
