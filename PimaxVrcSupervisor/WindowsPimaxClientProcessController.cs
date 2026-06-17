@@ -134,15 +134,7 @@ internal sealed class WindowsPimaxClientProcessController : IPimaxClientProcessC
             return new PimaxRecoveryOperationResult(true, false, "Verified Pimax Play client executable no longer exists.", []);
         }
 
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = target.ExecutablePath,
-            Arguments = target.Arguments,
-            WorkingDirectory = string.IsNullOrWhiteSpace(target.WorkingDirectory)
-                ? Path.GetDirectoryName(target.ExecutablePath) ?? Environment.CurrentDirectory
-                : target.WorkingDirectory,
-            UseShellExecute = false
-        };
+        var startInfo = BuildDetachedRelaunchStartInfo(target);
         Process.Start(startInfo)?.Dispose();
 
         var deadline = DateTimeOffset.UtcNow.Add(timeout);
@@ -162,6 +154,20 @@ internal sealed class WindowsPimaxClientProcessController : IPimaxClientProcessC
 
         return new PimaxRecoveryOperationResult(true, false, "Pimax Play client relaunch was not detected before timeout.", []);
     }
+
+    internal static ProcessStartInfo BuildDetachedRelaunchStartInfo(PimaxClientTargetDescriptor target)
+        => new()
+        {
+            FileName = target.ExecutablePath,
+            Arguments = target.Arguments,
+            WorkingDirectory = string.IsNullOrWhiteSpace(target.WorkingDirectory)
+                ? Path.GetDirectoryName(target.ExecutablePath) ?? Environment.CurrentDirectory
+                : target.WorkingDirectory,
+            UseShellExecute = true,
+            RedirectStandardOutput = false,
+            RedirectStandardError = false,
+            RedirectStandardInput = false
+        };
 
     private static IEnumerable<Process> GetVerifiedTargetProcesses(PimaxClientTargetDescriptor target)
     {

@@ -17,6 +17,29 @@ It emits schema `pimax-recovery-experiment-v1`.
 
 The command is not exposed through the bridge, Terminal UI, SteamVR overlay, Configurator UI, or scheduled startup flow.
 
+## Phase 28C Trial Result
+
+The first controlled hardware trial found that a client-only Pimax Play restart was not an effective recovery action for the captured failure mode:
+
+- the wait-only control did not recover registration;
+- the verified Pimax Play UI/client closed and relaunched once;
+- no Pimax service, USB/PnP device, SteamVR process, or Connect UI automation was intentionally changed;
+- registration remained `likelyPoweredOnAwaitingRegistration` through the bounded observation window;
+- the user-observed Pimax Play UI remained disconnected or in the setup guide.
+
+This does not prove that a client-only restart can never help. It means the captured blue/unregistered failure did not recover through this action.
+
+## Phase 28C1 Corrections
+
+The first trial exposed two transport defects in the experimental framework:
+
+- the relaunched Electron client inherited the CLI command's stdout/stderr handles, so Pimax Play log output contaminated the JSON result stream;
+- the ad hoc timeline helper used fragile nested quoting and failed when the repository path contained a space.
+
+The corrected implementation detaches the relaunched GUI process from the command JSON channel. `pimax-recovery-experiment-json` is expected to write exactly one JSON document to stdout and return after the bounded experiment completes, even when the relaunched Pimax Play process remains open.
+
+The reusable timeline helper now uses explicit PowerShell parameters and structured argument passing. Diagnostic stderr is written separately from JSON sample files.
+
 ## Wait-Control Experiment
 
 `wait-control` repeats the existing Pimax registration assessment for a bounded duration and performs no mutation. Use it first to see whether the headset registers naturally.
@@ -94,3 +117,5 @@ Keep evidence outside the repository.
 ## Limitations
 
 This experiment does not prove that client restart is safe for automatic recovery. A successful controlled run would justify a later manual operator-confirmed action design, not background automation.
+
+`registeredReady` in `pimax-registration-assessment-v1` describes runtime/device evidence. It does not guarantee that the Pimax Play Electron UI has visually refreshed to the same state.

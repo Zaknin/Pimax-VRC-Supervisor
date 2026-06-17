@@ -257,6 +257,90 @@ public sealed class PimaxRecoveryExperimentTests
     }
 
     [Fact]
+    public void RecoverySchemaSerializesAsOneJsonDocument()
+    {
+        var result = new PimaxRecoveryExperimentResult(
+            PimaxRecoveryExperimentSchema.Version,
+            "id",
+            PimaxRecoveryExperimentKind.WaitControl,
+            true,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            0,
+            null,
+            new PimaxRecoverySafetyResult(false, [], ["rejected"], [], null, null),
+            new PimaxRecoveryConfirmationResult(false, false, false, null),
+            [],
+            null,
+            [],
+            null,
+            null,
+            null,
+            [],
+            null,
+            false,
+            PimaxRecoveryFailureCategory.SafetyGuardRejected,
+            [],
+            ["rejected"],
+            false,
+            false,
+            null);
+
+        var json = JsonSerializer.Serialize(result, PimaxRecoveryExperimentJson.Options);
+        using var document = JsonDocument.Parse(json);
+
+        Assert.Equal(PimaxRecoveryExperimentSchema.Version, document.RootElement.GetProperty("schemaVersion").GetString());
+        Assert.Equal(json.Length, document.RootElement.GetRawText().Length);
+    }
+
+    [Fact]
+    public void DetachedRelaunchStartInfoDoesNotRedirectOrInheritJsonPipes()
+    {
+        var target = Target();
+
+        var startInfo = WindowsPimaxClientProcessController.BuildDetachedRelaunchStartInfo(target);
+
+        Assert.True(startInfo.UseShellExecute);
+        Assert.False(startInfo.RedirectStandardOutput);
+        Assert.False(startInfo.RedirectStandardError);
+        Assert.False(startInfo.RedirectStandardInput);
+        Assert.Equal(target.ExecutablePath, startInfo.FileName);
+        Assert.Equal(target.Arguments, startInfo.Arguments);
+        Assert.Equal(target.WorkingDirectory, startInfo.WorkingDirectory);
+    }
+
+    [Theory]
+    [InlineData("C:\\Path With Spaces\\capture script.ps1", "C:\\Repo With Spaces\\PimaxVrcSupervisor.dll", "C:\\Out With Spaces", "C:\\Out With Spaces\\STOP")]
+    [InlineData("C:\\Unicode ÅÆØ\\capture.ps1", "C:\\Unicode ÅÆØ\\app.dll", "C:\\Output ÅÆØ", "C:\\Output ÅÆØ\\STOP")]
+    [InlineData("C:\\Path (Test)\\capture.ps1", "C:\\Path (Test)\\app.dll", "C:\\Output (Test)", "C:\\Output (Test)\\STOP")]
+    public void TimelineCaptureHelperUsesLiteralArgumentList(
+        string scriptPath,
+        string dllPath,
+        string outputDirectory,
+        string stopFile)
+    {
+        var startInfo = PimaxRecoveryTimelineCaptureHelper.BuildPowerShellStartInfo(
+            scriptPath,
+            dllPath,
+            outputDirectory,
+            stopFile,
+            "ABC123",
+            2,
+            "C:\\logs\\stdout.log",
+            "C:\\logs\\stderr.log");
+
+        Assert.False(startInfo.UseShellExecute);
+        Assert.True(startInfo.CreateNoWindow);
+        Assert.True(startInfo.RedirectStandardOutput);
+        Assert.True(startInfo.RedirectStandardError);
+        Assert.Contains(scriptPath, startInfo.ArgumentList);
+        Assert.Contains(dllPath, startInfo.ArgumentList);
+        Assert.Contains(outputDirectory, startInfo.ArgumentList);
+        Assert.Contains(stopFile, startInfo.ArgumentList);
+        Assert.DoesNotContain(startInfo.ArgumentList, arg => arg.Contains('"', StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ExistingDiagnosticSchemasRemainStable()
     {
         Assert.Equal("pimax-connectivity-v1", PimaxConnectivitySchema.Version);
@@ -272,6 +356,7 @@ public sealed class PimaxRecoveryExperimentTests
         {
             Path.Combine(repositoryRoot, "PimaxVrcSupervisor", "PimaxRecoveryExperiment.cs"),
             Path.Combine(repositoryRoot, "PimaxVrcSupervisor", "WindowsPimaxClientProcessController.cs"),
+            Path.Combine(repositoryRoot, "PimaxVrcSupervisor", "PimaxRecoveryTimelineCaptureHelper.cs"),
         };
         var forbiddenTokens = new[]
         {
