@@ -349,6 +349,108 @@ public sealed class PimaxRecoveryExperimentTests
     }
 
     [Fact]
+    public async Task StabilizedAssessmentDoesNotMutateAndRecordsStableState()
+    {
+        var controller = new FakePimaxClientController();
+        var serviceController = new FakeRuntimeServiceController();
+        var runner = Runner(
+            [
+                Assessment(PimaxRegistrationState.LikelyPoweredOnAwaitingRegistration),
+                Assessment(PimaxRegistrationState.LikelyPoweredOnAwaitingRegistration),
+                Assessment(PimaxRegistrationState.LikelyPoweredOnAwaitingRegistration),
+                Assessment(PimaxRegistrationState.LikelyPoweredOnAwaitingRegistration)
+            ],
+            controller,
+            serviceController: serviceController);
+
+        var result = await runner.RunAsync(new PimaxRecoveryExperimentRequest(PimaxRecoveryExperimentKind.StabilizedAssessment, false, null, 6, null), CancellationToken.None);
+
+        Assert.True(result.Stabilization?.Stable);
+        Assert.Equal(PimaxRegistrationState.LikelyPoweredOnAwaitingRegistration, result.Stabilization?.StableState);
+        Assert.Equal(0, controller.GracefulCloseCalls);
+        Assert.Equal(0, serviceController.RestartCalls);
+    }
+
+    [Fact]
+    public async Task RuntimeServiceDryRunGeneratesTokenWithoutMutation()
+    {
+        var serviceController = new FakeRuntimeServiceController();
+        var runner = Runner(
+            [Assessment(PimaxRegistrationState.LikelyPoweredOnAwaitingRegistration)],
+            new FakePimaxClientController(),
+            serviceController: serviceController);
+
+        var result = await runner.RunAsync(new PimaxRecoveryExperimentRequest(PimaxRecoveryExperimentKind.RestartRuntimeService, false, null, 30, null), CancellationToken.None);
+
+        Assert.True(result.DryRun);
+        Assert.True(result.Safety.Permitted);
+        Assert.NotNull(result.RuntimeServiceTarget);
+        Assert.False(string.IsNullOrWhiteSpace(result.Safety.ConfirmationToken));
+        Assert.Equal(0, serviceController.RestartCalls);
+    }
+
+    [Fact]
+    public async Task RuntimeServiceRejectsExecutionWithoutValidToken()
+    {
+        var serviceController = new FakeRuntimeServiceController();
+        var runner = Runner(
+            [Assessment(PimaxRegistrationState.LikelyPoweredOnAwaitingRegistration)],
+            new FakePimaxClientController(),
+            serviceController: serviceController);
+
+        var result = await runner.RunAsync(new PimaxRecoveryExperimentRequest(PimaxRecoveryExperimentKind.RestartRuntimeService, true, "bad-token", 30, null), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(PimaxRecoveryFailureCategory.ConfirmationRejected, result.FailureCategory);
+        Assert.Equal(0, serviceController.RestartCalls);
+    }
+
+    [Fact]
+    public async Task RuntimeServiceExecutionUsesPrivilegedHelperAbstractionOnce()
+    {
+        PimaxRecoveryConfirmationToken.ResetForTests();
+        var serviceController = new FakeRuntimeServiceController();
+        var target = serviceController.Target;
+        var now = DateTimeOffset.UtcNow;
+        var token = PimaxRecoveryConfirmationToken.CreateForService(
+            PimaxRecoveryExperimentKind.RestartRuntimeService,
+            target,
+            PimaxRegistrationState.LikelyPoweredOnAwaitingRegistration,
+            "closed",
+            now.AddMinutes(5),
+            () => now);
+        var temp = Path.Combine(Path.GetTempPath(), "pimax-runtime-service-test-" + Guid.NewGuid().ToString("N"));
+        var runner = Runner(
+            [Assessment(PimaxRegistrationState.LikelyPoweredOnAwaitingRegistration), Assessment(PimaxRegistrationState.RegisteredReady, PimaxRegistrationConfidence.Confirmed)],
+            new FakePimaxClientController(),
+            serviceController: serviceController,
+            now: () => now);
+
+        var result = await runner.RunAsync(new PimaxRecoveryExperimentRequest(PimaxRecoveryExperimentKind.RestartRuntimeService, true, token, 30, temp), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(1, serviceController.RestartCalls);
+        Assert.NotNull(result.PrivilegedServiceRequest);
+        Assert.NotNull(result.PrivilegedServiceResult);
+        Assert.Equal(PimaxRecoveryFailureCategory.None, result.FailureCategory);
+    }
+
+    [Theory]
+    [InlineData("C:\\Path With Spaces\\helper.ps1", "C:\\Evidence With Spaces\\request.json", "C:\\Evidence With Spaces\\result.json")]
+    [InlineData("C:\\Unicode Ã…Ã†Ã˜\\helper.ps1", "C:\\Unicode Ã…Ã†Ã˜\\request.json", "C:\\Unicode Ã…Ã†Ã˜\\result.json")]
+    public void UacHelperStartInfoUsesArgumentList(string helperPath, string requestPath, string resultPath)
+    {
+        var startInfo = WindowsPimaxRuntimeServiceController.BuildHelperStartInfo(helperPath, requestPath, resultPath, "HASH", "BINDING");
+
+        Assert.True(startInfo.UseShellExecute);
+        Assert.Equal("runas", startInfo.Verb);
+        Assert.Contains(helperPath, startInfo.ArgumentList);
+        Assert.Contains(requestPath, startInfo.ArgumentList);
+        Assert.Contains(resultPath, startInfo.ArgumentList);
+        Assert.DoesNotContain(startInfo.ArgumentList, arg => arg.Contains('"', StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void RecoveryExperimentSourceDoesNotReferenceServiceOrDeviceMutationApis()
     {
         var repositoryRoot = FindRepositoryRoot();
@@ -360,7 +462,6 @@ public sealed class PimaxRecoveryExperimentTests
         };
         var forbiddenTokens = new[]
         {
-            "ServiceController",
             "SetupDi",
             "CM_",
             "pnputil",
@@ -382,12 +483,29 @@ public sealed class PimaxRecoveryExperimentTests
         }
     }
 
+    [Fact]
+    public void RuntimeServiceControllerDoesNotUseWildcardOrBroadProcessKill()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(repositoryRoot, "PimaxVrcSupervisor", "WindowsPimaxRuntimeServiceController.cs"));
+
+        Assert.DoesNotContain("Stop-Service", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Restart-Service", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Stop-Process", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("taskkill", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Disable-PnpDevice", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Enable-PnpDevice", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("pnputil", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("devcon", source, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static PimaxRecoveryExperimentRunner Runner(
         IEnumerable<PimaxRegistrationAssessmentSnapshot> assessments,
         FakePimaxClientController controller,
         FakeEnvironment? environment = null,
-        Func<DateTimeOffset>? now = null)
-        => new(new FakeAssessmentCollector(assessments), controller, environment ?? new FakeEnvironment(), now);
+        Func<DateTimeOffset>? now = null,
+        FakeRuntimeServiceController? serviceController = null)
+        => new(new FakeAssessmentCollector(assessments), controller, environment ?? new FakeEnvironment(), serviceController, now);
 
     private static PimaxRegistrationAssessmentSnapshot Assessment(
         string state,
@@ -500,4 +618,75 @@ public sealed class PimaxRecoveryExperimentTests
         public Task<PimaxClientProcessSnapshot[]> SnapshotAsync(CancellationToken cancellationToken)
             => Task.FromResult(Array.Empty<PimaxClientProcessSnapshot>());
     }
+
+    private sealed class FakeRuntimeServiceController : IPimaxRuntimeServiceController
+    {
+        public PimaxRuntimeServiceDescriptor Target { get; init; } = RuntimeServiceTarget();
+        public int RestartCalls { get; private set; }
+
+        public Task<PimaxRuntimeServiceDiscoveryResult> DiscoverAsync(CancellationToken cancellationToken)
+            => Task.FromResult(new PimaxRuntimeServiceDiscoveryResult(Target, [Target], [], [], null));
+
+        public Task<PimaxPrivilegedServiceResult> RestartWithUacHelperAsync(
+            PimaxPrivilegedServiceRequest request,
+            string requestSha256,
+            string confirmationBinding,
+            CancellationToken cancellationToken)
+        {
+            RestartCalls++;
+            var now = DateTimeOffset.UtcNow;
+            return Task.FromResult(new PimaxPrivilegedServiceResult(
+                PimaxRecoveryExperimentSchema.Version,
+                request.ExperimentId,
+                requestSha256,
+                true,
+                1234,
+                now,
+                now,
+                true,
+                Target.ServiceName,
+                "Running",
+                Target.ProcessId,
+                now,
+                now,
+                new PimaxRecoveryOperationResult(true, true, "stopped", [Target.ProcessId]),
+                now,
+                now,
+                new PimaxRecoveryOperationResult(true, true, "started", [Target.ProcessId + 1]),
+                Target.ProcessId + 1,
+                true,
+                true,
+                [],
+                false,
+                null,
+                2,
+                true,
+                PimaxRecoveryFailureCategory.None,
+                [],
+                []));
+        }
+    }
+
+    private static PimaxRuntimeServiceDescriptor RuntimeServiceTarget()
+        => new(
+            "PiServiceLauncher",
+            "PiServiceLauncher",
+            "Running",
+            "Auto",
+            4242,
+            @"C:\Program Files\Pimax\Runtime\PiServiceLauncher.exe",
+            @"C:\Program Files\Pimax\Runtime\PiServiceLauncher.exe",
+            "Own Process",
+            "LocalSystem",
+            null,
+            null,
+            null,
+            null,
+            "ABC123",
+            "Valid",
+            "CN=Pimax",
+            [],
+            [],
+            ["Service name matches PiServiceLauncher."],
+            []);
 }

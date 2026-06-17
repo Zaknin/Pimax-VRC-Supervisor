@@ -64,7 +64,8 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-recovery-experiment-jso
     var runner = new PimaxRecoveryExperimentRunner(
         new DefaultPimaxRegistrationAssessmentCollector(diagnosticConfig),
         new WindowsPimaxClientProcessController(),
-        new DefaultPimaxRecoveryEnvironment());
+        new DefaultPimaxRecoveryEnvironment(),
+        new WindowsPimaxRuntimeServiceController());
     var result = await runner.RunAsync(request, shutdown.Token);
     Console.WriteLine(JsonSerializer.Serialize(result, PimaxRecoveryExperimentJson.Options));
     return;

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -14,6 +15,8 @@ internal static class PimaxRecoveryExperimentKind
 {
     public const string WaitControl = "wait-control";
     public const string RestartPlayClient = "restart-play-client";
+    public const string RestartRuntimeService = "restart-runtime-service";
+    public const string StabilizedAssessment = "stabilized-assessment";
 }
 
 internal static class PimaxRecoveryFailureCategory
@@ -23,6 +26,20 @@ internal static class PimaxRecoveryFailureCategory
     public const string AssessmentInconclusive = "assessmentInconclusive";
     public const string TargetNotFound = "targetNotFound";
     public const string TargetAmbiguous = "targetAmbiguous";
+    public const string NotElevated = "notElevated";
+    public const string TargetIdentityMismatch = "targetIdentityMismatch";
+    public const string StaleConfirmationPlan = "staleConfirmationPlan";
+    public const string SteamVrRunning = "steamVrRunning";
+    public const string DependentServicesActive = "dependentServicesActive";
+    public const string ServiceNotExpectedState = "serviceNotExpectedState";
+    public const string ServiceStopRejected = "serviceStopRejected";
+    public const string ServiceStopTimeout = "serviceStopTimeout";
+    public const string ServiceStartRejected = "serviceStartRejected";
+    public const string ServiceStartTimeout = "serviceStartTimeout";
+    public const string ServicePidPathMismatch = "servicePidPathMismatch";
+    public const string SafetyRestorationRequired = "safetyRestorationRequired";
+    public const string SafetyRestorationFailed = "safetyRestorationFailed";
+    public const string ServiceRestartedButRegistrationUnchanged = "serviceRestartedButRegistrationUnchanged";
     public const string ConfirmationRejected = "confirmationRejected";
     public const string GracefulCloseTimeout = "gracefulCloseTimeout";
     public const string ForcedStopFailed = "forcedStopFailed";
@@ -74,7 +91,11 @@ internal sealed record PimaxRecoveryExperimentResult(
     string[] Errors,
     bool Cancelled,
     bool ClientRunningAfterExperiment,
-    string? EvidencePackagePath);
+    string? EvidencePackagePath,
+    PimaxRuntimeServiceDescriptor? RuntimeServiceTarget = null,
+    PimaxPrivilegedServiceRequest? PrivilegedServiceRequest = null,
+    PimaxPrivilegedServiceResult? PrivilegedServiceResult = null,
+    PimaxStabilizationResult? Stabilization = null);
 
 internal sealed record PimaxRecoverySafetyResult(
     bool Permitted,
@@ -102,6 +123,103 @@ internal sealed record PimaxRecoveryOperationResult(
     bool Success,
     string Message,
     int[] ProcessIds);
+
+internal sealed record PimaxRuntimeServiceDescriptor(
+    string ServiceName,
+    string DisplayName,
+    string State,
+    string StartMode,
+    int ProcessId,
+    string ExecutablePath,
+    string? CommandLine,
+    string ServiceType,
+    string StartName,
+    string? ProductName,
+    string? CompanyName,
+    string? FileDescription,
+    string? ProductVersion,
+    string? ExecutableSha256,
+    string? SignatureStatus,
+    string? SignatureSigner,
+    string[] Dependencies,
+    string[] DependentServices,
+    string[] VerificationReasons,
+    string[] VerificationWarnings);
+
+internal sealed record PimaxRuntimeServiceDiscoveryResult(
+    PimaxRuntimeServiceDescriptor? Target,
+    PimaxRuntimeServiceDescriptor[] Candidates,
+    string[] Warnings,
+    string[] Errors,
+    string? FailureCategory);
+
+internal sealed record PimaxPrivilegedServiceRequest(
+    string SchemaVersion,
+    string ExperimentId,
+    string ExperimentKind,
+    string ServiceName,
+    string ExpectedDisplayName,
+    string ExpectedExecutablePath,
+    string? ExpectedExecutableSha256,
+    string? ExpectedProductName,
+    string? ExpectedCompanyName,
+    string ExpectedServiceType,
+    string ExpectedState,
+    int ExpectedProcessId,
+    string RegistrationAssessmentState,
+    string RegistrationAssessmentConfidence,
+    string SteamVrExpectedState,
+    string ConfirmationBinding,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset ExpiresAt,
+    string EvidenceDirectory,
+    string OutputResultPath,
+    bool SafetyRestorationPermitted,
+    int StopTimeoutSeconds,
+    int StartTimeoutSeconds,
+    string[] Dependencies,
+    string[] DependentServices);
+
+internal sealed record PimaxPrivilegedServiceResult(
+    string SchemaVersion,
+    string ExperimentId,
+    string RequestSha256,
+    bool Elevated,
+    int HelperProcessId,
+    DateTimeOffset StartedAt,
+    DateTimeOffset EndedAt,
+    bool ServiceIdentityVerified,
+    string? ServiceName,
+    string? PreStopState,
+    int? PreStopProcessId,
+    DateTimeOffset? StopRequestedAt,
+    DateTimeOffset? StoppedAt,
+    PimaxRecoveryOperationResult StopResult,
+    DateTimeOffset? StartRequestedAt,
+    DateTimeOffset? RunningAt,
+    PimaxRecoveryOperationResult StartResult,
+    int? PostStartProcessId,
+    bool ExecutablePathVerified,
+    bool ExecutableHashVerified,
+    string[] DependencyState,
+    bool SafetyRestorationAttempted,
+    PimaxRecoveryOperationResult? SafetyRestorationResult,
+    int MutationCount,
+    bool Success,
+    string FailureCategory,
+    string[] Warnings,
+    string[] Errors);
+
+internal sealed record PimaxStabilizationResult(
+    bool Stable,
+    bool Transitional,
+    bool Conflicting,
+    bool TimedOut,
+    int RequiredEquivalentObservations,
+    int ObservationCount,
+    string? StableState,
+    string? StableConfidence,
+    PimaxRecoveryAssessmentSample[] Samples);
 
 internal sealed record PimaxRecoveryAssessmentSample(
     DateTimeOffset CollectedAt,
@@ -155,6 +273,16 @@ internal interface IPimaxClientProcessController
     Task<PimaxClientProcessSnapshot[]> SnapshotAsync(CancellationToken cancellationToken);
 }
 
+internal interface IPimaxRuntimeServiceController
+{
+    Task<PimaxRuntimeServiceDiscoveryResult> DiscoverAsync(CancellationToken cancellationToken);
+    Task<PimaxPrivilegedServiceResult> RestartWithUacHelperAsync(
+        PimaxPrivilegedServiceRequest request,
+        string requestSha256,
+        string confirmationBinding,
+        CancellationToken cancellationToken);
+}
+
 internal sealed record PimaxClientTargetDiscoveryResult(
     PimaxClientTargetDescriptor? Target,
     PimaxClientProcessSnapshot[] Processes,
@@ -193,10 +321,15 @@ internal sealed class PimaxRecoveryExperimentRunner
     internal static readonly TimeSpan RelaunchDetectionTimeout = TimeSpan.FromSeconds(15);
     internal static readonly TimeSpan RestartObservationTimeout = TimeSpan.FromSeconds(60);
     internal static readonly TimeSpan AssessmentInterval = TimeSpan.FromSeconds(2);
+    internal static readonly TimeSpan RuntimeServiceStopTimeout = TimeSpan.FromSeconds(15);
+    internal static readonly TimeSpan RuntimeServiceStartTimeout = TimeSpan.FromSeconds(20);
+    internal static readonly TimeSpan RuntimeServiceRequestLifetime = TimeSpan.FromMinutes(3);
+    internal const int StabilizedAssessmentDefaultRequired = 3;
 
     private static readonly ConcurrentDictionary<string, byte> ActiveExperiments = new(StringComparer.Ordinal);
     private readonly IPimaxRegistrationAssessmentCollector _assessmentCollector;
     private readonly IPimaxClientProcessController _clientController;
+    private readonly IPimaxRuntimeServiceController? _runtimeServiceController;
     private readonly IPimaxRecoveryEnvironment _environment;
     private readonly Func<DateTimeOffset> _now;
     private readonly Func<string> _newExperimentId;
@@ -205,11 +338,13 @@ internal sealed class PimaxRecoveryExperimentRunner
         IPimaxRegistrationAssessmentCollector assessmentCollector,
         IPimaxClientProcessController clientController,
         IPimaxRecoveryEnvironment environment,
+        IPimaxRuntimeServiceController? runtimeServiceController = null,
         Func<DateTimeOffset>? now = null,
         Func<string>? newExperimentId = null)
     {
         _assessmentCollector = assessmentCollector;
         _clientController = clientController;
+        _runtimeServiceController = runtimeServiceController;
         _environment = environment;
         _now = now ?? (() => DateTimeOffset.UtcNow);
         _newExperimentId = newExperimentId ?? (() => $"pimax-recovery-{Guid.NewGuid():N}");
@@ -295,6 +430,54 @@ internal sealed class PimaxRecoveryExperimentRunner
                     cancelled: false,
                     clientRunningAfterExperiment: false,
                     request.EvidenceDirectory);
+            }
+
+            if (string.Equals(request.Experiment, PimaxRecoveryExperimentKind.StabilizedAssessment, StringComparison.OrdinalIgnoreCase))
+            {
+                var stabilization = await RunStabilizedAssessmentAsync(request, stages, samples, cancellationToken);
+                final = stabilization.Samples.Length > 0
+                    ? await SafeCollectFinalAsync(samples, warnings, errors, cancellationToken)
+                    : initial;
+                var ended = _now();
+                return BuildResult(
+                    experimentId,
+                    request,
+                    dryRun: false,
+                    started,
+                    ended,
+                    initial,
+                    new PimaxRecoverySafetyResult(true, ["Stabilized assessment performs no mutation."], [], [], null, null),
+                    new PimaxRecoveryConfirmationResult(false, false, true, null),
+                    stages,
+                    null,
+                    [],
+                    null,
+                    null,
+                    null,
+                    samples,
+                    final,
+                    stabilization.Stable,
+                    stabilization.Stable ? PimaxRecoveryFailureCategory.None : PimaxRecoveryFailureCategory.AssessmentInconclusive,
+                    warnings,
+                    errors,
+                    cancelled: false,
+                    clientRunningAfterExperiment: false,
+                    request.EvidenceDirectory,
+                    stabilization: stabilization);
+            }
+
+            if (string.Equals(request.Experiment, PimaxRecoveryExperimentKind.RestartRuntimeService, StringComparison.OrdinalIgnoreCase))
+            {
+                return await RunRuntimeServiceRestartAsync(
+                    experimentId,
+                    request,
+                    started,
+                    stages,
+                    warnings,
+                    errors,
+                    samples,
+                    initial,
+                    cancellationToken);
             }
 
             discovery = await StageAsync(
@@ -584,7 +767,242 @@ internal sealed class PimaxRecoveryExperimentRunner
 
     private static bool IsSupportedExperiment(string experiment)
         => string.Equals(experiment, PimaxRecoveryExperimentKind.WaitControl, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(experiment, PimaxRecoveryExperimentKind.RestartPlayClient, StringComparison.OrdinalIgnoreCase);
+            || string.Equals(experiment, PimaxRecoveryExperimentKind.RestartPlayClient, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(experiment, PimaxRecoveryExperimentKind.RestartRuntimeService, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(experiment, PimaxRecoveryExperimentKind.StabilizedAssessment, StringComparison.OrdinalIgnoreCase);
+
+    private async Task<PimaxRecoveryExperimentResult> RunRuntimeServiceRestartAsync(
+        string experimentId,
+        PimaxRecoveryExperimentRequest request,
+        DateTimeOffset started,
+        List<PimaxRecoveryExperimentStage> stages,
+        List<string> warnings,
+        List<string> errors,
+        List<PimaxRecoveryAssessmentSample> samples,
+        PimaxRegistrationAssessmentSnapshot initial,
+        CancellationToken cancellationToken)
+    {
+        if (_runtimeServiceController is null)
+        {
+            var unavailableEnded = _now();
+            return BuildResult(
+                experimentId,
+                request,
+                dryRun: !request.Confirm,
+                started,
+                unavailableEnded,
+                initial,
+                new PimaxRecoverySafetyResult(false, [], ["Runtime service controller is not available."], [], null, null),
+                new PimaxRecoveryConfirmationResult(true, request.Confirm, false, "Runtime service controller is not available."),
+                stages,
+                null,
+                [],
+                null,
+                null,
+                null,
+                samples,
+                initial,
+                false,
+                PimaxRecoveryFailureCategory.TargetNotFound,
+                warnings,
+                errors,
+                false,
+                false,
+                request.EvidenceDirectory);
+        }
+
+        var discovery = await StageAsync(
+            "discoverPimaxRuntimeService",
+            stages,
+            async () => await _runtimeServiceController.DiscoverAsync(cancellationToken));
+        warnings.AddRange(discovery.Warnings);
+        errors.AddRange(discovery.Errors);
+
+        var safety = EvaluateRuntimeServiceSafety(initial, discovery);
+        if (safety.Permitted && !request.Confirm)
+        {
+            var expiresAt = _now().Add(ConfirmationTokenLifetime);
+            safety = safety with
+            {
+                ConfirmationToken = PimaxRecoveryConfirmationToken.CreateForService(
+                    request.Experiment,
+                    discovery.Target!,
+                    initial.Assessment.State,
+                    _environment.IsSteamVrRunning() ? "running" : "closed",
+                    expiresAt,
+                    _now),
+                ConfirmationTokenExpiresAt = expiresAt
+            };
+        }
+
+        if (!safety.Permitted)
+        {
+            var rejectedAt = _now();
+            return BuildResult(
+                experimentId,
+                request,
+                dryRun: true,
+                started,
+                rejectedAt,
+                initial,
+                safety,
+                new PimaxRecoveryConfirmationResult(true, request.Confirm, false, "Safety guard rejected execution."),
+                stages,
+                null,
+                [],
+                null,
+                null,
+                null,
+                samples,
+                initial,
+                false,
+                discovery.Target is null && !string.IsNullOrWhiteSpace(discovery.FailureCategory)
+                    ? discovery.FailureCategory
+                    : PimaxRecoveryFailureCategory.SafetyGuardRejected,
+                warnings,
+                errors,
+                false,
+                false,
+                request.EvidenceDirectory,
+                runtimeServiceTarget: discovery.Target);
+        }
+
+        if (!request.Confirm)
+        {
+            var dryRunEnded = _now();
+            return BuildResult(
+                experimentId,
+                request,
+                dryRun: true,
+                started,
+                dryRunEnded,
+                initial,
+                safety,
+                new PimaxRecoveryConfirmationResult(true, false, false, "Dry run only. Re-run with --confirm and --confirmation-token."),
+                stages,
+                null,
+                [],
+                null,
+                null,
+                null,
+                samples,
+                initial,
+                false,
+                PimaxRecoveryFailureCategory.None,
+                warnings,
+                errors,
+                false,
+                false,
+                request.EvidenceDirectory,
+                runtimeServiceTarget: discovery.Target);
+        }
+
+        var confirmation = PimaxRecoveryConfirmationToken.ValidateForService(
+            request.ConfirmationToken,
+            request.Experiment,
+            discovery.Target!,
+            initial.Assessment.State,
+            _environment.IsSteamVrRunning() ? "running" : "closed",
+            _now);
+        if (!confirmation.Accepted)
+        {
+            var rejectedAt = _now();
+            return BuildResult(
+                experimentId,
+                request,
+                dryRun: false,
+                started,
+                rejectedAt,
+                initial,
+                safety,
+                confirmation,
+                stages,
+                null,
+                [],
+                null,
+                null,
+                null,
+                samples,
+                initial,
+                false,
+                PimaxRecoveryFailureCategory.ConfirmationRejected,
+                warnings,
+                errors,
+                false,
+                false,
+                request.EvidenceDirectory,
+                runtimeServiceTarget: discovery.Target);
+        }
+
+        var evidenceDirectory = string.IsNullOrWhiteSpace(request.EvidenceDirectory)
+            ? Path.Combine(Path.GetTempPath(), "PimaxVrcSupervisorDiagnostics", experimentId)
+            : request.EvidenceDirectory;
+        Directory.CreateDirectory(evidenceDirectory);
+        var resultPath = Path.Combine(evidenceDirectory, "phase-28c2-privileged-service-result.json");
+        var privilegedRequest = BuildPrivilegedRequest(
+            experimentId,
+            request,
+            discovery.Target!,
+            initial,
+            evidenceDirectory,
+            resultPath,
+            request.ConfirmationToken!);
+        var requestPath = Path.Combine(evidenceDirectory, "phase-28c2-privileged-service-request.json");
+        var requestJson = JsonSerializer.Serialize(privilegedRequest, PimaxRecoveryExperimentJson.Options);
+        File.WriteAllText(requestPath, requestJson, new UTF8Encoding(false));
+        var requestSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(requestJson)));
+
+        var helperResult = await StageAsync(
+            "uacPrivilegedRuntimeServiceRestart",
+            stages,
+            async () => await _runtimeServiceController.RestartWithUacHelperAsync(
+                privilegedRequest,
+                requestSha256,
+                BindingForServiceConfirmation(request.ConfirmationToken!, discovery.Target!, initial.Assessment.State),
+                cancellationToken));
+
+        warnings.AddRange(helperResult.Warnings);
+        errors.AddRange(helperResult.Errors);
+
+        var final = helperResult.Success
+            ? await ObserveRegistrationAsync(stages, samples, cancellationToken)
+            : await SafeCollectFinalAsync(samples, warnings, errors, cancellationToken);
+        var ended = _now();
+        var success = helperResult.Success
+            && string.Equals(final.Assessment.State, PimaxRegistrationState.RegisteredReady, StringComparison.OrdinalIgnoreCase);
+
+        return BuildResult(
+            experimentId,
+            request,
+            dryRun: false,
+            started,
+            ended,
+            initial,
+            safety,
+            confirmation,
+            stages,
+            null,
+            [],
+            null,
+            null,
+            null,
+            samples,
+            final,
+            success,
+            success
+                ? PimaxRecoveryFailureCategory.None
+                : helperResult.Success
+                    ? PimaxRecoveryFailureCategory.ServiceRestartedButRegistrationUnchanged
+                    : helperResult.FailureCategory,
+            warnings,
+            errors,
+            false,
+            false,
+            evidenceDirectory,
+            runtimeServiceTarget: discovery.Target,
+            privilegedServiceRequest: privilegedRequest,
+            privilegedServiceResult: helperResult);
+    }
 
     private async Task<PimaxRegistrationAssessmentSnapshot> RunWaitControlAsync(
         PimaxRecoveryExperimentRequest request,
@@ -613,6 +1031,71 @@ internal sealed class PimaxRecoveryExperimentRunner
         }
 
         return final;
+    }
+
+    private async Task<PimaxStabilizationResult> RunStabilizedAssessmentAsync(
+        PimaxRecoveryExperimentRequest request,
+        List<PimaxRecoveryExperimentStage> stages,
+        List<PimaxRecoveryAssessmentSample> samples,
+        CancellationToken cancellationToken)
+    {
+        var duration = TimeSpan.FromSeconds(Math.Clamp(request.DurationSeconds, 4, 60));
+        var deadline = _now().Add(duration);
+        var required = StabilizedAssessmentDefaultRequired;
+        var localSamples = new List<PimaxRecoveryAssessmentSample>();
+        string? lastSignature = null;
+        var equivalentCount = 0;
+        var conflicting = false;
+
+        while (_now() < deadline)
+        {
+            var snapshot = await StageAsync(
+                "stabilizedAssessmentSample",
+                stages,
+                async () => await _assessmentCollector.CollectAsync(cancellationToken));
+            var sample = Sample(snapshot);
+            samples.Add(sample);
+            localSamples.Add(sample);
+            conflicting |= string.Equals(sample.State, PimaxRegistrationState.ConflictingEvidence, StringComparison.OrdinalIgnoreCase);
+
+            var signature = $"{sample.State}|{sample.Confidence}|{sample.Explanation}";
+            if (string.Equals(signature, lastSignature, StringComparison.Ordinal))
+            {
+                equivalentCount++;
+            }
+            else
+            {
+                lastSignature = signature;
+                equivalentCount = 1;
+            }
+
+            if (equivalentCount >= required)
+            {
+                return new PimaxStabilizationResult(
+                    Stable: true,
+                    Transitional: localSamples.Select(value => value.State).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1,
+                    Conflicting: conflicting,
+                    TimedOut: false,
+                    RequiredEquivalentObservations: required,
+                    ObservationCount: localSamples.Count,
+                    StableState: sample.State,
+                    StableConfidence: sample.Confidence,
+                    Samples: localSamples.ToArray());
+            }
+
+            await Task.Delay(AssessmentInterval, cancellationToken);
+        }
+
+        return new PimaxStabilizationResult(
+            Stable: false,
+            Transitional: localSamples.Select(value => value.State).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1,
+            Conflicting: conflicting,
+            TimedOut: true,
+            RequiredEquivalentObservations: required,
+            ObservationCount: localSamples.Count,
+            StableState: null,
+            StableConfidence: null,
+            Samples: localSamples.ToArray());
     }
 
     private async Task<PimaxRegistrationAssessmentSnapshot> ObserveRegistrationAsync(
@@ -722,6 +1205,149 @@ internal sealed class PimaxRecoveryExperimentRunner
         return new PimaxRecoverySafetyResult(failed.Count == 0, passed.ToArray(), failed.ToArray(), warnings.ToArray(), null, null);
     }
 
+    private PimaxRecoverySafetyResult EvaluateRuntimeServiceSafety(
+        PimaxRegistrationAssessmentSnapshot initial,
+        PimaxRuntimeServiceDiscoveryResult discovery)
+    {
+        var passed = new List<string>();
+        var failed = new List<string>();
+        var warnings = new List<string>();
+
+        if (string.Equals(initial.Assessment.State, PimaxRegistrationState.LikelyPoweredOnAwaitingRegistration, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(initial.Assessment.Confidence, PimaxRegistrationConfidence.Probable, StringComparison.OrdinalIgnoreCase))
+        {
+            passed.Add("Assessment is likelyPoweredOnAwaitingRegistration with probable confidence.");
+        }
+        else
+        {
+            failed.Add($"Current assessment is {initial.Assessment.State}/{initial.Assessment.Confidence}, not likelyPoweredOnAwaitingRegistration/probable.");
+        }
+
+        if (initial.Assessment.Conflicts.Length == 0 && !string.Equals(initial.Assessment.State, PimaxRegistrationState.ConflictingEvidence, StringComparison.OrdinalIgnoreCase))
+        {
+            passed.Add("Assessment evidence is not conflicting.");
+        }
+        else
+        {
+            failed.Add("Assessment evidence is conflicting.");
+        }
+
+        if (!_environment.IsSteamVrRunning())
+        {
+            passed.Add("SteamVR is not running.");
+        }
+        else
+        {
+            failed.Add("SteamVR is running.");
+        }
+
+        if (!_environment.IsSupervisorCleanupInProgress())
+        {
+            passed.Add("No Supervisor cleanup/shutdown state is visible to this CLI experiment.");
+        }
+        else
+        {
+            failed.Add("Supervisor cleanup/shutdown is in progress.");
+        }
+
+        if (discovery.Target is null)
+        {
+            failed.AddRange(discovery.Errors.Length == 0 ? ["Exact Pimax runtime service target was not found."] : discovery.Errors);
+        }
+        else
+        {
+            passed.Add($"Exact Pimax runtime service target was verified: {discovery.Target.ServiceName}.");
+            if (!string.Equals(discovery.Target.State, "Running", StringComparison.OrdinalIgnoreCase))
+            {
+                failed.Add($"Runtime service is {discovery.Target.State}, not Running.");
+            }
+            else if (discovery.Target.ProcessId <= 0)
+            {
+                failed.Add("Runtime service has no running process ID.");
+            }
+            else
+            {
+                passed.Add($"Runtime service is running with PID {discovery.Target.ProcessId}.");
+            }
+
+            if (!string.Equals(discovery.Target.ServiceType, "Own Process", StringComparison.OrdinalIgnoreCase))
+            {
+                failed.Add($"Runtime service type is {discovery.Target.ServiceType}, not Own Process.");
+            }
+            else
+            {
+                passed.Add("Runtime service is an Own Process service.");
+            }
+
+            if (discovery.Target.DependentServices.Length == 0)
+            {
+                passed.Add("No dependent service conflict is visible.");
+            }
+            else
+            {
+                failed.Add($"Runtime service has dependent services: {string.Join(", ", discovery.Target.DependentServices)}.");
+            }
+        }
+
+        warnings.AddRange(discovery.Warnings);
+        return new PimaxRecoverySafetyResult(failed.Count == 0, passed.ToArray(), failed.ToArray(), warnings.ToArray(), null, null);
+    }
+
+    private PimaxPrivilegedServiceRequest BuildPrivilegedRequest(
+        string experimentId,
+        PimaxRecoveryExperimentRequest request,
+        PimaxRuntimeServiceDescriptor target,
+        PimaxRegistrationAssessmentSnapshot initial,
+        string evidenceDirectory,
+        string resultPath,
+        string confirmationToken)
+    {
+        var createdAt = _now();
+        return new PimaxPrivilegedServiceRequest(
+            PimaxRecoveryExperimentSchema.Version,
+            experimentId,
+            request.Experiment,
+            target.ServiceName,
+            target.DisplayName,
+            target.ExecutablePath,
+            target.ExecutableSha256,
+            target.ProductName,
+            target.CompanyName,
+            target.ServiceType,
+            target.State,
+            target.ProcessId,
+            initial.Assessment.State,
+            initial.Assessment.Confidence,
+            _environment.IsSteamVrRunning() ? "running" : "closed",
+            BindingForServiceConfirmation(confirmationToken, target, initial.Assessment.State),
+            createdAt,
+            createdAt.Add(RuntimeServiceRequestLifetime),
+            evidenceDirectory,
+            resultPath,
+            SafetyRestorationPermitted: true,
+            StopTimeoutSeconds: (int)RuntimeServiceStopTimeout.TotalSeconds,
+            StartTimeoutSeconds: (int)RuntimeServiceStartTimeout.TotalSeconds,
+            target.Dependencies,
+            target.DependentServices);
+    }
+
+    internal static string BindingForServiceConfirmation(
+        string confirmationToken,
+        PimaxRuntimeServiceDescriptor target,
+        string assessmentState)
+    {
+        var material = string.Join(
+            "|",
+            "PimaxVrcSupervisor.Phase28C2.ServiceBinding.v1",
+            confirmationToken,
+            target.ServiceName,
+            target.ExecutablePath,
+            target.ExecutableSha256 ?? "",
+            target.ProcessId.ToString(CultureInfo.InvariantCulture),
+            assessmentState);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
+
     private async Task<T> StageAsync<T>(
         string name,
         List<PimaxRecoveryExperimentStage> stages,
@@ -799,7 +1425,11 @@ internal sealed class PimaxRecoveryExperimentRunner
         IEnumerable<string> errors,
         bool cancelled,
         bool clientRunningAfterExperiment,
-        string? evidencePackagePath)
+        string? evidencePackagePath,
+        PimaxRuntimeServiceDescriptor? runtimeServiceTarget = null,
+        PimaxPrivilegedServiceRequest? privilegedServiceRequest = null,
+        PimaxPrivilegedServiceResult? privilegedServiceResult = null,
+        PimaxStabilizationResult? stabilization = null)
         => new(
             PimaxRecoveryExperimentSchema.Version,
             experimentId,
@@ -825,7 +1455,11 @@ internal sealed class PimaxRecoveryExperimentRunner
             errors.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             cancelled,
             clientRunningAfterExperiment,
-            evidencePackagePath);
+            evidencePackagePath,
+            runtimeServiceTarget,
+            privilegedServiceRequest,
+            privilegedServiceResult,
+            stabilization);
 }
 
 internal static class PimaxRecoveryConfirmationToken
@@ -846,6 +1480,30 @@ internal static class PimaxRecoveryConfirmationToken
             state,
             expiresAt,
             Guid.NewGuid().ToString("N"));
+        var json = JsonSerializer.Serialize(payload, PimaxRecoveryExperimentJson.Options);
+        var payloadText = Base64Url(Encoding.UTF8.GetBytes(json));
+        var signature = Base64Url(Sign(payloadText));
+        return $"{payloadText}.{signature}";
+    }
+
+    public static string CreateForService(
+        string experiment,
+        PimaxRuntimeServiceDescriptor target,
+        string state,
+        string steamVrState,
+        DateTimeOffset expiresAt,
+        Func<DateTimeOffset> now)
+    {
+        var payload = new PimaxRecoveryConfirmationTokenPayload(
+            experiment,
+            target.ExecutableSha256 ?? "",
+            target.ExecutablePath,
+            state,
+            expiresAt,
+            Guid.NewGuid().ToString("N"),
+            target.ServiceName,
+            target.ProcessId,
+            steamVrState);
         var json = JsonSerializer.Serialize(payload, PimaxRecoveryExperimentJson.Options);
         var payloadText = Base64Url(Encoding.UTF8.GetBytes(json));
         var signature = Base64Url(Sign(payloadText));
@@ -914,6 +1572,72 @@ internal static class PimaxRecoveryConfirmationToken
         return new PimaxRecoveryConfirmationResult(true, true, true, null);
     }
 
+    public static PimaxRecoveryConfirmationResult ValidateForService(
+        string? token,
+        string experiment,
+        PimaxRuntimeServiceDescriptor target,
+        string state,
+        string steamVrState,
+        Func<DateTimeOffset> now)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return new PimaxRecoveryConfirmationResult(true, false, false, "Missing confirmation token.");
+        }
+
+        if (!UsedTokens.TryAdd(token, 0))
+        {
+            return new PimaxRecoveryConfirmationResult(true, true, false, "Confirmation token was already used in this process.");
+        }
+
+        var parts = token.Split('.', 2);
+        if (parts.Length != 2)
+        {
+            return new PimaxRecoveryConfirmationResult(true, true, false, "Confirmation token format is invalid.");
+        }
+
+        var expected = Base64Url(Sign(parts[0]));
+        if (!CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(expected), Encoding.ASCII.GetBytes(parts[1])))
+        {
+            return new PimaxRecoveryConfirmationResult(true, true, false, "Confirmation token signature is invalid.");
+        }
+
+        PimaxRecoveryConfirmationTokenPayload? payload;
+        try
+        {
+            payload = JsonSerializer.Deserialize<PimaxRecoveryConfirmationTokenPayload>(
+                Encoding.UTF8.GetString(Base64UrlDecode(parts[0])),
+                PimaxRecoveryExperimentJson.Options);
+        }
+        catch (Exception ex)
+        {
+            return new PimaxRecoveryConfirmationResult(true, true, false, $"Confirmation token payload is invalid: {ex.Message}");
+        }
+
+        if (payload is null)
+        {
+            return new PimaxRecoveryConfirmationResult(true, true, false, "Confirmation token payload is empty.");
+        }
+
+        if (payload.ExpiresAt <= now())
+        {
+            return new PimaxRecoveryConfirmationResult(true, true, false, "Confirmation token expired.");
+        }
+
+        if (!string.Equals(payload.Experiment, experiment, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(payload.TargetSha256, target.ExecutableSha256 ?? "", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(payload.TargetPath, target.ExecutablePath, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(payload.AssessmentState, state, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(payload.ServiceName, target.ServiceName, StringComparison.OrdinalIgnoreCase)
+            || payload.ServiceProcessId != target.ProcessId
+            || !string.Equals(payload.SteamVrState, steamVrState, StringComparison.OrdinalIgnoreCase))
+        {
+            return new PimaxRecoveryConfirmationResult(true, true, false, "Confirmation token does not match the current service target, assessment, and SteamVR state.");
+        }
+
+        return new PimaxRecoveryConfirmationResult(true, true, true, null);
+    }
+
     internal static void ResetForTests()
         => UsedTokens.Clear();
 
@@ -940,5 +1664,8 @@ internal static class PimaxRecoveryConfirmationToken
         string TargetPath,
         string AssessmentState,
         DateTimeOffset ExpiresAt,
-        string Nonce);
+        string Nonce,
+        string? ServiceName = null,
+        int? ServiceProcessId = null,
+        string? SteamVrState = null);
 }
