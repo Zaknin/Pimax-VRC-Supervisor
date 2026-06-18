@@ -108,7 +108,8 @@ internal sealed record PimaxUsbRawDeviceRecord(
     string? LocationInformation,
     string[] LocationPaths,
     string[] PropertyQueryFailures,
-    string EvidenceSource);
+    string EvidenceSource,
+    string? DriverKey = null);
 
 internal sealed record PimaxUsbInventoryResult(
     PimaxUsbRawDeviceRecord[] Devices,
@@ -470,7 +471,8 @@ internal sealed class WindowsPnpDeviceInventorySource : IPimaxUsbDeviceInventory
             GetRegistryString(deviceInfoSet, data, NativeMethods.SPDRP_LOCATION_INFORMATION, "locationInformation", failures),
             locationPaths,
             failures.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-            "SetupAPI/ConfigurationManager");
+            "SetupAPI/ConfigurationManager",
+            GetRegistryString(deviceInfoSet, data, NativeMethods.SPDRP_DRIVER, "driverKey", failures));
     }
 
     private static string GetDeviceId(uint devInst, List<string> failures)
@@ -632,6 +634,7 @@ internal sealed class WindowsPnpDeviceInventorySource : IPimaxUsbDeviceInventory
         public const uint SPDRP_HARDWAREID = 0x00000001;
         public const uint SPDRP_COMPATIBLEIDS = 0x00000002;
         public const uint SPDRP_SERVICE = 0x00000004;
+        public const uint SPDRP_DRIVER = 0x00000009;
         public const uint SPDRP_CLASS = 0x00000007;
         public const uint SPDRP_CLASSGUID = 0x00000008;
         public const uint SPDRP_MFG = 0x0000000B;

@@ -24,6 +24,8 @@ The first controlled client-restart trial did not recover registration for the c
 
 The Phase 28C2 service-restart experiment was not executed. Target validation failed because `PiServiceLauncher` behaves as a transient Connect-triggered launcher rather than a stable persistent runtime service, and Windows recorded abnormal launcher exits. No Pimax service should be restarted until the persistent registration path is mapped. The read-only [`pimax-connect-lifecycle-observe-json`](pimax-connect-lifecycle-observation.md) command collects synchronized service, process, registration, USB/PnP, event-log, and Pimax-log evidence for that mapping.
 
+Phase 28C3 also stopped safely. No exact-devnode re-enumeration was implemented: no single PnP ancestor covered every Pimax USB branch without also including unrelated devices, and the first common scopes were the root hub and xHCI controller. Those broad mutation targets remain prohibited. Phase 28C3A therefore investigates the exact downstream external-hub connector with the read-only [`pimax-usb-physical-port-map-json`](pimax-external-hub-physical-port-mapping.md) command before any future recovery experiment is considered.
+
 ## Experiment Matrix
 
 | Order | Experiment | Prerequisite state | Action | Expected transition | Success criterion | Failure criterion | Timeout | Rollback | Admin | SteamVR guard | Risk | Evidence captured | Status |
