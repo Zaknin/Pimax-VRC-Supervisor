@@ -75,6 +75,15 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-usb-physical-port-map-j
     return;
 }
 
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-usb-port-cycle-experiment-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var diagnosticConfig = SupervisorConfig.Load(configPath);
+    var request = PimaxUsbPortCycleRequest.Parse(commandLineArgs);
+    var result = await new PimaxUsbPortCycleExperimentRunner(new WindowsPimaxUsbPortCycleStateCollector(diagnosticConfig)).RunAsync(request, shutdown.Token);
+    Console.WriteLine(JsonSerializer.Serialize(result, PimaxUsbPortCycleJson.Options));
+    return;
+}
+
 if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-recovery-experiment-json", StringComparison.OrdinalIgnoreCase)))
 {
     var diagnosticConfig = SupervisorConfig.Load(configPath);

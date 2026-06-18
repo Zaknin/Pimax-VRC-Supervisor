@@ -77,6 +77,7 @@ nav:
       - Pimax Play Client Restart Experiment: development/pimax-client-restart-experiment.md
       - Pimax Connect Lifecycle Observation: development/pimax-connect-lifecycle-observation.md
       - Pimax External-Hub Physical Port Mapping: development/pimax-external-hub-physical-port-mapping.md
+      - Pimax Exact External-Hub Port Cycle Experiment: development/pimax-exact-external-hub-port-cycle-experiment.md
       - Base Station Startup Diagnostics: development/base-station-startup-diagnostics.md
       - Shortcuts: reference/shortcuts.md
       - Release Packaging: reference/release-packaging.md

@@ -195,6 +195,7 @@ internal sealed class PimaxRecoveryExperimentRunner
     internal static readonly TimeSpan AssessmentInterval = TimeSpan.FromSeconds(2);
 
     private static readonly ConcurrentDictionary<string, byte> ActiveExperiments = new(StringComparer.Ordinal);
+    internal static bool HasActiveExperiment => !ActiveExperiments.IsEmpty;
     private readonly IPimaxRegistrationAssessmentCollector _assessmentCollector;
     private readonly IPimaxClientProcessController _clientController;
     private readonly IPimaxRecoveryEnvironment _environment;

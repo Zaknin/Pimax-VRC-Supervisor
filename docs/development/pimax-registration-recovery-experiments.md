@@ -26,6 +26,8 @@ The Phase 28C2 service-restart experiment was not executed. Target validation fa
 
 Phase 28C3 also stopped safely. No exact-devnode re-enumeration was implemented: no single PnP ancestor covered every Pimax USB branch without also including unrelated devices, and the first common scopes were the root hub and xHCI controller. Those broad mutation targets remain prohibited. Phase 28C3A therefore investigates the exact downstream external-hub connector with the read-only [`pimax-usb-physical-port-map-json`](pimax-external-hub-physical-port-mapping.md) command before any future recovery experiment is considered.
 
+Phase 28C3A-R subsequently proved separate reciprocal connector groups for Pimax index 4 and Vive index 2. Phase 28C3B implements the one-time, operator-confirmed [`pimax-usb-port-cycle-experiment-json`](pimax-exact-external-hub-port-cycle-experiment.md) hypothesis test for only the Pimax USB 2 logical side. It permits one exact hub-port cycle request and has no companion fallback, retry, broad PnP mutation, or automatic recovery path.
+
 ## Experiment Matrix
 
 | Order | Experiment | Prerequisite state | Action | Expected transition | Success criterion | Failure criterion | Timeout | Rollback | Admin | SteamVR guard | Risk | Evidence captured | Status |
