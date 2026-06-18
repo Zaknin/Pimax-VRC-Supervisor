@@ -139,31 +139,182 @@ public sealed class PimaxUsbPortCycleExperimentTests
         var (signature, state) = Fixture();
         var plan = PimaxUsbPortCycleTargetValidator.Validate(signature, state, Now).Plan!;
         var token = PimaxUsbPortCycleConfirmationToken.Create("experiment", plan, Now).Token;
-        var changed = plan with { BindingSha256 = "changed", Observer = plan.Observer! with { MarkerFileSha256 = "changed" } };
+        var changed = plan with { BindingSha256 = "changed", Observer = plan.Observer! with { ConnectMarkerId = "changed" } };
         Assert.False(PimaxUsbPortCycleConfirmationToken.Validate(token, "experiment", changed, Now, null, false).Accepted);
         Assert.False(PimaxUsbPortCycleConfirmationToken.Validate(token, "experiment", plan, Now.AddMinutes(6), null, false).Accepted);
     }
 
     [Fact]
-    public void MarkerSequenceRequiresReadinessThenConnectThenScan()
+    public void MarkerSequenceRequiresObserverInfoModelReadinessThenSingleConnectScanMarker()
     {
         using var directory = new TempDirectory();
         var status = Path.Combine(directory.Path, "status.json");
         var markers = Path.Combine(directory.Path, "markers.jsonl");
-        File.WriteAllText(status, JsonSerializer.Serialize(new { sessionId = "observer", updatedAt = Now, state = "running" }));
+        File.WriteAllText(status, JsonSerializer.Serialize(new { sessionId = "observer", scenario = "phase28c3b-r", updatedAt = Now, state = "running" }));
         File.WriteAllLines(markers,
         [
-            JsonSerializer.Serialize(new { label = "ready-to-start-connect-scan", timestamp = Now.AddSeconds(-3) }),
-            JsonSerializer.Serialize(new { label = "connect-pressed", timestamp = Now.AddSeconds(-2) }),
-            JsonSerializer.Serialize(new { label = "connect-scan-active", timestamp = Now.AddSeconds(-1) })
+            JsonSerializer.Serialize(new { label = "observer-started", timestamp = Now.AddSeconds(-5) }),
+            JsonSerializer.Serialize(new { label = "pimax-info-opened", timestamp = Now.AddSeconds(-4) }),
+            JsonSerializer.Serialize(new { label = "pimax-crystal-model-selected", timestamp = Now.AddSeconds(-3) }),
+            JsonSerializer.Serialize(new { label = "connect-ready-before-action", timestamp = Now.AddSeconds(-2) }),
+            JsonSerializer.Serialize(new { label = "connect-action-completed", timestamp = Now.AddSeconds(-1) })
         ]);
-        Assert.NotNull(PimaxUsbPortCycleObserverReader.Read(status, markers, Now));
+        var binding = Assert.IsType<PimaxUsbPortCycleObserverBinding>(PimaxUsbPortCycleObserverReader.Read(status, markers, Now));
+        Assert.Equal(PimaxUsbPortCycleObserverReader.ConnectAction, binding.ConnectAction);
         File.WriteAllLines(markers,
         [
-            JsonSerializer.Serialize(new { label = "connect-pressed", timestamp = Now.AddSeconds(-2) }),
-            JsonSerializer.Serialize(new { label = "connect-scan-active", timestamp = Now.AddSeconds(-1) })
+            JsonSerializer.Serialize(new { label = "observer-started", timestamp = Now.AddSeconds(-4) }),
+            JsonSerializer.Serialize(new { label = "pimax-info-opened", timestamp = Now.AddSeconds(-3) }),
+            JsonSerializer.Serialize(new { label = "connect-ready-before-action", timestamp = Now.AddSeconds(-2) }),
+            JsonSerializer.Serialize(new { label = "connect-action-completed", timestamp = Now.AddSeconds(-1) })
         ]);
         Assert.Null(PimaxUsbPortCycleObserverReader.Read(status, markers, Now));
+    }
+
+    [Fact]
+    public void StableFingerprintExcludesMarkerAgeAndObserverHeartbeat()
+    {
+        var (signature, state) = Fixture();
+        var first = PimaxUsbPortCycleTargetValidator.Validate(signature, state, Now.AddSeconds(-1.5)).Plan!;
+        state = state with { Observer = state.Observer! with { UpdatedAt = Now, ConnectMarkerAgeSeconds = 1.5 } };
+        var second = PimaxUsbPortCycleTargetValidator.Validate(signature, state, Now).Plan!;
+        Assert.Equal(first.BindingSha256, second.BindingSha256);
+        var token = PimaxUsbPortCycleConfirmationToken.Create("experiment", first, Now.AddSeconds(-1)).Token;
+        Assert.True(PimaxUsbPortCycleConfirmationToken.Validate(token, "experiment", second, Now, null, false).Accepted);
+    }
+
+    [Fact]
+    public void MarkerFreshnessAcceptsBoundaryAndRejectsBeyondBoundary()
+    {
+        var (_, state) = Fixture();
+        var observer = state.Observer! with { ConnectMarkerTimestamp = Now.AddSeconds(-120), ConnectMarkerAgeSeconds = 999 };
+        Assert.True(PimaxUsbPortCycleTargetValidator.IsMarkerFresh(observer, Now));
+        Assert.False(PimaxUsbPortCycleTargetValidator.IsMarkerFresh(observer, Now.AddMilliseconds(1)));
+        Assert.False(PimaxUsbPortCycleTargetValidator.IsMarkerFresh(observer, Now.AddSeconds(-121)));
+    }
+
+    [Theory]
+    [InlineData("session")]
+    [InlineData("scenario")]
+    [InlineData("id")]
+    [InlineData("sequence")]
+    [InlineData("type")]
+    [InlineData("source")]
+    [InlineData("timestamp")]
+    [InlineData("action")]
+    public void StableFingerprintChangesForEveryImmutableMarkerIdentityField(string field)
+    {
+        var (signature, state) = Fixture();
+        var original = PimaxUsbPortCycleTargetValidator.Validate(signature, state, Now).Plan!;
+        var marker = state.Observer!;
+        marker = field switch
+        {
+            "session" => marker with { SessionId = "other" },
+            "scenario" => marker with { ScenarioId = "other" },
+            "id" => marker with { ConnectMarkerId = "other" },
+            "sequence" => marker with { ConnectMarkerSequence = marker.ConnectMarkerSequence + 1 },
+            "type" => marker with { ConnectMarkerType = "other" },
+            "source" => marker with { ConnectMarkerSource = "other" },
+            "timestamp" => marker with { ConnectMarkerTimestamp = marker.ConnectMarkerTimestamp.AddTicks(1) },
+            "action" => marker with { ConnectAction = "other" },
+            _ => throw new ArgumentOutOfRangeException(nameof(field))
+        };
+        var changed = PimaxUsbPortCycleTargetValidator.Validate(signature, state with { Observer = marker }, Now).Plan!;
+        Assert.NotEqual(original.BindingSha256, changed.BindingSha256);
+    }
+
+    [Fact]
+    public void UnorderedInventoriesAndIdentityArraysHaveDeterministicFingerprints()
+    {
+        var (signature, state) = Fixture();
+        var original = PimaxUsbPortCycleTargetValidator.Validate(signature, state, Now).Plan!;
+        var hubs = state.Topology.Hubs.Select(hub => hub with
+        {
+            HardwareIds = [.. hub.HardwareIds.Reverse(), .. hub.HardwareIds],
+            LocationPaths = [.. hub.LocationPaths.Reverse(), .. hub.LocationPaths]
+        }).Reverse().ToArray();
+        var ports = state.Topology.Ports.Select(port => port with
+        {
+            DescendantPnpInstanceIds = [.. port.DescendantPnpInstanceIds.Reverse(), .. port.DescendantPnpInstanceIds]
+        }).Reverse().ToArray();
+        var reordered = PimaxUsbPortCycleTargetValidator.Validate(signature, state with { Topology = state.Topology with { Hubs = hubs, Ports = ports } }, Now).Plan!;
+        Assert.Equal(original.BindingSha256, reordered.BindingSha256);
+        Assert.Equal(original.OtherPortOccupants.Length, reordered.OtherPortOccupants.Length);
+
+        var reorderedSignature = signature with
+        {
+            UnrelatedPortInventory = [.. signature.UnrelatedPortInventory.Reverse(), .. signature.UnrelatedPortInventory]
+        };
+        var signatureValidation = PimaxUsbPortCycleTargetValidator.Validate(reorderedSignature, state, Now);
+        Assert.True(signatureValidation.Safety.Permitted);
+        Assert.Equal(
+            PimaxUsbPortCycleTargetValidator.StableTargetSignatureFingerprint(signature),
+            PimaxUsbPortCycleTargetValidator.StableTargetSignatureFingerprint(reorderedSignature));
+    }
+
+    [Fact]
+    public async Task DelayedButFreshPreparationKeepsFingerprintAndCreatesRequest()
+    {
+        using var directory = new TempDirectory();
+        var (signature, state) = Fixture();
+        var targetPath = Path.Combine(directory.Path, "target.json");
+        var requestPath = Path.Combine(directory.Path, "request.json");
+        var resultPath = Path.Combine(directory.Path, "result.json");
+        File.WriteAllText(targetPath, JsonSerializer.Serialize(signature, PimaxUsbPortCycleJson.Options));
+        var dryTime = Now.AddMilliseconds(500);
+        var dryState = state with { Observer = state.Observer! with { UpdatedAt = dryTime, ConnectMarkerTimestamp = Now, ConnectMarkerAgeSeconds = .5 } };
+        var dry = await new PimaxUsbPortCycleExperimentRunner(new FixedCollector(dryState), () => dryTime).RunAsync(
+            Request("dry-run", targetPath, directory.Path, requestPath, resultPath), CancellationToken.None);
+        Assert.True(dry.Safety.Permitted);
+        var prepareTime = Now.AddSeconds(1.5);
+        var prepareState = dryState with { Observer = dryState.Observer! with { UpdatedAt = prepareTime, ConnectMarkerAgeSeconds = 1.5 } };
+        var prepare = await new PimaxUsbPortCycleExperimentRunner(new FixedCollector(prepareState), () => prepareTime).RunAsync(
+            Request("prepare", targetPath, directory.Path, requestPath, resultPath, dry.ConfirmationToken, PimaxUsbPortCycleExperimentRunner.ExactConfirmationPhrase), CancellationToken.None);
+        Assert.True(prepare.Safety.Permitted);
+        Assert.Equal(dry.Plan!.BindingSha256, prepare.Plan!.BindingSha256);
+        Assert.True(File.Exists(requestPath));
+    }
+
+    [Fact]
+    public async Task StalePreparationCreatesNoRequest()
+    {
+        using var directory = new TempDirectory();
+        var (signature, state) = Fixture();
+        var targetPath = Path.Combine(directory.Path, "target.json");
+        var requestPath = Path.Combine(directory.Path, "request.json");
+        File.WriteAllText(targetPath, JsonSerializer.Serialize(signature, PimaxUsbPortCycleJson.Options));
+        var dry = await new PimaxUsbPortCycleExperimentRunner(new FixedCollector(state with { Observer = state.Observer! with { ConnectMarkerTimestamp = Now } }), () => Now).RunAsync(
+            Request("dry-run", targetPath, directory.Path, requestPath, Path.Combine(directory.Path, "result.json")), CancellationToken.None);
+        var staleTime = Now.AddSeconds(120.001);
+        var stale = state with { Observer = state.Observer! with { UpdatedAt = staleTime, ConnectMarkerTimestamp = Now, ConnectMarkerAgeSeconds = 120.001 } };
+        var prepare = await new PimaxUsbPortCycleExperimentRunner(new FixedCollector(stale), () => staleTime).RunAsync(
+            Request("prepare", targetPath, directory.Path, requestPath, Path.Combine(directory.Path, "result.json"), dry.ConfirmationToken, PimaxUsbPortCycleExperimentRunner.ExactConfirmationPhrase), CancellationToken.None);
+        Assert.False(prepare.Safety.Permitted);
+        Assert.False(File.Exists(requestPath));
+    }
+
+    [Fact]
+    public void PrivilegedRequestHashExcludesDynamicAgeButBindsImmutableMarkerAndTarget()
+    {
+        var (signature, state) = Fixture();
+        var plan = PimaxUsbPortCycleTargetValidator.Validate(signature, state, Now).Plan!;
+        var payload = Payload(signature, plan);
+        var ageChanged = payload with { Plan = plan with { Observer = plan.Observer! with { UpdatedAt = Now.AddSeconds(1), ConnectMarkerAgeSeconds = 3 } } };
+        Assert.Equal(PimaxUsbPortCycleTargetValidator.PrivilegedRequestFingerprint(payload), PimaxUsbPortCycleTargetValidator.PrivilegedRequestFingerprint(ageChanged));
+        Assert.NotEqual(PimaxUsbPortCycleTargetValidator.PrivilegedRequestFingerprint(payload),
+            PimaxUsbPortCycleTargetValidator.PrivilegedRequestFingerprint(payload with { ConnectMarkerId = "changed" }));
+        Assert.NotEqual(PimaxUsbPortCycleTargetValidator.PrivilegedRequestFingerprint(payload),
+            PimaxUsbPortCycleTargetValidator.PrivilegedRequestFingerprint(payload with { TargetSignature = signature with { PimaxUsb2Port = signature.PimaxUsb2Port with { ConnectionIndex = 3 } } }));
+    }
+
+    [Fact]
+    public void HelperTemporalGatesRejectTokenRequestAndMarkerExpiryIndependently()
+    {
+        var marker = Now.AddSeconds(-1);
+        Assert.Null(PimaxUsbPortCycleElevatedExecutor.ValidateTemporalBoundary(Now.AddMinutes(1), Now.AddSeconds(30), marker, 120, "nonce", Now));
+        Assert.Contains("token", PimaxUsbPortCycleElevatedExecutor.ValidateTemporalBoundary(Now, Now.AddSeconds(30), marker, 120, "nonce", Now)!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("request", PimaxUsbPortCycleElevatedExecutor.ValidateTemporalBoundary(Now.AddMinutes(1), Now, marker, 120, "nonce", Now)!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("marker", PimaxUsbPortCycleElevatedExecutor.ValidateTemporalBoundary(Now.AddMinutes(1), Now.AddSeconds(30), Now.AddSeconds(-121), 120, "nonce", Now)!, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -262,7 +413,9 @@ public sealed class PimaxUsbPortCycleExperimentTests
             new("connector:pimax", 4, "pimax-related", ["pimax2"]), PimaxUsbPortCycleTargetValidator.Identity(usb3),
             new("connector:pimax", 4, "pimax-related", ["pimax3"]), new("connector:vive", 2, "vive", ["vive2"]),
             new("connector:vive", 2, "vive", ["vive3"]), PimaxUsbPortCycleTargetValidator.Inventory(snapshot, usb2, usb3), phase);
-        var observer = new PimaxUsbPortCycleObserverBinding("observer", Now.AddSeconds(-1), "running", "connect-scan-active", Now.AddSeconds(-2), 2, "marker-hash");
+        var observer = new PimaxUsbPortCycleObserverBinding("observer", "phase28c3b-r", Now.AddSeconds(-1), "running", "marker-id", 5,
+            "operator-marker", "user-confirmed", "connect-action-completed", Now.AddSeconds(-2), 2,
+            PimaxUsbPortCycleObserverReader.MaximumMarkerAgeSeconds, PimaxUsbPortCycleObserverReader.ConnectAction);
         return (signature, new(snapshot, Registration("likelyPoweredOnAwaitingRegistration", "probable"), Connectivity(), true, false, false, observer, phase));
     }
 
@@ -308,6 +461,15 @@ public sealed class PimaxUsbPortCycleExperimentTests
     private static PimaxPhase29IntegritySignature Phase29()
         => new("task", "\\", @"C:\deployment\watcher.exe", "--args", @"C:\deployment", "HASH", new(@"C:\logs\supervisor.jsonl", 10, Now), new(@"C:\logs\configurator.jsonl", 10, Now));
 
+    private static PimaxUsbPortCycleRequest Request(string mode, string targetPath, string evidencePath, string requestPath, string resultPath, string? token = null, string? phrase = null)
+        => new(mode, targetPath, "status.json", "markers.jsonl", token, phrase, evidencePath, requestPath, resultPath, null, null, false, 60);
+
+    private static PimaxUsbPortCyclePrivilegedPayload Payload(PimaxUsbPortCycleTargetSignature signature, PimaxUsbPortCyclePlan plan)
+        => new(PimaxUsbPortCycleExperimentSchema.PrivilegedRequestVersion, "experiment", plan.ExperimentKind, signature, plan, "status", "markers",
+            plan.Observer!.SessionId, plan.Observer.ScenarioId, plan.Observer.ConnectMarkerId, plan.Observer.ConnectMarkerSequence,
+            plan.Observer.ConnectMarkerType, plan.Observer.ConnectMarkerSource, plan.Observer.ConnectMarkerLabel, plan.Observer.ConnectMarkerTimestamp,
+            plan.Observer.MaximumConnectMarkerAgeSeconds, plan.Observer.ConnectAction, "token", "nonce", Now, Now.AddMinutes(5), Now.AddSeconds(60), "result");
+
     private static int Count(string text, string value) { var count = 0; var offset = 0; while ((offset = text.IndexOf(value, offset, StringComparison.Ordinal)) >= 0) { count++; offset += value.Length; } return count; }
     private static string FindRepositoryRoot() { var directory = new DirectoryInfo(AppContext.BaseDirectory); while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, ".git"))) directory = directory.Parent; return directory?.FullName ?? throw new DirectoryNotFoundException(); }
 
@@ -321,5 +483,11 @@ public sealed class PimaxUsbPortCycleExperimentTests
             Calls++; Path = hubInterfacePath; Index = connectionIndex;
             return new(true, 0, 0);
         }
+    }
+
+    private sealed class FixedCollector(PimaxUsbPortCycleRuntimeState state) : IPimaxUsbPortCycleStateCollector
+    {
+        public Task<PimaxUsbPortCycleRuntimeState> CollectAsync(PimaxUsbPortCycleTargetSignature signature, string? observerStatusPath, string? markerFilePath, CancellationToken cancellationToken)
+            => Task.FromResult(state);
     }
 }

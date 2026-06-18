@@ -135,12 +135,30 @@ internal sealed record PimaxUsbPortCycleTargetSignature(
 
 internal sealed record PimaxUsbPortCycleObserverBinding(
     string SessionId,
+    string ScenarioId,
     DateTimeOffset UpdatedAt,
     string State,
+    string ConnectMarkerId,
+    int ConnectMarkerSequence,
+    string ConnectMarkerType,
+    string ConnectMarkerSource,
     string ConnectMarkerLabel,
     DateTimeOffset ConnectMarkerTimestamp,
     double ConnectMarkerAgeSeconds,
-    string MarkerFileSha256);
+    double MaximumConnectMarkerAgeSeconds,
+    string ConnectAction);
+
+internal sealed record PimaxUsbPortCycleStableObserverIdentity(
+    string SessionId,
+    string ScenarioId,
+    string ConnectMarkerId,
+    int ConnectMarkerSequence,
+    string ConnectMarkerType,
+    string ConnectMarkerSource,
+    string ConnectMarkerLabel,
+    DateTimeOffset ConnectMarkerTimestamp,
+    double MaximumConnectMarkerAgeSeconds,
+    string ConnectAction);
 
 internal sealed record PimaxUsbPortCycleRuntimeState(
     PimaxUsbPhysicalPortSnapshot Topology,
@@ -205,11 +223,19 @@ internal sealed record PimaxUsbPortCyclePrivilegedPayload(
     string ObserverStatusPath,
     string MarkerFilePath,
     string ObserverSessionId,
+    string ObserverScenarioId,
+    string ConnectMarkerId,
+    int ConnectMarkerSequence,
+    string ConnectMarkerType,
+    string ConnectMarkerSource,
     string ConnectMarkerLabel,
     DateTimeOffset ConnectMarkerTimestamp,
+    double MaximumConnectMarkerAgeSeconds,
+    string ConnectAction,
     string ConfirmationToken,
     string Nonce,
     DateTimeOffset CreatedAt,
+    DateTimeOffset TokenExpiresAt,
     DateTimeOffset ExpiresAt,
     string OutputResultPath);
 
@@ -284,8 +310,15 @@ internal sealed class WindowsPimaxUsbPortCycleStateCollector(SupervisorConfig co
 
 internal static class PimaxUsbPortCycleObserverReader
 {
-    private static readonly string[] AcceptedLabels = ["connect-scan-active", "connect-scan-visible"];
-    private static readonly string[] ReadinessLabels = ["ready-to-start-connect-scan", "ready-before-action"];
+    internal const double MaximumMarkerAgeSeconds = 120;
+    internal const string ConnectAction = "pimax-play-pimax-crystal-connect-and-scan-start";
+    private static readonly string[] ObserverLabels = ["observer-started", "observer-start"];
+    private static readonly string[] InfoLabels = ["pimax-info-opened"];
+    private static readonly string[] ModelLabels = ["pimax-crystal-model-selected"];
+    private static readonly string[] ReadinessLabels = ["connect-ready-before-action", "ready-to-press-connect"];
+    private static readonly string[] ConnectLabels = ["connect-action-completed", "connect-pressed-scan-started"];
+
+    private sealed record Marker(string Label, DateTimeOffset Timestamp, string Source, string Type, string Action, string Id, int Sequence);
 
     public static PimaxUsbPortCycleObserverBinding? Read(string? statusPath, string? markerPath, DateTimeOffset now)
     {
@@ -294,17 +327,30 @@ internal static class PimaxUsbPortCycleObserverReader
         var root = status.RootElement;
         var state = root.TryGetProperty("state", out var stateValue) ? stateValue.GetString() ?? "" : "";
         var session = root.TryGetProperty("sessionId", out var sessionValue) ? sessionValue.GetString() ?? "" : "";
+        var scenario = root.TryGetProperty("scenario", out var scenarioValue) ? scenarioValue.GetString() ?? "" : "";
         var updated = root.TryGetProperty("updatedAt", out var updatedValue) && updatedValue.TryGetDateTimeOffset(out var parsedUpdated) ? parsedUpdated : DateTimeOffset.MinValue;
-        var markers = File.ReadLines(markerPath).Select(TryReadMarker).Where(value => value is not null).Cast<(string Label, DateTimeOffset Timestamp)>().ToArray();
-        var readyIndex = Array.FindLastIndex(markers, value => ReadinessLabels.Contains(value.Label, StringComparer.OrdinalIgnoreCase));
-        var pressedIndex = Array.FindLastIndex(markers, value => value.Label.Equals("connect-pressed", StringComparison.OrdinalIgnoreCase));
-        var scanIndex = Array.FindLastIndex(markers, value => AcceptedLabels.Contains(value.Label, StringComparer.OrdinalIgnoreCase));
-        if (string.IsNullOrWhiteSpace(session) || readyIndex < 0 || pressedIndex <= readyIndex || scanIndex <= pressedIndex) return null;
-        var marker = markers[scanIndex];
-        return new(session, updated, state, marker.Label, marker.Timestamp, Math.Max(0, (now - marker.Timestamp.ToUniversalTime()).TotalSeconds), HashFile(markerPath));
+        var markers = File.ReadLines(markerPath).Select((line, index) => TryReadMarker(line, index + 1, session, scenario)).Where(value => value is not null).Cast<Marker>().ToArray();
+        var connectIndex = Array.FindLastIndex(markers, value => ConnectLabels.Contains(value.Label, StringComparer.OrdinalIgnoreCase));
+        if (connectIndex < 0) return null;
+        var observerIndex = FindLastBefore(markers, connectIndex, ObserverLabels);
+        var infoIndex = FindLastBefore(markers, connectIndex, InfoLabels);
+        var modelIndex = FindLastBefore(markers, connectIndex, ModelLabels);
+        var readyIndex = FindLastBefore(markers, connectIndex, ReadinessLabels);
+        if (string.IsNullOrWhiteSpace(session) || string.IsNullOrWhiteSpace(scenario)
+            || observerIndex < 0 || infoIndex <= observerIndex || modelIndex <= infoIndex || readyIndex <= modelIndex || connectIndex <= readyIndex) return null;
+        var marker = markers[connectIndex];
+        return new(session, scenario, updated, state, marker.Id, marker.Sequence, marker.Type, marker.Source, marker.Label, marker.Timestamp,
+            Math.Max(0, (now - marker.Timestamp.ToUniversalTime()).TotalSeconds), MaximumMarkerAgeSeconds, marker.Action);
     }
 
-    private static (string Label, DateTimeOffset Timestamp)? TryReadMarker(string line)
+    private static int FindLastBefore(Marker[] markers, int before, string[] labels)
+    {
+        for (var index = before - 1; index >= 0; index--)
+            if (labels.Contains(markers[index].Label, StringComparer.OrdinalIgnoreCase)) return index;
+        return -1;
+    }
+
+    private static Marker? TryReadMarker(string line, int fallbackSequence, string session, string scenario)
     {
         try
         {
@@ -312,16 +358,20 @@ internal static class PimaxUsbPortCycleObserverReader
             var root = document.RootElement;
             if (!root.TryGetProperty("label", out var label)) return null;
             var timestamp = root.TryGetProperty("timestamp", out var value) && value.TryGetDateTimeOffset(out var parsed) ? parsed : DateTimeOffset.MinValue;
-            return (label.GetString() ?? "", timestamp);
+            var text = label.GetString()?.Trim() ?? "";
+            var source = root.TryGetProperty("source", out var sourceValue) ? sourceValue.GetString() ?? "user-confirmed" : "user-confirmed";
+            var type = root.TryGetProperty("type", out var typeValue) ? typeValue.GetString() ?? "operator-marker" : "operator-marker";
+            var action = root.TryGetProperty("action", out var actionValue) ? actionValue.GetString() ?? "" : "";
+            if (ConnectLabels.Contains(text, StringComparer.OrdinalIgnoreCase)) action = string.IsNullOrWhiteSpace(action) ? ConnectAction : action;
+            var sequence = root.TryGetProperty("sequence", out var sequenceValue) && sequenceValue.TryGetInt32(out var parsedSequence) ? parsedSequence : fallbackSequence;
+            var id = root.TryGetProperty("markerId", out var idValue) ? idValue.GetString() ?? "" : "";
+            if (string.IsNullOrWhiteSpace(id)) id = Fingerprint(new { session, scenario, sequence, label = text, source, type, timestamp, action });
+            return new(text, timestamp, source, type, action, id, sequence);
         }
         catch (JsonException) { return null; }
     }
 
-    internal static string HashFile(string path)
-    {
-        using var stream = File.OpenRead(path);
-        return Convert.ToHexString(SHA256.HashData(stream));
-    }
+    private static string Fingerprint<T>(T value) => Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(value, PimaxUsbPortCycleJson.Options)));
 }
 
 internal static class PimaxPhase29IntegrityCollector
@@ -399,40 +449,42 @@ internal static class PimaxUsbPortCycleTargetValidator
         Check(!current.RecoveryExperimentActive, "No concurrent recovery experiment is active.", "Another recovery experiment is active.", passed, failed);
         Check(current.Observer is not null && current.Observer.State.Equals("running", StringComparison.OrdinalIgnoreCase) && (now - current.Observer.UpdatedAt.ToUniversalTime()) <= TimeSpan.FromSeconds(5),
             "Observer is active.", "Observer is missing, stopped, or stale.", passed, failed);
-        Check(current.Observer is not null && current.Observer.ConnectMarkerAgeSeconds <= 120 && current.Observer.ConnectMarkerTimestamp != DateTimeOffset.MinValue,
+        Check(IsMarkerFresh(current.Observer, now),
             "Connect scan marker is recent.", "Connect scan marker is missing or stale.", passed, failed);
         Check(Phase29Matches(expected.Phase29, current.Phase29), "Phase 29B deployment and logs remain intact.", "Phase 29B integrity changed or could not be verified.", passed, failed);
 
         var plan = new PimaxUsbPortCyclePlan(PimaxUsbPortCycleExperimentKind.CycleExactExternalHubUsb2Port, Identity(usb2Hub), 4,
             expected.PimaxUsb2Port.ConnectorGroupId, Identity(ssHub), 4, expected.ViveUsb2Port.ConnectorGroupId, 2,
-            pimax2?.DescendantPnpInstanceIds.Order(StringComparer.OrdinalIgnoreCase).ToArray() ?? [], 0,
+            NormalizeStrings(pimax2?.DescendantPnpInstanceIds ?? []), 0,
             Inventory(current.Topology, usb2Hub, ssHub), current.Registration.Assessment.State, current.Registration.Assessment.Confidence,
             current.Connectivity.Assessment.Value, current.PimaxPlayRunning, current.SteamVrRunning, current.Observer,
             "IOCTL_USB_HUB_CYCLE_PORT", 1, PimaxUsbPortCycleSafetyBoundary.ExcludedOperations, "");
-        plan = plan with { BindingSha256 = Fingerprint(plan) };
+        plan = plan with { BindingSha256 = StablePlanFingerprint(plan) };
         return (plan, new(failed.Count == 0, passed.ToArray(), failed.ToArray(), warnings.ToArray()));
     }
 
     internal static PimaxUsbPortCycleInventoryItem[] Inventory(PimaxUsbPhysicalPortSnapshot snapshot, params PimaxUsbHubRecord[] hubs)
         => snapshot.Ports.Where(port => hubs.Any(hub => hub.HubId == port.HubId) && port.ConnectionIndex is not 2 and not 4)
             .Select(port => new PimaxUsbPortCycleInventoryItem(hubs.Single(hub => hub.HubId == port.HubId).PnpInstanceId ?? "", port.ConnectionIndex,
-                port.ConnectionStatus, port.VendorId, port.ProductId, port.ChildPnpInstanceId, port.DescendantPnpInstanceIds.Order(StringComparer.OrdinalIgnoreCase).ToArray()))
-            .OrderBy(item => item.HubPnpInstanceId, StringComparer.OrdinalIgnoreCase).ThenBy(item => item.ConnectionIndex).ToArray();
+                port.ConnectionStatus, port.VendorId, port.ProductId, port.ChildPnpInstanceId, NormalizeStrings(port.DescendantPnpInstanceIds)))
+            .GroupBy(InventoryKey, StringComparer.OrdinalIgnoreCase).Select(group => group.First())
+            .OrderBy(item => item.HubPnpInstanceId, StringComparer.OrdinalIgnoreCase).ThenBy(item => item.ConnectionIndex)
+            .ThenBy(item => item.ChildPnpInstanceId, StringComparer.OrdinalIgnoreCase).ToArray();
 
     private static bool InventoryMatches(PimaxUsbPortCycleInventoryItem[] expected, PimaxUsbPortCycleInventoryItem[] current)
-        => Fingerprint(expected) == Fingerprint(current);
+        => Fingerprint(NormalizeInventory(expected)) == Fingerprint(NormalizeInventory(current));
     private static PimaxUsbPortRecord? FindPort(PimaxUsbPhysicalPortSnapshot snapshot, PimaxUsbHubRecord hub, int index)
         => snapshot.Ports.SingleOrDefault(port => port.HubId == hub.HubId && port.ConnectionIndex == index);
     private static bool PortMatches(PimaxUsbPortCyclePortIdentity expected, PimaxUsbPortRecord? current)
         => current is not null && current.ConnectionIndex == expected.ConnectionIndex
             && current.PhysicalConnectorGroupId == expected.ConnectorGroupId && current.DeviceConnected
-            && Fingerprint(current.DescendantPnpInstanceIds.Order(StringComparer.OrdinalIgnoreCase).ToArray()) == Fingerprint(expected.DescendantPnpInstanceIds.Order(StringComparer.OrdinalIgnoreCase).ToArray());
+            && Fingerprint(NormalizeStrings(current.DescendantPnpInstanceIds)) == Fingerprint(NormalizeStrings(expected.DescendantPnpInstanceIds));
     private static bool HubMatches(PimaxUsbPortCycleHubIdentity expected, PimaxUsbHubRecord current)
         => Same(expected.InterfacePath, current.InterfacePath) && Same(expected.PnpInstanceId, current.PnpInstanceId)
             && Same(expected.ContainerId, current.ContainerId) && Same(expected.Vid, current.Vid) && Same(expected.Pid, current.Pid)
             && Same(expected.HubType, current.HubType) && expected.IsRootHub == current.IsRootHub
-            && Fingerprint(expected.HardwareIds.Order(StringComparer.OrdinalIgnoreCase).ToArray()) == Fingerprint(current.HardwareIds.Order(StringComparer.OrdinalIgnoreCase).ToArray())
-            && Fingerprint(expected.LocationPaths.Order(StringComparer.OrdinalIgnoreCase).ToArray()) == Fingerprint(current.LocationPaths.Order(StringComparer.OrdinalIgnoreCase).ToArray());
+            && Fingerprint(NormalizeStrings(expected.HardwareIds)) == Fingerprint(NormalizeStrings(current.HardwareIds))
+            && Fingerprint(NormalizeStrings(expected.LocationPaths)) == Fingerprint(NormalizeStrings(current.LocationPaths));
     private static bool Phase29Matches(PimaxPhase29IntegritySignature expected, PimaxPhase29IntegritySignature? current)
         => current is not null && Same(expected.TaskName, current.TaskName) && Same(expected.TaskPath, current.TaskPath)
             && Same(expected.Execute, current.Execute) && Same(expected.Arguments, current.Arguments) && Same(expected.WorkingDirectory, current.WorkingDirectory)
@@ -443,7 +495,92 @@ internal static class PimaxUsbPortCycleTargetValidator
     private static bool Same(string? left, string? right) => string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
     private static string Text(PimaxUsbHubRecord hub) => string.Join('|', hub.PnpInstanceId, hub.Product, hub.DeviceClass, hub.ClassGuid, string.Join('|', hub.HardwareIds));
     private static void Check(bool condition, string yes, string no, List<string> passed, List<string> failed) { if (condition) passed.Add(yes); else failed.Add(no); }
-    internal static PimaxUsbPortCycleHubIdentity Identity(PimaxUsbHubRecord hub) => new(hub.InterfacePath, hub.PnpInstanceId ?? "", hub.ContainerId ?? "", hub.HardwareIds, hub.LocationPaths, hub.Vid ?? "", hub.Pid ?? "", hub.HubType, hub.IsRootHub);
+    internal static PimaxUsbPortCycleHubIdentity Identity(PimaxUsbHubRecord hub) => new(hub.InterfacePath, hub.PnpInstanceId ?? "", hub.ContainerId ?? "", NormalizeStrings(hub.HardwareIds), NormalizeStrings(hub.LocationPaths), hub.Vid ?? "", hub.Pid ?? "", hub.HubType, hub.IsRootHub);
+    internal static bool IsMarkerFresh(PimaxUsbPortCycleObserverBinding? observer, DateTimeOffset now)
+    {
+        if (observer is null || observer.ConnectMarkerTimestamp == DateTimeOffset.MinValue || observer.MaximumConnectMarkerAgeSeconds != PimaxUsbPortCycleObserverReader.MaximumMarkerAgeSeconds) return false;
+        var age = (now.ToUniversalTime() - observer.ConnectMarkerTimestamp.ToUniversalTime()).TotalSeconds;
+        return age >= 0 && age <= observer.MaximumConnectMarkerAgeSeconds;
+    }
+    internal static string StablePlanFingerprint(PimaxUsbPortCyclePlan plan) => Fingerprint(new
+    {
+        plan.ExperimentKind,
+        Usb2Hub = NormalizeHub(plan.Usb2Hub),
+        plan.ConnectionIndex,
+        plan.PimaxConnectorGroupId,
+        SuperSpeedCompanionHub = NormalizeHub(plan.SuperSpeedCompanionHub),
+        plan.SuperSpeedCompanionIndex,
+        plan.ViveConnectorGroupId,
+        plan.ViveConnectionIndex,
+        PimaxDescendantInventory = NormalizeStrings(plan.PimaxDescendantInventory),
+        plan.UnrelatedOccupantCount,
+        OtherPortOccupants = NormalizeInventory(plan.OtherPortOccupants),
+        plan.RegistrationState,
+        plan.RegistrationConfidence,
+        plan.FilteredConnectivity,
+        plan.PimaxPlayRunning,
+        plan.SteamVrRunning,
+        Observer = StableObserver(plan.Observer),
+        plan.PlannedIoctl,
+        plan.ExactRequestCount,
+        ExcludedOperations = NormalizeStrings(plan.ExcludedOperations)
+    });
+    internal static string StableTargetSignatureFingerprint(PimaxUsbPortCycleTargetSignature signature) => Fingerprint(new
+    {
+        signature.Schema,
+        Usb2Hub = NormalizeHub(signature.Usb2Hub),
+        PimaxUsb2Port = NormalizePort(signature.PimaxUsb2Port),
+        SuperSpeedHub = NormalizeHub(signature.SuperSpeedHub),
+        PimaxSuperSpeedPort = NormalizePort(signature.PimaxSuperSpeedPort),
+        ViveUsb2Port = NormalizePort(signature.ViveUsb2Port),
+        ViveSuperSpeedPort = NormalizePort(signature.ViveSuperSpeedPort),
+        UnrelatedPortInventory = NormalizeInventory(signature.UnrelatedPortInventory),
+        signature.Phase29
+    });
+    internal static string PrivilegedRequestFingerprint(PimaxUsbPortCyclePrivilegedPayload payload) => Fingerprint(new
+    {
+        payload.Schema,
+        payload.ExperimentId,
+        payload.ExperimentKind,
+        TargetSignatureSha256 = StableTargetSignatureFingerprint(payload.TargetSignature),
+        PlanBindingSha256 = payload.Plan.BindingSha256,
+        payload.ObserverStatusPath,
+        payload.MarkerFilePath,
+        payload.ObserverSessionId,
+        payload.ObserverScenarioId,
+        payload.ConnectMarkerId,
+        payload.ConnectMarkerSequence,
+        payload.ConnectMarkerType,
+        payload.ConnectMarkerSource,
+        payload.ConnectMarkerLabel,
+        payload.ConnectMarkerTimestamp,
+        payload.MaximumConnectMarkerAgeSeconds,
+        payload.ConnectAction,
+        payload.ConfirmationToken,
+        payload.Nonce,
+        payload.CreatedAt,
+        payload.TokenExpiresAt,
+        payload.ExpiresAt,
+        payload.OutputResultPath
+    });
+    internal static PimaxUsbPortCycleStableObserverIdentity? StableObserver(PimaxUsbPortCycleObserverBinding? observer)
+        => observer is null ? null : new(observer.SessionId, observer.ScenarioId, observer.ConnectMarkerId, observer.ConnectMarkerSequence,
+            observer.ConnectMarkerType, observer.ConnectMarkerSource, observer.ConnectMarkerLabel, observer.ConnectMarkerTimestamp,
+            observer.MaximumConnectMarkerAgeSeconds, observer.ConnectAction);
+    private static PimaxUsbPortCycleHubIdentity NormalizeHub(PimaxUsbPortCycleHubIdentity hub)
+        => hub with { HardwareIds = NormalizeStrings(hub.HardwareIds), LocationPaths = NormalizeStrings(hub.LocationPaths) };
+    private static PimaxUsbPortCyclePortIdentity NormalizePort(PimaxUsbPortCyclePortIdentity port)
+        => port with { DescendantPnpInstanceIds = NormalizeStrings(port.DescendantPnpInstanceIds) };
+    private static PimaxUsbPortCycleInventoryItem[] NormalizeInventory(PimaxUsbPortCycleInventoryItem[] items)
+        => items.Select(item => item with { DescendantPnpInstanceIds = NormalizeStrings(item.DescendantPnpInstanceIds) })
+            .GroupBy(InventoryKey, StringComparer.OrdinalIgnoreCase).Select(group => group.First())
+            .OrderBy(item => item.HubPnpInstanceId, StringComparer.OrdinalIgnoreCase).ThenBy(item => item.ConnectionIndex)
+            .ThenBy(item => item.ChildPnpInstanceId, StringComparer.OrdinalIgnoreCase).ToArray();
+    private static string InventoryKey(PimaxUsbPortCycleInventoryItem item)
+        => string.Join('|', item.HubPnpInstanceId, item.ConnectionIndex, item.ConnectionStatus, item.VendorId, item.ProductId,
+            item.ChildPnpInstanceId, string.Join('\u001f', NormalizeStrings(item.DescendantPnpInstanceIds)));
+    internal static string[] NormalizeStrings(IEnumerable<string> values)
+        => values.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
     internal static string Fingerprint<T>(T value) => Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(value, PimaxUsbPortCycleJson.Options)));
 }
 
@@ -459,12 +596,12 @@ internal static class PimaxUsbPortCycleSafetyBoundary
 
 internal static class PimaxUsbPortCycleConfirmationToken
 {
-    private sealed record Payload(string ExperimentId, string Kind, string BindingSha256, string ObserverSessionId, string MarkerHash, DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt, string Nonce);
+    private sealed record Payload(string ExperimentId, string Kind, string BindingSha256, PimaxUsbPortCycleStableObserverIdentity? MarkerIdentity, DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt, string Nonce);
 
     public static (string Token, DateTimeOffset ExpiresAt) Create(string experimentId, PimaxUsbPortCyclePlan plan, DateTimeOffset now)
     {
         var expires = now.AddMinutes(5);
-        var payload = new Payload(experimentId, plan.ExperimentKind, plan.BindingSha256, plan.Observer?.SessionId ?? "", plan.Observer?.MarkerFileSha256 ?? "", now, expires, Guid.NewGuid().ToString("N"));
+        var payload = new Payload(experimentId, plan.ExperimentKind, plan.BindingSha256, PimaxUsbPortCycleTargetValidator.StableObserver(plan.Observer), now, expires, Guid.NewGuid().ToString("N"));
         var body = Base64(JsonSerializer.SerializeToUtf8Bytes(payload, PimaxUsbPortCycleJson.Options));
         return ($"{body}.{Base64(Sign(body))}", expires);
     }
@@ -480,7 +617,7 @@ internal static class PimaxUsbPortCycleConfirmationToken
         catch (Exception ex) { return (false, $"Token payload is invalid: {ex.Message}", null, null); }
         if (payload is null || payload.ExpiresAt <= now) return (false, "Token expired.", payload?.Nonce, payload?.ExpiresAt);
         if (payload.ExperimentId != experimentId || payload.Kind != plan.ExperimentKind || payload.BindingSha256 != plan.BindingSha256
-            || payload.ObserverSessionId != plan.Observer?.SessionId || payload.MarkerHash != plan.Observer?.MarkerFileSha256)
+            || PimaxUsbPortCycleTargetValidator.Fingerprint(payload.MarkerIdentity) != PimaxUsbPortCycleTargetValidator.Fingerprint(PimaxUsbPortCycleTargetValidator.StableObserver(plan.Observer)))
             return (false, "Token does not match the current topology, state, observer, or Connect marker.", payload.Nonce, payload.ExpiresAt);
         if (consume)
         {
@@ -535,12 +672,16 @@ internal sealed class PimaxUsbPortCycleExperimentRunner
         if (tokenId is null) return Result(id, request.Mode, started, plan, new(false, safety.ChecksPassed, ["Confirmation token payload could not be read."], safety.Warnings));
         var validation = PimaxUsbPortCycleConfirmationToken.Validate(request.ConfirmationToken, tokenId, plan, _now(), request.EvidenceDirectory, consume: true);
         if (!validation.Accepted) return Result(id, request.Mode, started, plan, new(false, safety.ChecksPassed, [validation.Reason!], safety.Warnings));
+        if (!PimaxUsbPortCycleTargetValidator.IsMarkerFresh(plan.Observer, _now()))
+            return Result(id, request.Mode, started, plan, new(false, safety.ChecksPassed, ["Connect scan marker became stale before privileged request preparation."], safety.Warnings));
         if (string.IsNullOrWhiteSpace(request.PrivilegedRequestPath) || string.IsNullOrWhiteSpace(request.PrivilegedResultPath) || plan.Observer is null)
             return Result(id, request.Mode, started, plan, new(false, safety.ChecksPassed, ["Request path, result path, and observer binding are required."], safety.Warnings));
         var payload = new PimaxUsbPortCyclePrivilegedPayload(PimaxUsbPortCycleExperimentSchema.PrivilegedRequestVersion, tokenId, plan.ExperimentKind, signature, plan,
-            Path.GetFullPath(request.ObserverStatusPath!), Path.GetFullPath(request.MarkerFilePath!), plan.Observer.SessionId, plan.Observer.ConnectMarkerLabel,
-            plan.Observer.ConnectMarkerTimestamp, request.ConfirmationToken!, validation.Nonce!, _now(), validation.ExpiresAt!.Value, Path.GetFullPath(request.PrivilegedResultPath));
-        var hash = PimaxUsbPortCycleTargetValidator.Fingerprint(payload);
+            Path.GetFullPath(request.ObserverStatusPath!), Path.GetFullPath(request.MarkerFilePath!), plan.Observer.SessionId, plan.Observer.ScenarioId,
+            plan.Observer.ConnectMarkerId, plan.Observer.ConnectMarkerSequence, plan.Observer.ConnectMarkerType, plan.Observer.ConnectMarkerSource,
+            plan.Observer.ConnectMarkerLabel, plan.Observer.ConnectMarkerTimestamp, plan.Observer.MaximumConnectMarkerAgeSeconds, plan.Observer.ConnectAction,
+            request.ConfirmationToken!, validation.Nonce!, _now(), validation.ExpiresAt!.Value, _now().AddSeconds(60), Path.GetFullPath(request.PrivilegedResultPath));
+        var hash = PimaxUsbPortCycleTargetValidator.PrivilegedRequestFingerprint(payload);
         AtomicWrite(request.PrivilegedRequestPath, new PimaxUsbPortCyclePrivilegedRequest(payload, hash));
         PimaxUsbPortCycleUacLaunch? launch = null;
         if (request.LaunchHelper) launch = PimaxUsbPortCycleUacLauncher.Launch(request.HelperPath, request.PrivilegedRequestPath, hash);
@@ -658,13 +799,21 @@ internal static class PimaxUsbPortCycleElevatedExecutor
             if (string.IsNullOrWhiteSpace(request.PrivilegedRequestPath) || string.IsNullOrWhiteSpace(request.ExpectedRequestSha256)) throw new InvalidDataException("Request file and expected hash are required.");
             envelope = JsonSerializer.Deserialize<PimaxUsbPortCyclePrivilegedRequest>(File.ReadAllText(request.PrivilegedRequestPath), PimaxUsbPortCycleJson.Options) ?? throw new InvalidDataException("Request is empty.");
             experimentId = envelope.Payload.ExperimentId;
-            var calculated = PimaxUsbPortCycleTargetValidator.Fingerprint(envelope.Payload);
+            var calculated = PimaxUsbPortCycleTargetValidator.PrivilegedRequestFingerprint(envelope.Payload);
             if (!calculated.Equals(envelope.RequestSha256, StringComparison.OrdinalIgnoreCase) || !calculated.Equals(request.ExpectedRequestSha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Privileged request SHA-256 does not match.");
-            if (envelope.Payload.ExpiresAt <= DateTimeOffset.UtcNow || string.IsNullOrWhiteSpace(envelope.Payload.Nonce)) throw new InvalidDataException("Privileged request expired or has no nonce.");
+            var helperNow = DateTimeOffset.UtcNow;
+            var temporalFailure = ValidateTemporalBoundary(envelope.Payload.TokenExpiresAt, envelope.Payload.ExpiresAt,
+                envelope.Payload.ConnectMarkerTimestamp, envelope.Payload.MaximumConnectMarkerAgeSeconds, envelope.Payload.Nonce, helperNow);
+            if (temporalFailure is not null) throw new InvalidDataException(temporalFailure);
+            var immutableMarker = new PimaxUsbPortCycleStableObserverIdentity(envelope.Payload.ObserverSessionId, envelope.Payload.ObserverScenarioId,
+                envelope.Payload.ConnectMarkerId, envelope.Payload.ConnectMarkerSequence, envelope.Payload.ConnectMarkerType, envelope.Payload.ConnectMarkerSource,
+                envelope.Payload.ConnectMarkerLabel, envelope.Payload.ConnectMarkerTimestamp, envelope.Payload.MaximumConnectMarkerAgeSeconds, envelope.Payload.ConnectAction);
             var collector = new WindowsPimaxUsbPortCycleStateCollector(SupervisorConfig.Load(null));
             var current = await collector.CollectAsync(envelope.Payload.TargetSignature, envelope.Payload.ObserverStatusPath, envelope.Payload.MarkerFilePath, cancellationToken);
             var validation = PimaxUsbPortCycleTargetValidator.Validate(envelope.Payload.TargetSignature, current, DateTimeOffset.UtcNow);
             if (!validation.Safety.Permitted || validation.Plan?.BindingSha256 != envelope.Payload.Plan.BindingSha256) throw new InvalidOperationException("Immediate target revalidation failed: " + string.Join("; ", validation.Safety.RefusalReasons));
+            if (PimaxUsbPortCycleTargetValidator.Fingerprint(PimaxUsbPortCycleTargetValidator.StableObserver(validation.Plan.Observer))
+                != PimaxUsbPortCycleTargetValidator.Fingerprint(immutableMarker)) throw new InvalidOperationException("Immutable Connect marker identity changed.");
             var token = PimaxUsbPortCycleConfirmationToken.Validate(envelope.Payload.ConfirmationToken, envelope.Payload.ExperimentId, validation.Plan, DateTimeOffset.UtcNow, null, consume: false);
             if (!token.Accepted || token.Nonce != envelope.Payload.Nonce) throw new InvalidOperationException("Signed confirmation token revalidation failed: " + token.Reason);
             exactHub = true; exactIndex = envelope.Payload.Plan.ConnectionIndex == 4; companion = true; vive = true; valid = true;
@@ -684,6 +833,17 @@ internal static class PimaxUsbPortCycleElevatedExecutor
 
     internal static bool IsPermittedExecutionContext(string? processPath, bool elevated)
         => elevated && string.Equals(Path.GetFileNameWithoutExtension(processPath), "PimaxVrcSupervisor.PortCycleHelper", StringComparison.OrdinalIgnoreCase);
+    internal static string? ValidateTemporalBoundary(DateTimeOffset tokenExpiresAt, DateTimeOffset requestExpiresAt,
+        DateTimeOffset markerTimestamp, double maximumMarkerAgeSeconds, string? nonce, DateTimeOffset now)
+    {
+        if (tokenExpiresAt <= now) return "Confirmation token expired.";
+        if (requestExpiresAt <= now) return "Privileged request expired.";
+        if (string.IsNullOrWhiteSpace(nonce)) return "Privileged request has no nonce.";
+        var markerAge = (now.ToUniversalTime() - markerTimestamp.ToUniversalTime()).TotalSeconds;
+        if (markerAge < 0 || markerAge > maximumMarkerAgeSeconds || maximumMarkerAgeSeconds != PimaxUsbPortCycleObserverReader.MaximumMarkerAgeSeconds)
+            return "Connect scan marker is stale or has an invalid freshness policy.";
+        return null;
+    }
     private static bool IsElevated() { using var identity = WindowsIdentity.GetCurrent(); return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator); }
     internal static void AtomicWriteResult(string path, PimaxUsbPortCyclePrivilegedResult value) { var full = Path.GetFullPath(path); Directory.CreateDirectory(Path.GetDirectoryName(full)!); var temp = full + ".tmp-" + Guid.NewGuid().ToString("N"); File.WriteAllText(temp, JsonSerializer.Serialize(value, PimaxUsbPortCycleJson.Options), new UTF8Encoding(false)); File.Move(temp, full, false); }
 }
