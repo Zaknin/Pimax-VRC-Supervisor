@@ -57,6 +57,15 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-registration-assessment
     return;
 }
 
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-connect-lifecycle-observe-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var diagnosticConfig = SupervisorConfig.Load(configPath);
+    var request = PimaxConnectLifecycleObservationRequest.Parse(commandLineArgs);
+    var result = await new PimaxConnectLifecycleObserver(diagnosticConfig).ObserveAsync(request, shutdown.Token);
+    Console.WriteLine(JsonSerializer.Serialize(result, PimaxConnectLifecycleObservationJson.Options));
+    return;
+}
+
 if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-recovery-experiment-json", StringComparison.OrdinalIgnoreCase)))
 {
     var diagnosticConfig = SupervisorConfig.Load(configPath);
