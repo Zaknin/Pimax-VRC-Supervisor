@@ -57,3 +57,9 @@ If registration remains unavailable, finish the official software evidence first
 - Invalid evidence: repeat preparation without another mutation.
 
 No result from this phase authorizes automatic recovery.
+
+## Phase 28C3B-R result and paired boundary
+
+The corrected USB 2-only request succeeded technically: one request was accepted for `05E3:0610` index 4 and returned Win32/status zero. The USB 2 side transitioned, the `05E3:0626` SuperSpeed side did not, and registration remained unavailable with Pimax Play error 10500. Manual physical Pimax USB restoration was required.
+
+Paired behavior has not been tested. Phase 28C3C adds only a non-mutating design report and fake-adapter simulation. It does not add a paired UAC request, helper mode, native adapter, hub-handle opening path, or hardware execution path, and it does not claim that a future paired cycle will reproduce a physical reseat.
