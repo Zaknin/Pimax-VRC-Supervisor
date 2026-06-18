@@ -22,6 +22,8 @@ The implemented client-restart experiment is limited to the verified Pimax Play 
 
 The first controlled client-restart trial did not recover registration for the captured blue/unregistered failure. The verified Pimax Play UI/client closed and relaunched, but the assessment remained `LikelyPoweredOnAwaitingRegistration` through the bounded observation window. The experiment framework was then hardened so the relaunched GUI process cannot contaminate CLI JSON stdout.
 
+The Phase 28C2 service-restart experiment was not executed. Target validation failed because `PiServiceLauncher` behaves as a transient Connect-triggered launcher rather than a stable persistent runtime service, and Windows recorded abnormal launcher exits. No Pimax service should be restarted until the persistent registration path is mapped. The read-only [`pimax-connect-lifecycle-observe-json`](pimax-connect-lifecycle-observation.md) command collects synchronized service, process, registration, USB/PnP, event-log, and Pimax-log evidence for that mapping.
+
 ## Experiment Matrix
 
 | Order | Experiment | Prerequisite state | Action | Expected transition | Success criterion | Failure criterion | Timeout | Rollback | Admin | SteamVR guard | Risk | Evidence captured | Status |

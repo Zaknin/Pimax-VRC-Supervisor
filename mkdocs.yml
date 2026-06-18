@@ -75,6 +75,7 @@ nav:
       - Pimax USB Enumeration Diagnostics: reference/pimax-usb-enumeration-diagnostics.md
       - Pimax Registration Recovery Experiments: development/pimax-registration-recovery-experiments.md
       - Pimax Play Client Restart Experiment: development/pimax-client-restart-experiment.md
+      - Pimax Connect Lifecycle Observation: development/pimax-connect-lifecycle-observation.md
       - Base Station Startup Diagnostics: development/base-station-startup-diagnostics.md
       - Shortcuts: reference/shortcuts.md
       - Release Packaging: reference/release-packaging.md
