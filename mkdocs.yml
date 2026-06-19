@@ -79,5 +79,6 @@ nav:
       - Pimax External-Hub Physical Port Mapping: development/pimax-external-hub-physical-port-mapping.md
       - Base Station Startup Diagnostics: development/base-station-startup-diagnostics.md
       - Base Station Startup Failure Analysis: development/base-station-startup-failure-analysis.md
+      - Post-Reboot Crash-Causality Instrumentation: development/post-reboot-cross-routine-crash-causality-instrumentation.md
       - Shortcuts: reference/shortcuts.md
       - Release Packaging: reference/release-packaging.md

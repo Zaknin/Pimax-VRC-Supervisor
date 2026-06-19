@@ -12,6 +12,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Text.Json.Serialization;
 using PimaxVrcSupervisor.BaseStations;
+using PimaxVrcSupervisor.Diagnostics;
 
 namespace PimaxVrcSupervisor.Configurator;
 
@@ -20,8 +21,10 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        using var flightSession = HardwareFlightRecorder.StartDefault("Configurator");
         ApplicationConfiguration.Initialize();
         Application.Run(new ConfigEditorForm(args.FirstOrDefault()));
+        flightSession.MarkCleanShutdown("configurator-closed");
     }
 }
 

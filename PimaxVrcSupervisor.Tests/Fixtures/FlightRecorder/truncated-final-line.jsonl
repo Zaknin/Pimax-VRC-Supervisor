@@ -1,0 +1,2 @@
+{"schema":"supervisor-hardware-flight-recorder-v1","eventId":"e15","processSequence":1,"timestampUtc":"2026-01-01T07:00:00Z","bootIdentity":"boot-f","processSessionId":"session-truncated","processName":"Supervisor","stage":"processSessionStarted","flushClass":"critical"}
+{"schema":"supervisor-hardware-flight-recorder-v1","eventId":"broken"

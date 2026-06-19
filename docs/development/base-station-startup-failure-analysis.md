@@ -147,6 +147,8 @@ Exactly one next phase is recommended: **Phase 29D-E — improve instrumentation
 
 This direction cannot create repeated Bluetooth bursts because it changes no scheduler, retry, timer, watcher, or command path.
 
+Phase 29D-E implements the recommended observation-only direction. See [Post-reboot and cross-routine crash-causality instrumentation](post-reboot-cross-routine-crash-causality-instrumentation.md) for the bounded flight recorder, previous-session classification, overlap model, and read-only Windows-event correlation design. It does not implement a startup correction.
+
 ## Offline command
 
 ```powershell

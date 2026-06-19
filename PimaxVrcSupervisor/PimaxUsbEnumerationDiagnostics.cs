@@ -6,6 +6,7 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using PimaxVrcSupervisor.Diagnostics;
 
 internal static class PimaxUsbEnumerationSchema
 {
@@ -137,19 +138,25 @@ internal sealed class PimaxUsbEnumerationSnapshotCollector
 
     public PimaxUsbEnumerationSnapshot Collect()
     {
+        using var flight = HardwareFlightRecorder.Begin(new(
+            "pimaxUsbEnumeration", "PimaxUsbEnumerationSnapshotCollector.Collect",
+            ["usbPnp", "pimaxHeadset"], DeviceCategory: "pimaxUsbInventory"));
         var warnings = new List<string>();
         var errors = new List<string>();
         var raw = Array.Empty<PimaxUsbRawDeviceRecord>();
 
         try
         {
+            flight.Stage("nativeOrLibraryCallStarted", "SetupAPI.ConfigurationManager.inventory", durable: true);
             var result = _inventorySource.Collect();
+            flight.Stage("nativeOrLibraryCallReturned", "SetupAPI.ConfigurationManager.inventory", durable: true);
             raw = result.Devices;
             warnings.AddRange(result.Warnings);
             errors.AddRange(result.Errors);
         }
         catch (Exception ex)
         {
+            flight.Failed(ex);
             errors.Add($"USB/PnP inventory collection failed: {ex.Message}");
         }
 
@@ -161,7 +168,7 @@ internal sealed class PimaxUsbEnumerationSnapshotCollector
             .ThenBy(record => record.StableId, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        return new PimaxUsbEnumerationSnapshot(
+        var snapshot = new PimaxUsbEnumerationSnapshot(
             PimaxUsbEnumerationSchema.Version,
             DateTimeOffset.Now,
             typeof(PimaxUsbEnumerationSnapshotCollector).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
@@ -173,6 +180,8 @@ internal sealed class PimaxUsbEnumerationSnapshotCollector
             records,
             warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+        if (errors.Count == 0) flight.Completed($"devices={records.Length}");
+        return snapshot;
     }
 
     private static PimaxUsbEnumerationHost BuildHost()

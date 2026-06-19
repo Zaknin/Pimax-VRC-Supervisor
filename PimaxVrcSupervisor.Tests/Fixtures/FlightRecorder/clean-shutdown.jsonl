@@ -1,0 +1,2 @@
+{"schema":"supervisor-session-summary-v1","eventId":"e1","processSequence":1,"timestampUtc":"2026-01-01T00:00:00Z","bootIdentity":"boot-a","processSessionId":"session-clean","processName":"Supervisor","stage":"processSessionStarted","flushClass":"critical"}
+{"schema":"supervisor-session-summary-v1","eventId":"e2","processSequence":2,"timestampUtc":"2026-01-01T00:01:00Z","bootIdentity":"boot-a","processSessionId":"session-clean","processName":"Supervisor","stage":"cleanShutdownCompleted","cleanShutdownState":"clean","flushClass":"critical"}

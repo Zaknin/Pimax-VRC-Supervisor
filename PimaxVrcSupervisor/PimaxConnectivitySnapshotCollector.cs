@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using PimaxVrcSupervisor.Diagnostics;
 
 internal static class PimaxConnectivityJson
 {
@@ -30,6 +31,10 @@ internal sealed class PimaxConnectivitySnapshotCollector
         SupervisorConfig config,
         CancellationToken cancellationToken)
     {
+        using var flight = HardwareFlightRecorder.Begin(new(
+            "headsetConnectivityDetection", "PimaxConnectivitySnapshotCollector.CollectAsync",
+            ["pimaxRuntime", "pimaxHeadset", "usbPnp"], DeviceCategory: "pimaxHeadset",
+            ExpectedTimeoutMilliseconds: DefaultOverallTimeout.TotalMilliseconds));
         var collectedAt = DateTimeOffset.Now;
         var startedAt = Stopwatch.GetTimestamp();
         using var overallTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -133,7 +138,7 @@ internal sealed class PimaxConnectivitySnapshotCollector
             runtimeEvidence.Errors,
             steamVrDriver.Errors);
 
-        return new PimaxConnectivitySnapshot(
+        var snapshot = new PimaxConnectivitySnapshot(
             PimaxConnectivitySchema.Version,
             collectedAt,
             Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
@@ -147,6 +152,8 @@ internal sealed class PimaxConnectivitySnapshotCollector
             assessment.Confidence,
             warnings,
             errors);
+        flight.Completed(assessment.Value);
+        return snapshot;
     }
 
     private static string[] Merge(params string[][] values)

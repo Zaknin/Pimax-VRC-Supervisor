@@ -1,0 +1,1 @@
+{"schemaVersion":"windows-event-correlation-v1","channels":[{"channel":"System","status":"accessDenied","recordCount":0,"error":"UnauthorizedAccessException"}],"events":[],"warnings":["Synthetic unavailable channel"]}

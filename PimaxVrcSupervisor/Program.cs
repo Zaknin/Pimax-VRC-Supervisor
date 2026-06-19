@@ -17,6 +17,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using Microsoft.Win32;
 using PimaxVrcSupervisor.BaseStations;
+using PimaxVrcSupervisor.Diagnostics;
 using Windows.Devices.Bluetooth.Advertisement;
 
 using var shutdown = new CancellationTokenSource();
@@ -34,6 +35,22 @@ var showStartupIntegrationResult = startupContext.ShowStartupIntegrationResult;
 var desktopTuiDefaultInterface = startupContext.DesktopTuiDefaultInterface;
 var explicitConfigSupplied = startupContext.ExplicitConfigSupplied;
 var configPath = startupContext.ExplicitConfigPath;
+if (commandLineArgs.Any(arg => string.Equals(arg, "windows-event-correlation-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var request = WindowsEventCorrelationRequest.Parse(commandLineArgs);
+    var result = new WindowsEventCorrelationCollector().Collect(request);
+    Console.WriteLine(JsonSerializer.Serialize(result, HardwareFlightRecorder.JsonOptions));
+    return;
+}
+
+if (commandLineArgs.Any(arg => string.Equals(arg, "hardware-flight-recorder-analysis-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var request = HardwareFlightRecorderAnalysisRequest.Parse(commandLineArgs);
+    var result = new HardwareFlightRecorderAnalyzer().Analyze(request);
+    Console.WriteLine(JsonSerializer.Serialize(result, HardwareFlightRecorder.JsonOptions));
+    return;
+}
+
 if (commandLineArgs.Any(arg => string.Equals(arg, "base-station-startup-analysis-json", StringComparison.OrdinalIgnoreCase)))
 {
     var request = PimaxVrcSupervisor.BaseStationStartupAnalysisRequest.Parse(commandLineArgs);
@@ -162,10 +179,14 @@ if (applyStartupIntegration)
 
     return;
 }
+var flightSessionStartedAt = DateTimeOffset.UtcNow;
+using var hardwareFlightSession = HardwareFlightRecorder.StartDefault(watchVrchatAutoLaunch ? "Watcher" : "Supervisor");
+DeferredWindowsEventSnapshot.ScheduleIfNeeded(hardwareFlightSession.PreviousSession, flightSessionStartedAt);
 if (watchVrchatAutoLaunch)
 {
     var skipCurrentSteamVrSession = commandLineArgs.Any(arg => string.Equals(arg, "--skip-current-vrserver-session", StringComparison.OrdinalIgnoreCase));
     await AutoLaunchWatcher.RunAsync(skipCurrentSteamVrSession, desktopTuiDefaultInterface, configPath, shutdown.Token);
+    hardwareFlightSession.MarkCleanShutdown("watcher-returned");
     return;
 }
 
@@ -207,6 +228,7 @@ var supervisorStopped = new TaskCompletionSource(TaskCreationOptions.RunContinua
 Console.CancelKeyPress += (_, eventArgs) =>
 {
     eventArgs.Cancel = true;
+    hardwareFlightSession.ShutdownRequested("Ctrl+C");
     RunBlockingGracefulShutdown(supervisor, supervisorStopped.Task);
 };
 using var consoleCloseHandler = ConsoleCloseHandler.Register(
@@ -218,6 +240,7 @@ using var consoleCloseHandler = ConsoleCloseHandler.Register(
 try
 {
     await supervisor.RunAsync(shutdown.Token);
+    hardwareFlightSession.MarkCleanShutdown("supervisor-returned");
 }
 finally
 {
@@ -4942,6 +4965,12 @@ internal sealed class AppSupervisor
         bool initialPassOnly,
         CancellationToken cancellationToken)
     {
+        using var flight = HardwareFlightRecorder.Begin(new(
+            "baseStationStartup", "AppSupervisor.RunScheduledBaseStationStartupAsync",
+            ["bluetoothAdapter", "baseStations", "steamVrLifecycle"],
+            SessionId: _baseStationDiagnostics.SessionId,
+            StartupBurstId: epoch.Identity,
+            DeviceCategory: "baseStations"));
         TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Running, caller, initialPassOnly ? "running initial base-station wake pass" : "running base-station startup routine");
         _baseStationDiagnostics.WriteEvent(
             "schedulerDelayCompleted",
@@ -4996,9 +5025,11 @@ internal sealed class AppSupervisor
                 configuredStationCount: GetEnabledBaseStations().Length,
                 currentStage: _baseStationStartupSchedulerState.ToString(),
                 outcome: result.ToString());
+            flight.Completed(result.ToString());
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            flight.Cancelled();
             TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Cancelled, caller, "base-station startup cancelled");
             WriteDiagnosticEvent(
                 "base_station_startup_execution"
@@ -5006,6 +5037,11 @@ internal sealed class AppSupervisor
                 + "; cancellationReason=shutdown"
                 + $"; epoch={epoch.Identity}"
                 + $"; caller={caller}");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            flight.Failed(ex);
             throw;
         }
     }
@@ -5726,6 +5762,7 @@ internal sealed class AppSupervisor
             {
                 for (var attempt = 1; attempt <= Math.Max(1, attemptsPerStation); attempt++)
                 {
+                    HardwareOperationScope? flight = null;
                     try
                     {
                         var operation = _baseStationDiagnostics.CreateOperation(
@@ -5745,10 +5782,20 @@ internal sealed class AppSupervisor
                             retryNumber: retryNumber,
                             station: baseStation,
                             outcome: $"attempt {attempt}/{attemptsPerStation}; totalBursts={totalBursts}");
+                        flight = HardwareFlightRecorder.Begin(new(
+                            "baseStationCommand", "AppSupervisor.SendBaseStationCommandsAsync",
+                            ["bluetoothAdapter", "baseStations"],
+                            OperationId: operation.OperationId,
+                            SessionId: _baseStationDiagnostics.SessionId,
+                            StationOperationId: operation.OperationId,
+                            DeviceCategory: "baseStation",
+                            DeviceIdentity: baseStation.BluetoothAddress,
+                            ExpectedTimeoutMilliseconds: BaseStationCommandTiming.PowerOnCommandTimeout.TotalMilliseconds));
                         await RunBaseStationPowerOnCommandWithTimeoutAsync(
                             token => commandAsync(baseStation, token, operation),
                             cancellationToken,
                             operation);
+                        flight.Completed("commandSucceeded");
                         successes++;
                         onSuccess?.Invoke(index);
                         _baseStationPowerOnLastFailure.Remove(baseStation.BluetoothAddress);
@@ -5759,12 +5806,17 @@ internal sealed class AppSupervisor
                     }
                     catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                     {
+                        if (ex is TimeoutException) flight?.TimedOut(ex); else flight?.Failed(ex);
                         lastException = ex;
                         if (attempt < attemptsPerStation)
                         {
                             Console.WriteLine($"Base station {baseStation.DisplayName}: {action} attempt {attempt} failed: {ex.Message}. Trying again.");
                             await Task.Delay(BaseStationCommandTiming.InterStationDelay, cancellationToken);
                         }
+                    }
+                    finally
+                    {
+                        flight?.Dispose();
                     }
                 }
             }
@@ -7397,16 +7449,16 @@ internal sealed class AppSupervisor
     }
 
     private async Task<bool> IsPimaxConnectedAsync(CancellationToken cancellationToken)
-        => await IsDeviceConnectedAsync(_config.PimaxDetectors, cancellationToken);
+        => await IsDeviceConnectedAsync(_config.PimaxDetectors, "headsetConnectivityDetection", "AppSupervisor.IsPimaxConnectedAsync", "pimaxHeadset", cancellationToken);
 
     private async Task<bool> IsMouthTrackerConnectedAsync(CancellationToken cancellationToken)
-        => await IsDeviceConnectedAsync(_config.MouthTrackerDetectors, cancellationToken);
+        => await IsDeviceConnectedAsync(_config.MouthTrackerDetectors, "viveFaceTrackerDetection", "AppSupervisor.IsMouthTrackerConnectedAsync", "viveFaceTracker", cancellationToken);
 
     private async Task<bool> IsLovenseConnectedAsync(CancellationToken cancellationToken)
     {
         try
         {
-            if (await IsDeviceConnectedAsync(_config.LovenseDetectors, cancellationToken))
+            if (await IsDeviceConnectedAsync(_config.LovenseDetectors, "mouthTrackerDetection", "AppSupervisor.IsLovenseConnectedAsync", "mouthTracker", cancellationToken))
             {
                 return true;
             }
@@ -7492,18 +7544,34 @@ internal sealed class AppSupervisor
         }
     }
 
-    private async Task<bool> IsDeviceConnectedAsync(string[][] detectorGroups, CancellationToken cancellationToken)
+    private async Task<bool> IsDeviceConnectedAsync(
+        string[][] detectorGroups,
+        string category,
+        string routine,
+        string resourceTag,
+        CancellationToken cancellationToken)
     {
-        var output = await RunProcessForOutputAsync(
-            "pnputil.exe",
-            "/enum-devices /connected",
-            TimeSpan.FromSeconds(_config.DeviceProbeTimeoutSeconds),
-            cancellationToken);
+        using var flight = HardwareFlightRecorder.Begin(new(
+            category, routine, ["usbPnp", resourceTag], DeviceCategory: resourceTag,
+            ExpectedTimeoutMilliseconds: TimeSpan.FromSeconds(_config.DeviceProbeTimeoutSeconds).TotalMilliseconds));
+        string output;
+        try
+        {
+            output = await HardwareFlightRecorder.NativeCallAsync(flight, "pnputil /enum-devices /connected", () => RunProcessForOutputAsync(
+                "pnputil.exe", "/enum-devices /connected", TimeSpan.FromSeconds(_config.DeviceProbeTimeoutSeconds), cancellationToken));
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            flight.TimedOut(ex);
+            throw;
+        }
 
         var deviceBlocks = SplitDeviceBlocks(output);
-        return detectorGroups
+        var connected = detectorGroups
             .Where(group => group.Length > 0)
             .Any(group => deviceBlocks.Any(block => DetectorGroupMatchesBlock(group, block)));
+        flight.Completed(connected ? "matched" : "notMatched");
+        return connected;
     }
 
     private static string[] SplitDeviceBlocks(string pnputilOutput)

@@ -1,0 +1,1 @@
+{"schema":"supervisor-hardware-flight-recorder-v1","eventId":"e16","processSequence":2,"timestampUtc":"2026-01-01T08:00:01Z","bootIdentity":"boot-g","processSessionId":"session-rotation","processName":"Supervisor","stage":"heartbeat","flushClass":"normal"}
