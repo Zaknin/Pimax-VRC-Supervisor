@@ -44,6 +44,100 @@ public sealed class PimaxUsbPairedPortCycleExperimentTests
         Assert.False(PimaxUsbPairedValidator.Validate(signature, state, new(2026, 6, 18, 12, 0, 0, TimeSpan.Zero)).Safety.Permitted);
     }
 
+    [Theory]
+    [InlineData(@"SWD\MMDEVAPI\{audio-endpoint}")]
+    [InlineData(@"USB\VID_2104&PID_0220\EYECHIP")]
+    [InlineData(@"SWD\CAMERA\PIMAX")]
+    [InlineData(@"HID\VID_28DE&PID_2300\VALVE")]
+    [InlineData(@"SWD\PIMAX_RUNTIME\TRANSIENT")]
+    public void StateDependentDescendantVariationIsInformationalAndHelperBindingStable(string transientDescendant)
+    {
+        var (signature, state) = PimaxUsbPortCycleExperimentTests.Fixture();
+        var approved = signature with
+        {
+            PimaxSuperSpeedPort = signature.PimaxSuperSpeedPort with
+            {
+                DescendantPnpInstanceIds = [.. signature.PimaxSuperSpeedPort.DescendantPnpInstanceIds, transientDescendant]
+            }
+        };
+        var original = PimaxUsbPairedValidator.Validate(signature, state, FixtureNow);
+        var blue = PimaxUsbPairedValidator.Validate(approved, state, FixtureNow);
+        Assert.True(blue.Safety.Permitted);
+        Assert.Contains(blue.Safety.Warnings, warning => warning.Contains("state-dependent descendants differ", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(original.Plan!.BindingSha256, blue.Plan!.BindingSha256);
+        Assert.Equal(PimaxUsbPortCycleTargetValidator.StableTargetSignatureFingerprint(signature),
+            PimaxUsbPortCycleTargetValidator.StableTargetSignatureFingerprint(approved));
+    }
+
+    [Fact]
+    public void ReorderedRuntimeDescendantsDoNotChangePhysicalIdentityFingerprint()
+    {
+        var (signature, _) = PimaxUsbPortCycleExperimentTests.Fixture();
+        var reordered = signature with
+        {
+            PimaxUsb2Port = signature.PimaxUsb2Port with { DescendantPnpInstanceIds = [.. signature.PimaxUsb2Port.DescendantPnpInstanceIds.Reverse()] },
+            PimaxSuperSpeedPort = signature.PimaxSuperSpeedPort with { DescendantPnpInstanceIds = [.. signature.PimaxSuperSpeedPort.DescendantPnpInstanceIds.Reverse()] }
+        };
+        Assert.Equal(PimaxUsbPortCycleTargetValidator.StableTargetSignatureFingerprint(signature),
+            PimaxUsbPortCycleTargetValidator.StableTargetSignatureFingerprint(reordered));
+    }
+
+    [Fact]
+    public void UnrelatedPortRuntimeChildrenDoNotChangePhysicalPortInventory()
+    {
+        var (signature, state) = PimaxUsbPortCycleExperimentTests.Fixture();
+        var changedPorts = state.Topology.Ports.Select(port => port.ConnectionIndex == 1
+            ? port with { DescendantPnpInstanceIds = [.. port.DescendantPnpInstanceIds, @"SWD\RUNTIME\TRANSIENT"] }
+            : port).ToArray();
+        var changedState = state with { Topology = state.Topology with { Ports = changedPorts } };
+        Assert.True(PimaxUsbPairedValidator.Validate(signature, changedState, FixtureNow).Safety.Permitted);
+    }
+
+    [Fact]
+    public void PhysicalIdentityChangesAlterFingerprint()
+    {
+        var (signature, _) = PimaxUsbPortCycleExperimentTests.Fixture();
+        var changes = new[]
+        {
+            signature with { Usb2Hub = signature.Usb2Hub with { InterfacePath = "changed" } },
+            signature with { SuperSpeedHub = signature.SuperSpeedHub with { PnpInstanceId = "changed" } },
+            signature with { PimaxUsb2Port = signature.PimaxUsb2Port with { ConnectionIndex = 3 } },
+            signature with { PimaxSuperSpeedPort = signature.PimaxSuperSpeedPort with { ConnectorGroupId = "changed" } },
+            signature with { ViveUsb2Port = signature.ViveUsb2Port with { ConnectorGroupId = "changed" } }
+        };
+        var original = PimaxUsbPortCycleTargetValidator.StableTargetSignatureFingerprint(signature);
+        Assert.All(changes, changed => Assert.NotEqual(original, PimaxUsbPortCycleTargetValidator.StableTargetSignatureFingerprint(changed)));
+    }
+
+    [Fact]
+    public void MissingViveNonreciprocalCompanionAndUnrelatedPimaxOccupantAreRejected()
+    {
+        var (signature, state) = PimaxUsbPortCycleExperimentTests.Fixture();
+        var viveMissingPorts = state.Topology.Ports.Select(port => port.ConnectionIndex == 2 ? port with { DeviceConnected = false } : port).ToArray();
+        Assert.False(PimaxUsbPairedValidator.Validate(signature, state with { Topology = state.Topology with { Ports = viveMissingPorts } }, FixtureNow).Safety.Permitted);
+
+        var nonreciprocalPorts = state.Topology.Ports.Select(port => port.ConnectionIndex == 4 ? port with { Companions = [] } : port).ToArray();
+        Assert.False(PimaxUsbPairedValidator.Validate(signature, state with { Topology = state.Topology with { Ports = nonreciprocalPorts } }, FixtureNow).Safety.Permitted);
+
+        var unsafeGroups = state.Topology.ConnectorGroups.Select(group => group.GroupId == signature.PimaxUsb2Port.ConnectorGroupId
+            ? group with { ContainsUnrelatedOccupant = true } : group).ToArray();
+        Assert.False(PimaxUsbPairedValidator.Validate(signature, state with { Topology = state.Topology with { ConnectorGroups = unsafeGroups } }, FixtureNow).Safety.Permitted);
+    }
+
+    [Fact]
+    public void RootHubAndControllerTargetsAreRejected()
+    {
+        var (signature, state) = PimaxUsbPortCycleExperimentTests.Fixture();
+        var rootHub = state.Topology.Hubs.Single(hub => hub.InterfacePath == signature.SuperSpeedHub.InterfacePath) with { IsRootHub = true, HubType = "root" };
+        var rootState = state with { Topology = state.Topology with { Hubs = state.Topology.Hubs.Select(hub => hub.HubId == rootHub.HubId ? rootHub : hub).ToArray() } };
+        var rootSignature = signature with { SuperSpeedHub = PimaxUsbPortCycleTargetValidator.Identity(rootHub) };
+        Assert.False(PimaxUsbPairedValidator.Validate(rootSignature, rootState, FixtureNow).Safety.Permitted);
+
+        var controllerHub = state.Topology.Hubs.Single(hub => hub.InterfacePath == signature.SuperSpeedHub.InterfacePath) with { Product = "xHCI controller" };
+        var controllerState = state with { Topology = state.Topology with { Hubs = state.Topology.Hubs.Select(hub => hub.HubId == controllerHub.HubId ? controllerHub : hub).ToArray() } };
+        Assert.False(PimaxUsbPairedValidator.Validate(signature, controllerState, FixtureNow).Safety.Permitted);
+    }
+
     [Fact]
     public void EnvelopeRejectsWrongSchemaHashLimitsPoliciesAndExpiry()
     {

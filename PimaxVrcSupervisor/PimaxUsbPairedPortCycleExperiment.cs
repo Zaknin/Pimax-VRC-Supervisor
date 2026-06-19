@@ -398,8 +398,8 @@ internal sealed class PimaxUsbPairedExperimentRunner(IPimaxUsbPortCycleStateColl
             var usb2 = Changed(signature.Usb2Hub, 4, baseline.Topology, final.Topology);
             var superSpeed = Changed(signature.SuperSpeedHub, 4, baseline.Topology, final.Topology);
             var vive = !Changed(signature.Usb2Hub, 2, baseline.Topology, final.Topology) && !Changed(signature.SuperSpeedHub, 2, baseline.Topology, final.Topology);
-            var unrelated = PimaxUsbPortCycleTargetValidator.Fingerprint(PimaxUsbPortCycleTargetValidator.Inventory(baseline.Topology, FindHub(baseline.Topology, signature.Usb2Hub), FindHub(baseline.Topology, signature.SuperSpeedHub)))
-                == PimaxUsbPortCycleTargetValidator.Fingerprint(PimaxUsbPortCycleTargetValidator.Inventory(final.Topology, FindHub(final.Topology, signature.Usb2Hub), FindHub(final.Topology, signature.SuperSpeedHub)));
+            var unrelated = PimaxUsbPortCycleTargetValidator.StablePhysicalInventoryFingerprint(PimaxUsbPortCycleTargetValidator.Inventory(baseline.Topology, FindHub(baseline.Topology, signature.Usb2Hub), FindHub(baseline.Topology, signature.SuperSpeedHub)))
+                == PimaxUsbPortCycleTargetValidator.StablePhysicalInventoryFingerprint(PimaxUsbPortCycleTargetValidator.Inventory(final.Topology, FindHub(final.Topology, signature.Usb2Hub), FindHub(final.Topology, signature.SuperSpeedHub)));
             var expected = signature.PimaxUsb2Port.DescendantPnpInstanceIds.Concat(signature.PimaxSuperSpeedPort.DescendantPnpInstanceIds).Distinct(StringComparer.OrdinalIgnoreCase);
             var actual = final.Topology.Ports.Where(port => port.PhysicalConnectorGroupId == signature.PimaxUsb2Port.ConnectorGroupId).SelectMany(port => port.DescendantPnpInstanceIds).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var missing = expected.Where(value => !actual.Contains(value)).ToArray();

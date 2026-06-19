@@ -881,6 +881,7 @@ internal static class PimaxRuntimeEvidenceProbe
                 return;
             }
 
+            var sourceEvents = new List<PimaxRuntimeEvidenceEvent>();
             foreach (var file in Directory.EnumerateFiles(folder, searchPattern)
                 .Select(path => new FileInfo(path))
                 .OrderByDescending(file => file.LastWriteTimeUtc)
@@ -888,10 +889,11 @@ internal static class PimaxRuntimeEvidenceProbe
             {
                 var lines = ReadTailLines(file.FullName, MaxTailBytes);
                 var ageReference = DateTimeOffset.Now;
-                var sourceEvents = ParseLines(source, file, lines, parser, ageReference)
-                    .TakeLast(MaxEventsPerSource);
-                events.AddRange(sourceEvents);
+                sourceEvents.AddRange(ParseLines(source, file, lines, parser, ageReference));
             }
+            events.AddRange(sourceEvents
+                .OrderByDescending(ev => ev.EventTimestamp ?? ev.SourceLastWriteTime)
+                .Take(MaxEventsPerSource));
         }
         catch (UnauthorizedAccessException ex)
         {

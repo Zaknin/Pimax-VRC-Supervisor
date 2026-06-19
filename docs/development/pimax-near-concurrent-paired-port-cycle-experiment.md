@@ -8,9 +8,22 @@ Phase 28C3B-R proved that one USB 2 index-4 cycle was accepted in 0.4488 ms and 
 
 The exact evidence-bound targets are external SuperSpeed hub `05E3:0626` index 4 and external USB 2 hub `05E3:0610` index 4. Both must remain reciprocal companions on the proven Pimax connector. Vive remains excluded at index 2 on both sides, and unrelated ports must match the approved inventory.
 
+## Target-signature field classification
+
+The privileged request separates stable physical identity from runtime recovery evidence:
+
+| Class | Fields | Validation role |
+| --- | --- | --- |
+| Identity-critical | Exact USB 2 and SuperSpeed hub interface, PnP, container, hardware, location, VID/PID, hub type, root/controller exclusion; connection indexes; reciprocal companion metadata; Pimax and Vive connector groups; connected physical occupant classification; unrelated physical-port inventory | Hard gate in dry-run, preparation, and helper-side final validation |
+| State-dependent | MMDEVAPI, audio, camera, EyeChip, Valve/HID, composite children, runtime-created interfaces, and other Pimax descendant PnP nodes | Recorded before and after the operation and used to evaluate recovery, but not included in physical target equality |
+| Presentation-only | Human-readable products, manufacturers, warnings, explanations, and report labels | Evidence and operator display only |
+| Timing-derived | Observer update age, marker age, token expiry, monotonic entry/return timestamps, and submission skew | Freshness, ordering, and result analysis; never physical connector identity |
+
+The approved green-state descendant inventory remains diagnostic evidence. Its absence in a blue/unregistered state, including an absent `SWD\MMDEVAPI` endpoint, does not mean that the physical hub connector changed. Conversely, descendant variation is not ignored indiscriminately: an unrelated physical occupant on Pimax index 4, a moved or missing Vive connector, a changed hub/index/connector, or a nonreciprocal companion relationship remains a hard stop.
+
 ## Command and helper
 
-`pimax-usb-paired-port-cycle-experiment-json` emits `pimax-usb-paired-port-cycle-experiment-v1`. Its dry-run, prepare, and observe-result modes reuse the full topology, registration, process, marker-freshness, nonce, expiry, token, request-hash, and Phase 29B guards. Observe-result is read-only and correlates the final paired helper result with bounded topology and registration samples. The existing `pimax-usb-paired-port-cycle-design-json` command remains non-mutating.
+`pimax-usb-paired-port-cycle-experiment-json` emits `pimax-usb-paired-port-cycle-experiment-v1`. Its dry-run, prepare, and observe-result modes reuse the full topology, registration, process, marker-freshness, nonce, expiry, token, request-hash, and active Phase 29 deployment guards. Observe-result is read-only and correlates the final paired helper result with bounded topology and registration samples. The existing `pimax-usb-paired-port-cycle-design-json` command remains non-mutating.
 
 Execution is restricted to `PimaxVrcSupervisor.PairedPortCycleHelper.exe`, which accepts only `pimax-paired-companion-port-cycle-request-v1`. The existing single-side helper retains its one-call-only contract and rejects this paired command.
 

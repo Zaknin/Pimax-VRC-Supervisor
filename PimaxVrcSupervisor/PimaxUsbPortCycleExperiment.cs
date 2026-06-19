@@ -101,6 +101,13 @@ internal sealed record PimaxUsbPortCyclePortIdentity(
     string OccupantClassification,
     string[] DescendantPnpInstanceIds);
 
+internal sealed record PimaxUsbPortCyclePhysicalPortIdentity(
+    string ConnectorGroupId,
+    int ConnectionIndex,
+    string OccupantClassification);
+
+internal sealed record PimaxUsbPortCycleStateDependentDescendants(string[] PnpInstanceIds);
+
 internal sealed record PimaxUsbPortCycleInventoryItem(
     string HubPnpInstanceId,
     int ConnectionIndex,
@@ -422,8 +429,11 @@ internal static class PimaxUsbPortCycleTargetValidator
         Check(ssMatches.Length == 1, "Exact SuperSpeed companion hub exists once.", "Exact SuperSpeed companion hub is missing or ambiguous.", passed, failed);
         if (usb2Matches.Length != 1 || ssMatches.Length != 1) return (null, new(false, passed.ToArray(), failed.ToArray(), warnings.ToArray()));
         var usb2Hub = usb2Matches[0]; var ssHub = ssMatches[0];
-        Check(!usb2Hub.IsRootHub && !usb2Hub.HubType.Contains("root", StringComparison.OrdinalIgnoreCase), "Target is not a root hub.", "Target resolves to a root hub.", passed, failed);
-        Check(!Text(usb2Hub).Contains("xhci", StringComparison.OrdinalIgnoreCase), "Target is not an xHCI controller.", "Target resembles an xHCI controller.", passed, failed);
+        Check(!usb2Hub.IsRootHub && !usb2Hub.HubType.Contains("root", StringComparison.OrdinalIgnoreCase)
+            && !ssHub.IsRootHub && !ssHub.HubType.Contains("root", StringComparison.OrdinalIgnoreCase),
+            "Targets are not root hubs.", "A target resolves to a root hub.", passed, failed);
+        Check(!Text(usb2Hub).Contains("xhci", StringComparison.OrdinalIgnoreCase) && !Text(ssHub).Contains("xhci", StringComparison.OrdinalIgnoreCase),
+            "Targets are not xHCI controllers.", "A target resembles an xHCI controller.", passed, failed);
 
         var pimax2 = FindPort(current.Topology, usb2Hub, expected.PimaxUsb2Port.ConnectionIndex);
         var pimax3 = FindPort(current.Topology, ssHub, expected.PimaxSuperSpeedPort.ConnectionIndex);
@@ -432,6 +442,10 @@ internal static class PimaxUsbPortCycleTargetValidator
         Check(PortMatches(expected.PimaxUsb2Port, pimax2), "Pimax USB 2 connector identity matches.", "Pimax USB 2 connector identity changed.", passed, failed);
         Check(PortMatches(expected.PimaxSuperSpeedPort, pimax3), "Pimax SuperSpeed connector identity matches.", "Pimax SuperSpeed connector identity changed.", passed, failed);
         Check(PortMatches(expected.ViveUsb2Port, vive2) && PortMatches(expected.ViveSuperSpeedPort, vive3), "Vive connector remains present on index 2.", "Vive connector is missing or changed.", passed, failed);
+        RecordStateDependentDifference("Pimax USB 2", expected.PimaxUsb2Port, pimax2, warnings);
+        RecordStateDependentDifference("Pimax SuperSpeed", expected.PimaxSuperSpeedPort, pimax3, warnings);
+        RecordStateDependentDifference("Vive USB 2", expected.ViveUsb2Port, vive2, warnings);
+        RecordStateDependentDifference("Vive SuperSpeed", expected.ViveSuperSpeedPort, vive3, warnings);
         Check(pimax2?.Companions.Any(value => value.Reciprocal && value.CompanionPortNumber == 4 && PimaxUsbConnectorGrouper.SameHub(value.CompanionHubSymbolicLink, ssHub.InterfacePath)) == true
             && pimax3?.Companions.Any(value => value.Reciprocal && value.CompanionPortNumber == 4 && PimaxUsbConnectorGrouper.SameHub(value.CompanionHubSymbolicLink, usb2Hub.InterfacePath)) == true,
             "Pimax companion mapping is reciprocal.", "Pimax companion mapping is not reciprocal.", passed, failed);
@@ -451,11 +465,11 @@ internal static class PimaxUsbPortCycleTargetValidator
             "Observer is active.", "Observer is missing, stopped, or stale.", passed, failed);
         Check(IsMarkerFresh(current.Observer, now),
             "Connect scan marker is recent.", "Connect scan marker is missing or stale.", passed, failed);
-        Check(Phase29Matches(expected.Phase29, current.Phase29), "Phase 29B deployment and logs remain intact.", "Phase 29B integrity changed or could not be verified.", passed, failed);
+        Check(Phase29Matches(expected.Phase29, current.Phase29), "Active Phase 29 deployment and logs remain intact.", "Active Phase 29 integrity changed or could not be verified.", passed, failed);
 
         var plan = new PimaxUsbPortCyclePlan(PimaxUsbPortCycleExperimentKind.CycleExactExternalHubUsb2Port, Identity(usb2Hub), 4,
             expected.PimaxUsb2Port.ConnectorGroupId, Identity(ssHub), 4, expected.ViveUsb2Port.ConnectorGroupId, 2,
-            NormalizeStrings(pimax2?.DescendantPnpInstanceIds ?? []), 0,
+            NormalizeStrings((pimax2?.DescendantPnpInstanceIds ?? []).Concat(pimax3?.DescendantPnpInstanceIds ?? [])), 0,
             Inventory(current.Topology, usb2Hub, ssHub), current.Registration.Assessment.State, current.Registration.Assessment.Confidence,
             current.Connectivity.Assessment.Value, current.PimaxPlayRunning, current.SteamVrRunning, current.Observer,
             "IOCTL_USB_HUB_CYCLE_PORT", 1, PimaxUsbPortCycleSafetyBoundary.ExcludedOperations, "");
@@ -472,13 +486,22 @@ internal static class PimaxUsbPortCycleTargetValidator
             .ThenBy(item => item.ChildPnpInstanceId, StringComparer.OrdinalIgnoreCase).ToArray();
 
     private static bool InventoryMatches(PimaxUsbPortCycleInventoryItem[] expected, PimaxUsbPortCycleInventoryItem[] current)
-        => Fingerprint(NormalizeInventory(expected)) == Fingerprint(NormalizeInventory(current));
+        => StablePhysicalInventoryFingerprint(expected) == StablePhysicalInventoryFingerprint(current);
     private static PimaxUsbPortRecord? FindPort(PimaxUsbPhysicalPortSnapshot snapshot, PimaxUsbHubRecord hub, int index)
         => snapshot.Ports.SingleOrDefault(port => port.HubId == hub.HubId && port.ConnectionIndex == index);
     private static bool PortMatches(PimaxUsbPortCyclePortIdentity expected, PimaxUsbPortRecord? current)
         => current is not null && current.ConnectionIndex == expected.ConnectionIndex
-            && current.PhysicalConnectorGroupId == expected.ConnectorGroupId && current.DeviceConnected
-            && Fingerprint(NormalizeStrings(current.DescendantPnpInstanceIds)) == Fingerprint(NormalizeStrings(expected.DescendantPnpInstanceIds));
+            && current.PhysicalConnectorGroupId == expected.ConnectorGroupId && current.DeviceConnected;
+    private static void RecordStateDependentDifference(string label, PimaxUsbPortCyclePortIdentity expected, PimaxUsbPortRecord? current, List<string> warnings)
+    {
+        if (current is null) return;
+        var approved = StateDependentDescendants(expected).PnpInstanceIds;
+        var live = StateDependentDescendants(current).PnpInstanceIds;
+        if (Fingerprint(approved) == Fingerprint(live)) return;
+        var absent = approved.Except(live, StringComparer.OrdinalIgnoreCase).ToArray();
+        var additional = live.Except(approved, StringComparer.OrdinalIgnoreCase).ToArray();
+        warnings.Add($"{label} state-dependent descendants differ from the approved baseline; absent=[{string.Join(", ", absent)}]; additional=[{string.Join(", ", additional)}]. Physical connector validation is unaffected.");
+    }
     private static bool HubMatches(PimaxUsbPortCycleHubIdentity expected, PimaxUsbHubRecord current)
         => Same(expected.InterfacePath, current.InterfacePath) && Same(expected.PnpInstanceId, current.PnpInstanceId)
             && Same(expected.ContainerId, current.ContainerId) && Same(expected.Vid, current.Vid) && Same(expected.Pid, current.Pid)
@@ -512,9 +535,8 @@ internal static class PimaxUsbPortCycleTargetValidator
         plan.SuperSpeedCompanionIndex,
         plan.ViveConnectorGroupId,
         plan.ViveConnectionIndex,
-        PimaxDescendantInventory = NormalizeStrings(plan.PimaxDescendantInventory),
         plan.UnrelatedOccupantCount,
-        OtherPortOccupants = NormalizeInventory(plan.OtherPortOccupants),
+        OtherPortOccupants = NormalizePhysicalInventory(plan.OtherPortOccupants),
         plan.RegistrationState,
         plan.RegistrationConfidence,
         plan.FilteredConnectivity,
@@ -529,12 +551,12 @@ internal static class PimaxUsbPortCycleTargetValidator
     {
         signature.Schema,
         Usb2Hub = NormalizeHub(signature.Usb2Hub),
-        PimaxUsb2Port = NormalizePort(signature.PimaxUsb2Port),
+        PimaxUsb2Port = PhysicalIdentity(signature.PimaxUsb2Port),
         SuperSpeedHub = NormalizeHub(signature.SuperSpeedHub),
-        PimaxSuperSpeedPort = NormalizePort(signature.PimaxSuperSpeedPort),
-        ViveUsb2Port = NormalizePort(signature.ViveUsb2Port),
-        ViveSuperSpeedPort = NormalizePort(signature.ViveSuperSpeedPort),
-        UnrelatedPortInventory = NormalizeInventory(signature.UnrelatedPortInventory),
+        PimaxSuperSpeedPort = PhysicalIdentity(signature.PimaxSuperSpeedPort),
+        ViveUsb2Port = PhysicalIdentity(signature.ViveUsb2Port),
+        ViveSuperSpeedPort = PhysicalIdentity(signature.ViveSuperSpeedPort),
+        UnrelatedPortInventory = NormalizePhysicalInventory(signature.UnrelatedPortInventory),
         signature.Phase29
     });
     internal static string PrivilegedRequestFingerprint(PimaxUsbPortCyclePrivilegedPayload payload) => Fingerprint(new
@@ -569,16 +591,24 @@ internal static class PimaxUsbPortCycleTargetValidator
             observer.MaximumConnectMarkerAgeSeconds, observer.ConnectAction);
     private static PimaxUsbPortCycleHubIdentity NormalizeHub(PimaxUsbPortCycleHubIdentity hub)
         => hub with { HardwareIds = NormalizeStrings(hub.HardwareIds), LocationPaths = NormalizeStrings(hub.LocationPaths) };
-    private static PimaxUsbPortCyclePortIdentity NormalizePort(PimaxUsbPortCyclePortIdentity port)
-        => port with { DescendantPnpInstanceIds = NormalizeStrings(port.DescendantPnpInstanceIds) };
-    private static PimaxUsbPortCycleInventoryItem[] NormalizeInventory(PimaxUsbPortCycleInventoryItem[] items)
-        => items.Select(item => item with { DescendantPnpInstanceIds = NormalizeStrings(item.DescendantPnpInstanceIds) })
-            .GroupBy(InventoryKey, StringComparer.OrdinalIgnoreCase).Select(group => group.First())
+    internal static PimaxUsbPortCyclePhysicalPortIdentity PhysicalIdentity(PimaxUsbPortCyclePortIdentity port)
+        => new(port.ConnectorGroupId, port.ConnectionIndex, port.OccupantClassification);
+    internal static PimaxUsbPortCycleStateDependentDescendants StateDependentDescendants(PimaxUsbPortCyclePortIdentity port)
+        => new(NormalizeStrings(port.DescendantPnpInstanceIds));
+    internal static PimaxUsbPortCycleStateDependentDescendants StateDependentDescendants(PimaxUsbPortRecord port)
+        => new(NormalizeStrings(port.DescendantPnpInstanceIds));
+    private static PimaxUsbPortCycleInventoryItem[] NormalizePhysicalInventory(PimaxUsbPortCycleInventoryItem[] items)
+        => items.Select(item => item with { DescendantPnpInstanceIds = [] })
+            .GroupBy(PhysicalInventoryKey, StringComparer.OrdinalIgnoreCase).Select(group => group.First())
             .OrderBy(item => item.HubPnpInstanceId, StringComparer.OrdinalIgnoreCase).ThenBy(item => item.ConnectionIndex)
             .ThenBy(item => item.ChildPnpInstanceId, StringComparer.OrdinalIgnoreCase).ToArray();
+    internal static string StablePhysicalInventoryFingerprint(PimaxUsbPortCycleInventoryItem[] items)
+        => Fingerprint(NormalizePhysicalInventory(items));
     private static string InventoryKey(PimaxUsbPortCycleInventoryItem item)
         => string.Join('|', item.HubPnpInstanceId, item.ConnectionIndex, item.ConnectionStatus, item.VendorId, item.ProductId,
             item.ChildPnpInstanceId, string.Join('\u001f', NormalizeStrings(item.DescendantPnpInstanceIds)));
+    private static string PhysicalInventoryKey(PimaxUsbPortCycleInventoryItem item)
+        => string.Join('|', item.HubPnpInstanceId, item.ConnectionIndex, item.ConnectionStatus, item.VendorId, item.ProductId, item.ChildPnpInstanceId);
     internal static string[] NormalizeStrings(IEnumerable<string> values)
         => values.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
     internal static string Fingerprint<T>(T value) => Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(value, PimaxUsbPortCycleJson.Options)));
