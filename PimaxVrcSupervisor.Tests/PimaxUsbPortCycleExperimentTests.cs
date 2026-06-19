@@ -396,7 +396,7 @@ public sealed class PimaxUsbPortCycleExperimentTests
         Assert.Equal(json.Length, document.RootElement.GetRawText().Length);
     }
 
-    private static (PimaxUsbPortCycleTargetSignature Signature, PimaxUsbPortCycleRuntimeState State) Fixture()
+    internal static (PimaxUsbPortCycleTargetSignature Signature, PimaxUsbPortCycleRuntimeState State) Fixture()
     {
         var usb2 = Hub("hub2", @"\\?\usb#vid_05e3&pid_0610#exact#{guid}", "USB\\VID_05E3&PID_0610\\exact", "0610", "usb20");
         var usb3 = Hub("hub3", @"\\?\usb#vid_05e3&pid_0626#exact#{guid}", "USB\\VID_05E3&PID_0626\\exact", "0626", "usb30");
