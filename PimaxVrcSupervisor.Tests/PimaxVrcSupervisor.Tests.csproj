@@ -20,4 +20,10 @@
     <ProjectReference Include="..\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Fixtures\BaseStationStartup\*.jsonl">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

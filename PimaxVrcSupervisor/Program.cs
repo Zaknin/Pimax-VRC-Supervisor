@@ -34,6 +34,14 @@ var showStartupIntegrationResult = startupContext.ShowStartupIntegrationResult;
 var desktopTuiDefaultInterface = startupContext.DesktopTuiDefaultInterface;
 var explicitConfigSupplied = startupContext.ExplicitConfigSupplied;
 var configPath = startupContext.ExplicitConfigPath;
+if (commandLineArgs.Any(arg => string.Equals(arg, "base-station-startup-analysis-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var request = PimaxVrcSupervisor.BaseStationStartupAnalysisRequest.Parse(commandLineArgs);
+    var result = new PimaxVrcSupervisor.BaseStationStartupAnalyzer().Analyze(request);
+    Console.WriteLine(JsonSerializer.Serialize(result, PimaxVrcSupervisor.BaseStationStartupAnalysisJson.Options));
+    return;
+}
+
 if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-connectivity-json", StringComparison.OrdinalIgnoreCase)))
 {
     var diagnosticConfig = SupervisorConfig.Load(configPath);
