@@ -60,3 +60,5 @@ A future helper should preallocate or append safely to two side-specific progres
 The design coordinator depends only on `IPimaxUsbPairedSimulationAdapter`. The command constructs the deterministic fake implementation. No paired schema is recognized by the single-side UAC helper, no paired launcher or execute mode exists, and no code in the paired file references `CreateFileW`, `DeviceIoControl`, or the real native adapter.
 
 A future controlled hardware phase is eligible only after review confirms the exact pair can still be preopened and revalidated, side progress survives partial completion, two calls remain the absolute maximum, measured skew is retained, the observer and marker workflow is ready before UAC, and manual physical restoration is available. Paired behavior has not been tested and is not claimed to reproduce physical reseat.
+
+Phase 28C3D implements that first controlled real paired execution path in a dedicated helper. The design command remains simulation-only and hardware-disabled. The experiment path is CLI-only, non-atomic, operator-confirmed, capped at one request per exact logical side, and unavailable to product recovery surfaces.
