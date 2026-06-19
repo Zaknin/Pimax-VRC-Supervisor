@@ -186,3 +186,5 @@ Rollback restores the preserved Phase 29B watcher, arguments, and working direct
 ## Future evidence
 
 Exactly one recommended evidence phase follows deployment: capture natural clean shutdown, reboot, incomplete-session, base-station resolution failure, delay-only, Configurator Scan, and unexpected restart cases with the flight recorder and bounded Windows snapshot. Do not intentionally trigger a crash.
+
+Phase 29G-A adds offline UVC isolation session tooling for the later `usbvideo.sys` crash investigation. See [UVC isolation session correlation tooling](uvc-isolation-session-correlation-tooling.md) for the explicit start/annotate/finish commands, WinDbg text parser, scenario matrix, privacy model, and comparison analyzer. It is operator-invoked only and does not change the Phase 29D-E deployment.

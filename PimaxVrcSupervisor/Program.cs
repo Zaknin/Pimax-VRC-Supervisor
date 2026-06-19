@@ -35,6 +35,38 @@ var showStartupIntegrationResult = startupContext.ShowStartupIntegrationResult;
 var desktopTuiDefaultInterface = startupContext.DesktopTuiDefaultInterface;
 var explicitConfigSupplied = startupContext.ExplicitConfigSupplied;
 var configPath = startupContext.ExplicitConfigPath;
+if (commandLineArgs.Any(arg => string.Equals(arg, "uvc-isolation-session-start-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var request = UvcIsolationStartRequest.Parse(commandLineArgs, configPath);
+    var result = new UvcIsolationSessionService().Start(request);
+    Console.WriteLine(JsonSerializer.Serialize(result, UvcIsolationJson.Options));
+    return;
+}
+
+if (commandLineArgs.Any(arg => string.Equals(arg, "uvc-isolation-session-annotate-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var request = UvcIsolationAnnotationRequest.Parse(commandLineArgs);
+    var result = new UvcIsolationSessionService().Annotate(request);
+    Console.WriteLine(JsonSerializer.Serialize(result, UvcIsolationJson.Options));
+    return;
+}
+
+if (commandLineArgs.Any(arg => string.Equals(arg, "uvc-isolation-session-finish-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var request = UvcIsolationFinishRequest.Parse(commandLineArgs);
+    var result = new UvcIsolationSessionService().Finish(request);
+    Console.WriteLine(JsonSerializer.Serialize(result, UvcIsolationJson.Options));
+    return;
+}
+
+if (commandLineArgs.Any(arg => string.Equals(arg, "uvc-isolation-analysis-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var request = UvcIsolationAnalysisRequest.Parse(commandLineArgs);
+    var result = new UvcIsolationAnalyzer().Analyze(request);
+    Console.WriteLine(JsonSerializer.Serialize(result, UvcIsolationJson.Options));
+    return;
+}
+
 if (commandLineArgs.Any(arg => string.Equals(arg, "windows-event-correlation-json", StringComparison.OrdinalIgnoreCase)))
 {
     var request = WindowsEventCorrelationRequest.Parse(commandLineArgs);

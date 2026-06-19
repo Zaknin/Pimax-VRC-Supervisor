@@ -1,0 +1,26 @@
+{
+  "schema": "uvc-isolation-sanitized-baseline-v1",
+  "incident": "2026-06-19 sanitized UVC crash baseline",
+  "durationApproximate": "12m50s",
+  "result": "confirmedBugcheck",
+  "bugcheckCode": "0xD1",
+  "bugcheckName": "DRIVER_IRQL_NOT_LESS_OR_EQUAL",
+  "faultingSymbol": "usbvideo!CaptureProcessDataPayload+0xb8",
+  "failureBucket": "AV_usbvideo!CaptureProcessDataPayload",
+  "uvcDevices": [
+    {
+      "label": "vive-like UVC",
+      "vid": "0BB4",
+      "pid": "0321"
+    },
+    {
+      "label": "second UVC",
+      "vid": "34A4",
+      "pid": "0012"
+    }
+  ],
+  "supervisorActivityAtInterruption": "no active Supervisor operation",
+  "vrcFaceTracking": "application crash earlier in the session",
+  "whea": "none observed",
+  "gpuTdr": "no current evidence"
+}
