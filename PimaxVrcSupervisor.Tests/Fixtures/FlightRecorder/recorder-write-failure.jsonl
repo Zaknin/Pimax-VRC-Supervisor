@@ -1,0 +1,1 @@
+{"schema":"supervisor-hardware-flight-recorder-v1","eventId":"e18","processSequence":1,"timestampUtc":"2026-01-01T09:00:00Z","bootIdentity":"boot-h","processSessionId":"session-writer","processName":"Supervisor","stage":"heartbeat","result":"writerDegraded","droppedEventCount":3,"warnings":["Synthetic throttled writer failure"],"flushClass":"normal"}

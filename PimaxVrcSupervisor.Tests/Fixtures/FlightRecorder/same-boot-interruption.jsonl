@@ -1,0 +1,2 @@
+{"schema":"supervisor-session-summary-v1","eventId":"e3","processSequence":1,"timestampUtc":"2026-01-01T01:00:00Z","bootIdentity":"boot-a","processSessionId":"session-interrupted","processName":"Supervisor","stage":"processSessionStarted","flushClass":"critical"}
+{"schema":"supervisor-session-summary-v1","eventId":"e4","processSequence":2,"timestampUtc":"2026-01-01T01:00:05Z","bootIdentity":"boot-a","processSessionId":"session-interrupted","processName":"Supervisor","stage":"heartbeat","flushClass":"normal"}

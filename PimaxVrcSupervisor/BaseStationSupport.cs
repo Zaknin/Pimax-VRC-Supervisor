@@ -6,6 +6,7 @@ using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.Advertisement;
 using Windows.Devices.Bluetooth.GenericAttributeProfile;
 using Windows.Devices.Enumeration;
+using PimaxVrcSupervisor.Diagnostics;
 
 namespace PimaxVrcSupervisor.BaseStations;
 
@@ -341,8 +342,14 @@ internal static class BaseStationDiscovery
 {
     public static async Task<bool> HasBluetoothLeAdapterAsync()
     {
-        var adapter = await BluetoothAdapter.GetDefaultAsync().AsTask();
-        return adapter is not null && adapter.IsLowEnergySupported;
+        using var flight = HardwareFlightRecorder.Begin(new(
+            "baseStationBluetoothConnection", "BaseStationDiscovery.HasBluetoothLeAdapterAsync",
+            ["bluetoothAdapter"], DeviceCategory: "bluetoothAdapter"));
+        var adapter = await HardwareFlightRecorder.NativeCallAsync(flight, "BluetoothAdapter.GetDefaultAsync",
+            () => BluetoothAdapter.GetDefaultAsync().AsTask());
+        var available = adapter is not null && adapter.IsLowEnergySupported;
+        flight.Completed(available ? "available" : "unavailable");
+        return available;
     }
 
     public static async Task<IReadOnlyList<BaseStationDevice>> ScanAsync(
@@ -354,6 +361,13 @@ internal static class BaseStationDiscovery
     {
         scanSessionId ??= BaseStationDiagnosticSink.CreateId("bs-scan");
         var isConfiguratorScan = string.Equals(trigger, "Configurator Scan", StringComparison.OrdinalIgnoreCase);
+        using var flight = HardwareFlightRecorder.Begin(new(
+            isConfiguratorScan ? "configuratorScan" : "baseStationDiscovery",
+            "BaseStationDiscovery.ScanAsync",
+            ["bluetoothAdapter", "bluetoothDeviceInventory", "baseStations"],
+            SessionId: scanSessionId,
+            DeviceCategory: "baseStations",
+            ExpectedTimeoutMilliseconds: duration.TotalMilliseconds));
         diagnostics?.WriteEvent(
             isConfiguratorScan ? "configuratorScanStarted" : "discoveryScanStarted",
             trigger,
@@ -364,7 +378,8 @@ internal static class BaseStationDiscovery
             trigger,
             scanSessionId: scanSessionId,
             currentStage: "adapterLookup");
-        if (!await HasBluetoothLeAdapterAsync())
+        var adapterAvailable = await HasBluetoothLeAdapterAsync();
+        if (!adapterAvailable)
         {
             diagnostics?.WriteEvent(
                 "bluetoothAdapterLookupCompleted",
@@ -416,13 +431,20 @@ internal static class BaseStationDiscovery
                 var address = TryReadBluetoothAddress(deviceInfo);
                 if (string.IsNullOrWhiteSpace(address))
                 {
-                    using var device = await BluetoothLEDevice.FromIdAsync(deviceInfo.Id).AsTask();
+                    using var resolutionFlight = HardwareFlightRecorder.Begin(new(
+                        "baseStationDeviceResolution", "BaseStationDiscovery.OnAdded.FromIdAsync",
+                        ["bluetoothAdapter", "bluetoothDeviceInventory"], DeviceCategory: "baseStation",
+                        DeviceIdentity: deviceInfo.Id));
+                    using var device = await HardwareFlightRecorder.NativeCallAsync(resolutionFlight, "BluetoothLEDevice.FromIdAsync",
+                        () => BluetoothLEDevice.FromIdAsync(deviceInfo.Id).AsTask());
                     if (device is null)
                     {
+                        resolutionFlight.Completed("notResolved");
                         return;
                     }
 
                     address = BluetoothAddressConverter.AddressToString(device.BluetoothAddress);
+                    resolutionFlight.Completed("resolved");
                 }
 
                 found[address] = new BaseStationDevice
@@ -481,10 +503,14 @@ internal static class BaseStationDiscovery
         foreach (var watcher in watchers)
         {
             watcher.Added += OnAdded;
+            flight.Stage("nativeOrLibraryCallStarted", "DeviceWatcher.Start", durable: true);
             watcher.Start();
+            flight.Stage("nativeOrLibraryCallReturned", "DeviceWatcher.Start", durable: true);
         }
         advertisementWatcher.Received += OnAdvertisementReceived;
+        flight.Stage("nativeOrLibraryCallStarted", "BluetoothLEAdvertisementWatcher.Start", durable: true);
         advertisementWatcher.Start();
+        flight.Stage("nativeOrLibraryCallReturned", "BluetoothLEAdvertisementWatcher.Start", durable: true);
         diagnostics?.WriteEvent(
             isConfiguratorScan ? "configuratorWatcherStarted" : "discoveryWatcherStarted",
             trigger,
@@ -538,6 +564,7 @@ internal static class BaseStationDiscovery
             currentStage: "scan",
             discoveryState: "complete",
             outcome: "succeeded");
+        flight.Completed($"found={result.Length}");
         return result;
     }
 
@@ -788,12 +815,18 @@ internal sealed class BaseStationGattClient
                     return null;
                 }
 
-                var result = await characteristic.ReadValueAsync(BluetoothCacheMode.Uncached).AsTask(cancellationToken);
+                using var readFlight = HardwareFlightRecorder.Begin(new(
+                    "baseStationCommand", "BaseStationGattClient.ReadPowerCharacteristicAsync",
+                    ["bluetoothAdapter", "baseStations"], DeviceCategory: "baseStation",
+                    DeviceIdentity: baseStation.BluetoothAddress));
+                var result = await HardwareFlightRecorder.NativeCallAsync(readFlight, "GattCharacteristic.ReadValueAsync",
+                    () => characteristic.ReadValueAsync(BluetoothCacheMode.Uncached).AsTask(cancellationToken));
                 if (result.Status != GattCommunicationStatus.Success)
                 {
                     throw new InvalidOperationException($"Could not read Bluetooth characteristic for {characteristic.Service.Device.Name}: {result.Status}.");
                 }
 
+                readFlight.Completed(result.Status.ToString());
                 return result.Value.ToArray();
             }
             catch (Exception ex) when (attempt < retryCount && !cancellationToken.IsCancellationRequested)
@@ -812,12 +845,18 @@ internal sealed class BaseStationGattClient
 
     private static async Task<BluetoothLEDevice> GetBluetoothLeDeviceAsync(ulong address, CancellationToken cancellationToken)
     {
+        using var flight = HardwareFlightRecorder.Begin(new(
+            "baseStationDeviceResolution", "BaseStationGattClient.GetBluetoothLeDeviceAsync",
+            ["bluetoothAdapter", "bluetoothDeviceInventory", "baseStations"],
+            DeviceCategory: "baseStation", DeviceIdentity: address.ToString("X12", CultureInfo.InvariantCulture)));
         for (var attempt = 1; attempt <= 10; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var device = await BluetoothLEDevice.FromBluetoothAddressAsync(address).AsTask(cancellationToken);
+            var device = await HardwareFlightRecorder.NativeCallAsync(flight, "BluetoothLEDevice.FromBluetoothAddressAsync",
+                () => BluetoothLEDevice.FromBluetoothAddressAsync(address).AsTask(cancellationToken));
             if (device is not null)
             {
+                flight.Completed($"resolvedAttempt={attempt};source=addressResolution");
                 return device;
             }
 
@@ -829,15 +868,22 @@ internal sealed class BaseStationGattClient
 
     private static async Task<GattDeviceService> GetServiceAsync(BluetoothLEDevice device, Guid serviceGuid, CancellationToken cancellationToken)
     {
-        var result = await device.GetGattServicesForUuidAsync(serviceGuid, BluetoothCacheMode.Cached).AsTask(cancellationToken);
+        using var flight = HardwareFlightRecorder.Begin(new(
+            "baseStationBluetoothConnection", "BaseStationGattClient.GetServiceAsync",
+            ["bluetoothAdapter", "baseStations"], DeviceCategory: "baseStation"));
+        var result = await HardwareFlightRecorder.NativeCallAsync(flight, "GetGattServicesForUuidAsync.cached",
+            () => device.GetGattServicesForUuidAsync(serviceGuid, BluetoothCacheMode.Cached).AsTask(cancellationToken));
         if (result.Status == GattCommunicationStatus.Success && result.Services.Count > 0)
         {
+            flight.Completed("cached");
             return result.Services[0];
         }
 
-        result = await device.GetGattServicesForUuidAsync(serviceGuid, BluetoothCacheMode.Uncached).AsTask(cancellationToken);
+        result = await HardwareFlightRecorder.NativeCallAsync(flight, "GetGattServicesForUuidAsync.uncached",
+            () => device.GetGattServicesForUuidAsync(serviceGuid, BluetoothCacheMode.Uncached).AsTask(cancellationToken));
         if (result.Status == GattCommunicationStatus.Success && result.Services.Count > 0)
         {
+            flight.Completed("uncached");
             return result.Services[0];
         }
 
@@ -846,15 +892,22 @@ internal sealed class BaseStationGattClient
 
     private static async Task<GattCharacteristic> GetCharacteristicAsync(GattDeviceService service, Guid characteristicGuid, CancellationToken cancellationToken)
     {
-        var result = await service.GetCharacteristicsForUuidAsync(characteristicGuid, BluetoothCacheMode.Cached).AsTask(cancellationToken);
+        using var flight = HardwareFlightRecorder.Begin(new(
+            "baseStationBluetoothConnection", "BaseStationGattClient.GetCharacteristicAsync",
+            ["bluetoothAdapter", "baseStations"], DeviceCategory: "baseStation"));
+        var result = await HardwareFlightRecorder.NativeCallAsync(flight, "GetCharacteristicsForUuidAsync.cached",
+            () => service.GetCharacteristicsForUuidAsync(characteristicGuid, BluetoothCacheMode.Cached).AsTask(cancellationToken));
         if (result.Status == GattCommunicationStatus.Success && result.Characteristics.Count > 0)
         {
+            flight.Completed("cached");
             return result.Characteristics[0];
         }
 
-        result = await service.GetCharacteristicsForUuidAsync(characteristicGuid, BluetoothCacheMode.Uncached).AsTask(cancellationToken);
+        result = await HardwareFlightRecorder.NativeCallAsync(flight, "GetCharacteristicsForUuidAsync.uncached",
+            () => service.GetCharacteristicsForUuidAsync(characteristicGuid, BluetoothCacheMode.Uncached).AsTask(cancellationToken));
         if (result.Status == GattCommunicationStatus.Success && result.Characteristics.Count > 0)
         {
+            flight.Completed("uncached");
             return result.Characteristics[0];
         }
 
@@ -863,10 +916,15 @@ internal sealed class BaseStationGattClient
 
     private static async Task WriteCharacteristicAsync(GattCharacteristic characteristic, byte[] data, CancellationToken cancellationToken)
     {
-        var status = await characteristic.WriteValueAsync(data.AsBuffer()).AsTask(cancellationToken);
+        using var flight = HardwareFlightRecorder.Begin(new(
+            "baseStationCommand", "BaseStationGattClient.WriteCharacteristicAsync",
+            ["bluetoothAdapter", "baseStations"], DeviceCategory: "baseStation"));
+        var status = await HardwareFlightRecorder.NativeCallAsync(flight, "GattCharacteristic.WriteValueAsync",
+            () => characteristic.WriteValueAsync(data.AsBuffer()).AsTask(cancellationToken));
         if (status != GattCommunicationStatus.Success)
         {
             throw new InvalidOperationException($"Could not write Bluetooth characteristic for {characteristic.Service.Device.Name}: {status}.");
         }
+        flight.Completed(status.ToString());
     }
 }
