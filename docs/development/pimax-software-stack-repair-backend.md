@@ -11,6 +11,8 @@ Read-only:
 ```powershell
 dotnet .\PimaxVrcSupervisor.dll pimax-repair-targets-json
 dotnet .\PimaxVrcSupervisor.dll pimax-launch-recipe-json
+dotnet .\PimaxVrcSupervisor.dll pimax-startup-sources-json
+dotnet .\PimaxVrcSupervisor.dll pimax-startup-observe-json --fake
 dotnet .\PimaxVrcSupervisor.dll pimax-repair-status-json
 dotnet .\PimaxVrcSupervisor.dll pimax-repair-result-json
 ```
@@ -27,6 +29,8 @@ Schemas:
 ```text
 pimax-repair-targets-v1
 pimax-launch-recipe-v1
+pimax-startup-sources-v1
+pimax-startup-observation-v1
 pimax-repair-start-v1
 pimax-repair-status-v1
 pimax-repair-cancel-v1
@@ -61,7 +65,7 @@ Each target is classified as exactly one of:
 
 Phase 28D2-B1 does not approve any standalone Pimax Play/runtime process. A validated `PimaxClient` is classified as `groupMemberNotIndependentlyRestartable` because closing it terminated other runtime members during Phase 28D2-BV.
 
-The complete Pimax Play/runtime group is represented as a `processGroup` target. When the current group is complete and the launcher recipe is statically modeled, the target may be classified as `readyForControlledValidation`. That state is still non-executable: the restart recipe remains `Complete=false`, live validation is required, and automatic restart remains disabled until a later stopped-state launch test marks the recipe `validated`.
+The complete Pimax Play/runtime group is represented as a `processGroup` target. When the current group is complete, the target may still be listed as a non-executable validation candidate, but its launch recipe state is `shellActivationObserved`, not executable. Phase 28D2-BV2 rejected direct `PimaxClient.exe` process creation because it produced only a blank `PimaxClient` window and left `DeviceSetting`, `PiPlayService`, and `pi_server` missing. Automatic restart remains disabled until a formal observer-backed Start Menu comparison identifies the creator chain and a later one-shot phase validates a safe programmatic equivalent.
 
 Pimax services, including `PiServiceLauncher` and Tobii Eye Tracking runtime services, remain observe-only in this phase. Previous evidence did not prove that restarting them is a safe or correct persistent recovery target.
 
@@ -147,7 +151,7 @@ A future group start must use a proven group launch recipe. The backend does not
 
 ## Phase 28D2-B2 Launch Recipe
 
-Phase 28D2-B2 adds the read-only `pimax-launch-recipe-json` command. It does not start Pimax, stop Pimax, invoke Connect, automate the GUI, cycle USB, touch DisplayPort, restart services, restart SteamVR, restart VRChat, restart VRCFT, restart the Supervisor, restart the watcher, or change scheduled tasks.
+Phase 28D2-B2 adds the read-only `pimax-launch-recipe-json`, `pimax-startup-sources-json`, and bounded `pimax-startup-observe-json` commands. They do not start Pimax, stop Pimax, invoke Connect, automate the GUI, cycle USB, touch DisplayPort, restart services, restart SteamVR, restart VRChat, restart VRCFT, restart the Supervisor, restart the watcher, or change scheduled tasks.
 
 Private discovery confirmed the local launcher candidate:
 
@@ -169,9 +173,15 @@ Sanitized launcher evidence:
 - installed application: `PimaxPlay version 1.43.9.272`;
 - App Paths registration: none observed.
 
+BV2 direct launch evidence rejects treating that executable path as sufficient. Direct process creation started `PimaxClient` but did not recreate the complete runtime group. A later unobserved operator restoration launch through the normal Windows Start Menu opened Pimax Play normally and automatically restored registration, but the observer was not running, so that launch is supporting evidence only.
+
+The formal Phase 28D2-B2A observer-backed Start Menu comparison then produced `groupReadyAndRegistered` with `registeredReady / confirmed` and current freshness. The user-visible result was green LED, normal Pimax Play window, image present, audio and microphone present, eye tracking present, Vive face tracking detected, and no unrelated restart or PC instability. The required runtime group formed without manually starting `DeviceSetting`, `PiPlayService`, or `pi_server`.
+
+Creator-chain evidence remains incomplete. The post-launch parent snapshot showed `PiPlayService` created by or currently parented to `DeviceSetting`, `PiService` parented to `DeviceSetting`, and `pi_server` parented to `PiService`. `DeviceSetting` itself was parented outside the still-running Pimax group or by an already-exited broker, so the root activation creator remains unresolved.
+
 The raw SHA-256 hash, raw certificate subject, raw process IDs, command lines, and local registry details are kept in private discovery evidence and are not committed.
 
-Lifecycle-root assessment is `probable`, not `confirmed`: the shortcut launches `PimaxClient.exe`, the top-level `PimaxClient` process owns Electron child processes, and required runtime members are coordinated through `DeviceSetting` and service-owned processes. That is enough to model a one-shot stopped-state validation, but not enough to execute automatic restart.
+Lifecycle-root assessment is unresolved: the shortcut target is known, but the missing runtime members may be created by shell activation context, a service broker, a transient helper, state reset, or multiple mechanisms. `pimax-startup-sources-json` reports the activation-source candidates, and the formal `pimax-startup-observe-json` run is used to compare the Start Menu path against the rejected direct-launch evidence.
 
 Expected required members:
 
@@ -208,9 +218,9 @@ Pimax Play Connect and a physical USB reconnection may still be required.
 
 Recipe blockers that still prevent execution:
 
-- no stopped-state live validation has launched the candidate once;
-- process-group formation from an absent group has not been observed;
-- single-instance behavior was not execution-tested in this phase;
+- formal observer-backed Start Menu launch evidence has not yet proven the creator chain;
+- `DeviceSetting` root creator ownership is not yet established;
+- a safe programmatic shell-equivalent is not validated;
 - registration after launch still requires post-health proof;
 - no shutdown/retry/rollback behavior is approved for product repair.
 

@@ -186,7 +186,7 @@ C:\Program Files\Pimax\PimaxClient\pimaxui\PimaxClient.exe
 
 The shortcut has no arguments and uses the `pimaxui` directory as its working directory. The executable is a Pimax metadata-matched, 64-bit Windows GUI process with an `asInvoker` requested execution level. Installed-application registry evidence identifies Pimax Play, and no App Paths launcher override was observed.
 
-This evidence is sufficient for the backend to report `pimax-launch-recipe-v1` and classify the process-group recipe as `readyForControlledValidation` when all required members are currently present. It is not sufficient for execution. The recipe remains non-executable until a later one-shot phase starts from a fully absent Pimax group, launches the exact candidate once, and verifies complete group formation and readiness without Connect, USB cycling, retries, or GUI automation.
+BV2 later proved that direct process creation of this executable is not sufficient: it started `PimaxClient` but left the required runtime group partial. The backend now reports the process-group launch recipe as `shellActivationObserved` when the group is healthy: the normal Start Menu path is the candidate, direct executable launch is rejected, and backend execution remains disabled until an observer-backed comparison identifies the creator chain and a later one-shot phase validates a safe programmatic equivalent.
 
 ## Dependency-Aware Ordering
 

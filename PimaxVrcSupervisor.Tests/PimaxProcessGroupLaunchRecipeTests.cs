@@ -4,20 +4,20 @@ using Xunit;
 public sealed class PimaxProcessGroupLaunchRecipeTests
 {
     [Fact]
-    public void CompleteShortcutCandidateBuildsReadyForControlledValidationButNotExecutable()
+    public void CompleteShortcutCandidateBuildsShellActivationCandidateButNotExecutable()
     {
         var snapshot = PimaxProcessGroupLaunchRecipeModel.Build(
             Input(Candidate()),
             DateTimeOffset.Parse("2026-06-20T00:00:00Z"));
 
         Assert.Equal(PimaxLaunchRecipeSchema.Version, snapshot.Schema);
-        Assert.Equal(PimaxProcessGroupLaunchRecipeState.ReadyForControlledValidation, snapshot.Recipe.State);
+        Assert.Equal(PimaxProcessGroupLaunchRecipeState.ShellActivationObserved, snapshot.Recipe.State);
         Assert.False(snapshot.Recipe.Executable);
         Assert.Equal(PimaxProcessGroupReadinessState.GroupReadyAndRegistered, snapshot.Readiness.State);
         Assert.Equal(@"<pimax>\PimaxClient\pimaxui\PimaxClient.exe", snapshot.SelectedCandidate?.SanitizedPath);
         Assert.Equal("", snapshot.Recipe.Arguments);
         Assert.Equal(@"<pimax>\PimaxClient\pimaxui", snapshot.Recipe.WorkingDirectory);
-        Assert.Contains("stopped-state validation", snapshot.HumanReadableSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Direct PimaxClient.exe process creation is rejected", snapshot.HumanReadableSummary, StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]
@@ -30,7 +30,7 @@ public sealed class PimaxProcessGroupLaunchRecipeTests
         var candidate = Candidate(source: source, exists: exists, root: root, product: product, signer: signer);
         var snapshot = PimaxProcessGroupLaunchRecipeModel.Build(Input(candidate), DateTimeOffset.UtcNow);
 
-        Assert.NotEqual(PimaxProcessGroupLaunchRecipeState.ReadyForControlledValidation, snapshot.Recipe.State);
+        Assert.NotEqual(PimaxProcessGroupLaunchRecipeState.ShellActivationObserved, snapshot.Recipe.State);
         Assert.Contains(snapshot.LauncherCandidates.Single().Blockers, blocker => blocker.Contains(expectedBlocker, StringComparison.OrdinalIgnoreCase));
         Assert.False(snapshot.Recipe.Executable);
     }

@@ -243,12 +243,13 @@ internal static class PimaxSoftwareGroupModel
     public static PimaxSoftwareGroupRecipe ReadyForControlledValidationRecipe()
         => new(
             false,
-            PimaxProcessGroupLaunchRecipeState.ReadyForControlledValidation,
+            PimaxProcessGroupLaunchRecipeState.ShellActivationObserved,
             [
-                "one stopped-state launch validation",
+                "one formal observer-backed Start Menu launch comparison",
                 "post-launch process-group formation proof",
                 "post-launch readiness and registration verification",
-                "single controlled validation without retry"
+                "creator-chain proof",
+                "separate programmatic-equivalent validation before backend execution"
             ],
-            "A Pimax Play launcher candidate and read-only launch recipe are modeled, but the recipe is not executable until a later stopped-state validation marks it validated.");
+            "Direct PimaxClient.exe process creation is rejected. Normal Start Menu activation is modeled, but the recipe is not executable until a formal observer-backed comparison and later programmatic-equivalent validation prove it safe.");
 }

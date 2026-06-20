@@ -14,6 +14,10 @@ internal static class PimaxProcessGroupLaunchRecipeState
     public const string Candidate = "candidate";
     public const string VerifiedReadOnly = "verifiedReadOnly";
     public const string ReadyForControlledValidation = "readyForControlledValidation";
+    public const string DirectLaunchRejected = "directLaunchRejected";
+    public const string ShellActivationObserved = "shellActivationObserved";
+    public const string ActivationMechanismIdentified = "activationMechanismIdentified";
+    public const string ReadyForActivationValidation = "readyForActivationValidation";
     public const string Validated = "validated";
     public const string Incomplete = "incomplete";
     public const string Rejected = "rejected";
@@ -215,7 +219,7 @@ internal static class PimaxProcessGroupLaunchRecipeModel
         }
 
         var state = blockers.Count == 0
-            ? PimaxProcessGroupLaunchRecipeState.ReadyForControlledValidation
+            ? PimaxProcessGroupLaunchRecipeState.ShellActivationObserved
             : selected is null
                 ? PimaxProcessGroupLaunchRecipeState.Incomplete
                 : PimaxProcessGroupLaunchRecipeState.VerifiedReadOnly;
@@ -232,22 +236,25 @@ internal static class PimaxProcessGroupLaunchRecipeModel
             "Use the installed Pimax environment. Do not inject transient command-line, IPC, token, or PID values.",
             "Launch only in the interactive user session during a later explicit stopped-state validation.",
             selected?.RequestedExecutionLevel == "asInvoker" ? "asInvoker; no elevation indicated by launcher manifest." : "unknown",
-            "Not execution-tested in this phase. Treat as unknown for already-running instances; controlled validation must start from an absent group.",
-            "PimaxClient",
+            "Direct process creation was rejected by Phase 28D2-BV2; normal Start Menu shell activation is a distinct candidate and must be formally observed.",
+            "Normal Windows Start Menu PimaxPlay activation; the shortcut target is PimaxClient.exe, but direct process creation is rejected.",
             RequiredMembers,
             OptionalMembers,
-            ["PimaxClient", "DeviceSetting", "PiPlayService", "PiServiceLauncher", "pi_server", "optional PVRHome/pi_overlay"],
+            ["Start Menu PimaxPlay activation", "PimaxClient", "DeviceSetting", "PiPlayService", "PiServiceLauncher", "pi_server", "optional PVRHome/pi_overlay"],
             90,
             input.LifecycleRoot,
             input.LifecycleRootConfidence,
             [
+                "Direct PimaxClient.exe process creation is rejected for complete process-group recovery.",
+                "Normal Start Menu activation must be observed with the bounded startup observer before selecting a mechanism.",
                 "Required members are present from the same current software-group snapshot.",
                 "Launcher path and Pimax signer/product metadata validate.",
                 "No unexpected required group member is missing.",
                 "Registration is current and owned by the active group before reporting full repair success."
             ],
             [
-                "Launcher process appears but required group members do not form.",
+                "Direct process creation produces PimaxClient without the required runtime members.",
+                "Start Menu activation produces PimaxClient but required group members do not form.",
                 "Required member path or signer validation fails.",
                 "Registration remains unavailable after group formation.",
                 "Unexpected conflicting Pimax-root process appears.",
@@ -263,8 +270,8 @@ internal static class PimaxProcessGroupLaunchRecipeModel
                 "Do not change scheduled tasks."
             ],
             "Cancellation is only safe before any future launch request is issued.",
-            state == PimaxProcessGroupLaunchRecipeState.ReadyForControlledValidation
-                ? "A read-only launcher recipe is complete enough for one later stopped-state validation. It is not validated and is not executable."
+            state == PimaxProcessGroupLaunchRecipeState.ShellActivationObserved
+                ? "Direct PimaxClient.exe process creation is rejected. Normal Start Menu activation is the current candidate, but the creator chain and safe programmatic equivalent remain unvalidated, so backend execution is disabled."
                 : "The launch recipe remains incomplete and is not executable.");
 
         var evidence = new PimaxProcessGroupLaunchEvidence(

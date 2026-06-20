@@ -96,6 +96,21 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-launch-recipe-json", St
     return;
 }
 
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-startup-sources-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var snapshot = PimaxStartupSourcesCollector.Collect();
+    Console.WriteLine(JsonSerializer.Serialize(snapshot, PimaxRepairJson.Options));
+    return;
+}
+
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-startup-observe-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var request = PimaxStartupObservationRequest.Parse(commandLineArgs);
+    var snapshot = await new PimaxStartupObserver().ObserveAsync(request, shutdown.Token);
+    Console.WriteLine(JsonSerializer.Serialize(snapshot, PimaxRepairJson.Options));
+    return;
+}
+
 if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-repair-start-json", StringComparison.OrdinalIgnoreCase)))
 {
     var diagnosticConfig = SupervisorConfig.Load(configPath);

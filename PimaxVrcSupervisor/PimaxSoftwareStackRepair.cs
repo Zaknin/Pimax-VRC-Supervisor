@@ -396,12 +396,12 @@ internal sealed class PimaxRepairTargetCatalog(IPimaxClientProcessController cli
                 ? PimaxSoftwareGroupModel.ReadyForControlledValidationRecipe()
                 : PimaxSoftwareGroupModel.IncompleteRecipe(),
             LaunchRecipeState = state == PimaxSoftwareGroupState.Complete
-                ? PimaxProcessGroupLaunchRecipeState.ReadyForControlledValidation
+                ? PimaxProcessGroupLaunchRecipeState.ShellActivationObserved
                 : PimaxProcessGroupLaunchRecipeState.Incomplete,
             Reason = state == PimaxSoftwareGroupState.Unavailable
                 ? "The Pimax Play/runtime group is unavailable. No automatic group launch recipe has been approved."
                 : state == PimaxSoftwareGroupState.Complete
-                    ? "A verified Pimax Play launcher candidate has been identified and modeled for a later one-shot stopped-state validation. Automatic restart remains disabled."
+                    ? "Direct PimaxClient.exe process creation is rejected. Normal Start Menu activation is the current candidate, but creator-chain and programmatic-equivalent validation are still required. Automatic restart remains disabled."
                     : "The Pimax Play/runtime group is observable, but restart is observe-only until a complete safe recipe is approved."
         };
     }
