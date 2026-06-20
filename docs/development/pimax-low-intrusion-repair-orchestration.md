@@ -337,12 +337,22 @@ Automatic limitations:
 
 The final TUI button should wait until backend execution is validated in a later phase.
 
+## Phase 28D2-B Backend
+
+The next backend phase is documented here:
+
+```text
+docs/development/pimax-software-stack-repair-backend.md
+```
+
+It implements the software-stack-only execution backend, target allowlist, durable diagnostics, cancellation, timeout handling, and post-health result verification while preserving the same Connect, USB, and DisplayPort limitations.
+
 ## Next Phase
 
 Recommended next implementation phase:
 
 ```text
-Phase 28D2-B - Implement Confirmed Pimax Software-Stack Repair Actions and Post-Repair Verification
+Phase 28D3 - Add Repair Pimax Connection to the Terminal UI
 ```
 
-That phase may implement only software actions that are explicitly identified and validated as safe. It must still not claim it can automatically perform Pimax Play Connect, physical USB reconnection, or DisplayPort reconnection.
+That phase may add the TUI entry only after backend contracts and static safety remain stable. It must still not claim it can automatically perform Pimax Play Connect, physical USB reconnection, or DisplayPort reconnection.

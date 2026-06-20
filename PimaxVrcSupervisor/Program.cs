@@ -80,6 +80,47 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-repair-plan-json", Stri
     return;
 }
 
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-repair-targets-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var diagnosticConfig = SupervisorConfig.Load(configPath);
+    var snapshot = await PimaxSoftwareStackRepairBackend.ForConfig(diagnosticConfig).DiscoverTargetsAsync(shutdown.Token);
+    Console.WriteLine(JsonSerializer.Serialize(snapshot, PimaxRepairJson.Options));
+    return;
+}
+
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-repair-start-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var diagnosticConfig = SupervisorConfig.Load(configPath);
+    var request = PimaxRepairCommandLine.ParseStart(commandLineArgs);
+    var result = await PimaxSoftwareStackRepairBackend.ForConfig(diagnosticConfig).StartAsync(request, shutdown.Token);
+    Console.WriteLine(JsonSerializer.Serialize(result, PimaxRepairJson.Options));
+    return;
+}
+
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-repair-status-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var diagnosticConfig = SupervisorConfig.Load(configPath);
+    var result = PimaxSoftwareStackRepairBackend.ForConfig(diagnosticConfig).Status();
+    Console.WriteLine(JsonSerializer.Serialize(result, PimaxRepairJson.Options));
+    return;
+}
+
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-repair-cancel-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var diagnosticConfig = SupervisorConfig.Load(configPath);
+    var result = PimaxSoftwareStackRepairBackend.ForConfig(diagnosticConfig).Cancel();
+    Console.WriteLine(JsonSerializer.Serialize(result, PimaxRepairJson.Options));
+    return;
+}
+
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-repair-result-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var diagnosticConfig = SupervisorConfig.Load(configPath);
+    var result = PimaxSoftwareStackRepairBackend.ForConfig(diagnosticConfig).Result();
+    Console.WriteLine(JsonSerializer.Serialize((object?)result ?? new { schema = PimaxRepairResultSchema.Version, found = false, message = "No Pimax repair result is available in this process." }, PimaxRepairJson.Options));
+    return;
+}
+
 if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-connect-routine-observe-json", StringComparison.OrdinalIgnoreCase)))
 {
     var diagnosticConfig = SupervisorConfig.Load(configPath);
@@ -3751,6 +3792,9 @@ internal sealed class AppSupervisor
                 "pimax-component-health-json" => JsonSerializer.Serialize(await BuildPimaxComponentHealthSnapshotAsync(cancellationToken), PimaxComponentHealthJson.Options),
                 "pimax-repair-capabilities-json" => JsonSerializer.Serialize(BuildPimaxRepairCapabilitiesSnapshot(), PimaxRepairJson.Options),
                 "pimax-repair-plan-json" => JsonSerializer.Serialize(await BuildPimaxRepairPlanSnapshotAsync(cancellationToken), PimaxRepairJson.Options),
+                "pimax-repair-targets-json" => JsonSerializer.Serialize(await BuildPimaxRepairTargetsSnapshotAsync(cancellationToken), PimaxRepairJson.Options),
+                "pimax-repair-status-json" => JsonSerializer.Serialize(BuildPimaxRepairStatusSnapshot(), PimaxRepairJson.Options),
+                "pimax-repair-result-json" => JsonSerializer.Serialize(BuildPimaxRepairResultSnapshot(), PimaxRepairJson.Options),
                 "restart-core-apps" => await RestartCoreAppsCommandAsync(cancellationToken),
                 "start-osc-goes-brrr" => await StartOscGoesBrrrCommandAsync(cancellationToken),
                 "base-stations-on" => await ManualPowerOnBaseStationsCommandAsync(cancellationToken),
@@ -3969,6 +4013,41 @@ internal sealed class AppSupervisor
                     "Json",
                     "Planning query only. Does not execute repair, invoke Connect, automate the GUI, or touch USB/DisplayPort."),
                 CommandDefinition(
+                    "pimax-repair-targets-json",
+                    "Pimax Repair Targets JSON",
+                    "Discovers exact Pimax process/service repair target classifications and approval status.",
+                    "Diagnostics",
+                    "Json",
+                    "Read-only target query. Does not stop or start processes or services."),
+                CommandDefinition(
+                    "pimax-repair-start-json",
+                    "Pimax Repair Start JSON",
+                    "Starts a software-stack-only Pimax repair operation, dry-run unless explicitly confirmed with a token.",
+                    "Diagnostics",
+                    "Json",
+                    "Confirmed backend operation. Does not invoke Connect, automate GUI input, cycle USB, touch DisplayPort, or restart SteamVR/VRChat/VRCFT/Supervisor."),
+                CommandDefinition(
+                    "pimax-repair-status-json",
+                    "Pimax Repair Status JSON",
+                    "Returns the current in-process Pimax repair operation status.",
+                    "Diagnostics",
+                    "Json",
+                    "Read-only status query."),
+                CommandDefinition(
+                    "pimax-repair-cancel-json",
+                    "Pimax Repair Cancel JSON",
+                    "Requests cancellation at the next safe Pimax repair operation boundary.",
+                    "Diagnostics",
+                    "Json",
+                    "Cancellation request only. Does not claim rollback."),
+                CommandDefinition(
+                    "pimax-repair-result-json",
+                    "Pimax Repair Result JSON",
+                    "Returns the latest in-process Pimax repair result if available.",
+                    "Diagnostics",
+                    "Json",
+                    "Read-only result query."),
+                CommandDefinition(
                     "action-json",
                     "Structured Action JSON",
                     "Executes an allowlisted structured action request.",
@@ -4157,7 +4236,7 @@ internal sealed class AppSupervisor
                 message: "query-json request requires a resource.",
                 resultType: "error",
                 data: null,
-                error: "Missing resource. Supported resources: status, commands, log, pimax-connectivity, pimax-component-health, pimax-repair-capabilities, pimax-repair-plan.");
+                error: "Missing resource. Supported resources: status, commands, log, pimax-connectivity, pimax-component-health, pimax-repair-capabilities, pimax-repair-plan, pimax-repair-targets, pimax-repair-status, pimax-repair-result.");
         }
 
         return resource.ToLowerInvariant() switch
@@ -4211,13 +4290,34 @@ internal sealed class AppSupervisor
                 resultType: "pimaxRepairPlan",
                 data: await BuildPimaxRepairPlanSnapshotAsync(cancellationToken),
                 error: null),
+            "pimax-repair-targets" => ReadOnlyJsonQueryResult(
+                requestId,
+                success: true,
+                message: "Pimax repair targets returned.",
+                resultType: "pimaxRepairTargets",
+                data: await BuildPimaxRepairTargetsSnapshotAsync(cancellationToken),
+                error: null),
+            "pimax-repair-status" => ReadOnlyJsonQueryResult(
+                requestId,
+                success: true,
+                message: "Pimax repair status returned.",
+                resultType: "pimaxRepairStatus",
+                data: BuildPimaxRepairStatusSnapshot(),
+                error: null),
+            "pimax-repair-result" => ReadOnlyJsonQueryResult(
+                requestId,
+                success: true,
+                message: "Pimax repair result returned.",
+                resultType: "pimaxRepairResult",
+                data: BuildPimaxRepairResultSnapshot(),
+                error: null),
             _ => ReadOnlyJsonQueryResult(
                 requestId,
                 success: false,
                 message: $"Unsupported query-json resource: {resource}.",
                 resultType: "error",
                 data: null,
-                error: "Supported resources: status, commands, log, pimax-connectivity, pimax-component-health, pimax-repair-capabilities, pimax-repair-plan.")
+                error: "Supported resources: status, commands, log, pimax-connectivity, pimax-component-health, pimax-repair-capabilities, pimax-repair-plan, pimax-repair-targets, pimax-repair-status, pimax-repair-result.")
         };
     }
 
@@ -4232,6 +4332,16 @@ internal sealed class AppSupervisor
 
     private async Task<PimaxRepairPlanSnapshot> BuildPimaxRepairPlanSnapshotAsync(CancellationToken cancellationToken)
         => await new PimaxRepairPlanner().BuildPlanAsync(_config, cancellationToken);
+
+    private async Task<PimaxRepairTargetsSnapshot> BuildPimaxRepairTargetsSnapshotAsync(CancellationToken cancellationToken)
+        => await PimaxSoftwareStackRepairBackend.ForConfig(_config).DiscoverTargetsAsync(cancellationToken);
+
+    private PimaxRepairStatusResponse BuildPimaxRepairStatusSnapshot()
+        => PimaxSoftwareStackRepairBackend.ForConfig(_config).Status();
+
+    private object BuildPimaxRepairResultSnapshot()
+        => (object?)PimaxSoftwareStackRepairBackend.ForConfig(_config).Result()
+            ?? new { schema = PimaxRepairResultSchema.Version, found = false, message = "No Pimax repair result is available in this process." };
 
     private static SupervisorCommandResult ReadOnlyJsonQueryResult(
         string? requestId,
@@ -4303,7 +4413,7 @@ internal sealed class AppSupervisor
                 success: false,
                 message: "action-json request requires a command.",
                 data: null,
-                error: "Missing command. Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps.");
+                error: "Missing command. Supported commands: pimax-repair-start-json, pimax-repair-cancel-json, restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps.");
         }
 
         if (string.Equals(canonicalCommand, "force-stop-supervisor", StringComparison.Ordinal))
@@ -4330,13 +4440,15 @@ internal sealed class AppSupervisor
 
         return canonicalCommand switch
         {
+            "pimax-repair-start-json" => await ExecutePimaxRepairStartActionAsync(request.RequestId, request.Confirmed == true, cancellationToken),
+            "pimax-repair-cancel-json" => ActionJsonResult(request.RequestId, canonicalCommand, success: true, message: "Pimax repair cancellation requested.", data: PimaxSoftwareStackRepairBackend.ForConfig(_config).Cancel(), error: null),
             "restart-core-apps" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, RestartCoreAppsCommandAsync, cancellationToken),
             "start-osc-goes-brrr" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, StartOscGoesBrrrCommandAsync, cancellationToken),
             "base-stations-on" => await ExecuteConfirmedBaseStationActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ManualPowerOnBaseStationsAsync, cancellationToken),
             "base-stations-off" => await ExecuteConfirmedBaseStationActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ManualPowerDownBaseStationsAsync, cancellationToken),
             "restart-osc-router" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, RestartOscRouterCommandAsync, cancellationToken),
             "reload-autostart-apps" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ReloadAutostartAppsCommandAsync, cancellationToken),
-            "status" or "status-json" or "commands-json" or "log" or "log-json" or "query-json" or "pimax-connectivity-json" or "pimax-component-health-json" or "pimax-repair-capabilities-json" or "pimax-repair-plan-json" => ActionJsonResult(
+            "status" or "status-json" or "commands-json" or "log" or "log-json" or "query-json" or "pimax-connectivity-json" or "pimax-component-health-json" or "pimax-repair-capabilities-json" or "pimax-repair-plan-json" or "pimax-repair-targets-json" or "pimax-repair-status-json" or "pimax-repair-result-json" => ActionJsonResult(
                 request.RequestId,
                 canonicalCommand,
                 success: false,
@@ -4349,8 +4461,26 @@ internal sealed class AppSupervisor
                 success: false,
                 message: $"Unsupported action-json command: {canonicalCommand}.",
                 data: null,
-                error: "Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps.")
+                error: "Supported commands: pimax-repair-start-json, pimax-repair-cancel-json, restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps.")
         };
+    }
+
+    private async Task<SupervisorCommandResult> ExecutePimaxRepairStartActionAsync(string? requestId, bool confirmed, CancellationToken cancellationToken)
+    {
+        var request = new PimaxRepairStartRequest(
+            PimaxSoftwareStackRepairBackend.ModeSoftwareStackOnly,
+            DryRun: !confirmed,
+            Confirm: confirmed,
+            ConfirmationToken: null,
+            TimeoutSeconds: 120);
+        var result = await PimaxSoftwareStackRepairBackend.ForConfig(_config).StartAsync(request, cancellationToken);
+        return ActionJsonResult(
+            requestId,
+            "pimax-repair-start-json",
+            result.Accepted,
+            result.HumanReadableSummary,
+            result,
+            result.Accepted ? null : string.Join(" ", result.Errors));
     }
 
     private async Task<SupervisorCommandResult> ExecuteLifecycleJsonAsync(string payload)
