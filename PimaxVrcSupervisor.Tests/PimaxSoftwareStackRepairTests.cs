@@ -24,7 +24,7 @@ public sealed class PimaxSoftwareStackRepairTests
 
         Assert.Empty(snapshot.ApprovedRestartableProcesses);
         Assert.Contains(snapshot.Targets, item => item.Classification == PimaxRepairTargetClassification.GroupMemberNotIndependentlyRestartable && item.ExecutableName == "PimaxClient" && item.Approved == false);
-        Assert.Contains(snapshot.Targets, item => item.TargetType == "processGroup" && item.Classification == PimaxRepairTargetClassification.RestartRecipeIncomplete && item.RestartRecipe?.Complete == false);
+        Assert.Contains(snapshot.Targets, item => item.TargetType == "processGroup" && item.Classification == PimaxRepairTargetClassification.ReadyForControlledValidation && item.RestartRecipe?.Complete == false && item.LiveValidationRequired);
         Assert.Contains(snapshot.Targets, item => item.Classification == PimaxRepairTargetClassification.Prohibited && item.ExecutableName == "PVRHome");
         Assert.DoesNotContain(snapshot.Targets, item => item.SanitizedPath?.Contains(@"C:\Users\", StringComparison.OrdinalIgnoreCase) == true);
     }

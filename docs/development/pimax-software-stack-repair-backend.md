@@ -10,6 +10,7 @@ Read-only:
 
 ```powershell
 dotnet .\PimaxVrcSupervisor.dll pimax-repair-targets-json
+dotnet .\PimaxVrcSupervisor.dll pimax-launch-recipe-json
 dotnet .\PimaxVrcSupervisor.dll pimax-repair-status-json
 dotnet .\PimaxVrcSupervisor.dll pimax-repair-result-json
 ```
@@ -25,6 +26,7 @@ Schemas:
 
 ```text
 pimax-repair-targets-v1
+pimax-launch-recipe-v1
 pimax-repair-start-v1
 pimax-repair-status-v1
 pimax-repair-cancel-v1
@@ -54,11 +56,12 @@ Each target is classified as exactly one of:
 - `observeOnly`
 - `groupMemberNotIndependentlyRestartable`
 - `restartRecipeIncomplete`
+- `readyForControlledValidation`
 - `prohibited`
 
 Phase 28D2-B1 does not approve any standalone Pimax Play/runtime process. A validated `PimaxClient` is classified as `groupMemberNotIndependentlyRestartable` because closing it terminated other runtime members during Phase 28D2-BV.
 
-The complete Pimax Play/runtime group is represented as a `processGroup` target, but it is classified as `restartRecipeIncomplete` until all of these are proven: complete expected member set, root launch method, safe start command, readiness criteria, runtime ownership, shutdown semantics, bounded child-process expansion, side-effect declaration, and post-start health verification.
+The complete Pimax Play/runtime group is represented as a `processGroup` target. When the current group is complete and the launcher recipe is statically modeled, the target may be classified as `readyForControlledValidation`. That state is still non-executable: the restart recipe remains `Complete=false`, live validation is required, and automatic restart remains disabled until a later stopped-state launch test marks the recipe `validated`.
 
 Pimax services, including `PiServiceLauncher` and Tobii Eye Tracking runtime services, remain observe-only in this phase. Previous evidence did not prove that restarting them is a safe or correct persistent recovery target.
 
@@ -141,6 +144,75 @@ There are no repeated retry loops.
 The backend does not force-kill by default.
 
 A future group start must use a proven group launch recipe. The backend does not search `PATH`, launch by filename alone, or start unrelated processes.
+
+## Phase 28D2-B2 Launch Recipe
+
+Phase 28D2-B2 adds the read-only `pimax-launch-recipe-json` command. It does not start Pimax, stop Pimax, invoke Connect, automate the GUI, cycle USB, touch DisplayPort, restart services, restart SteamVR, restart VRChat, restart VRCFT, restart the Supervisor, restart the watcher, or change scheduled tasks.
+
+Private discovery confirmed the local launcher candidate:
+
+```text
+C:\Program Files\Pimax\PimaxClient\pimaxui\PimaxClient.exe
+```
+
+Sanitized launcher evidence:
+
+- product name: `PimaxClient`;
+- company name: `Pimax`;
+- file/product version: `1.43.9.272`;
+- architecture: 64-bit Windows GUI executable;
+- requested execution level: `asInvoker`;
+- Start Menu shortcut: `PimaxPlay.lnk`;
+- shortcut target: the candidate executable;
+- shortcut arguments: empty;
+- shortcut working directory: `C:\Program Files\Pimax\PimaxClient\pimaxui`;
+- installed application: `PimaxPlay version 1.43.9.272`;
+- App Paths registration: none observed.
+
+The raw SHA-256 hash, raw certificate subject, raw process IDs, command lines, and local registry details are kept in private discovery evidence and are not committed.
+
+Lifecycle-root assessment is `probable`, not `confirmed`: the shortcut launches `PimaxClient.exe`, the top-level `PimaxClient` process owns Electron child processes, and required runtime members are coordinated through `DeviceSetting` and service-owned processes. That is enough to model a one-shot stopped-state validation, but not enough to execute automatic restart.
+
+Expected required members:
+
+- `PimaxClient`;
+- `DeviceSetting`;
+- `PiPlayService`;
+- `pi_server`;
+- `PiServiceLauncher`;
+- `Tobii VR4PIMAXP3B Platform Runtime`.
+
+Optional members include `PiService`, `PiPlatformService_64`, `PVRHome`, and `pi_overlay`.
+
+Readiness states added by the launch recipe model:
+
+- `groupReadyAndRegistered`;
+- `groupReadyAwaitingRegistration`;
+- `groupCompleteRegistrationUnknown`;
+- `groupStarting`;
+- `groupPartial`;
+- `groupUnavailable`;
+- `groupConflicting`;
+- `groupLaunchFailed`;
+- `timedOut`;
+- `unknown`.
+
+`groupReadyAwaitingRegistration` deliberately does not claim repair success:
+
+```text
+Pimax Play started successfully, but the headset is still awaiting
+registration.
+
+Pimax Play Connect and a physical USB reconnection may still be required.
+```
+
+Recipe blockers that still prevent execution:
+
+- no stopped-state live validation has launched the candidate once;
+- process-group formation from an absent group has not been observed;
+- single-instance behavior was not execution-tested in this phase;
+- registration after launch still requires post-health proof;
+- no shutdown/retry/rollback behavior is approved for product repair.
 
 ## Service Policy
 
@@ -226,9 +298,11 @@ Supported outcomes:
 ```text
 Automatic Pimax software restart is unavailable.
 
-PimaxClient is part of a coupled Pimax Play/runtime process group.
-Closing it also terminates other runtime processes, and a complete safe
-group restart recipe has not yet been approved.
+A verified Pimax Play launcher candidate has been identified, but the
+complete process-group launch and readiness recipe has not yet been
+validated from a stopped state.
+
+Automatic restart remains disabled.
 ```
 
 If software restarts succeed but registration remains unavailable, the result is:
@@ -273,8 +347,8 @@ Live validation is optional. It may occur only after a dry run and only with exp
 
 ## Future TUI Integration
 
-The TUI phase remains blocked while no complete safe Pimax Play/runtime restart recipe exists. The next phase should determine that recipe read-only or through vendor-supported launch behavior:
+The TUI phase remains blocked while no validated executable Pimax Play/runtime restart recipe exists. The next phase should validate the candidate exactly once from a stopped process-group state:
 
 ```text
-Phase 28D2-B2 - Determine a Safe Pimax Play Process-Group Launch and Readiness Recipe
+Phase 28D2-BV2 - One-Shot Validation of the Candidate Pimax Process-Group Launch Recipe
 ```

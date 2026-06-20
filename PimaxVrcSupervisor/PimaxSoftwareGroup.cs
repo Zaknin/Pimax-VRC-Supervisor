@@ -239,4 +239,16 @@ internal static class PimaxSoftwareGroupModel
                 "post-start health verification approved"
             ],
             "A complete safe Pimax Play/runtime group restart recipe has not been approved.");
+
+    public static PimaxSoftwareGroupRecipe ReadyForControlledValidationRecipe()
+        => new(
+            false,
+            PimaxProcessGroupLaunchRecipeState.ReadyForControlledValidation,
+            [
+                "one stopped-state launch validation",
+                "post-launch process-group formation proof",
+                "post-launch readiness and registration verification",
+                "single controlled validation without retry"
+            ],
+            "A Pimax Play launcher candidate and read-only launch recipe are modeled, but the recipe is not executable until a later stopped-state validation marks it validated.");
 }

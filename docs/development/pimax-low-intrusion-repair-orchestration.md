@@ -79,6 +79,8 @@ Available now:
 - bounded wait design;
 - human-readable diagnosis;
 - Pimax Play/runtime process-group observation;
+- Pimax Play launcher candidate discovery;
+- Pimax process-group launch recipe modeling;
 - operation progress reporting;
 - cancellation before mutating software actions;
 - final verification.
@@ -91,7 +93,7 @@ Unavailable or not approved:
 - electrical USB disconnect/reconnect;
 - approved software USB cycle for registration recovery;
 - standalone `PimaxClient` restart;
-- incomplete Pimax Play/runtime group restart;
+- unvalidated Pimax Play/runtime group restart;
 - DisplayPort electrical reconnect;
 - automatic physical-cable recovery.
 
@@ -121,7 +123,7 @@ The planner supports these classifications:
 
 `viveFaceTrackerMissing` is optional accessory state. It does not make the Pimax headset unusable by itself.
 
-`softwareStackUnavailable`, `softwareStackPartial`, and `staleRegistrationEvidence` return `unsupportedAutomaticRecovery` until a complete Pimax Play/runtime group launch and readiness recipe is proven.
+`softwareStackUnavailable`, `softwareStackPartial`, and `staleRegistrationEvidence` return `unsupportedAutomaticRecovery` until a complete Pimax Play/runtime group launch and readiness recipe is validated from a stopped state. A discovered launcher candidate does not make the group executable.
 
 `poweredOnAwaitingRegistration` explicitly reports that automatic registration is not guaranteed. Pimax Play Connect and a real physical USB reconnection may still be required.
 
@@ -172,7 +174,19 @@ The model defines these future action types:
 
 Each descriptor includes category, mutating flag, supported flag, approved flag, confirmation requirement, cancellation behavior, timeout, preconditions, success criteria, failure criteria, and explanation.
 
-In this phase, mutating actions are descriptors only. They are not supported or approved for execution by the new commands. `requireApprovedGroupRestartRecipe` is the descriptor used when a group-level recovery would be needed but no complete safe recipe exists.
+In this phase, mutating actions are descriptors only. They are not supported or approved for execution by the new commands. `requireApprovedGroupRestartRecipe` is the descriptor used when a group-level recovery would be needed but no complete stopped-state validated recipe exists.
+
+## Process-Group Launch Boundary
+
+Phase 28D2-B2 identifies a read-only Pimax Play launcher candidate through the official Start Menu shortcut:
+
+```text
+C:\Program Files\Pimax\PimaxClient\pimaxui\PimaxClient.exe
+```
+
+The shortcut has no arguments and uses the `pimaxui` directory as its working directory. The executable is a Pimax metadata-matched, 64-bit Windows GUI process with an `asInvoker` requested execution level. Installed-application registry evidence identifies Pimax Play, and no App Paths launcher override was observed.
+
+This evidence is sufficient for the backend to report `pimax-launch-recipe-v1` and classify the process-group recipe as `readyForControlledValidation` when all required members are currently present. It is not sufficient for execution. The recipe remains non-executable until a later one-shot phase starts from a fully absent Pimax group, launches the exact candidate once, and verifies complete group formation and readiness without Connect, USB cycling, retries, or GUI automation.
 
 ## Dependency-Aware Ordering
 
@@ -367,7 +381,7 @@ It implements the software-stack-only execution backend, target allowlist, durab
 Recommended next implementation phase:
 
 ```text
-Phase 28D2-B2 - Determine a Safe Pimax Play Process-Group Launch and Readiness Recipe
+Phase 28D2-BV2 - One-Shot Validation of the Candidate Pimax Process-Group Launch Recipe
 ```
 
-That phase must remain read-only or use vendor-supported launch behavior only. TUI exposure should wait until the corrected allowlist contains an executable target with a complete side-effect declaration and restart recipe.
+That phase must use an exact confirmation gate, launch the candidate once from an absent group, and stop without retry if required process-group or readiness evidence does not form. TUI exposure should wait until the allowlist contains an executable target with a validated side-effect declaration and restart recipe.

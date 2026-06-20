@@ -36,6 +36,7 @@ internal static class PimaxRepairTargetClassification
     public const string ObserveOnly = "observeOnly";
     public const string GroupMemberNotIndependentlyRestartable = "groupMemberNotIndependentlyRestartable";
     public const string RestartRecipeIncomplete = "restartRecipeIncomplete";
+    public const string ReadyForControlledValidation = "readyForControlledValidation";
     public const string Prohibited = "prohibited";
 }
 
@@ -91,7 +92,10 @@ internal sealed record PimaxRepairTarget(
     string IntendedOrder,
     string? GroupId = null,
     PimaxRepairTargetSideEffectDeclaration? SideEffects = null,
-    PimaxSoftwareGroupRecipe? RestartRecipe = null);
+    PimaxSoftwareGroupRecipe? RestartRecipe = null,
+    string? LauncherCandidate = null,
+    string? LaunchRecipeState = null,
+    bool LiveValidationRequired = false);
 
 internal sealed record PimaxRepairTargetSideEffectDeclaration(
     string[] ExpectedProcessesToExit,
@@ -306,7 +310,7 @@ internal sealed class PimaxRepairTargetCatalog(IPimaxClientProcessController cli
                 false,
                 [],
                 [],
-                group.Select(process => process.ProcessId.ToString()).Where(value => value != "0").ToArray(),
+                ObservationTokens(group.Count(process => process.ProcessId > 0)),
                 validatedPimaxClientMember
                     ? "PimaxClient is a coupled Pimax Play/runtime group member. Phase 28D2-BV observed that closing it also terminated runtime members, so it is not independently restartable."
                     : ClassificationReason(first.ProcessName, first.ExecutablePath),
@@ -326,11 +330,11 @@ internal sealed class PimaxRepairTargetCatalog(IPimaxClientProcessController cli
             targets.OrderBy(target => target.TargetType, StringComparer.OrdinalIgnoreCase).ThenBy(target => target.DisplayName, StringComparer.OrdinalIgnoreCase).ToArray(),
             targets.Where(target => target.Classification == PimaxRepairTargetClassification.ApprovedRestartableProcess).Select(target => target.TargetId).ToArray(),
             targets.Where(target => target.Classification == PimaxRepairTargetClassification.ApprovedRestartableService).Select(target => target.TargetId).ToArray(),
-            targets.Where(target => target.Classification is PimaxRepairTargetClassification.ObserveOnly or PimaxRepairTargetClassification.GroupMemberNotIndependentlyRestartable or PimaxRepairTargetClassification.RestartRecipeIncomplete).Select(target => target.TargetId).ToArray(),
+            targets.Where(target => target.Classification is PimaxRepairTargetClassification.ObserveOnly or PimaxRepairTargetClassification.GroupMemberNotIndependentlyRestartable or PimaxRepairTargetClassification.RestartRecipeIncomplete or PimaxRepairTargetClassification.ReadyForControlledValidation).Select(target => target.TargetId).ToArray(),
             targets.Where(target => target.Classification == PimaxRepairTargetClassification.Prohibited).Select(target => target.TargetId).ToArray(),
             targets.Where(target => target.Approved && target.TargetType == "process").Select(target => target.TargetId).ToArray(),
             targets.Where(target => target.Approved && target.TargetType == "service").Select(target => target.TargetId).Concat(targets.Where(target => target.Approved && target.TargetType == "process").Select(target => target.TargetId)).ToArray(),
-            "No Pimax Play/runtime member is independently restartable. The complete group remains observe-only until a safe launch, readiness, shutdown, and side-effect recipe is proven.",
+            "No Pimax Play/runtime member is independently restartable. A Pimax Play launcher candidate may be modeled for controlled validation, but automatic restart remains disabled until a stopped-state launch test validates the complete recipe.",
             warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
     }
@@ -367,7 +371,10 @@ internal sealed class PimaxRepairTargetCatalog(IPimaxClientProcessController cli
             "observe only",
             "pimax-play-runtime",
             GroupSideEffects(),
-            PimaxSoftwareGroupModel.IncompleteRecipe());
+            PimaxSoftwareGroupModel.IncompleteRecipe(),
+            PimaxProcessGroupLaunchRecipeModel.CandidateLauncherPath,
+            PimaxProcessGroupLaunchRecipeState.Incomplete,
+            true);
 
     private static PimaxRepairTarget BuildSoftwareGroupTarget(IEnumerable<PimaxRepairTarget> currentTargets)
     {
@@ -380,11 +387,22 @@ internal sealed class PimaxRepairTargetCatalog(IPimaxClientProcessController cli
             PimaxSoftwareGroupState.Partial;
         return RestartRecipeIncompleteGroupForTests() with
         {
+            Classification = state == PimaxSoftwareGroupState.Complete
+                ? PimaxRepairTargetClassification.ReadyForControlledValidation
+                : PimaxRepairTargetClassification.RestartRecipeIncomplete,
             CurrentState = state,
             Dependencies = processes.Select(target => target.TargetId).ToArray(),
+            RestartRecipe = state == PimaxSoftwareGroupState.Complete
+                ? PimaxSoftwareGroupModel.ReadyForControlledValidationRecipe()
+                : PimaxSoftwareGroupModel.IncompleteRecipe(),
+            LaunchRecipeState = state == PimaxSoftwareGroupState.Complete
+                ? PimaxProcessGroupLaunchRecipeState.ReadyForControlledValidation
+                : PimaxProcessGroupLaunchRecipeState.Incomplete,
             Reason = state == PimaxSoftwareGroupState.Unavailable
                 ? "The Pimax Play/runtime group is unavailable. No automatic group launch recipe has been approved."
-                : "The Pimax Play/runtime group is observable, but restart is observe-only until a complete safe recipe is approved."
+                : state == PimaxSoftwareGroupState.Complete
+                    ? "A verified Pimax Play launcher candidate has been identified and modeled for a later one-shot stopped-state validation. Automatic restart remains disabled."
+                    : "The Pimax Play/runtime group is observable, but restart is observe-only until a complete safe recipe is approved."
         };
     }
 
@@ -513,7 +531,7 @@ internal sealed class PimaxRepairTargetCatalog(IPimaxClientProcessController cli
                     false,
                     [],
                     [],
-                    [process.Id.ToString()],
+                    ObservationTokens(1),
                     prohibited ? ClassificationReason(processName, path) : "Additional Pimax-root process is useful diagnostically but not approved for restart.",
                     "observe only"));
             }
@@ -543,6 +561,9 @@ internal sealed class PimaxRepairTargetCatalog(IPimaxClientProcessController cli
         var basis = $"{kind}|{name}|{path ?? ""}".ToLowerInvariant();
         return $"{kind}:{Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(basis)))[..16].ToLowerInvariant()}";
     }
+
+    private static string[] ObservationTokens(int count)
+        => Enumerable.Range(1, Math.Max(0, count)).Select(index => $"observed:{index}").ToArray();
 
     private static string? SanitizePath(string? path)
     {
@@ -1070,7 +1091,7 @@ internal sealed class PimaxSoftwareStackRepairBackend
         PimaxSoftwareRepairOutcome.SoftwareStackHealthyButNotRegistered => "The Pimax software stack restarted successfully, but Pimax Play still has not registered the headset.\n\nPimax Play Connect and a physical USB reconnection may still be required.",
         PimaxSoftwareRepairOutcome.CoreUsbMissing => "Core Pimax USB is missing. No software restart can be reported as a complete repair.",
         PimaxSoftwareRepairOutcome.DisplayPathMissing => "Pimax registration may be ready, but the DisplayPort image path remains missing.",
-        PimaxSoftwareRepairOutcome.UnsupportedAutomaticRecovery => "Automatic Pimax software restart is unavailable.\n\nPimaxClient is part of a coupled Pimax Play/runtime process group. Closing it also terminates other runtime processes, and a complete safe group restart recipe has not yet been approved.",
+        PimaxSoftwareRepairOutcome.UnsupportedAutomaticRecovery => "Automatic Pimax software restart is unavailable.\n\nA verified Pimax Play launcher candidate has been identified, but the complete process-group launch and readiness recipe has not yet been validated from a stopped state.\n\nAutomatic restart remains disabled.",
         PimaxSoftwareRepairOutcome.ConflictingEvidence => "Pimax evidence is conflicting. Automatic repair was not attempted.",
         PimaxSoftwareRepairOutcome.Unknown => "Pimax repair state is unknown. Automatic repair was not attempted.",
         PimaxSoftwareRepairOutcome.Cancelled => "Pimax repair was cancelled at a safe boundary.",

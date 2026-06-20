@@ -80,6 +80,7 @@ nav:
       - Pimax Component Health And Connect Routine Mapping: development/pimax-component-health-and-connect-routine-mapping.md
       - Pimax Low-Intrusion Repair Orchestration: development/pimax-low-intrusion-repair-orchestration.md
       - Pimax Software-Stack Repair Backend: development/pimax-software-stack-repair-backend.md
+      - Pimax Process-Group Launch Readiness: development/pimax-process-group-launch-readiness.md
       - Base Station Startup Diagnostics: development/base-station-startup-diagnostics.md
       - Shortcuts: reference/shortcuts.md
       - Release Packaging: reference/release-packaging.md
