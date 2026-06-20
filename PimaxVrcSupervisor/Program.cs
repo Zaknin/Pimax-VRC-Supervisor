@@ -57,6 +57,23 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-registration-assessment
     return;
 }
 
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-component-health-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var diagnosticConfig = SupervisorConfig.Load(configPath);
+    var snapshot = await new PimaxComponentHealthCoordinator().CollectAsync(diagnosticConfig, shutdown.Token);
+    Console.WriteLine(JsonSerializer.Serialize(snapshot, PimaxComponentHealthJson.Options));
+    return;
+}
+
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-connect-routine-observe-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var diagnosticConfig = SupervisorConfig.Load(configPath);
+    var request = PimaxConnectRoutineObservationRequest.Parse(commandLineArgs);
+    var result = await new PimaxConnectRoutineObserver(diagnosticConfig).ObserveAsync(request, shutdown.Token);
+    Console.WriteLine(JsonSerializer.Serialize(result, PimaxConnectRoutineObservationJson.Options));
+    return;
+}
+
 if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-connect-lifecycle-observe-json", StringComparison.OrdinalIgnoreCase)))
 {
     var diagnosticConfig = SupervisorConfig.Load(configPath);
@@ -3716,6 +3733,7 @@ internal sealed class AppSupervisor
                 "log-json" => JsonSerializer.Serialize(BuildSupervisorRecentLogSnapshot(14), CommandBridgeJsonOptions),
                 "commands-json" => JsonSerializer.Serialize(BuildSupervisorCommandCapabilitiesSnapshot(), CommandBridgeJsonOptions),
                 "pimax-connectivity-json" => JsonSerializer.Serialize(await BuildPimaxConnectivitySnapshotAsync(cancellationToken), PimaxConnectivityJson.Options),
+                "pimax-component-health-json" => JsonSerializer.Serialize(await BuildPimaxComponentHealthSnapshotAsync(cancellationToken), PimaxComponentHealthJson.Options),
                 "restart-core-apps" => await RestartCoreAppsCommandAsync(cancellationToken),
                 "start-osc-goes-brrr" => await StartOscGoesBrrrCommandAsync(cancellationToken),
                 "base-stations-on" => await ManualPowerOnBaseStationsCommandAsync(cancellationToken),
@@ -3913,6 +3931,13 @@ internal sealed class AppSupervisor
                     "Json",
                     "Explicit diagnostic query. May take several seconds and does not restart processes, services, SteamVR, or USB devices."),
                 CommandDefinition(
+                    "pimax-component-health-json",
+                    "Pimax Component Health JSON",
+                    "Collects a one-shot read-only component-health diagnostic snapshot for the complete Pimax headset stack.",
+                    "Diagnostics",
+                    "Json",
+                    "Explicit diagnostic query. Does not restart processes, services, SteamVR, Pimax Play, VRCFT, or USB devices."),
+                CommandDefinition(
                     "action-json",
                     "Structured Action JSON",
                     "Executes an allowlisted structured action request.",
@@ -4101,7 +4126,7 @@ internal sealed class AppSupervisor
                 message: "query-json request requires a resource.",
                 resultType: "error",
                 data: null,
-                error: "Missing resource. Supported resources: status, commands, log, pimax-connectivity.");
+                error: "Missing resource. Supported resources: status, commands, log, pimax-connectivity, pimax-component-health.");
         }
 
         return resource.ToLowerInvariant() switch
@@ -4134,18 +4159,28 @@ internal sealed class AppSupervisor
                 resultType: "pimaxConnectivity",
                 data: await BuildPimaxConnectivitySnapshotAsync(cancellationToken),
                 error: null),
+            "pimax-component-health" => ReadOnlyJsonQueryResult(
+                requestId,
+                success: true,
+                message: "Pimax component health snapshot returned.",
+                resultType: "pimaxComponentHealth",
+                data: await BuildPimaxComponentHealthSnapshotAsync(cancellationToken),
+                error: null),
             _ => ReadOnlyJsonQueryResult(
                 requestId,
                 success: false,
                 message: $"Unsupported query-json resource: {resource}.",
                 resultType: "error",
                 data: null,
-                error: "Supported resources: status, commands, log, pimax-connectivity.")
+                error: "Supported resources: status, commands, log, pimax-connectivity, pimax-component-health.")
         };
     }
 
     private async Task<PimaxConnectivitySnapshot> BuildPimaxConnectivitySnapshotAsync(CancellationToken cancellationToken)
         => await new PimaxConnectivitySnapshotCollector().CollectAsync(_config, cancellationToken);
+
+    private async Task<PimaxComponentHealthSnapshot> BuildPimaxComponentHealthSnapshotAsync(CancellationToken cancellationToken)
+        => await new PimaxComponentHealthCoordinator().CollectAsync(_config, cancellationToken);
 
     private static SupervisorCommandResult ReadOnlyJsonQueryResult(
         string? requestId,
@@ -4250,7 +4285,7 @@ internal sealed class AppSupervisor
             "base-stations-off" => await ExecuteConfirmedBaseStationActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ManualPowerDownBaseStationsAsync, cancellationToken),
             "restart-osc-router" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, RestartOscRouterCommandAsync, cancellationToken),
             "reload-autostart-apps" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ReloadAutostartAppsCommandAsync, cancellationToken),
-            "status" or "status-json" or "commands-json" or "log" or "log-json" or "query-json" or "pimax-connectivity-json" => ActionJsonResult(
+            "status" or "status-json" or "commands-json" or "log" or "log-json" or "query-json" or "pimax-connectivity-json" or "pimax-component-health-json" => ActionJsonResult(
                 request.RequestId,
                 canonicalCommand,
                 success: false,

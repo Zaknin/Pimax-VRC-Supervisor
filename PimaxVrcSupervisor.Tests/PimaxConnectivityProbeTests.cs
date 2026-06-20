@@ -52,8 +52,8 @@ public sealed class PimaxConnectivityProbeTests
         using var freshTemp = TempPiServiceLog(DateTimeOffset.Now.AddSeconds(-30), "connected hmd name:Pimax Crystal");
         using var staleTemp = TempPiServiceLog(DateTimeOffset.Now.AddMinutes(-10), "connected hmd name:Pimax Crystal");
 
-        var fresh = PimaxRuntimeEvidenceProbe.Collect(freshTemp.Config, DateTimeOffset.Now);
-        var stale = PimaxRuntimeEvidenceProbe.Collect(staleTemp.Config, DateTimeOffset.Now);
+        var fresh = PimaxRuntimeEvidenceProbe.Collect(freshTemp.Config, DateTimeOffset.Now, includePimaxClientLogs: false);
+        var stale = PimaxRuntimeEvidenceProbe.Collect(staleTemp.Config, DateTimeOffset.Now, includePimaxClientLogs: false);
 
         var freshPiServiceEvent = Assert.Single(fresh.Events, IsTempPiServiceConnectedEvent);
         var stalePiServiceEvent = Assert.Single(stale.Events, IsTempPiServiceConnectedEvent);
@@ -67,7 +67,7 @@ public sealed class PimaxConnectivityProbeTests
         var eventTime = DateTimeOffset.Now.AddSeconds(2);
         using var temp = TempPiServiceLog(eventTime, "connected hmd name:Pimax Crystal");
 
-        var evidence = PimaxRuntimeEvidenceProbe.Collect(temp.Config, DateTimeOffset.Now);
+        var evidence = PimaxRuntimeEvidenceProbe.Collect(temp.Config, DateTimeOffset.Now, includePimaxClientLogs: false);
         var ev = Assert.Single(evidence.Events, IsTempPiServiceConnectedEvent);
 
         Assert.True(ev.IsFresh);
@@ -80,7 +80,7 @@ public sealed class PimaxConnectivityProbeTests
         var eventTime = DateTimeOffset.Now.AddSeconds(45);
         using var temp = TempPiServiceLog(eventTime, "connected hmd name:Pimax Crystal");
 
-        var evidence = PimaxRuntimeEvidenceProbe.Collect(temp.Config, DateTimeOffset.Now);
+        var evidence = PimaxRuntimeEvidenceProbe.Collect(temp.Config, DateTimeOffset.Now, includePimaxClientLogs: false);
         var ev = Assert.Single(evidence.Events, IsTempPiServiceConnectedEvent);
 
         Assert.False(ev.IsFresh);
@@ -93,7 +93,7 @@ public sealed class PimaxConnectivityProbeTests
         var eventTime = DateTimeOffset.Now.AddSeconds(-120);
         using var temp = TempPiServiceLog(eventTime, "connected hmd name:Pimax Crystal");
 
-        var evidence = PimaxRuntimeEvidenceProbe.Collect(temp.Config, DateTimeOffset.Now);
+        var evidence = PimaxRuntimeEvidenceProbe.Collect(temp.Config, DateTimeOffset.Now, includePimaxClientLogs: false);
         var ev = Assert.Single(evidence.Events, IsTempPiServiceConnectedEvent);
 
         Assert.True(ev.IsFresh);
