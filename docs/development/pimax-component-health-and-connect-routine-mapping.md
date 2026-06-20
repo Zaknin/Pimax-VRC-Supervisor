@@ -202,10 +202,16 @@ D - Only opaque internal GUI behavior observed.
 
 The live evidence also contains contradictory timing around the successful registration transition, because registration completed only after the heavier observer stopped and after the lighter observer had already left the observation window. That contradiction is treated as a stop condition for Connect-routine mapping rather than a reason to add stronger live polling.
 
-The selected next phase is:
+Phase 28D2-L builds on this component-health model with a non-mutating repair capability and planning layer:
 
 ```text
-Phase 28D2-G - Add Component Health and Software-Stack Restart with Explicit Connect Limitation
+docs/development/pimax-low-intrusion-repair-orchestration.md
+```
+
+The selected next implementation phase after repair planning is:
+
+```text
+Phase 28D2-B - Implement Confirmed Pimax Software-Stack Repair Actions and Post-Repair Verification
 ```
 
 ## Remaining Limitations

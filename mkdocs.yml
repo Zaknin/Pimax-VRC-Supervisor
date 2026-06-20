@@ -78,6 +78,7 @@ nav:
       - Pimax Connect Lifecycle Observation: development/pimax-connect-lifecycle-observation.md
       - Pimax External-Hub Physical Port Mapping: development/pimax-external-hub-physical-port-mapping.md
       - Pimax Component Health And Connect Routine Mapping: development/pimax-component-health-and-connect-routine-mapping.md
+      - Pimax Low-Intrusion Repair Orchestration: development/pimax-low-intrusion-repair-orchestration.md
       - Base Station Startup Diagnostics: development/base-station-startup-diagnostics.md
       - Shortcuts: reference/shortcuts.md
       - Release Packaging: reference/release-packaging.md
