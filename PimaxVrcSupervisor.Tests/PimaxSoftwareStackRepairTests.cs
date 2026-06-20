@@ -4,7 +4,7 @@ using Xunit;
 public sealed class PimaxSoftwareStackRepairTests
 {
     [Fact]
-    public async Task TargetCatalogApprovesOnlyExactValidatedPimaxClient()
+    public async Task TargetCatalogTreatsPimaxClientAsCoupledGroupMember()
     {
         var target = new PimaxClientTargetDescriptor(@"C:\Program Files\Pimax\PimaxClient\pimaxui\PimaxClient.exe", @"C:\Program Files\Pimax\PimaxClient\pimaxui", "", "PimaxClient", "Pimax", "1", "ABC", [101], "shortcut", "PimaxPlayUiClient");
         var controller = new FakeClientController
@@ -22,7 +22,9 @@ public sealed class PimaxSoftwareStackRepairTests
 
         var snapshot = await new PimaxRepairTargetCatalog(controller).DiscoverAsync(CancellationToken.None);
 
-        Assert.Contains(snapshot.Targets, item => item.Classification == PimaxRepairTargetClassification.ApprovedRestartableProcess && item.ExecutableName == "PimaxClient");
+        Assert.Empty(snapshot.ApprovedRestartableProcesses);
+        Assert.Contains(snapshot.Targets, item => item.Classification == PimaxRepairTargetClassification.GroupMemberNotIndependentlyRestartable && item.ExecutableName == "PimaxClient" && item.Approved == false);
+        Assert.Contains(snapshot.Targets, item => item.TargetType == "processGroup" && item.Classification == PimaxRepairTargetClassification.RestartRecipeIncomplete && item.RestartRecipe?.Complete == false);
         Assert.Contains(snapshot.Targets, item => item.Classification == PimaxRepairTargetClassification.Prohibited && item.ExecutableName == "PVRHome");
         Assert.DoesNotContain(snapshot.Targets, item => item.SanitizedPath?.Contains(@"C:\Users\", StringComparison.OrdinalIgnoreCase) == true);
     }
@@ -43,6 +45,40 @@ public sealed class PimaxSoftwareStackRepairTests
         Assert.False(string.IsNullOrWhiteSpace(response.ConfirmationToken));
         Assert.Equal(0, process.CloseCalls);
         Assert.Equal(0, process.RelaunchCalls);
+    }
+
+    [Fact]
+    public async Task BackendRejectsStandalonePimaxClientEvenIfCatalogMarksItApproved()
+    {
+        var process = new FakeProcessController();
+        var backend = Backend(
+            [Health(PimaxRepairClassification.PoweredOnAwaitingRegistration)],
+            Targets([PimaxRepairTargetCatalog.UnsafeApprovedPimaxClientForTests()]),
+            process);
+
+        var response = await backend.StartAsync(new PimaxRepairStartRequest(PimaxSoftwareStackRepairBackend.ModeSoftwareStackOnly, true, false, null, 120), CancellationToken.None);
+
+        Assert.True(response.Accepted);
+        Assert.False(response.ConfirmationRequired);
+        Assert.Equal(PimaxSoftwareRepairOutcome.UnsupportedAutomaticRecovery, response.Result?.Outcome);
+        Assert.Contains(response.Errors, error => error.Contains("cannot be restarted as a standalone target", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0, process.CloseCalls);
+    }
+
+    [Fact]
+    public void SanitizedLiveRegressionFixtureContainsExpectedCoupledExitAndNoPrivateIdentifiers()
+    {
+        var path = Path.Combine(RepositoryRoot(), "PimaxVrcSupervisor.Tests", "Fixtures", "phase28d2bv-coupled-exit-sanitized.json");
+        var json = File.ReadAllText(path);
+        using var document = JsonDocument.Parse(json);
+
+        Assert.Equal("softwareStackUnavailable", document.RootElement.GetProperty("expectedCorrectedResult").GetProperty("overallHealth").GetString());
+        Assert.Equal("groupMemberNotIndependentlyRestartable", document.RootElement.GetProperty("expectedCorrectedResult").GetProperty("targetClassification").GetString());
+        Assert.Contains("PiService", json);
+        Assert.DoesNotContain("C:\\", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("USB\\", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(Environment.UserName, json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(Environment.MachineName, json, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -283,7 +319,7 @@ public sealed class PimaxSoftwareStackRepairTests
             "summary",
             "probable",
             new PimaxHealthCapabilitySummary("available", "available", "available", "available", "available", "available", "ready", "summary"),
-            new PimaxHealthSanitizedEvidence(PimaxConnectivitySchema.Version, PimaxUsbEnumerationSchema.Version, PimaxRegistrationAssessmentSchema.Version, "synthetic", registration.State, 1, 1, [], [], [], []),
+            new PimaxHealthSanitizedEvidence(PimaxConnectivitySchema.Version, PimaxUsbEnumerationSchema.Version, PimaxRegistrationAssessmentSchema.Version, "synthetic", registration.State, 1, 1, [], [], ["PimaxClient"], ["PiServiceLauncher"], registration.EvidenceFreshness, CompleteGroup()),
             [],
             []);
     }
@@ -315,7 +351,15 @@ public sealed class PimaxSoftwareStackRepairTests
         => components.Select(component => component.ComponentId == id ? component with { Status = PimaxHealthComponentStatus.Missing, Explanation = component.DisplayName + " is missing." } : component).ToArray();
 
     private static PimaxRegistrationAssessmentResult Registration(string state, string confidence)
-        => new(state, confidence, "registration", [], [], [], [], [], new PimaxRegistrationEvidence(true, 1, 1, state == PimaxRegistrationState.RegisteredReady, 1, 1, true, state == PimaxRegistrationState.RegisteredReady, false, false, true, [], []));
+        => new(state, confidence, PimaxEvidenceFreshness.Current, "registration", [], [], [], [], [], new PimaxRegistrationEvidence(true, 1, 1, state == PimaxRegistrationState.RegisteredReady, 1, 1, true, state == PimaxRegistrationState.RegisteredReady, false, false, true, [], []));
+
+    private static PimaxSoftwareGroupSnapshot CompleteGroup()
+        => PimaxSoftwareGroupModel.FromMembers(
+            DateTimeOffset.UtcNow,
+            "health",
+            new PimaxSoftwareGroupMember("PimaxClient", PimaxSoftwareGroupRole.PimaxPlayUiProcess, @"<pimax>\PimaxClient\pimaxui\PimaxClient.exe", "Pimax publisher metadata present.", "current process session observed", "coupled", true, false),
+            new PimaxSoftwareGroupMember("PiPlayService", PimaxSoftwareGroupRole.RuntimeProcess, @"<pimax>\Runtime\PiPlayService.exe", "Pimax publisher metadata present.", "current process session observed", "coupled", true, false),
+            new PimaxSoftwareGroupMember("PiServiceLauncher", PimaxSoftwareGroupRole.ServiceOwnedProcess, @"<pimax>\Runtime\PiServiceLauncher.exe", "Service metadata observed.", "service running in current snapshot", "service-owned", true, false));
 
     private static string RepositoryRoot()
     {

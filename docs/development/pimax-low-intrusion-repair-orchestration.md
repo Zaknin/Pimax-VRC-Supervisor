@@ -62,6 +62,12 @@ The confirmed low-intrusion blue-to-green recovery sequence was:
 
 The heavy Connect observer appeared to perturb or delay registration, so it remains development-only and is not part of the repair workflow.
 
+### Phase 28D2-BV
+
+The Phase 28D2-BV live validation proved that `PimaxClient` is part of a coupled Pimax Play/runtime process group. A graceful `CloseMainWindow` against the selected `PimaxClient` also terminated other runtime members, Pimax Play closed, and the headset became blue/unavailable by operator observation. No force kill was used and no backend repair operation was started.
+
+Fault-state machine evidence still reported `healthy / registeredReady` because previously enumerated USB/audio/device evidence remained present. Phase 28D2-B1 corrects that by requiring current Pimax Play/runtime ownership for `registeredReady / confirmed` and by downgrading stale or unowned evidence to non-healthy software-stack states. The sanitized public reference is PR #22 comment `4758761712`; private raw paths, PIDs, command lines, and device identities are not documented here.
+
 ## Capability Boundaries
 
 Available now:
@@ -72,7 +78,7 @@ Available now:
 - before/after component comparison;
 - bounded wait design;
 - human-readable diagnosis;
-- software-stack restart candidate identification;
+- Pimax Play/runtime process-group observation;
 - operation progress reporting;
 - cancellation before mutating software actions;
 - final verification.
@@ -84,6 +90,8 @@ Unavailable or not approved:
 - reliable GUI-free Connect equivalent;
 - electrical USB disconnect/reconnect;
 - approved software USB cycle for registration recovery;
+- standalone `PimaxClient` restart;
+- incomplete Pimax Play/runtime group restart;
 - DisplayPort electrical reconnect;
 - automatic physical-cable recovery.
 
@@ -95,6 +103,9 @@ The planner supports these classifications:
 
 - `alreadyHealthy`
 - `softwareStackUnhealthy`
+- `softwareStackUnavailable`
+- `softwareStackPartial`
+- `staleRegistrationEvidence`
 - `poweredOnAwaitingRegistration`
 - `coreUsbMissing`
 - `superSpeedMissing`
@@ -110,7 +121,9 @@ The planner supports these classifications:
 
 `viveFaceTrackerMissing` is optional accessory state. It does not make the Pimax headset unusable by itself.
 
-`poweredOnAwaitingRegistration` explicitly reports that a future software-stack restart may be attempted, but automatic registration is not guaranteed. Pimax Play Connect and a real physical USB reconnection may still be required.
+`softwareStackUnavailable`, `softwareStackPartial`, and `staleRegistrationEvidence` return `unsupportedAutomaticRecovery` until a complete Pimax Play/runtime group launch and readiness recipe is proven.
+
+`poweredOnAwaitingRegistration` explicitly reports that automatic registration is not guaranteed. Pimax Play Connect and a real physical USB reconnection may still be required.
 
 ## State Machine
 
@@ -143,6 +156,7 @@ The model defines these future action types:
 - `verifyProcessState`
 - `verifyServiceState`
 - `requestOperatorConfirmation`
+- `requireApprovedGroupRestartRecipe`
 - `stopValidatedPimaxProcesses`
 - `restartValidatedPimaxServices`
 - `startValidatedPimaxProcesses`
@@ -158,7 +172,7 @@ The model defines these future action types:
 
 Each descriptor includes category, mutating flag, supported flag, approved flag, confirmation requirement, cancellation behavior, timeout, preconditions, success criteria, failure criteria, and explanation.
 
-In this phase, mutating actions are descriptors only. They are not supported or approved for execution by the new commands.
+In this phase, mutating actions are descriptors only. They are not supported or approved for execution by the new commands. `requireApprovedGroupRestartRecipe` is the descriptor used when a group-level recovery would be needed but no complete safe recipe exists.
 
 ## Dependency-Aware Ordering
 
@@ -167,7 +181,7 @@ Registration problem:
 1. Capture health.
 2. Verify core USB.
 3. Verify Pimax processes and services.
-4. Propose software-stack restart only as a later confirmed phase.
+4. Require a complete Pimax Play/runtime group restart recipe before any software mutation.
 5. Settle.
 6. Verify registration.
 7. Report Connect and physical USB limitations if registration remains unavailable.
@@ -178,7 +192,7 @@ EyeChip missing:
 1. Verify registration.
 2. Verify USB 2 and SuperSpeed.
 3. Verify Pimax software stack.
-4. Propose software restart candidate.
+4. Require a complete group restart recipe before any software mutation.
 5. Verify EyeChip.
 6. Report eye tracking availability.
 
@@ -193,7 +207,7 @@ Audio missing:
 
 1. Verify registration.
 2. Verify MMDEVAPI/audio endpoint.
-3. Propose safe software-stack restart candidate.
+3. Require a complete group restart recipe before any software mutation.
 4. Recheck endpoint.
 5. Report sound availability.
 
@@ -203,7 +217,6 @@ Live planning outcomes in this phase are limited to:
 
 - `noRepairNeeded`
 - `repairPlanned`
-- `softwareRepairCandidate`
 - `physicalUsbConnectionRequired`
 - `displayPortConnectionRequired`
 - `unsupportedAutomaticRecovery`
@@ -211,6 +224,8 @@ Live planning outcomes in this phase are limited to:
 - `unknown`
 
 The planner does not emit `repaired`, because no repair is executed.
+
+`softwareRepairCandidate` is not used for Pimax Play/runtime group restart while the recipe is incomplete; those states use `unsupportedAutomaticRecovery`.
 
 ## Verification Contract
 
@@ -326,7 +341,7 @@ Current status: Pimax not registered
 Planned actions:
 [x] Assess headset components
 [ ] Verify Pimax software stack
-[ ] Restart validated Pimax components
+[ ] Verify approved group restart recipe
 [ ] Wait for stack stabilization
 [ ] Verify registration and features
 
@@ -335,7 +350,7 @@ Automatic limitations:
 - Physical USB reconnection cannot be performed
 ```
 
-The final TUI button should wait until backend execution is validated in a later phase.
+The final TUI button should wait until backend execution is validated in a later phase. It remains blocked while the allowlist contains no executable Pimax Play/runtime group target.
 
 ## Phase 28D2-B Backend
 
@@ -352,7 +367,7 @@ It implements the software-stack-only execution backend, target allowlist, durab
 Recommended next implementation phase:
 
 ```text
-Phase 28D3 - Add Repair Pimax Connection to the Terminal UI
+Phase 28D2-B2 - Determine a Safe Pimax Play Process-Group Launch and Readiness Recipe
 ```
 
-That phase may add the TUI entry only after backend contracts and static safety remain stable. It must still not claim it can automatically perform Pimax Play Connect, physical USB reconnection, or DisplayPort reconnection.
+That phase must remain read-only or use vendor-supported launch behavior only. TUI exposure should wait until the corrected allowlist contains an executable target with a complete side-effect declaration and restart recipe.

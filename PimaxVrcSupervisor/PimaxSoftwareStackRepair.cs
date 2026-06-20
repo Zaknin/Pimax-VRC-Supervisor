@@ -34,6 +34,8 @@ internal static class PimaxRepairTargetClassification
     public const string ApprovedRestartableService = "approvedRestartableService";
     public const string ApprovedRestartableProcess = "approvedRestartableProcess";
     public const string ObserveOnly = "observeOnly";
+    public const string GroupMemberNotIndependentlyRestartable = "groupMemberNotIndependentlyRestartable";
+    public const string RestartRecipeIncomplete = "restartRecipeIncomplete";
     public const string Prohibited = "prohibited";
 }
 
@@ -86,7 +88,20 @@ internal sealed record PimaxRepairTarget(
     string[] DependentServices,
     string[] CurrentProcessIds,
     string Reason,
-    string IntendedOrder);
+    string IntendedOrder,
+    string? GroupId = null,
+    PimaxRepairTargetSideEffectDeclaration? SideEffects = null,
+    PimaxSoftwareGroupRecipe? RestartRecipe = null);
+
+internal sealed record PimaxRepairTargetSideEffectDeclaration(
+    string[] ExpectedProcessesToExit,
+    string[] ExpectedProcessesToStart,
+    string[] ExpectedServicesToChange,
+    string[] ExpectedChildProcessEffects,
+    string[] ProhibitedSideEffects,
+    int MaximumProcessTreeExpansion,
+    bool RollbackAvailable,
+    string RestartRecipeConfidence);
 
 internal sealed record PimaxRepairStartRequest(
     string Mode,
@@ -162,6 +177,7 @@ internal sealed record PimaxRepairHealthSummary(
     string OverallStatus,
     string RegistrationState,
     string RegistrationConfidence,
+    string RegistrationFreshness,
     string EvidenceConfidence,
     string HumanReadableSummary);
 
@@ -263,12 +279,13 @@ internal sealed class PimaxRepairTargetCatalog(IPimaxClientProcessController cli
             var exactTarget = discovery.Target is not null
                 && !string.IsNullOrWhiteSpace(first.ExecutablePath)
                 && string.Equals(discovery.Target.ExecutablePath, first.ExecutablePath, StringComparison.OrdinalIgnoreCase);
-            var approved = exactTarget
+            var validatedPimaxClientMember = exactTarget
+                && discovery.Target is not null
                 && group.Any(process => process.HasMainWindow)
-                && string.Equals(discovery.Target!.ProductName, "PimaxClient", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(discovery.Target.ProductName, "PimaxClient", StringComparison.OrdinalIgnoreCase)
                 && string.Equals(discovery.Target.CompanyName, "Pimax", StringComparison.OrdinalIgnoreCase);
-            var classification = approved
-                ? PimaxRepairTargetClassification.ApprovedRestartableProcess
+            var classification = validatedPimaxClientMember
+                ? PimaxRepairTargetClassification.GroupMemberNotIndependentlyRestartable
                 : IsProhibitedProcess(first.ProcessName, first.ExecutablePath)
                     ? PimaxRepairTargetClassification.Prohibited
                     : PimaxRepairTargetClassification.ObserveOnly;
@@ -277,27 +294,31 @@ internal sealed class PimaxRepairTargetCatalog(IPimaxClientProcessController cli
                 first.ProcessName,
                 "process",
                 classification,
-                approved,
+                false,
                 first.ProcessName,
                 SanitizePath(first.ExecutablePath),
                 null,
                 null,
                 group.Any(process => process.ProcessId > 0) ? "running" : "notRunning",
-                approved,
-                approved ? "Pimax client file identity and shortcut target validated." : "Signer or launch semantics not approved by this phase.",
+                validatedPimaxClientMember,
+                validatedPimaxClientMember ? "Pimax client file identity validated, but standalone restart is unsafe." : "Signer or launch semantics not approved by this phase.",
                 !string.IsNullOrWhiteSpace(first.ExecutablePath),
                 false,
                 [],
                 [],
                 group.Select(process => process.ProcessId.ToString()).Where(value => value != "0").ToArray(),
-                approved
-                    ? "Exact top-level Pimax Play client target validated for graceful close and exact relaunch."
+                validatedPimaxClientMember
+                    ? "PimaxClient is a coupled Pimax Play/runtime group member. Phase 28D2-BV observed that closing it also terminated runtime members, so it is not independently restartable."
                     : ClassificationReason(first.ProcessName, first.ExecutablePath),
-                approved ? "stop before services; start after services if it was running before repair" : "observe only"));
+                "observe only",
+                "pimax-play-runtime",
+                StandaloneMemberSideEffects(),
+                PimaxSoftwareGroupModel.IncompleteRecipe()));
         }
 
         targets.AddRange(DiscoverAdditionalPimaxProcesses(targets));
         targets.AddRange(await DiscoverServicesAsync(cancellationToken));
+        targets.Add(BuildSoftwareGroupTarget(targets));
 
         return new PimaxRepairTargetsSnapshot(
             PimaxRepairTargetsSchema.Version,
@@ -305,20 +326,100 @@ internal sealed class PimaxRepairTargetCatalog(IPimaxClientProcessController cli
             targets.OrderBy(target => target.TargetType, StringComparer.OrdinalIgnoreCase).ThenBy(target => target.DisplayName, StringComparer.OrdinalIgnoreCase).ToArray(),
             targets.Where(target => target.Classification == PimaxRepairTargetClassification.ApprovedRestartableProcess).Select(target => target.TargetId).ToArray(),
             targets.Where(target => target.Classification == PimaxRepairTargetClassification.ApprovedRestartableService).Select(target => target.TargetId).ToArray(),
-            targets.Where(target => target.Classification == PimaxRepairTargetClassification.ObserveOnly).Select(target => target.TargetId).ToArray(),
+            targets.Where(target => target.Classification is PimaxRepairTargetClassification.ObserveOnly or PimaxRepairTargetClassification.GroupMemberNotIndependentlyRestartable or PimaxRepairTargetClassification.RestartRecipeIncomplete).Select(target => target.TargetId).ToArray(),
             targets.Where(target => target.Classification == PimaxRepairTargetClassification.Prohibited).Select(target => target.TargetId).ToArray(),
             targets.Where(target => target.Approved && target.TargetType == "process").Select(target => target.TargetId).ToArray(),
             targets.Where(target => target.Approved && target.TargetType == "service").Select(target => target.TargetId).Concat(targets.Where(target => target.Approved && target.TargetType == "process").Select(target => target.TargetId)).ToArray(),
-            "Only exact validated Pimax Play user-mode client processes may be restarted. Pimax services are observe-only unless a future phase proves exact safe dependency and restart semantics.",
+            "No Pimax Play/runtime member is independently restartable. The complete group remains observe-only until a safe launch, readiness, shutdown, and side-effect recipe is proven.",
             warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
-    internal static PimaxRepairTarget ApprovedProcessForTests(string id = "process:pimaxclient")
-        => new(id, "PimaxClient.exe", "process", PimaxRepairTargetClassification.ApprovedRestartableProcess, true, "PimaxClient.exe", @"<pimax>\PimaxClient\pimaxui\PimaxClient.exe", null, null, "running", true, "valid", true, false, [], [], ["101"], "test approved", "stop before services; start after services");
+    internal static PimaxRepairTarget ApprovedProcessForTests(string id = "process:synthetic-safe")
+        => new(id, "Synthetic safe process", "process", PimaxRepairTargetClassification.ApprovedRestartableProcess, true, "SyntheticSafeProcess.exe", @"<test>\SyntheticSafeProcess.exe", null, null, "running", true, "valid", true, false, [], [], ["101"], "test approved", "stop before services; start after services", null, CompleteSideEffectsForTests(), null);
+
+    internal static PimaxRepairTarget UnsafeApprovedPimaxClientForTests(string id = "process:pimaxclient")
+        => new(id, "PimaxClient.exe", "process", PimaxRepairTargetClassification.ApprovedRestartableProcess, true, "PimaxClient", @"<pimax>\PimaxClient\pimaxui\PimaxClient.exe", null, null, "running", true, "valid", true, false, [], [], ["101"], "unsafe test approved", "stop before services; start after services", "pimax-play-runtime", StandaloneMemberSideEffects(), PimaxSoftwareGroupModel.IncompleteRecipe());
 
     internal static PimaxRepairTarget ApprovedServiceForTests(string id = "service:test")
-        => new(id, "Pimax test service", "service", PimaxRepairTargetClassification.ApprovedRestartableService, true, null, @"<pimax>\Runtime\TestService.exe", "PimaxTestService", "Own Process", "Running", true, "valid", true, false, [], [], [], "test approved", "dependency order");
+        => new(id, "Pimax test service", "service", PimaxRepairTargetClassification.ApprovedRestartableService, true, null, @"<pimax>\Runtime\TestService.exe", "PimaxTestService", "Own Process", "Running", true, "valid", true, false, [], [], [], "test approved", "dependency order", null, CompleteSideEffectsForTests(), null);
+
+    internal static PimaxRepairTarget RestartRecipeIncompleteGroupForTests(string id = "group:pimax-play-runtime")
+        => new(
+            id,
+            "Pimax Play/runtime process group",
+            "processGroup",
+            PimaxRepairTargetClassification.RestartRecipeIncomplete,
+            false,
+            null,
+            "<pimax>",
+            null,
+            null,
+            PimaxSoftwareGroupState.Complete,
+            true,
+            "Pimax publisher metadata and installation path evidence are required for each member.",
+            true,
+            false,
+            [],
+            [],
+            [],
+            "Complete Pimax Play/runtime group restart is not executable because no safe launch and readiness recipe is approved.",
+            "observe only",
+            "pimax-play-runtime",
+            GroupSideEffects(),
+            PimaxSoftwareGroupModel.IncompleteRecipe());
+
+    private static PimaxRepairTarget BuildSoftwareGroupTarget(IEnumerable<PimaxRepairTarget> currentTargets)
+    {
+        var processes = currentTargets
+            .Where(target => target.TargetType == "process" && target.Classification != PimaxRepairTargetClassification.Prohibited)
+            .ToArray();
+        var state =
+            processes.Length == 0 ? PimaxSoftwareGroupState.Unavailable :
+            processes.Any(target => string.Equals(target.ExecutableName, "PimaxClient", StringComparison.OrdinalIgnoreCase)) && processes.Any(target => target.ExecutableName is not null && (target.ExecutableName.Contains("PiService", StringComparison.OrdinalIgnoreCase) || target.ExecutableName.Contains("PiPlayService", StringComparison.OrdinalIgnoreCase) || target.ExecutableName.Contains("DeviceSetting", StringComparison.OrdinalIgnoreCase))) ? PimaxSoftwareGroupState.Complete :
+            PimaxSoftwareGroupState.Partial;
+        return RestartRecipeIncompleteGroupForTests() with
+        {
+            CurrentState = state,
+            Dependencies = processes.Select(target => target.TargetId).ToArray(),
+            Reason = state == PimaxSoftwareGroupState.Unavailable
+                ? "The Pimax Play/runtime group is unavailable. No automatic group launch recipe has been approved."
+                : "The Pimax Play/runtime group is observable, but restart is observe-only until a complete safe recipe is approved."
+        };
+    }
+
+    private static PimaxRepairTargetSideEffectDeclaration StandaloneMemberSideEffects()
+        => new(
+            ["PimaxClient", "coupled runtime members observed in Phase 28D2-BV"],
+            [],
+            [],
+            ["Closing one group member may terminate sibling runtime members."],
+            ["Any unapproved Pimax runtime exit", "driver/service mutation", "USB cycling", "GUI automation", "SteamVR/VRChat/VRCFT/Supervisor/watcher restart"],
+            0,
+            false,
+            "none");
+
+    private static PimaxRepairTargetSideEffectDeclaration GroupSideEffects()
+        => new(
+            ["complete declared group member set required before execution"],
+            ["complete declared group member set required before execution"],
+            ["none approved"],
+            ["child-process expansion must be bounded before execution"],
+            ["unknown process exit", "unknown process start", "driver/service mutation", "USB cycling", "GUI automation", "SteamVR/VRChat/VRCFT/Supervisor/watcher restart"],
+            0,
+            false,
+            "insufficient");
+
+    private static PimaxRepairTargetSideEffectDeclaration CompleteSideEffectsForTests()
+        => new(
+            ["declared target"],
+            ["declared target"],
+            [],
+            [],
+            ["unexpected process-tree change"],
+            1,
+            true,
+            "confirmed");
 
     private static async Task<IEnumerable<PimaxRepairTarget>> DiscoverServicesAsync(CancellationToken cancellationToken)
     {
@@ -661,6 +762,15 @@ internal sealed class PimaxSoftwareStackRepairBackend
             var approvedProcesses = targets.Targets.Where(target => target.Classification == PimaxRepairTargetClassification.ApprovedRestartableProcess).ToArray();
             var approvedServices = targets.Targets.Where(target => target.Classification == PimaxRepairTargetClassification.ApprovedRestartableService).ToArray();
             var mutatingActions = approvedProcesses.Select(target => $"restart-process:{target.TargetId}").Concat(approvedServices.Select(target => $"restart-service:{target.TargetId}")).ToArray();
+            var gateFailures = MutationGateFailures(approvedProcesses, approvedServices).ToArray();
+            if (gateFailures.Length > 0)
+            {
+                errors.AddRange(gateFailures);
+                var result = BuildResult(operationId, correlationId, request.Mode, started, _now(), PimaxSoftwareRepairOutcome.UnsupportedAutomaticRecovery, PimaxRepairStage.Completed, preHealth, preHealth, targets, actions, false, false, warnings, errors);
+                _lastResult = result;
+                return Accepted(operationId, request, classification, [], [], false, null, null, "none", result.HumanReadableSummary, result, warnings, errors);
+            }
+
             if (mutatingActions.Length == 0)
             {
                 var result = BuildResult(operationId, correlationId, request.Mode, started, _now(), PimaxSoftwareRepairOutcome.UnsupportedAutomaticRecovery, PimaxRepairStage.Completed, preHealth, preHealth, targets, actions, false, false, warnings, errors);
@@ -835,6 +945,35 @@ internal sealed class PimaxSoftwareStackRepairBackend
         catch (Exception ex) { errors.Add($"Post-health capture failed: {ex.GetType().Name}: {ex.Message}"); return UnknownHealth(); }
     }
 
+    private static IEnumerable<string> MutationGateFailures(IEnumerable<PimaxRepairTarget> approvedProcesses, IEnumerable<PimaxRepairTarget> approvedServices)
+    {
+        foreach (var target in approvedProcesses.Concat(approvedServices))
+        {
+            if (target.SideEffects is null)
+            {
+                yield return $"Target {target.TargetId} is missing a complete side-effect declaration.";
+            }
+
+            if (target.TargetType == "process"
+                && string.Equals(target.ExecutableName, "PimaxClient", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return "PimaxClient is part of a coupled Pimax Play/runtime process group and cannot be restarted as a standalone target.";
+            }
+
+            if (string.Equals(target.GroupId, "pimax-play-runtime", StringComparison.OrdinalIgnoreCase)
+                && target.RestartRecipe?.Complete != true)
+            {
+                yield return "The Pimax Play/runtime group restart recipe is incomplete.";
+            }
+
+            if (target.SideEffects is not null
+                && (target.SideEffects.ProhibitedSideEffects.Length == 0 || target.SideEffects.RestartRecipeConfidence is "none" or "insufficient"))
+            {
+                yield return $"Target {target.TargetId} does not declare enough side-effect and recipe confidence for mutation.";
+            }
+        }
+    }
+
     private static string DetermineOutcome(PimaxComponentHealthSnapshot pre, PimaxComponentHealthSnapshot post, IReadOnlyCollection<PimaxRepairActionEvent> actions)
     {
         if (!actions.All(action => action.Success))
@@ -845,6 +984,11 @@ internal sealed class PimaxSoftwareStackRepairBackend
         if (post.OverallStatus == PimaxHealthOverallStatus.CoreConnectionMissing)
         {
             return PimaxSoftwareRepairOutcome.CoreUsbMissing;
+        }
+
+        if (post.OverallStatus is PimaxHealthOverallStatus.SoftwareStackUnavailable or PimaxHealthOverallStatus.SoftwareStackPartial or PimaxHealthOverallStatus.StaleRegistrationEvidence or PimaxHealthOverallStatus.SoftwareStackConflicting)
+        {
+            return PimaxSoftwareRepairOutcome.UnsupportedAutomaticRecovery;
         }
 
         if (post.Components.Any(component => component.ComponentId == "displayPortVideo" && component.Status == PimaxHealthComponentStatus.Missing))
@@ -910,11 +1054,11 @@ internal sealed class PimaxSoftwareStackRepairBackend
             errors.ToArray());
 
     private static PimaxRepairHealthSummary HealthSummary(PimaxComponentHealthSnapshot health)
-        => new(health.OverallStatus, health.RegistrationAssessment.State, health.RegistrationAssessment.Confidence, health.EvidenceConfidence, health.HumanReadableSummary);
+        => new(health.OverallStatus, health.RegistrationAssessment.State, health.RegistrationAssessment.Confidence, health.RegistrationAssessment.EvidenceFreshness, health.EvidenceConfidence, health.HumanReadableSummary);
 
     private static PimaxRepairComponentReport[] ComponentReport(PimaxComponentHealthSnapshot health)
         => health.Components
-            .Where(component => component.ComponentId is "pimaxRegistration" or "coreUsb" or "usb2Companion" or "superSpeedCompanion" or "displayPortVideo" or "headsetAudioOutput" or "headsetMicrophone" or "eyeChip" or "eyeTracking" or "trackingCameras" or "headsetHid" or "viveFaceTracker" or "pimaxRuntime" or "pimaxPlay" or "pimaxServices")
+            .Where(component => component.ComponentId is "pimaxRegistration" or "pimaxSoftwareGroup" or "coreUsb" or "usb2Companion" or "superSpeedCompanion" or "displayPortVideo" or "headsetAudioOutput" or "headsetMicrophone" or "eyeChip" or "eyeTracking" or "trackingCameras" or "headsetHid" or "viveFaceTracker" or "pimaxRuntime" or "pimaxPlay" or "pimaxServices")
             .Select(component => new PimaxRepairComponentReport(component.ComponentId, component.DisplayName, component.Status, component.Criticality, component.Explanation))
             .ToArray();
 
@@ -926,7 +1070,7 @@ internal sealed class PimaxSoftwareStackRepairBackend
         PimaxSoftwareRepairOutcome.SoftwareStackHealthyButNotRegistered => "The Pimax software stack restarted successfully, but Pimax Play still has not registered the headset.\n\nPimax Play Connect and a physical USB reconnection may still be required.",
         PimaxSoftwareRepairOutcome.CoreUsbMissing => "Core Pimax USB is missing. No software restart can be reported as a complete repair.",
         PimaxSoftwareRepairOutcome.DisplayPathMissing => "Pimax registration may be ready, but the DisplayPort image path remains missing.",
-        PimaxSoftwareRepairOutcome.UnsupportedAutomaticRecovery => "No approved executable software action exists for the diagnosed Pimax problem.",
+        PimaxSoftwareRepairOutcome.UnsupportedAutomaticRecovery => "Automatic Pimax software restart is unavailable.\n\nPimaxClient is part of a coupled Pimax Play/runtime process group. Closing it also terminates other runtime processes, and a complete safe group restart recipe has not yet been approved.",
         PimaxSoftwareRepairOutcome.ConflictingEvidence => "Pimax evidence is conflicting. Automatic repair was not attempted.",
         PimaxSoftwareRepairOutcome.Unknown => "Pimax repair state is unknown. Automatic repair was not attempted.",
         PimaxSoftwareRepairOutcome.Cancelled => "Pimax repair was cancelled at a safe boundary.",
@@ -956,7 +1100,7 @@ internal sealed class PimaxSoftwareStackRepairBackend
         => _diagnostics.Append(new PimaxRepairOperationLogEntry(PimaxRepairDiagnosticsWriter.Schema, operationId, correlationId, typeof(PimaxSoftwareStackRepairBackend).Assembly.GetName().Version?.ToString() ?? "unknown", _now(), stage, action, targetId, result, durationMs, timeout, cancellation, exceptionType, error, pre, post, finalOutcome, warnings.ToArray()));
 
     private static PimaxComponentHealthSnapshot UnknownHealth()
-        => new(PimaxComponentHealthSchema.Version, DateTimeOffset.Now, "unknown", PimaxHealthOverallStatus.Unknown, new PimaxRegistrationAssessmentResult(PimaxRegistrationState.Unknown, PimaxRegistrationConfidence.Insufficient, "Health unavailable.", [], [], [], [], [], new PimaxRegistrationEvidence(false, 0, 0, false, 0, 0, false, false, false, false, false, [], [])), "insufficient", [], ["Health unavailable."], [], [], "Health unavailable.", "insufficient", new PimaxHealthCapabilitySummary("unknown", "unknown", "unknown", "unknown", "unknown", "unknown", "unknown", "unknown"), new PimaxHealthSanitizedEvidence(PimaxConnectivitySchema.Version, PimaxUsbEnumerationSchema.Version, PimaxRegistrationAssessmentSchema.Version, "unknown", PimaxRegistrationState.Unknown, 0, 0, [], [], [], []), [], []);
+        => new(PimaxComponentHealthSchema.Version, DateTimeOffset.Now, "unknown", PimaxHealthOverallStatus.Unknown, new PimaxRegistrationAssessmentResult(PimaxRegistrationState.Unknown, PimaxRegistrationConfidence.Insufficient, PimaxEvidenceFreshness.Unknown, "Health unavailable.", [], [], [], [], [], new PimaxRegistrationEvidence(false, 0, 0, false, 0, 0, false, false, false, false, false, [], [])), "insufficient", [], ["Health unavailable."], [], [], "Health unavailable.", "insufficient", new PimaxHealthCapabilitySummary("unknown", "unknown", "unknown", "unknown", "unknown", "unknown", "unknown", "unknown"), new PimaxHealthSanitizedEvidence(PimaxConnectivitySchema.Version, PimaxUsbEnumerationSchema.Version, PimaxRegistrationAssessmentSchema.Version, "unknown", PimaxRegistrationState.Unknown, 0, 0, [], [], [], [], PimaxEvidenceFreshness.Unknown, PimaxSoftwareGroupModel.Unknown(DateTimeOffset.Now, "unknown")), [], []);
 }
 
 internal static class PimaxRepairCommandLine

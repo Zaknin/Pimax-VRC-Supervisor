@@ -23,6 +23,11 @@ internal static class PimaxHealthOverallStatus
     public const string NotRegistered = "notRegistered";
     public const string CoreConnectionMissing = "coreConnectionMissing";
     public const string Initializing = "initializing";
+    public const string SoftwareStackUnavailable = "softwareStackUnavailable";
+    public const string SoftwareStackPartial = "softwareStackPartial";
+    public const string StaleRegistrationEvidence = "staleRegistrationEvidence";
+    public const string SoftwareStackStarting = "softwareStackStarting";
+    public const string SoftwareStackConflicting = "softwareStackConflicting";
     public const string ConflictingEvidence = "conflictingEvidence";
     public const string Unknown = "unknown";
 }
@@ -98,7 +103,9 @@ internal sealed record PimaxHealthSanitizedEvidence(
     string[] RelevantRoles,
     string[] CandidateVidPids,
     string[] PimaxProcesses,
-    string[] PimaxServices);
+    string[] PimaxServices,
+    string RegistrationFreshness,
+    PimaxSoftwareGroupSnapshot SoftwareGroup);
 
 internal sealed class PimaxComponentHealthCoordinator
 {
@@ -144,6 +151,7 @@ internal sealed class PimaxComponentHealthCoordinator
         if (connectivity is null || usb is null)
         {
             var unavailable = UnavailableRegistration();
+            var group = PimaxSoftwareGroupModel.FromConnectivity(connectivity, now, operationId);
             var evidence = new PimaxHealthSanitizedEvidence(
                 connectivity?.SchemaVersion ?? PimaxConnectivitySchema.Version,
                 usb?.SchemaVersion ?? PimaxUsbEnumerationSchema.Version,
@@ -155,7 +163,9 @@ internal sealed class PimaxComponentHealthCoordinator
                 connectivity?.Devices.RelevantDevices.Select(device => device.Role).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray() ?? [],
                 usb?.CandidateDevices.Select(VidPid).Where(value => value != "unknown").Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray() ?? [],
                 connectivity?.Processes.Processes.Select(process => process.ProcessName).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray() ?? [],
-                connectivity?.Services.Services.Select(service => service.Name).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray() ?? []);
+                connectivity?.Services.Services.Select(service => service.Name).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray() ?? [],
+                unavailable.EvidenceFreshness,
+                group);
 
             return new PimaxComponentHealthSnapshot(
                 PimaxComponentHealthSchema.Version,
@@ -181,10 +191,12 @@ internal sealed class PimaxComponentHealthCoordinator
         errors.AddRange(connectivity.Errors);
         errors.AddRange(usb.Errors);
         var gap = Math.Abs((usb.CollectedAt - connectivity.CollectedAt).TotalMilliseconds);
-        var registration = _assessor.Evaluate(connectivity, usb, gap);
+        var groupSnapshot = PimaxSoftwareGroupModel.FromConnectivity(connectivity, now, operationId);
+        var registration = ApplyOwnershipFreshness(_assessor.Evaluate(connectivity, usb, gap), groupSnapshot);
         warnings.AddRange(registration.Warnings);
-        var components = PimaxComponentHealthBuilder.Build(connectivity, usb, registration).ToArray();
-        var overall = PimaxComponentHealthBuilder.ClassifyOverall(components, registration);
+        warnings.AddRange(groupSnapshot.Warnings);
+        var components = PimaxComponentHealthBuilder.Build(connectivity, usb, registration, groupSnapshot).ToArray();
+        var overall = PimaxComponentHealthBuilder.ClassifyOverall(components, registration, groupSnapshot);
         var capabilities = PimaxComponentHealthBuilder.BuildCapabilitySummary(components, registration);
         var blocking = components
             .Where(component => component.Status is PimaxHealthComponentStatus.Missing or PimaxHealthComponentStatus.Conflicting
@@ -224,15 +236,52 @@ internal sealed class PimaxComponentHealthCoordinator
                 connectivity.Devices.RelevantDevices.Select(device => device.Role).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray(),
                 usb.CandidateDevices.Select(VidPid).Where(value => value != "unknown").Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray(),
                 connectivity.Processes.Processes.Select(process => process.ProcessName).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray(),
-                connectivity.Services.Services.Select(service => service.Name).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray()),
+                connectivity.Services.Services.Select(service => service.Name).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray(),
+                registration.EvidenceFreshness,
+                groupSnapshot),
             warnings.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             errors.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
+    private static PimaxRegistrationAssessmentResult ApplyOwnershipFreshness(PimaxRegistrationAssessmentResult registration, PimaxSoftwareGroupSnapshot group)
+    {
+        if (registration.State != PimaxRegistrationState.RegisteredReady)
+        {
+            return registration;
+        }
+
+        if (group.State == PimaxSoftwareGroupState.Complete && group.Freshness == PimaxEvidenceFreshness.Current)
+        {
+            return registration;
+        }
+
+        var state = group.State switch
+        {
+            PimaxSoftwareGroupState.Unavailable => PimaxRegistrationState.SoftwareStackUnavailable,
+            PimaxSoftwareGroupState.Partial => PimaxRegistrationState.RegistrationEvidenceStale,
+            PimaxSoftwareGroupState.Conflicting => PimaxRegistrationState.RegistrationEvidenceStale,
+            _ => PimaxRegistrationState.RegistrationEvidenceStale
+        };
+        var explanation = group.State == PimaxSoftwareGroupState.Unavailable
+            ? "The Pimax software stack is not running, so previously available registration evidence is unowned."
+            : "The Pimax software stack changed or is incomplete, so previously ready registration evidence is stale.";
+        return registration with
+        {
+            State = state,
+            Confidence = PimaxRegistrationConfidence.Insufficient,
+            EvidenceFreshness = group.State == PimaxSoftwareGroupState.Unavailable ? PimaxEvidenceFreshness.Unowned : PimaxEvidenceFreshness.Contradicted,
+            Explanation = explanation,
+            ContraryEvidence = registration.ContraryEvidence.Concat([group.HumanReadableSummary]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            MissingEvidence = registration.MissingEvidence.Concat(group.RequiredMissingRoles.Select(role => $"Missing current Pimax software owner role: {role}.")).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            Warnings = registration.Warnings.Concat(["Registration ready evidence was downgraded because current Pimax software ownership was not proven."]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+        };
     }
 
     private static PimaxRegistrationAssessmentResult UnavailableRegistration()
         => new(
             PimaxRegistrationState.Unknown,
             PimaxRegistrationConfidence.Insufficient,
+            PimaxEvidenceFreshness.Unknown,
             "One or more required read-only probes failed.",
             [],
             [],
@@ -260,10 +309,12 @@ internal static class PimaxComponentHealthBuilder
     public static IEnumerable<PimaxHealthComponent> Build(
         PimaxConnectivitySnapshot connectivity,
         PimaxUsbEnumerationSnapshot usb,
-        PimaxRegistrationAssessmentResult registration)
+        PimaxRegistrationAssessmentResult registration,
+        PimaxSoftwareGroupSnapshot group)
     {
-        yield return Component("pimaxPlay", "Pimax Play", HasProcess(connectivity, "PimaxClient") ? PimaxHealthComponentStatus.Present : PimaxHealthComponentStatus.Missing, PimaxHealthCriticality.RequiredForRegistration, "probable", "Pimax Play client process is running.", Evidence(ProcessNames(connectivity)), HasProcess(connectivity, "PimaxClient") ? "pimax_play_running" : "pimax_play_not_running", HasProcess(connectivity, "PimaxClient") ? "Pimax Play is running." : "Pimax Play is not running.", "startOrInspectPimaxPlay");
-        yield return Component("pimaxRuntime", "Pimax runtime", HasRuntimeProcessOrService(connectivity) ? PimaxHealthComponentStatus.Present : PimaxHealthComponentStatus.Missing, PimaxHealthCriticality.RequiredForRegistration, "probable", "Pimax runtime process or service is running.", Evidence(ProcessNames(connectivity).Concat(ServiceNames(connectivity))), HasRuntimeProcessOrService(connectivity) ? "pimax_runtime_present" : "pimax_runtime_missing", HasRuntimeProcessOrService(connectivity) ? "Pimax runtime evidence is present." : "Pimax runtime evidence is missing.", "inspectPimaxRuntime");
+        yield return Component("pimaxSoftwareGroup", "Pimax software group", SoftwareGroupStatus(group), PimaxHealthCriticality.RequiredForRegistration, "probable", "Pimax Play/runtime process group is complete and current.", Evidence(new[] { group.State, group.Freshness }.Concat(group.Members.Select(member => $"{member.ProcessName}:{member.Role}"))), "pimax_software_group_" + group.State, group.HumanReadableSummary, "inspectPimaxSoftwareGroup");
+        yield return Component("pimaxPlay", "Pimax Play", group.HasRole(PimaxSoftwareGroupRole.PimaxPlayUiProcess) ? PimaxHealthComponentStatus.Present : PimaxHealthComponentStatus.Missing, PimaxHealthCriticality.RequiredForRegistration, "probable", "Pimax Play client process is running.", Evidence(ProcessNames(connectivity)), group.HasRole(PimaxSoftwareGroupRole.PimaxPlayUiProcess) ? "pimax_play_running" : "pimax_play_not_running", group.HasRole(PimaxSoftwareGroupRole.PimaxPlayUiProcess) ? "Pimax Play is running." : "Pimax Play is not running.", "startOrInspectPimaxPlay");
+        yield return Component("pimaxRuntime", group.State == PimaxSoftwareGroupState.Unavailable ? "Pimax runtime" : "Pimax runtime", group.HasRole(PimaxSoftwareGroupRole.RuntimeProcess) || group.HasRole(PimaxSoftwareGroupRole.ServiceOwnedProcess) ? PimaxHealthComponentStatus.Present : PimaxHealthComponentStatus.Missing, PimaxHealthCriticality.RequiredForRegistration, "probable", "Pimax runtime process or service is running.", Evidence(ProcessNames(connectivity).Concat(ServiceNames(connectivity))), group.HasRole(PimaxSoftwareGroupRole.RuntimeProcess) || group.HasRole(PimaxSoftwareGroupRole.ServiceOwnedProcess) ? "pimax_runtime_present" : "pimax_runtime_missing", group.HasRole(PimaxSoftwareGroupRole.RuntimeProcess) || group.HasRole(PimaxSoftwareGroupRole.ServiceOwnedProcess) ? "Pimax runtime evidence is present." : "Pimax runtime evidence is missing.", "inspectPimaxRuntime");
         yield return Component("pimaxServices", "Pimax services", connectivity.Services.Services.Length > 0 ? PimaxHealthComponentStatus.Present : PimaxHealthComponentStatus.Unknown, PimaxHealthCriticality.RequiredForRegistration, "probable", "Relevant Pimax services are discoverable.", Evidence(ServiceNames(connectivity)), connectivity.Services.Services.Length > 0 ? "pimax_services_found" : "pimax_services_unknown", connectivity.Services.Services.Length > 0 ? "Pimax service evidence is present." : "Pimax service state is unknown.", "inspectPimaxServices");
         yield return Component("pimaxBackgroundProcesses", "Pimax background processes", connectivity.Processes.Processes.Length > 0 ? PimaxHealthComponentStatus.Present : PimaxHealthComponentStatus.Missing, PimaxHealthCriticality.Informational, "probable", "Relevant Pimax background processes are discoverable.", Evidence(ProcessNames(connectivity)), connectivity.Processes.Processes.Length > 0 ? "pimax_processes_found" : "pimax_processes_missing", connectivity.Processes.Processes.Length > 0 ? "Pimax background process evidence is present." : "Pimax background process evidence is missing.", "inspectPimaxProcesses");
 
@@ -288,8 +339,28 @@ internal static class PimaxComponentHealthBuilder
         yield return Component("pimaxOpenVrOpenXrIntegration", "Pimax OpenVR/OpenXR integration", connectivity.SteamVrDriver.ManifestFound ? PimaxHealthComponentStatus.Present : PimaxHealthComponentStatus.Unknown, PimaxHealthCriticality.Informational, "possible", "OpenVR/OpenXR integration is safely observable only through registration metadata in this phase.", Evidence(connectivity.SteamVrDriver.RegisteredDriverPaths.Select(path => PimaxConnectivityRedactor.SanitizePath(path) ?? "driver path")), connectivity.SteamVrDriver.ManifestFound ? "openvr_openxr_present" : "openvr_openxr_unknown", connectivity.SteamVrDriver.ManifestFound ? "Pimax runtime integration metadata is present." : "Pimax OpenVR/OpenXR integration is not confirmed.", "inspectRuntimeIntegration");
     }
 
-    public static string ClassifyOverall(IReadOnlyCollection<PimaxHealthComponent> components, PimaxRegistrationAssessmentResult registration)
+    public static string ClassifyOverall(IReadOnlyCollection<PimaxHealthComponent> components, PimaxRegistrationAssessmentResult registration, PimaxSoftwareGroupSnapshot group)
     {
+        if (group.State == PimaxSoftwareGroupState.Unavailable || registration.State == PimaxRegistrationState.SoftwareStackUnavailable)
+        {
+            return PimaxHealthOverallStatus.SoftwareStackUnavailable;
+        }
+
+        if (group.State == PimaxSoftwareGroupState.Partial)
+        {
+            return PimaxHealthOverallStatus.SoftwareStackPartial;
+        }
+
+        if (group.State == PimaxSoftwareGroupState.Conflicting)
+        {
+            return PimaxHealthOverallStatus.SoftwareStackConflicting;
+        }
+
+        if (registration.State == PimaxRegistrationState.RegistrationEvidenceStale)
+        {
+            return PimaxHealthOverallStatus.StaleRegistrationEvidence;
+        }
+
         if (registration.State == PimaxRegistrationState.ConflictingEvidence || components.Any(component => component.Status == PimaxHealthComponentStatus.Conflicting))
         {
             return PimaxHealthOverallStatus.ConflictingEvidence;
@@ -360,9 +431,10 @@ internal static class PimaxComponentHealthBuilder
     private static IEnumerable<string> DeviceNames(PimaxUsbEnumerationSnapshot snapshot, params string[] classOrText) => snapshot.FullInventory.Where(IsPresent).Where(record => classOrText.Any(value => string.Equals(record.DeviceClass, value, StringComparison.OrdinalIgnoreCase) || (record.FriendlyName ?? record.DeviceDescription ?? "").Contains(value, StringComparison.OrdinalIgnoreCase))).Select(record => record.FriendlyName ?? record.DeviceDescription ?? record.DeviceClass ?? record.EnumeratorName);
     private static IEnumerable<string> DeviceNamesContaining(PimaxUsbEnumerationSnapshot snapshot, params string[] values) => snapshot.FullInventory.Where(IsPresent).Where(record => values.Any(value => (record.FriendlyName ?? record.DeviceDescription ?? "").Contains(value, StringComparison.OrdinalIgnoreCase))).Select(record => record.FriendlyName ?? record.DeviceDescription ?? record.DeviceClass ?? record.EnumeratorName);
     private static IEnumerable<string> AudioNames(PimaxUsbEnumerationSnapshot snapshot) => DeviceNames(snapshot, "AudioEndpoint", "MEDIA", "Microphone", "Pimax");
-    private static string RegistrationStatus(PimaxRegistrationAssessmentResult registration) => registration.State switch { PimaxRegistrationState.RegisteredReady => PimaxHealthComponentStatus.Present, PimaxRegistrationState.LikelyPoweredOnAwaitingRegistration => PimaxHealthComponentStatus.Missing, PimaxRegistrationState.ConflictingEvidence => PimaxHealthComponentStatus.Conflicting, PimaxRegistrationState.Unknown => PimaxHealthComponentStatus.Unknown, _ => PimaxHealthComponentStatus.Missing };
-    private static string RegistrationReason(PimaxRegistrationAssessmentResult registration) => registration.State switch { PimaxRegistrationState.RegisteredReady => "pimax_registration_ready", PimaxRegistrationState.LikelyPoweredOnAwaitingRegistration => "windows_usb_present_pimax_unregistered", PimaxRegistrationState.ConflictingEvidence => "pimax_registration_conflicting", _ => "pimax_registration_unknown" };
-    private static string RegistrationExplanation(PimaxRegistrationAssessmentResult registration) => registration.State switch { PimaxRegistrationState.RegisteredReady => "All required headset components are present and Pimax registration is ready.", PimaxRegistrationState.LikelyPoweredOnAwaitingRegistration => PimaxComponentHealthMessages.UsbPresentRegistrationMissing, PimaxRegistrationState.ConflictingEvidence => "Pimax registration evidence is conflicting.", _ => "Pimax registration state is unknown." };
+    private static string SoftwareGroupStatus(PimaxSoftwareGroupSnapshot group) => group.State switch { PimaxSoftwareGroupState.Complete => PimaxHealthComponentStatus.Present, PimaxSoftwareGroupState.Partial => PimaxHealthComponentStatus.Degraded, PimaxSoftwareGroupState.Unavailable => PimaxHealthComponentStatus.Missing, PimaxSoftwareGroupState.Conflicting => PimaxHealthComponentStatus.Conflicting, PimaxSoftwareGroupState.Starting => PimaxHealthComponentStatus.Initializing, _ => PimaxHealthComponentStatus.Unknown };
+    private static string RegistrationStatus(PimaxRegistrationAssessmentResult registration) => registration.State switch { PimaxRegistrationState.RegisteredReady => PimaxHealthComponentStatus.Present, PimaxRegistrationState.LikelyPoweredOnAwaitingRegistration => PimaxHealthComponentStatus.Missing, PimaxRegistrationState.SoftwareStackUnavailable => PimaxHealthComponentStatus.Missing, PimaxRegistrationState.RegistrationEvidenceStale => PimaxHealthComponentStatus.Degraded, PimaxRegistrationState.ConflictingEvidence => PimaxHealthComponentStatus.Conflicting, PimaxRegistrationState.Unknown => PimaxHealthComponentStatus.Unknown, _ => PimaxHealthComponentStatus.Missing };
+    private static string RegistrationReason(PimaxRegistrationAssessmentResult registration) => registration.State switch { PimaxRegistrationState.RegisteredReady => "pimax_registration_ready", PimaxRegistrationState.LikelyPoweredOnAwaitingRegistration => "windows_usb_present_pimax_unregistered", PimaxRegistrationState.SoftwareStackUnavailable => "pimax_software_stack_unavailable", PimaxRegistrationState.RegistrationEvidenceStale => "pimax_registration_evidence_stale", PimaxRegistrationState.ConflictingEvidence => "pimax_registration_conflicting", _ => "pimax_registration_unknown" };
+    private static string RegistrationExplanation(PimaxRegistrationAssessmentResult registration) => registration.State switch { PimaxRegistrationState.RegisteredReady => "All required headset components are present and current Pimax software ownership is proven.", PimaxRegistrationState.LikelyPoweredOnAwaitingRegistration => PimaxComponentHealthMessages.UsbPresentRegistrationMissing, PimaxRegistrationState.SoftwareStackUnavailable => PimaxComponentHealthMessages.SoftwareStackUnavailable, PimaxRegistrationState.RegistrationEvidenceStale => PimaxComponentHealthMessages.StaleRegistrationEvidence, PimaxRegistrationState.ConflictingEvidence => "Pimax registration evidence is conflicting.", _ => "Pimax registration state is unknown." };
 }
 
 internal static class PimaxComponentHealthMessages
@@ -377,6 +449,8 @@ internal static class PimaxComponentHealthMessages
     public const string TrackingCamerasMissing = "One or more headset tracking-camera interfaces are missing.\n\nHeadset tracking may be unavailable or unstable.";
     public const string ViveMissing = "The Vive face tracker is not detected.\n\nFace or mouth tracking through VRCFT will be unavailable.";
     public const string Healthy = "Pimax headset connection is healthy.\n\nAll required core components are present and Pimax registration is ready.";
+    public const string SoftwareStackUnavailable = "The Pimax software stack is not running.\n\nWindows still detects some previously enumerated headset components, but\ncurrent Pimax registration cannot be confirmed.\n\nThe headset may appear blue or unavailable until the Pimax software\nstack is restored.";
+    public const string StaleRegistrationEvidence = "Previously recorded registration evidence is no longer current.\n\nPimax Play or its runtime processes have changed, so the headset's\ncurrent registration state must be reassessed.";
 
     public static string Overall(string status) => status switch
     {
@@ -385,6 +459,11 @@ internal static class PimaxComponentHealthMessages
         PimaxHealthOverallStatus.NotRegistered => UsbPresentRegistrationMissing,
         PimaxHealthOverallStatus.CoreConnectionMissing => CoreUsbMissing,
         PimaxHealthOverallStatus.Initializing => "Pimax headset connection appears to be initializing.",
+        PimaxHealthOverallStatus.SoftwareStackUnavailable => SoftwareStackUnavailable,
+        PimaxHealthOverallStatus.SoftwareStackPartial => "The Pimax software stack is partially running.\n\nStandalone member restart is not approved; group-level recovery semantics are required.",
+        PimaxHealthOverallStatus.StaleRegistrationEvidence => StaleRegistrationEvidence,
+        PimaxHealthOverallStatus.SoftwareStackStarting => "The Pimax software stack appears to be starting. Reassess after it settles.",
+        PimaxHealthOverallStatus.SoftwareStackConflicting => "The Pimax software stack has conflicting or unknown members. Automatic repair is not allowed.",
         PimaxHealthOverallStatus.ConflictingEvidence => "Pimax component evidence is conflicting. Recheck the headset state before repair.",
         _ => "Pimax component health is unknown."
     };

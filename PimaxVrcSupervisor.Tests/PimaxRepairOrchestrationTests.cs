@@ -16,14 +16,17 @@ public sealed class PimaxRepairOrchestrationTests
         AssertCapability(first, "displayPortReconnect", PimaxRepairCapabilityAvailability.Unavailable);
         AssertCapability(first, "componentHealthAssessment", PimaxRepairCapabilityAvailability.Available);
         AssertCapability(first, "finalVerification", PimaxRepairCapabilityAvailability.Available);
-        AssertCapability(first, "softwareStackRestartCandidate", PimaxRepairCapabilityAvailability.AvailableWithLimitations);
+        AssertCapability(first, "softwareStackRestartCandidate", PimaxRepairCapabilityAvailability.NotApproved);
         AssertCapability(first, "approvedSoftwareUsbCycle", PimaxRepairCapabilityAvailability.NotApproved);
     }
 
     [Theory]
     [InlineData(PimaxRepairClassification.AlreadyHealthy, PimaxRepairOutcome.NoRepairNeeded)]
     [InlineData(PimaxRepairClassification.PoweredOnAwaitingRegistration, PimaxRepairOutcome.PhysicalUsbConnectionRequired)]
-    [InlineData(PimaxRepairClassification.SoftwareStackUnhealthy, PimaxRepairOutcome.SoftwareRepairCandidate)]
+    [InlineData(PimaxRepairClassification.SoftwareStackUnhealthy, PimaxRepairOutcome.UnsupportedAutomaticRecovery)]
+    [InlineData(PimaxRepairClassification.SoftwareStackUnavailable, PimaxRepairOutcome.UnsupportedAutomaticRecovery)]
+    [InlineData(PimaxRepairClassification.SoftwareStackPartial, PimaxRepairOutcome.UnsupportedAutomaticRecovery)]
+    [InlineData(PimaxRepairClassification.StaleRegistrationEvidence, PimaxRepairOutcome.UnsupportedAutomaticRecovery)]
     [InlineData(PimaxRepairClassification.CoreUsbMissing, PimaxRepairOutcome.PhysicalUsbConnectionRequired)]
     [InlineData(PimaxRepairClassification.SuperSpeedMissing, PimaxRepairOutcome.RepairPlanned)]
     [InlineData(PimaxRepairClassification.DisplayPathMissing, PimaxRepairOutcome.DisplayPortConnectionRequired)]
@@ -56,10 +59,26 @@ public sealed class PimaxRepairOrchestrationTests
         Assert.True(Array.IndexOf(ids, "captureHealth") < Array.IndexOf(ids, "verifyServiceState"));
         Assert.True(Array.IndexOf(ids, "waitForRegistration") < Array.IndexOf(ids, "requirePimaxConnect"));
         Assert.True(Array.IndexOf(ids, "requirePimaxConnect") < Array.IndexOf(ids, "requirePhysicalUsbReconnect"));
-        Assert.Contains("automatic registration cannot currently be guaranteed", plan.HumanReadableSummary);
+        Assert.Contains("complete group launch and readiness recipe", plan.HumanReadableSummary);
         Assert.Contains("physical USB reconnection may still be required", plan.HumanReadableSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("requirePimaxConnect", plan.RequiredUnavailableActionIds);
         Assert.Contains("requirePhysicalUsbReconnect", plan.RequiredUnavailableActionIds);
+    }
+
+    [Theory]
+    [InlineData(PimaxRepairClassification.SoftwareStackUnavailable)]
+    [InlineData(PimaxRepairClassification.SoftwareStackPartial)]
+    [InlineData(PimaxRepairClassification.StaleRegistrationEvidence)]
+    public void SoftwareGroupFailuresRequireRecipeAndDoNotPlanStandaloneRestart(string classification)
+    {
+        var plan = PimaxRepairPlanner.BuildPlan(HealthFor(classification), DateTimeOffset.UtcNow);
+        var ids = plan.PlannedActions.Select(action => action.ActionId).ToArray();
+
+        Assert.Equal(PimaxRepairOutcome.UnsupportedAutomaticRecovery, plan.Outcome);
+        Assert.Contains("requireApprovedGroupRestartRecipe", ids);
+        Assert.DoesNotContain("stopValidatedPimaxProcesses", ids);
+        Assert.DoesNotContain("restartValidatedPimaxServices", ids);
+        Assert.DoesNotContain("startValidatedPimaxProcesses", ids);
     }
 
     [Theory]
@@ -189,6 +208,21 @@ public sealed class PimaxRepairOrchestrationTests
                 components = SetMissing(components, "pimaxRuntime");
                 overall = PimaxHealthOverallStatus.UsableWithDegradedFeatures;
                 break;
+            case PimaxRepairClassification.SoftwareStackUnavailable:
+                components = SetMissing(SetMissing(SetMissing(components, "pimaxSoftwareGroup"), "pimaxPlay"), "pimaxRuntime");
+                registration = Registration(PimaxRegistrationState.SoftwareStackUnavailable, PimaxRegistrationConfidence.Insufficient, PimaxEvidenceFreshness.Unowned);
+                overall = PimaxHealthOverallStatus.SoftwareStackUnavailable;
+                break;
+            case PimaxRepairClassification.SoftwareStackPartial:
+                components = SetStatus(components, "pimaxSoftwareGroup", PimaxHealthComponentStatus.Degraded);
+                registration = Registration(PimaxRegistrationState.RegistrationEvidenceStale, PimaxRegistrationConfidence.Insufficient, PimaxEvidenceFreshness.Contradicted);
+                overall = PimaxHealthOverallStatus.SoftwareStackPartial;
+                break;
+            case PimaxRepairClassification.StaleRegistrationEvidence:
+                components = SetStatus(components, "pimaxRegistration", PimaxHealthComponentStatus.Degraded);
+                registration = Registration(PimaxRegistrationState.RegistrationEvidenceStale, PimaxRegistrationConfidence.Insufficient, PimaxEvidenceFreshness.Stale);
+                overall = PimaxHealthOverallStatus.StaleRegistrationEvidence;
+                break;
             case PimaxRepairClassification.CoreUsbMissing:
                 components = SetMissing(components, "coreUsb");
                 overall = PimaxHealthOverallStatus.CoreConnectionMissing;
@@ -251,7 +285,7 @@ public sealed class PimaxRepairOrchestrationTests
             "synthetic summary",
             "probable",
             new PimaxHealthCapabilitySummary("available", "available", "available", "available", "available", "available", "ready", "synthetic"),
-            new PimaxHealthSanitizedEvidence(PimaxConnectivitySchema.Version, PimaxUsbEnumerationSchema.Version, PimaxRegistrationAssessmentSchema.Version, "synthetic", registration.State, 8, 8, ["CrystalHidInterface"], ["VID_34A4&PID_0012"], ["PimaxClient"], ["PiServiceLauncher"]),
+            new PimaxHealthSanitizedEvidence(PimaxConnectivitySchema.Version, PimaxUsbEnumerationSchema.Version, PimaxRegistrationAssessmentSchema.Version, "synthetic", registration.State, 8, 8, ["CrystalHidInterface"], ["VID_34A4&PID_0012"], ["PimaxClient"], ["PiServiceLauncher"], registration.EvidenceFreshness, CompleteGroup()),
             [],
             []);
     }
@@ -260,6 +294,7 @@ public sealed class PimaxRepairOrchestrationTests
         =>
         [
             Component("pimaxPlay", "Pimax Play", PimaxHealthCriticality.RequiredForRegistration),
+            Component("pimaxSoftwareGroup", "Pimax software group", PimaxHealthCriticality.RequiredForRegistration),
             Component("pimaxRuntime", "Pimax runtime", PimaxHealthCriticality.RequiredForRegistration),
             Component("pimaxServices", "Pimax services", PimaxHealthCriticality.RequiredForRegistration),
             Component("pimaxBackgroundProcesses", "Pimax background processes", PimaxHealthCriticality.Informational),
@@ -291,10 +326,11 @@ public sealed class PimaxRepairOrchestrationTests
             ? component with { Status = status, ReasonCode = id + "_" + status, Explanation = component.DisplayName + " is " + status + "." }
             : component).ToArray();
 
-    private static PimaxRegistrationAssessmentResult Registration(string state, string confidence)
+    private static PimaxRegistrationAssessmentResult Registration(string state, string confidence, string freshness = PimaxEvidenceFreshness.Current)
         => new(
             state,
             confidence,
+            freshness,
             "synthetic registration",
             ["sanitized evidence"],
             [],
@@ -315,6 +351,14 @@ public sealed class PimaxRepairOrchestrationTests
                 true,
                 ["power-on group"],
                 ["runtime group"]));
+
+    private static PimaxSoftwareGroupSnapshot CompleteGroup()
+        => PimaxSoftwareGroupModel.FromMembers(
+            DateTimeOffset.Parse("2026-06-20T00:00:00Z"),
+            "pimax-health-test",
+            new PimaxSoftwareGroupMember("PimaxClient", PimaxSoftwareGroupRole.PimaxPlayUiProcess, @"<pimax>\PimaxClient\pimaxui\PimaxClient.exe", "Pimax publisher metadata present.", "current process session observed", "coupled", true, false),
+            new PimaxSoftwareGroupMember("PiPlayService", PimaxSoftwareGroupRole.RuntimeProcess, @"<pimax>\Runtime\PiPlayService.exe", "Pimax publisher metadata present.", "current process session observed", "coupled", true, false),
+            new PimaxSoftwareGroupMember("PiServiceLauncher", PimaxSoftwareGroupRole.ServiceOwnedProcess, @"<pimax>\Runtime\PiServiceLauncher.exe", "Service metadata observed.", "service running in current snapshot", "service-owned", true, false));
 
     private static string RepositoryRoot()
     {

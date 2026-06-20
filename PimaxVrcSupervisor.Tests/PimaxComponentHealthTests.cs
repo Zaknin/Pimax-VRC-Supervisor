@@ -76,6 +76,27 @@ public sealed class PimaxComponentHealthTests
     }
 
     [Fact]
+    public async Task RuntimeAbsentWithDeviceRemnantsProducesSoftwareStackUnavailable()
+    {
+        var snapshot = await Health(Connectivity(PimaxConnectivityAssessmentValue.Connected, [], []), Usb(AllDevices()));
+
+        Assert.Equal(PimaxHealthOverallStatus.SoftwareStackUnavailable, snapshot.OverallStatus);
+        Assert.Equal(PimaxRegistrationState.SoftwareStackUnavailable, snapshot.RegistrationAssessment.State);
+        Assert.Equal(PimaxEvidenceFreshness.Unowned, snapshot.RegistrationAssessment.EvidenceFreshness);
+        Assert.Contains("software stack is not running", snapshot.HumanReadableSummary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PreviousReadyEvidenceWithPartialOwnerIsStale()
+    {
+        var snapshot = await Health(Connectivity(PimaxConnectivityAssessmentValue.Connected, ["PimaxClient"], ["PiServiceLauncher"]), Usb(AllDevices()));
+
+        Assert.Equal(PimaxHealthOverallStatus.SoftwareStackPartial, snapshot.OverallStatus);
+        Assert.Equal(PimaxRegistrationState.RegistrationEvidenceStale, snapshot.RegistrationAssessment.State);
+        Assert.Equal(PimaxEvidenceFreshness.Contradicted, snapshot.RegistrationAssessment.EvidenceFreshness);
+    }
+
+    [Fact]
     public async Task UnknownProbeFailureProducesUnknownWithoutThrowing()
     {
         var coordinator = new PimaxComponentHealthCoordinator(
@@ -198,6 +219,9 @@ public sealed class PimaxComponentHealthTests
     }
 
     private static PimaxConnectivitySnapshot Connectivity(string assessmentValue)
+        => Connectivity(assessmentValue, ["PimaxClient", "PiService", "PiPlayService", "DeviceSetting"], ["PiServiceLauncher", "Tobii VR4PIMAXP3B Platform Runtime"]);
+
+    private static PimaxConnectivitySnapshot Connectivity(string assessmentValue, string[] processNames, string[] serviceNames)
     {
         var assessment = new PimaxConnectivityAssessmentResult(
             assessmentValue,
@@ -211,8 +235,8 @@ public sealed class PimaxComponentHealthTests
             DateTimeOffset.Now,
             1,
             new PimaxInstallationObservation(PimaxProbeStatus.Available, [], [], [], []),
-            new PimaxProcessObservation(PimaxProbeStatus.Available, [Process("PimaxClient"), Process("PiService")], [], []),
-            new PimaxServiceObservation(PimaxProbeStatus.Available, [Service("PiServiceLauncher", "CoreServiceCandidate"), Service("Tobii VR4PIMAXP3B Platform Runtime", "OptionalEyeTrackingService")], [], []),
+            new PimaxProcessObservation(PimaxProbeStatus.Available, processNames.Select(Process).ToArray(), [], []),
+            new PimaxServiceObservation(PimaxProbeStatus.Available, serviceNames.Select(name => Service(name, name.Contains("Tobii", StringComparison.OrdinalIgnoreCase) ? "OptionalEyeTrackingService" : "CoreServiceCandidate")).ToArray(), [], []),
             new PimaxDeviceObservation(PimaxProbeStatus.Available, [], [], true, true, false, [], [], []),
             new PimaxRuntimeEvidenceObservation(PimaxProbeStatus.Inconclusive, DateTimeOffset.Now, 0, [], null, null, [], []),
             new PimaxSteamVrDriverObservation(PimaxProbeStatus.Available, [@"<drive>:\Program Files\Pimax\runtime"], true, [], []),

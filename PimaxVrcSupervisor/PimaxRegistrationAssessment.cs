@@ -19,6 +19,8 @@ internal static class PimaxRegistrationState
     public const string LikelyHeadsetOff = "likelyHeadsetOff";
     public const string LikelyPoweredOnAwaitingRegistration = "likelyPoweredOnAwaitingRegistration";
     public const string RegisteredReady = "registeredReady";
+    public const string SoftwareStackUnavailable = "softwareStackUnavailable";
+    public const string RegistrationEvidenceStale = "registrationEvidenceStale";
     public const string ConflictingEvidence = "conflictingEvidence";
 }
 
@@ -57,6 +59,7 @@ internal sealed record PimaxRegistrationSnapshotMetadata(
 internal sealed record PimaxRegistrationAssessmentResult(
     string State,
     string Confidence,
+    string EvidenceFreshness,
     string Explanation,
     string[] SupportingEvidence,
     string[] ContraryEvidence,
@@ -181,6 +184,7 @@ internal sealed class PimaxRegistrationStateAssessor
             return Result(
                 PimaxRegistrationState.ConflictingEvidence,
                 PimaxRegistrationConfidence.Insufficient,
+                PimaxEvidenceFreshness.Contradicted,
                 "Filtered and expanded Pimax evidence disagree.",
                 supporting,
                 contrary,
@@ -195,6 +199,7 @@ internal sealed class PimaxRegistrationStateAssessor
             return Result(
                 PimaxRegistrationState.RegisteredReady,
                 PimaxRegistrationConfidence.Confirmed,
+                PimaxEvidenceFreshness.Current,
                 "Pimax runtime-ready evidence is present and filtered connectivity reports connected.",
                 supporting,
                 contrary,
@@ -209,6 +214,7 @@ internal sealed class PimaxRegistrationStateAssessor
             return Result(
                 PimaxRegistrationState.LikelyPoweredOnAwaitingRegistration,
                 PimaxRegistrationConfidence.Probable,
+                PimaxEvidenceFreshness.Current,
                 "Headset power-on evidence is present, but Crystal runtime-ready evidence is absent.",
                 supporting,
                 contrary,
@@ -223,6 +229,7 @@ internal sealed class PimaxRegistrationStateAssessor
             return Result(
                 PimaxRegistrationState.LikelyHeadsetOff,
                 PimaxRegistrationConfidence.Probable,
+                PimaxEvidenceFreshness.Current,
                 "Headset power-on and Crystal runtime-ready evidence are absent.",
                 supporting,
                 contrary,
@@ -235,6 +242,7 @@ internal sealed class PimaxRegistrationStateAssessor
         return Result(
             PimaxRegistrationState.Unknown,
             PimaxRegistrationConfidence.Insufficient,
+            PimaxEvidenceFreshness.Unknown,
             "The available evidence is incomplete for registration-state assessment.",
             supporting,
             contrary,
@@ -263,6 +271,7 @@ internal sealed class PimaxRegistrationStateAssessor
     private static PimaxRegistrationAssessmentResult Result(
         string state,
         string confidence,
+        string evidenceFreshness,
         string explanation,
         IEnumerable<string> supporting,
         IEnumerable<string> contrary,
@@ -273,6 +282,7 @@ internal sealed class PimaxRegistrationStateAssessor
         => new(
             state,
             confidence,
+            evidenceFreshness,
             explanation,
             supporting.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             contrary.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
