@@ -814,6 +814,9 @@ internal static class PimaxRuntimeEvidenceProbe
     private static readonly TimeSpan FreshnessWindow = TimeSpan.FromMinutes(5);
 
     public static PimaxRuntimeEvidenceObservation Collect(SupervisorConfig config, DateTimeOffset collectedAt)
+        => Collect(config, collectedAt, includePimaxClientLogs: true);
+
+    internal static PimaxRuntimeEvidenceObservation Collect(SupervisorConfig config, DateTimeOffset collectedAt, bool includePimaxClientLogs)
     {
         var warnings = new List<string>();
         var errors = new List<string>();
@@ -829,15 +832,18 @@ internal static class PimaxRuntimeEvidenceProbe
             events,
             warnings,
             errors);
-        AddEventsFromFolder(
-            "PimaxClient",
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PimaxClient", "logs"),
-            "*.log*",
-            ParsePimaxClientLine,
-            collectedAt,
-            events,
-            warnings,
-            errors);
+        if (includePimaxClientLogs)
+        {
+            AddEventsFromFolder(
+                "PimaxClient",
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PimaxClient", "logs"),
+                "*.log*",
+                ParsePimaxClientLine,
+                collectedAt,
+                events,
+                warnings,
+                errors);
+        }
 
         var orderedEvents = events
             .OrderByDescending(ev => ev.EventTimestamp ?? ev.SourceLastWriteTime)
