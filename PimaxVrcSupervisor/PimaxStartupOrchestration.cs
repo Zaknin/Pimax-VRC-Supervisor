@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Management;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Win32;
@@ -11,6 +12,11 @@ internal static class PimaxStartupSourcesSchema
 internal static class PimaxStartupObservationSchema
 {
     public const string Version = "pimax-startup-observation-v1";
+}
+
+internal static class PimaxStartupCreatorChainSchema
+{
+    public const string Version = "pimax-startup-creator-chain-v1";
 }
 
 internal static class PimaxStartupMechanism
@@ -136,7 +142,9 @@ internal sealed record PimaxStartupObservationSnapshot(
     string[] PrivacyRedactions,
     string[] Warnings,
     string[] Errors,
-    string HumanReadableSummary);
+    string HumanReadableSummary,
+    PimaxProcessStartIdentity[] Processes,
+    PimaxCreatorChainAssessment? CreatorChain);
 
 internal sealed record PimaxStartupEvent(
     int Sequence,
@@ -150,6 +158,63 @@ internal sealed record PimaxStartupEvent(
     string Session,
     string GroupRole,
     string Classification);
+
+internal sealed record PimaxProcessStartIdentity(
+    string Token,
+    string ParentToken,
+    string ProcessName,
+    string RelativePath,
+    string SignerSummary,
+    string ProductState,
+    string Session,
+    string Role,
+    DateTimeOffset? StartTimestamp,
+    DateTimeOffset? StopTimestamp,
+    bool PresentInBaseline,
+    bool ExitedDuringObservation,
+    string CreatorConfidence);
+
+internal sealed record PimaxCreatorChainNode(
+    string Token,
+    string ProcessName,
+    string Role,
+    bool PresentInBaseline,
+    bool ExitedDuringObservation,
+    string RelativePath);
+
+internal sealed record PimaxCreatorChainEdge(
+    string CreatorToken,
+    string ChildToken,
+    string ChildProcessName,
+    DateTimeOffset? EventTimestamp,
+    string EvidenceSource,
+    string Confidence,
+    bool CreatorExistedInBaseline,
+    bool CreatorExitedLater,
+    bool Direct);
+
+internal sealed record PimaxActivationRootCandidate(
+    string RootCategory,
+    string Token,
+    string ProcessName,
+    string Evidence,
+    string Confidence);
+
+internal sealed record PimaxCreatorChainAssessment(
+    string Schema,
+    string ObservationId,
+    string DeviceSettingRootResult,
+    string Confidence,
+    string DeviceSettingCreator,
+    string PiPlayServiceCreator,
+    string PiServiceCreator,
+    string PiServerCreator,
+    PimaxCreatorChainNode[] Nodes,
+    PimaxCreatorChainEdge[] Edges,
+    PimaxActivationRootCandidate[] RootCandidates,
+    string[] UnresolvedGaps,
+    bool BackendExecutable,
+    string HumanReadableSummary);
 
 internal sealed record PimaxStartupProcessCreator(
     string ProcessName,
@@ -170,6 +235,29 @@ internal sealed record PimaxStartupComparison(
     bool BackendExecutable,
     string[] Evidence,
     string[] Blockers);
+
+internal sealed record PimaxStartupCreatorChainRequest(
+    string? InputPath,
+    bool Fake)
+{
+    public static PimaxStartupCreatorChainRequest Parse(string[] args)
+    {
+        string? input = null;
+        for (var i = 0; i < args.Length - 1; i++)
+        {
+            if (string.Equals(args[i], "--input", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(args[i], "--fixture", StringComparison.OrdinalIgnoreCase))
+            {
+                input = args[i + 1];
+            }
+        }
+
+        var fake = args.Any(arg => string.Equals(arg, "--fake", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(arg, "--non-live", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(arg, "--dry-run", StringComparison.OrdinalIgnoreCase));
+        return new PimaxStartupCreatorChainRequest(input, fake);
+    }
+}
 
 internal static class PimaxStartupSourcesCollector
 {
@@ -692,46 +780,150 @@ internal static class PimaxStartupSourcesCollector
 
 internal sealed class PimaxStartupObserver
 {
-    private static readonly string[] RequiredMembers = ["PimaxClient", "DeviceSetting", "PiPlayService", "pi_server", "PiServiceLauncher", "Tobii VR4PIMAXP3B Platform Runtime"];
-    private static readonly string[] ExpectedNames = ["PimaxClient", "DeviceSetting", "PiPlayService", "pi_server", "PiService", "PiServiceLauncher", "PiPlatformService_64", "PVRHome", "pi_overlay", "UnityCrashHandler64"];
+    internal static readonly string[] RequiredMembers = ["PimaxClient", "DeviceSetting", "PiPlayService", "pi_server", "PiServiceLauncher", "Tobii VR4PIMAXP3B Platform Runtime"];
+    internal static readonly string[] ExpectedNames = ["PimaxClient", "DeviceSetting", "PiPlayService", "pi_server", "PiService", "PiServiceLauncher", "PiPlatformService_64", "PVRHome", "pi_overlay", "UnityCrashHandler64", "launcher", "fastlist-0.3.0-x64", "lighthouse_console", "platform_runtime_VR4PIMAXP3B_service"];
+    private static readonly string[] BrokerNames = ["explorer", "ShellExperienceHost", "StartMenuExperienceHost", "RuntimeBroker", "ApplicationFrameHost", "services", "svchost", "taskhostw", "dllhost"];
 
     public async Task<PimaxStartupObservationSnapshot> ObserveAsync(PimaxStartupObservationRequest request, CancellationToken cancellationToken)
     {
         if (request.Fake)
         {
             var at = DateTimeOffset.Now;
-            return BuildSnapshot(request, at, at, FakeEvents(at), [], ["fake non-live validation mode"]);
+            return BuildSnapshot(request, at, at, FakeIdentities(at), [], ["fake non-live validation mode"], "fake-process-lifecycle");
         }
 
         var started = DateTimeOffset.Now;
-        var events = new List<PimaxStartupEvent>();
-        var known = CaptureProcesses();
-        var tokens = new TokenMap();
+        var lockObject = new object();
+        var tokenMap = new TokenMap();
+        var identities = CaptureBaseline(tokenMap);
         var sequence = 0;
+        var errors = new List<string>();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         linked.CancelAfter(request.Duration);
 
-        while (!linked.IsCancellationRequested)
+        using var startWatcher = new ManagementEventWatcher(new WqlEventQuery("SELECT * FROM Win32_ProcessStartTrace"));
+        using var stopWatcher = new ManagementEventWatcher(new WqlEventQuery("SELECT * FROM Win32_ProcessStopTrace"));
+        startWatcher.EventArrived += (_, args) =>
         {
-            await Task.Delay(request.PollInterval, linked.Token).ContinueWith(_ => { }, CancellationToken.None);
-            var current = CaptureProcesses();
-            foreach (var added in current.Keys.Except(known.Keys).OrderBy(id => current[id].Name, StringComparer.OrdinalIgnoreCase))
+            try
             {
-                var process = current[added];
-                events.Add(ToEvent(++sequence, "processStart", process, tokens.TokenFor(added), "unknown"));
+                var identity = IdentityFromStartEvent(args.NewEvent, tokenMap);
+                if (!IsRelevant(identity.ProcessName, identity.RelativePath)) return;
+                lock (lockObject)
+                {
+                    identities.Add(identity);
+                    sequence++;
+                }
             }
-
-            foreach (var removed in known.Keys.Except(current.Keys).OrderBy(id => known[id].Name, StringComparer.OrdinalIgnoreCase))
+            catch (Exception ex)
             {
-                var process = known[removed];
-                events.Add(ToEvent(++sequence, "processStop", process, tokens.TokenFor(removed), "unknown"));
+                lock (lockObject) errors.Add("Process start event skipped: " + ex.GetType().Name);
             }
+        };
+        stopWatcher.EventArrived += (_, args) =>
+        {
+            try
+            {
+                var pid = SafeUInt(args.NewEvent["ProcessID"]);
+                var time = TimeCreated(args.NewEvent["TIME_CREATED"]) ?? DateTimeOffset.Now;
+                lock (lockObject)
+                {
+                    foreach (var identity in identities.Where(item => tokenMap.MatchesPid(item.Token, pid) && item.StopTimestamp is null).ToArray())
+                    {
+                        var index = identities.IndexOf(identity);
+                        identities[index] = identity with { StopTimestamp = time, ExitedDuringObservation = true };
+                    }
 
-            known = current;
+                    sequence++;
+                }
+            }
+            catch (Exception ex)
+            {
+                lock (lockObject) errors.Add("Process stop event skipped: " + ex.GetType().Name);
+            }
+        };
+
+        try
+        {
+            startWatcher.Start();
+            stopWatcher.Start();
+        }
+        catch (ManagementException ex) when (ex.ErrorCode == ManagementStatus.AccessDenied)
+        {
+            return await ObserveByPollingAsync(request, started, tokenMap, identities, ["Process trace subscription denied; using bounded WMI process snapshot fallback."], cancellationToken);
+        }
+
+        try
+        {
+            while (!linked.IsCancellationRequested)
+            {
+                await Task.Delay(request.PollInterval, linked.Token).ContinueWith(_ => { }, CancellationToken.None);
+            }
+        }
+        finally
+        {
+            TryStop(startWatcher);
+            TryStop(stopWatcher);
         }
 
         var ended = DateTimeOffset.Now;
-        return BuildSnapshot(request, started, ended, events, [], []);
+        return BuildSnapshot(request, started, ended, identities, errors, [], "wmi-process-start-stop-trace");
+    }
+
+    private static async Task<PimaxStartupObservationSnapshot> ObserveByPollingAsync(
+        PimaxStartupObservationRequest request,
+        DateTimeOffset started,
+        TokenMap tokenMap,
+        List<PimaxProcessStartIdentity> identities,
+        IReadOnlyCollection<string> warnings,
+        CancellationToken cancellationToken)
+    {
+        var errors = new List<string>();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        linked.CancelAfter(request.Duration);
+        while (!linked.IsCancellationRequested)
+        {
+            try
+            {
+                var observedTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var identity in CaptureCurrentProcesses(tokenMap))
+                {
+                    observedTokens.Add(identity.Token);
+                    var existing = identities.FindIndex(item => item.Token == identity.Token);
+                    if (existing < 0)
+                    {
+                        identities.Add(identity);
+                    }
+                    else if (identities[existing].StopTimestamp is not null)
+                    {
+                        identities[existing] = identities[existing] with
+                        {
+                            StopTimestamp = null,
+                            ExitedDuringObservation = false
+                        };
+                    }
+                }
+
+                var now = DateTimeOffset.Now;
+                for (var i = 0; i < identities.Count; i++)
+                {
+                    var identity = identities[i];
+                    if (identity.PresentInBaseline || identity.StopTimestamp is not null || !IsChainRelevantProcess(identity)) continue;
+                    if (!observedTokens.Contains(identity.Token))
+                    {
+                        identities[i] = identity with { StopTimestamp = now, ExitedDuringObservation = true };
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                errors.Add("Process snapshot sample skipped: " + ex.GetType().Name);
+            }
+
+            await Task.Delay(request.PollInterval, linked.Token).ContinueWith(_ => { }, CancellationToken.None);
+        }
+
+        return BuildSnapshot(request, started, DateTimeOffset.Now, identities, errors, warnings, "wmi-process-snapshot-fallback");
     }
 
     internal static PimaxStartupComparison Compare(PimaxStartupObservationSnapshot observation)
@@ -753,7 +945,7 @@ internal sealed class PimaxStartupObserver
             mechanism,
             observation.Events.Length == 0 ? "insufficient" : "probable",
             false,
-            observation.Events.Select(e => $"{e.EventType}:{e.ProcessName}:{e.GroupRole}").ToArray(),
+            observation.Events.Select(e => $"{e.EventType}:{e.ProcessName}:{e.GroupRole}:{e.ParentToken}").ToArray(),
             ["safe programmatic equivalent remains unvalidated"]);
     }
 
@@ -761,10 +953,12 @@ internal sealed class PimaxStartupObserver
         PimaxStartupObservationRequest request,
         DateTimeOffset started,
         DateTimeOffset ended,
-        IReadOnlyCollection<PimaxStartupEvent> events,
+        IReadOnlyCollection<PimaxProcessStartIdentity> identities,
         IReadOnlyCollection<string> errors,
-        IReadOnlyCollection<string> warnings)
+        IReadOnlyCollection<string> warnings,
+        string eventSource)
     {
+        var events = EventsFromIdentities(identities);
         var present = RequiredMembers
             .Where(required => events.Any(e => string.Equals(e.ProcessName, required, StringComparison.OrdinalIgnoreCase) && e.EventType == "processStart")
                 || events.Any(e => RequiredAliasMatches(required, e.ProcessName, e.RelativePath) && e.EventType == "processStart")
@@ -777,11 +971,12 @@ internal sealed class PimaxStartupObserver
             started,
             ended,
             Math.Round((ended - started).TotalSeconds, 3),
-            request.Fake ? "fake-process-lifecycle" : "bounded-process-snapshot-diff",
+            eventSource,
             true,
             request.Fake,
             events.OrderBy(e => e.Sequence).ToArray(),
-            events.Select(e => new PimaxStartupProcessCreator(e.ProcessName, e.ParentToken, e.ParentToken == "unknown" ? "parent unavailable from safe process snapshot source" : "parent token observed", e.ParentToken == "unknown" ? "unknown" : "possible"))
+            events.Where(e => e.EventType == "processStart")
+                .Select(e => new PimaxStartupProcessCreator(e.ProcessName, e.ParentToken, e.ParentToken is "unknown" or "external-parent" ? "parent unavailable or outside captured baseline" : "parent token preserved from event-time process trace", e.ParentToken is "unknown" or "external-parent" ? "unknown" : "probable"))
                 .DistinctBy(c => c.ProcessName, StringComparer.OrdinalIgnoreCase)
                 .ToArray(),
             present,
@@ -791,104 +986,388 @@ internal sealed class PimaxStartupObserver
             ["raw PIDs", "raw command lines", "environment blocks", "window contents", "handles", "user name", "machine name"],
             warnings.ToArray(),
             errors.ToArray(),
-            missing.Length == 0 ? "Observed Pimax process lifecycle reached the required member set." : "Bounded process lifecycle observation completed without proving all required members started during the window.");
+            missing.Length == 0 ? "Observed Pimax process lifecycle reached the required member set." : "Bounded process lifecycle observation completed without proving all required members started during the window.",
+            identities.OrderBy(item => item.StartTimestamp).ThenBy(item => item.Token, StringComparer.Ordinal).ToArray(),
+            PimaxCreatorChainAnalyzer.Assess(request.ObservationId, identities.ToArray()));
     }
 
-    private static PimaxStartupEvent[] FakeEvents(DateTimeOffset at)
+    private static PimaxProcessStartIdentity[] FakeIdentities(DateTimeOffset at)
         =>
         [
-            new(1, at, "processStart", "proc-0001", "unknown", "PimaxClient", @"<pimax>\PimaxClient\pimaxui\PimaxClient.exe", "Pimax publisher metadata present.", "interactive", PimaxSoftwareGroupRole.PimaxPlayUiProcess, "expected"),
-            new(2, at.AddMilliseconds(120), "processStart", "proc-0002", "unknown", "DeviceSetting", @"<pimax>\Runtime\DeviceSetting.exe", "Pimax installation-root executable.", "interactive", PimaxSoftwareGroupRole.RuntimeProcess, "expected"),
-            new(3, at.AddMilliseconds(240), "processStart", "proc-0003", "unknown", "PiPlayService", @"<pimax>\Runtime\PiPlayService.exe", "Pimax installation-root executable.", "interactive", PimaxSoftwareGroupRole.RuntimeProcess, "expected"),
-            new(4, at.AddMilliseconds(360), "processStart", "proc-0004", "unknown", "pi_server", @"<pimax>\Runtime\pi_server.exe", "Pimax installation-root executable.", "interactive", PimaxSoftwareGroupRole.RuntimeProcess, "expected"),
-            new(5, at.AddMilliseconds(480), "processStart", "proc-0005", "unknown", "PiServiceLauncher", @"<pimax>\Runtime\PiServiceLauncher.exe", "Pimax installation-root executable.", "service", PimaxSoftwareGroupRole.ServiceOwnedProcess, "expected"),
-            new(6, at.AddMilliseconds(600), "processStart", "proc-0006", "unknown", "Tobii VR4PIMAXP3B Platform Runtime", @"<pimax>\Runtime\EyeTrackingServer\platform_runtime\platform_runtime_VR4PIMAXP3B_service.exe", "Pimax installation-root executable.", "service", PimaxSoftwareGroupRole.ServiceOwnedProcess, "expected")
+            Identity("baseline:0001", "external-parent", "explorer", "<system>\\explorer.exe", "windowsShell", at.AddMinutes(-10), null, true),
+            Identity("process:0001", "baseline:0001", "PimaxClient", @"<pimax>\PimaxClient\pimaxui\PimaxClient.exe", PimaxSoftwareGroupRole.PimaxPlayUiProcess, at, null, false),
+            Identity("process:0002", "process:0001", "launcher", @"<pimax>\Runtime\launcher.exe", PimaxSoftwareGroupRole.HelperProcess, at.AddMilliseconds(100), at.AddMilliseconds(180), false),
+            Identity("process:0003", "process:0002", "DeviceSetting", @"<pimax>\Runtime\DeviceSetting.exe", PimaxSoftwareGroupRole.RuntimeProcess, at.AddMilliseconds(220), null, false),
+            Identity("process:0004", "process:0003", "PiPlayService", @"<pimax>\Runtime\PiPlayService.exe", PimaxSoftwareGroupRole.RuntimeProcess, at.AddMilliseconds(340), null, false),
+            Identity("process:0005", "process:0003", "PiService", @"<pimax>\Runtime\PiService.exe", PimaxSoftwareGroupRole.ServiceOwnedProcess, at.AddMilliseconds(460), null, false),
+            Identity("process:0006", "process:0005", "pi_server", @"<pimax>\Runtime\pi_server.exe", PimaxSoftwareGroupRole.RuntimeProcess, at.AddMilliseconds(580), null, false),
+            Identity("process:0007", "service:tobii", "Tobii VR4PIMAXP3B Platform Runtime", @"<pimax>\Runtime\EyeTrackingServer\platform_runtime\platform_runtime_VR4PIMAXP3B_service.exe", PimaxSoftwareGroupRole.ServiceOwnedProcess, at.AddMilliseconds(700), null, false)
         ];
 
-    private static Dictionary<int, ObservedProcess> CaptureProcesses()
+    private static PimaxProcessStartIdentity Identity(string token, string parentToken, string name, string path, string role, DateTimeOffset? start, DateTimeOffset? stop, bool baseline)
+        => new(
+            token,
+            parentToken,
+            name,
+            path,
+            path.StartsWith("<pimax>", StringComparison.OrdinalIgnoreCase) ? "Pimax installation-root executable." : "broker or external creator candidate",
+            "privateArgumentsNotCollected",
+            role.Contains("service", StringComparison.OrdinalIgnoreCase) ? "service" : "interactive-or-broker",
+            role,
+            start,
+            stop,
+            baseline,
+            stop is not null,
+            parentToken is "unknown" or "external-parent" ? "unknown" : "probable");
+
+    private static List<PimaxProcessStartIdentity> CaptureBaseline(TokenMap tokenMap)
     {
-        var result = new Dictionary<int, ObservedProcess>();
-        foreach (var process in Process.GetProcesses())
+        var result = new List<PimaxProcessStartIdentity>();
+        try
         {
-            try
-            {
-                var name = process.ProcessName;
-                var path = SafeProcessPath(process);
-                if (!IsRelevant(name, path)) continue;
-                result[process.Id] = new ObservedProcess(name, path, SafeStartTime(process), process.SessionId);
-            }
-            catch
-            {
-            }
-            finally
-            {
-                process.Dispose();
-            }
+            result.AddRange(CaptureCurrentProcesses(tokenMap, baseline: true));
+        }
+        catch
+        {
+            return result;
+        }
+        return result;
+    }
+
+    private static List<PimaxProcessStartIdentity> CaptureCurrentProcesses(TokenMap tokenMap, bool baseline = false)
+    {
+        var result = new List<PimaxProcessStartIdentity>();
+        using var searcher = new ManagementObjectSearcher("SELECT ProcessId, ParentProcessId, Name, ExecutablePath, CreationDate, SessionId FROM Win32_Process");
+        foreach (ManagementObject process in searcher.Get())
+        {
+            var name = NormalizeProcessName(SafeString(process["Name"]));
+            var path = SafeString(process["ExecutablePath"]);
+            if (!IsRelevant(name, path) && !IsBroker(name)) continue;
+            var pid = SafeUInt(process["ProcessId"]);
+            var parentPid = SafeUInt(process["ParentProcessId"]);
+            var start = ManagementTime(SafeString(process["CreationDate"]));
+            var token = tokenMap.TokenFor(pid, start, baseline, name);
+            var parentToken = tokenMap.TokenForKnownPid(parentPid) ?? (parentPid == 0 ? "unknown" : "external-parent");
+            result.Add(new PimaxProcessStartIdentity(
+                token,
+                parentToken,
+                name,
+                SanitizeProcessPath(path, name),
+                path.Contains(@"\Pimax\", StringComparison.OrdinalIgnoreCase) ? "Pimax installation-root executable." : "broker or service-control candidate",
+                baseline ? "commandLineNotCollected" : "privateArgumentsNotCollected",
+                SafeString(process["SessionId"]).Length == 0 ? "unknown" : "session-" + SafeString(process["SessionId"]),
+                RoleForName(name),
+                start,
+                null,
+                baseline,
+                false,
+                parentToken is "unknown" or "external-parent" ? "unknown" : (baseline ? "possible" : "probable")));
         }
 
         return result;
     }
 
-    private static PimaxStartupEvent ToEvent(int sequence, string eventType, ObservedProcess process, string token, string parentToken)
+    private static bool IsChainRelevantProcess(PimaxProcessStartIdentity identity)
+        => IsRelevant(identity.ProcessName, identity.RelativePath) || IsBroker(identity.ProcessName);
+
+    private static PimaxProcessStartIdentity IdentityFromStartEvent(ManagementBaseObject item, TokenMap tokenMap)
     {
-        var role = RoleForName(process.Name);
-        var expected = ExpectedNames.Contains(process.Name, StringComparer.OrdinalIgnoreCase)
-            || process.Path.Contains(@"\Pimax\", StringComparison.OrdinalIgnoreCase);
-        return new PimaxStartupEvent(
-            sequence,
-            DateTimeOffset.Now,
-            eventType,
+        var pid = SafeUInt(item["ProcessID"]);
+        var parentPid = SafeUInt(item["ParentProcessID"]);
+        var name = NormalizeProcessName(SafeString(item["ProcessName"]));
+        var timestamp = TimeCreated(item["TIME_CREATED"]) ?? DateTimeOffset.Now;
+        var path = TryProcessPath(pid);
+        var token = tokenMap.TokenFor(pid, timestamp, baseline: false, name);
+        var parentToken = tokenMap.TokenForKnownPid(parentPid) ?? (parentPid == 0 ? "unknown" : "external-parent");
+        var role = RoleForName(name);
+        return new PimaxProcessStartIdentity(
             token,
             parentToken,
-            process.Name,
-            PimaxStartupSourcesCollector.SanitizePath(process.Path),
-            process.Path.Contains(@"\Pimax\", StringComparison.OrdinalIgnoreCase) ? "Pimax installation-root executable." : "path unavailable or outside Pimax root",
-            process.SessionId < 0 ? "unknown" : "session-" + process.SessionId,
+            name,
+            SanitizeProcessPath(path, name),
+            path.Contains(@"\Pimax\", StringComparison.OrdinalIgnoreCase) ? "Pimax installation-root executable." : "path unavailable or outside Pimax root",
+            "privateArgumentsNotCollected",
+            "unknown",
             role,
+            timestamp,
+            null,
+            false,
+            false,
+            parentToken is "unknown" or "external-parent" ? "unknown" : "probable");
+    }
+
+    internal static PimaxStartupEvent[] EventsFromIdentities(IEnumerable<PimaxProcessStartIdentity> identities)
+    {
+        var sequence = 0;
+        var events = new List<PimaxStartupEvent>();
+        foreach (var identity in identities.Where(item => !item.PresentInBaseline).OrderBy(item => item.StartTimestamp).ThenBy(item => item.Token, StringComparer.Ordinal))
+        {
+            events.Add(Event(++sequence, identity, "processStart", identity.StartTimestamp ?? DateTimeOffset.Now));
+            if (identity.StopTimestamp is not null)
+            {
+                events.Add(Event(++sequence, identity, "processStop", identity.StopTimestamp.Value));
+            }
+        }
+
+        return events.OrderBy(e => e.ObservedAt).ThenBy(e => e.Sequence).Select((item, index) => item with { Sequence = index + 1 }).ToArray();
+    }
+
+    private static PimaxStartupEvent Event(int sequence, PimaxProcessStartIdentity identity, string type, DateTimeOffset at)
+    {
+        var expected = ExpectedNames.Contains(identity.ProcessName, StringComparer.OrdinalIgnoreCase)
+            || identity.RelativePath.StartsWith("<pimax>", StringComparison.OrdinalIgnoreCase)
+            || IsBroker(identity.ProcessName);
+        return new PimaxStartupEvent(
+            sequence,
+            at,
+            type,
+            identity.Token,
+            identity.ParentToken,
+            identity.ProcessName,
+            identity.RelativePath,
+            identity.SignerSummary,
+            identity.Session,
+            identity.Role,
             expected ? "expected" : "unexpected");
     }
 
-    private static string RoleForName(string name)
+    internal static string RoleForName(string name)
         => name.Equals("PimaxClient", StringComparison.OrdinalIgnoreCase) ? PimaxSoftwareGroupRole.PimaxPlayUiProcess :
             name.Equals("DeviceSetting", StringComparison.OrdinalIgnoreCase) || name.Equals("PiPlayService", StringComparison.OrdinalIgnoreCase) || name.Equals("pi_server", StringComparison.OrdinalIgnoreCase) ? PimaxSoftwareGroupRole.RuntimeProcess :
             name.Equals("PiService", StringComparison.OrdinalIgnoreCase) || name.Equals("PiServiceLauncher", StringComparison.OrdinalIgnoreCase) ? PimaxSoftwareGroupRole.ServiceOwnedProcess :
+            name.Equals("launcher", StringComparison.OrdinalIgnoreCase) ? PimaxSoftwareGroupRole.HelperProcess :
+            IsBroker(name) ? "windowsShell" :
             PimaxSoftwareGroupRole.OptionalComponent;
 
     private static bool IsRelevant(string name, string path)
         => ExpectedNames.Contains(name, StringComparer.OrdinalIgnoreCase)
             || name.Contains("Pimax", StringComparison.OrdinalIgnoreCase)
             || name.Contains("VR4PIMAX", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("PiService", StringComparison.OrdinalIgnoreCase)
             || path.Contains(@"\Pimax\", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsBroker(string name)
+        => BrokerNames.Contains(name, StringComparer.OrdinalIgnoreCase);
 
     private static bool RequiredAliasMatches(string required, string processName, string relativePath)
         => required.Equals("Tobii VR4PIMAXP3B Platform Runtime", StringComparison.OrdinalIgnoreCase)
             && (processName.Contains("VR4PIMAX", StringComparison.OrdinalIgnoreCase)
                 || relativePath.Contains("VR4PIMAX", StringComparison.OrdinalIgnoreCase));
 
-    private static string SafeProcessPath(Process process)
+    private static string TryProcessPath(uint pid)
     {
-        try { return process.MainModule?.FileName ?? ""; }
-        catch { return ""; }
+        try
+        {
+            using var searcher = new ManagementObjectSearcher($"SELECT ExecutablePath FROM Win32_Process WHERE ProcessId={pid}");
+            foreach (ManagementObject process in searcher.Get())
+            {
+                return SafeString(process["ExecutablePath"]);
+            }
+        }
+        catch
+        {
+        }
+
+        return "";
     }
 
-    private static DateTimeOffset? SafeStartTime(Process process)
+    private static string SanitizeProcessPath(string path, string name)
     {
-        try { return process.StartTime; }
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return IsBroker(name) ? "<system>\\" + name + ".exe" : "";
+        }
+
+        return PimaxStartupSourcesCollector.SanitizePath(path);
+    }
+
+    private static string NormalizeProcessName(string name)
+        => name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? Path.GetFileNameWithoutExtension(name) : name;
+
+    private static DateTimeOffset? ManagementTime(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        try { return ManagementDateTimeConverter.ToDateTime(value); }
         catch { return null; }
     }
 
-    private sealed record ObservedProcess(string Name, string Path, DateTimeOffset? StartTime, int SessionId);
+    private static DateTimeOffset? TimeCreated(object? value)
+    {
+        if (value is null) return null;
+        try
+        {
+            var raw = Convert.ToUInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+            return DateTimeOffset.FromFileTime((long)raw);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static uint SafeUInt(object? value)
+    {
+        try { return Convert.ToUInt32(value, System.Globalization.CultureInfo.InvariantCulture); }
+        catch { return 0; }
+    }
+
+    private static string SafeString(object? value) => value?.ToString() ?? "";
+
+    private static void TryStop(ManagementEventWatcher watcher)
+    {
+        try { watcher.Stop(); }
+        catch { }
+    }
 
     private sealed class TokenMap
     {
-        private readonly Dictionary<int, string> _tokens = [];
+        private readonly Dictionary<string, string> _tokensByIdentity = [];
+        private readonly Dictionary<uint, string> _latestByPid = [];
+        private readonly Dictionary<string, uint> _pidByToken = [];
 
-        public string TokenFor(int processId)
+        public string TokenFor(uint processId, DateTimeOffset? start, bool baseline, string name)
         {
-            if (_tokens.TryGetValue(processId, out var token)) return token;
-            token = "proc-" + (_tokens.Count + 1).ToString("0000", System.Globalization.CultureInfo.InvariantCulture);
-            _tokens[processId] = token;
+            var basis = processId + "|" + (start?.ToString("O") ?? "unknown") + "|" + name;
+            if (_tokensByIdentity.TryGetValue(basis, out var token)) return token;
+            token = (baseline ? "baseline:" : "process:") + (_tokensByIdentity.Count + 1).ToString("0000", System.Globalization.CultureInfo.InvariantCulture);
+            _tokensByIdentity[basis] = token;
+            _latestByPid[processId] = token;
+            _pidByToken[token] = processId;
             return token;
         }
+
+        public string? TokenForKnownPid(uint processId)
+            => _latestByPid.TryGetValue(processId, out var token) ? token : null;
+
+        public bool MatchesPid(string token, uint processId)
+            => _pidByToken.TryGetValue(token, out var pid) && pid == processId;
     }
+}
+
+internal static class PimaxCreatorChainAnalyzer
+{
+    public static PimaxCreatorChainAssessment Assess(string observationId, IReadOnlyCollection<PimaxProcessStartIdentity> identities)
+    {
+        var nodes = identities
+            .Where(item => item.PresentInBaseline || IsChainRelevant(item))
+            .Select(item => new PimaxCreatorChainNode(item.Token, item.ProcessName, item.Role, item.PresentInBaseline, item.ExitedDuringObservation, item.RelativePath))
+            .ToArray();
+        var edges = identities
+            .Where(item => !item.PresentInBaseline && item.ParentToken is not "unknown" and not "external-parent")
+            .Select(item =>
+            {
+                var creator = identities.FirstOrDefault(parent => parent.Token == item.ParentToken);
+                return new PimaxCreatorChainEdge(
+                    item.ParentToken,
+                    item.Token,
+                    item.ProcessName,
+                    item.StartTimestamp,
+                    "event-time process parent token",
+                    creator is null ? "possible" : "confirmed",
+                    creator?.PresentInBaseline == true,
+                    creator?.ExitedDuringObservation == true,
+                    true);
+            })
+            .ToArray();
+        var device = First(identities, "DeviceSetting");
+        var piPlay = First(identities, "PiPlayService");
+        var piService = First(identities, "PiService");
+        var piServer = First(identities, "pi_server");
+        var deviceCreator = CreatorName(identities, device);
+        var root = RootCandidate(identities, device);
+        var gaps = new List<string>();
+        var rootResult = "insufficientEvidence";
+        var confidence = "insufficient";
+        if (device is null)
+        {
+            gaps.Add("DeviceSetting start was not captured.");
+        }
+        else if (device.ParentToken is "unknown" or "external-parent")
+        {
+            rootResult = device.ParentToken == "external-parent" ? "unknownExternalCreator" : "creatorExitedBeforeCapture";
+            gaps.Add("DeviceSetting parent was not resolved to a preserved process token.");
+        }
+        else if (root is not null)
+        {
+            rootResult = CategoryFor(root);
+            confidence = root.PresentInBaseline || root.ExitedDuringObservation ? "confirmed" : "probable";
+        }
+
+        var rootCandidates = root is null
+            ? Array.Empty<PimaxActivationRootCandidate>()
+            : [new PimaxActivationRootCandidate(CategoryFor(root), root.Token, root.ProcessName, "Root reached by following preserved parent tokens from DeviceSetting.", confidence)];
+        return new PimaxCreatorChainAssessment(
+            PimaxStartupCreatorChainSchema.Version,
+            observationId,
+            rootResult,
+            confidence,
+            deviceCreator,
+            CreatorName(identities, piPlay),
+            CreatorName(identities, piService),
+            CreatorName(identities, piServer),
+            nodes,
+            edges,
+            rootCandidates,
+            gaps.ToArray(),
+            false,
+            Summary(rootResult, deviceCreator));
+    }
+
+    public static PimaxCreatorChainAssessment FromObservation(PimaxStartupObservationSnapshot snapshot)
+        => Assess(snapshot.ObservationId, snapshot.Processes);
+
+    private static PimaxProcessStartIdentity? First(IEnumerable<PimaxProcessStartIdentity> identities, string name)
+        => identities
+            .Where(item => string.Equals(item.ProcessName, name, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(item => item.PresentInBaseline)
+            .ThenBy(item => item.ExitedDuringObservation)
+            .ThenBy(item => item.StartTimestamp)
+            .FirstOrDefault();
+
+    private static string CreatorName(IEnumerable<PimaxProcessStartIdentity> identities, PimaxProcessStartIdentity? child)
+    {
+        if (child is null) return "notCaptured";
+        if (child.ParentToken is "unknown" or "external-parent") return child.ParentToken;
+        var parent = identities.FirstOrDefault(item => item.Token == child.ParentToken);
+        return parent?.ProcessName ?? child.ParentToken;
+    }
+
+    private static PimaxProcessStartIdentity? RootCandidate(IReadOnlyCollection<PimaxProcessStartIdentity> identities, PimaxProcessStartIdentity? child)
+    {
+        var current = child;
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (current is not null && visited.Add(current.Token))
+        {
+            if (current.ParentToken is "unknown" or "external-parent") return current == child ? null : current;
+            current = identities.FirstOrDefault(item => item.Token == current.ParentToken);
+        }
+
+        return current;
+    }
+
+    private static string CategoryFor(PimaxProcessStartIdentity identity)
+        => identity.ProcessName.Equals("explorer", StringComparison.OrdinalIgnoreCase) ? "windowsShellConfirmed" :
+            identity.ProcessName.Equals("StartMenuExperienceHost", StringComparison.OrdinalIgnoreCase) ? "startMenuHostConfirmed" :
+            identity.ProcessName.Equals("launcher", StringComparison.OrdinalIgnoreCase) ? "pimaxBootstrapHelperConfirmed" :
+            identity.ProcessName.Contains("PiService", StringComparison.OrdinalIgnoreCase) ? "pimaxServiceBrokerConfirmed" :
+            identity.ProcessName.Equals("services", StringComparison.OrdinalIgnoreCase) ? "serviceControlManagerProbable" :
+            identity.PresentInBaseline ? "existingPimaxProcessConfirmed" :
+            "unknownExternalCreator";
+
+    private static bool IsChainRelevant(PimaxProcessStartIdentity item)
+        => PimaxStartupObserver.RequiredMembers.Contains(item.ProcessName, StringComparer.OrdinalIgnoreCase)
+            || item.ProcessName is "PiService" or "launcher"
+            || item.RelativePath.StartsWith("<pimax>", StringComparison.OrdinalIgnoreCase)
+            || item.Role == "windowsShell";
+
+    private static string Summary(string rootResult, string deviceCreator)
+        => rootResult switch
+        {
+            "windowsShellConfirmed" => "DeviceSetting was traced back to the Windows shell activation chain; backend execution still requires separate programmatic validation.",
+            "pimaxBootstrapHelperConfirmed" => "DeviceSetting was traced to a transient Pimax bootstrap helper; backend execution remains disabled until a safe adapter is validated.",
+            "pimaxServiceBrokerConfirmed" => "DeviceSetting was traced to a Pimax service broker; backend execution remains disabled pending validation.",
+            "unknownExternalCreator" => "DeviceSetting parent was external to the preserved observation graph.",
+            "creatorExitedBeforeCapture" => "DeviceSetting creator exited before it could be resolved.",
+            _ => $"DeviceSetting creator remains unresolved: {deviceCreator}."
+        };
 }

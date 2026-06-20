@@ -186,7 +186,7 @@ C:\Program Files\Pimax\PimaxClient\pimaxui\PimaxClient.exe
 
 The shortcut has no arguments and uses the `pimaxui` directory as its working directory. The executable is a Pimax metadata-matched, 64-bit Windows GUI process with an `asInvoker` requested execution level. Installed-application registry evidence identifies Pimax Play, and no App Paths launcher override was observed.
 
-BV2 later proved that direct process creation of this executable is not sufficient: it started `PimaxClient` but left the required runtime group partial. The backend now reports the process-group launch recipe as `shellActivationObserved` when the group is healthy: the normal Start Menu path is the candidate, direct executable launch is rejected, and backend execution remains disabled until an observer-backed comparison identifies the creator chain and a later one-shot phase validates a safe programmatic equivalent.
+BV2 later proved that direct process creation of this executable is not sufficient: it started `PimaxClient` but left the required runtime group partial. B2A proved the normal Start Menu path can form the complete group, but the post-launch snapshot did not preserve the transient creator of `DeviceSetting`. B2B added creator-chain tooling and completed one normal Start Menu launch, but the non-elevated observer used its bounded WMI snapshot fallback after process trace subscription was denied; `DeviceSetting` still resolved to `unknownExternalCreator`. The backend now reports the process-group launch recipe as `shellActivationObserved` when the group is healthy: the normal Start Menu path is the candidate, direct executable launch is rejected, and backend execution remains disabled until the root is identified and a later one-shot phase validates a safe programmatic equivalent.
 
 ## Dependency-Aware Ordering
 
@@ -381,7 +381,7 @@ It implements the software-stack-only execution backend, target allowlist, durab
 Recommended next implementation phase:
 
 ```text
-Phase 28D2-BV2 - One-Shot Validation of the Candidate Pimax Process-Group Launch Recipe
+Phase 28D2-B2C - Resolve Remaining Pimax DeviceSetting Creator Evidence
 ```
 
-That phase must use an exact confirmation gate, launch the candidate once from an absent group, and stop without retry if required process-group or readiness evidence does not form. TUI exposure should wait until the allowlist contains an executable target with a validated side-effect declaration and restart recipe.
+That phase must preserve event-time parent ownership with sufficient privileges or another provider that exposes the root creator, and stop without retry if the required process-group or readiness evidence does not form. TUI exposure should wait until the allowlist contains an executable target with a validated side-effect declaration and restart recipe.

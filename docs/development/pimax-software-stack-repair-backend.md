@@ -13,6 +13,7 @@ dotnet .\PimaxVrcSupervisor.dll pimax-repair-targets-json
 dotnet .\PimaxVrcSupervisor.dll pimax-launch-recipe-json
 dotnet .\PimaxVrcSupervisor.dll pimax-startup-sources-json
 dotnet .\PimaxVrcSupervisor.dll pimax-startup-observe-json --fake
+dotnet .\PimaxVrcSupervisor.dll pimax-startup-creator-chain-json --input .\startup-observation.json
 dotnet .\PimaxVrcSupervisor.dll pimax-repair-status-json
 dotnet .\PimaxVrcSupervisor.dll pimax-repair-result-json
 ```
@@ -31,6 +32,7 @@ pimax-repair-targets-v1
 pimax-launch-recipe-v1
 pimax-startup-sources-v1
 pimax-startup-observation-v1
+pimax-startup-creator-chain-v1
 pimax-repair-start-v1
 pimax-repair-status-v1
 pimax-repair-cancel-v1
@@ -65,7 +67,7 @@ Each target is classified as exactly one of:
 
 Phase 28D2-B1 does not approve any standalone Pimax Play/runtime process. A validated `PimaxClient` is classified as `groupMemberNotIndependentlyRestartable` because closing it terminated other runtime members during Phase 28D2-BV.
 
-The complete Pimax Play/runtime group is represented as a `processGroup` target. When the current group is complete, the target may still be listed as a non-executable validation candidate, but its launch recipe state is `shellActivationObserved`, not executable. Phase 28D2-BV2 rejected direct `PimaxClient.exe` process creation because it produced only a blank `PimaxClient` window and left `DeviceSetting`, `PiPlayService`, and `pi_server` missing. Automatic restart remains disabled until a formal observer-backed Start Menu comparison identifies the creator chain and a later one-shot phase validates a safe programmatic equivalent.
+The complete Pimax Play/runtime group is represented as a `processGroup` target. When the current group is complete, the target may still be listed as a non-executable validation candidate, but its launch recipe state is `shellActivationObserved`, not executable. Phase 28D2-BV2 rejected direct `PimaxClient.exe` process creation because it produced only a blank `PimaxClient` window and left `DeviceSetting`, `PiPlayService`, and `pi_server` missing. Phase 28D2-B2A proved the normal Start Menu path can form the group, but did not preserve the transient root creator of `DeviceSetting`. Automatic restart remains disabled until a creator-chain observation identifies the activation root and a later one-shot phase validates a safe programmatic equivalent.
 
 Pimax services, including `PiServiceLauncher` and Tobii Eye Tracking runtime services, remain observe-only in this phase. Previous evidence did not prove that restarting them is a safe or correct persistent recovery target.
 
@@ -151,7 +153,7 @@ A future group start must use a proven group launch recipe. The backend does not
 
 ## Phase 28D2-B2 Launch Recipe
 
-Phase 28D2-B2 adds the read-only `pimax-launch-recipe-json`, `pimax-startup-sources-json`, and bounded `pimax-startup-observe-json` commands. They do not start Pimax, stop Pimax, invoke Connect, automate the GUI, cycle USB, touch DisplayPort, restart services, restart SteamVR, restart VRChat, restart VRCFT, restart the Supervisor, restart the watcher, or change scheduled tasks.
+Phase 28D2-B2 adds the read-only `pimax-launch-recipe-json`, `pimax-startup-sources-json`, bounded `pimax-startup-observe-json`, and offline `pimax-startup-creator-chain-json` commands. They do not start Pimax, stop Pimax, invoke Connect, automate the GUI, cycle USB, touch DisplayPort, restart services, restart SteamVR, restart VRChat, restart VRCFT, restart the Supervisor, restart the watcher, or change scheduled tasks.
 
 Private discovery confirmed the local launcher candidate:
 
@@ -178,6 +180,10 @@ BV2 direct launch evidence rejects treating that executable path as sufficient. 
 The formal Phase 28D2-B2A observer-backed Start Menu comparison then produced `groupReadyAndRegistered` with `registeredReady / confirmed` and current freshness. The user-visible result was green LED, normal Pimax Play window, image present, audio and microphone present, eye tracking present, Vive face tracking detected, and no unrelated restart or PC instability. The required runtime group formed without manually starting `DeviceSetting`, `PiPlayService`, or `pi_server`.
 
 Creator-chain evidence remains incomplete. The post-launch parent snapshot showed `PiPlayService` created by or currently parented to `DeviceSetting`, `PiService` parented to `DeviceSetting`, and `pi_server` parented to `PiService`. `DeviceSetting` itself was parented outside the still-running Pimax group or by an already-exited broker, so the root activation creator remains unresolved.
+
+Phase 28D2-B2B changes the observer to preserve an immutable process identity when a relevant process starts and to retain that identity after process-stop events. It tokenizes likely Shell, Start Menu, service-control, COM, task-host, and Pimax broker baseline processes before the launch window. The creator-chain analyzer reports the preserved token graph through `pimax-startup-creator-chain-v1`, but backend execution remains disabled because a confirmed root is not the same as a validated programmatic activation method.
+
+The B2B live run completed one normal Start Menu launch with no retry. Process trace subscription was denied in the non-elevated observer, so the observer used the bounded WMI snapshot fallback. The fallback preserved the known child chain and timing, but `DeviceSetting` still appeared with `external-parent`. The creator-chain result is `unknownExternalCreator` with `insufficient` confidence. Post-launch component health was `healthy`, software group was complete, registration was `registeredReady / confirmed`, and freshness was current.
 
 The raw SHA-256 hash, raw certificate subject, raw process IDs, command lines, and local registry details are kept in private discovery evidence and are not committed.
 
@@ -218,8 +224,8 @@ Pimax Play Connect and a physical USB reconnection may still be required.
 
 Recipe blockers that still prevent execution:
 
-- formal observer-backed Start Menu launch evidence has not yet proven the creator chain;
-- `DeviceSetting` root creator ownership is not yet established;
+- formal observer-backed Start Menu launch evidence formed the group but has not proven the `DeviceSetting` root creator;
+- `DeviceSetting` root creator ownership is still `unknownExternalCreator`;
 - a safe programmatic shell-equivalent is not validated;
 - registration after launch still requires post-health proof;
 - no shutdown/retry/rollback behavior is approved for product repair.
@@ -357,8 +363,8 @@ Live validation is optional. It may occur only after a dry run and only with exp
 
 ## Future TUI Integration
 
-The TUI phase remains blocked while no validated executable Pimax Play/runtime restart recipe exists. The next phase should validate the candidate exactly once from a stopped process-group state:
+The TUI phase remains blocked while no validated executable Pimax Play/runtime restart recipe exists. The current prerequisite phase is the creator-chain observation that identifies the root owner of `DeviceSetting` without approving backend execution:
 
 ```text
-Phase 28D2-BV2 - One-Shot Validation of the Candidate Pimax Process-Group Launch Recipe
+Phase 28D2-B2C - Resolve Remaining Pimax DeviceSetting Creator Evidence
 ```

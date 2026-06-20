@@ -8,6 +8,7 @@ Phase 28D2-B2 adds a read-only model for Pimax Play/runtime startup orchestratio
 dotnet .\PimaxVrcSupervisor.dll pimax-launch-recipe-json
 dotnet .\PimaxVrcSupervisor.dll pimax-startup-sources-json
 dotnet .\PimaxVrcSupervisor.dll pimax-startup-observe-json --fake
+dotnet .\PimaxVrcSupervisor.dll pimax-startup-creator-chain-json --input .\startup-observation.json
 ```
 
 Schema:
@@ -16,6 +17,7 @@ Schema:
 pimax-launch-recipe-v1
 pimax-startup-sources-v1
 pimax-startup-observation-v1
+pimax-startup-creator-chain-v1
 ```
 
 The commands report launcher candidates, selected candidate, static validation evidence, startup activation sources, expected group members, lifecycle-root confidence, readiness criteria, failure criteria, prohibited side effects, blockers, and a human-readable summary.
@@ -55,6 +57,8 @@ Recipe state values:
 - `readyForControlledValidation`;
 - `directLaunchRejected`;
 - `shellActivationObserved`;
+- `activationRootIdentified`;
+- `readyForShellActivationValidation`;
 - `activationMechanismIdentified`;
 - `readyForActivationValidation`;
 - `validated`;
@@ -63,7 +67,7 @@ Recipe state values:
 - `conflicting`;
 - `unknown`.
 
-The current state after BV2/B2A evidence is `shellActivationObserved`: direct `PimaxClient.exe` process creation is rejected, while normal Start Menu activation is the candidate path. `executable` remains `false`. A safe programmatic equivalent requires separate validation and cannot be inferred from manual Start Menu success.
+The current state after BV2/B2A evidence is `shellActivationObserved`: direct `PimaxClient.exe` process creation is rejected, while normal Start Menu activation is the candidate path. `executable` remains `false`. A safe programmatic equivalent requires separate validation and cannot be inferred from manual Start Menu success. Phase 28D2-B2B adds `activationRootIdentified` and `readyForShellActivationValidation` for later use, but the recipe must not advance to either state until live creator-chain evidence proves the activation root.
 
 ## Readiness States
 
@@ -117,7 +121,9 @@ Lifecycle root confidence is not yet confirmed. The shortcut launches `PimaxClie
 
 The command currently reports the normal `PimaxPlay.lnk` Start Menu entry as the visible user activation source. It also reports Pimax service and helper candidates that require correlation during the formal observer-backed launch. Backend execution remains disabled because the creator chain and a safe programmatic equivalent are not proven.
 
-`pimax-startup-observe-json` is a bounded process lifecycle observer. Fake mode emits deterministic non-live validation data. Live mode observes Pimax-related process starts and stops by bounded process snapshots, tokenizes raw PIDs, and avoids command lines, environment blocks, USB, SetupAPI, MMDEVAPI, DisplayPort, named pipes, localhost probes, and GUI automation.
+`pimax-startup-observe-json` is a bounded process lifecycle observer. Fake mode emits deterministic non-live validation data. Live mode takes a pre-roll baseline of Pimax processes and likely Windows activation brokers, then uses Windows process start/stop trace events where allowed to preserve an immutable observation-local identity for each relevant process. If process trace subscription is denied, it falls back to bounded WMI process snapshots that still preserve start tokens and stop state, but may miss already-exited parent ownership. Public JSON emits observation-local tokens such as `baseline:0001` and `process:0007`; raw PIDs, command lines, environment blocks, handles, user names, machine names, USB, SetupAPI, MMDEVAPI, DisplayPort, named pipes, localhost probes, and GUI automation are excluded.
+
+`pimax-startup-creator-chain-json` analyzes a captured startup-observation result and emits the `pimax-startup-creator-chain-v1` assessment. It reports preserved creator edges, root candidates, `DeviceSetting`, `PiPlayService`, `PiService`, and `pi_server` creators, unresolved gaps, and a sanitized summary. It does not launch Pimax, stop Pimax, access hardware, automate the GUI, mutate services, run tasks, or access the network.
 
 ## Formal Start Menu Comparison
 
@@ -140,14 +146,16 @@ Operator-visible result:
 - no unrelated application restarted;
 - no freeze, restart, blue-screen, or abnormal PC behavior was reported.
 
-Creator-chain evidence is partial. A post-launch parent snapshot showed `PiPlayService` parented by `DeviceSetting`, `PiService` parented by `DeviceSetting`, and `pi_server` parented by `PiService`. `DeviceSetting` itself had an external or already-exited parent, so the root activation creator remains unresolved. Mechanism classification is therefore `manualShellLaunchWorksMechanismStillUnresolved`, not `shellActivationMechanismIdentified`.
+Creator-chain evidence remains partial after Phase 28D2-B2B. The B2B live run used the bounded snapshot fallback because process trace subscription returned access denied. It preserved the child chain and post-launch timing, but `DeviceSetting` still arrived with an `external-parent` token. The creator-chain result is `unknownExternalCreator` with `insufficient` confidence. Preserved child-process evidence showed `PiPlayService` created by `DeviceSetting`, `PiService` created by `DeviceSetting`, and the final `pi_server` created by `PiService`.
+
+B2B post-launch health was `healthy`; the software group was complete; registration was `registeredReady / confirmed` with current freshness. Operator-visible state was green LED, normal Pimax Play window, automatic headset recognition, image/audio/microphone/eye tracking present, Vive face tracker detected, no unrelated application restart, and no PC freeze, restart, blue screen, or abnormal behavior. Mechanism classification therefore remains `manualShellLaunchWorksMechanismStillUnresolved`, not `shellActivationMechanismIdentified`.
 
 ## Execution Boundary
 
 Automatic restart remains disabled because these blockers are unresolved:
 
-- the formal observer-backed Start Menu comparison has not yet proven the creator chain;
-- the root creator of `DeviceSetting` remains unknown because its parent was external or already exited in the post-launch snapshot;
+- the formal observer-backed Start Menu comparison formed the group but did not prove the `DeviceSetting` root;
+- the root creator of `DeviceSetting` remains `unknownExternalCreator` because the live fallback observer saw an external parent token;
 - a safe programmatic equivalent to normal Start Menu activation has not been validated;
 - post-launch readiness and registration still require component-health proof;
 - no retry, shutdown, or rollback behavior is approved.
@@ -155,5 +163,5 @@ Automatic restart remains disabled because these blockers are unresolved:
 Recommended next phase:
 
 ```text
-Phase 28D2-B2B - Implement a Safe Windows Shell Activation Adapter for Pimax Play
+Phase 28D2-B2C - Resolve Remaining Pimax DeviceSetting Creator Evidence
 ```

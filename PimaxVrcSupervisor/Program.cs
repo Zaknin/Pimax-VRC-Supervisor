@@ -111,6 +111,28 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-startup-observe-json", 
     return;
 }
 
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-startup-creator-chain-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var request = PimaxStartupCreatorChainRequest.Parse(commandLineArgs);
+    PimaxCreatorChainAssessment assessment;
+    if (!string.IsNullOrWhiteSpace(request.InputPath))
+    {
+        var observation = JsonSerializer.Deserialize<PimaxStartupObservationSnapshot>(File.ReadAllText(request.InputPath), PimaxRepairJson.Options)
+            ?? throw new InvalidOperationException("Input observation could not be parsed.");
+        assessment = PimaxCreatorChainAnalyzer.FromObservation(observation);
+    }
+    else
+    {
+        var observation = await new PimaxStartupObserver().ObserveAsync(
+            new PimaxStartupObservationRequest(TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(100), true, $"pimax-startup-observe-{Guid.NewGuid():N}"),
+            shutdown.Token);
+        assessment = PimaxCreatorChainAnalyzer.FromObservation(observation);
+    }
+
+    Console.WriteLine(JsonSerializer.Serialize(assessment, PimaxRepairJson.Options));
+    return;
+}
+
 if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-repair-start-json", StringComparison.OrdinalIgnoreCase)))
 {
     var diagnosticConfig = SupervisorConfig.Load(configPath);

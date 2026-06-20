@@ -57,7 +57,7 @@ public sealed class PimaxStartupOrchestrationTests
         Assert.Contains(snapshot.Events, e => e.ProcessName == "DeviceSetting" && e.EventType == "processStart");
         Assert.Contains(snapshot.Events, e => e.ProcessName == "PiPlayService" && e.EventType == "processStart");
         Assert.Contains(snapshot.Events, e => e.ProcessName == "pi_server" && e.EventType == "processStart");
-        Assert.All(snapshot.Events, e => Assert.StartsWith("proc-", e.ProcessToken, StringComparison.Ordinal));
+        Assert.All(snapshot.Events, e => Assert.StartsWith("process:", e.ProcessToken, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -152,10 +152,111 @@ public sealed class PimaxStartupOrchestrationTests
         Assert.DoesNotContain(@"USB\\", json, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void CreatorChainFixturePreservesTransientLauncherAfterExit()
+    {
+        var snapshot = LoadObservationFixture("phase28d2b2b-transient-creator-sanitized.json");
+        var assessment = PimaxCreatorChainAnalyzer.FromObservation(snapshot);
+
+        Assert.Equal(PimaxStartupCreatorChainSchema.Version, assessment.Schema);
+        Assert.Equal("windowsShellConfirmed", assessment.DeviceSettingRootResult);
+        Assert.Equal("confirmed", assessment.Confidence);
+        Assert.Equal("launcher", assessment.DeviceSettingCreator);
+        Assert.Equal("DeviceSetting", assessment.PiPlayServiceCreator);
+        Assert.Equal("DeviceSetting", assessment.PiServiceCreator);
+        Assert.Equal("PiService", assessment.PiServerCreator);
+        Assert.Contains(assessment.Nodes, node => node.ProcessName == "launcher" && node.ExitedDuringObservation);
+        Assert.Contains(assessment.Edges, edge => edge.ChildProcessName == "DeviceSetting" && edge.CreatorExitedLater);
+        Assert.False(assessment.BackendExecutable);
+    }
+
+    [Fact]
+    public void EventProjectionKeepsDistinctTokensForCreatorAndChildren()
+    {
+        var snapshot = LoadObservationFixture("phase28d2b2b-transient-creator-sanitized.json");
+        var events = PimaxStartupObserver.EventsFromIdentities(snapshot.Processes);
+
+        Assert.Contains(events, item => item.EventType == "processStop" && item.ProcessName == "launcher");
+        Assert.Contains(events, item => item.EventType == "processStart" && item.ProcessName == "DeviceSetting" && item.ParentToken == "process:0002");
+        Assert.Equal(snapshot.Processes.Select(item => item.Token).Count(), snapshot.Processes.Select(item => item.Token).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.DoesNotContain(events, item => item.ProcessToken.All(char.IsDigit));
+    }
+
+    [Fact]
+    public void CreatorChainClassifiesServiceControlManagerBroker()
+    {
+        var snapshot = LoadObservationFixture("phase28d2b2b-service-broker-sanitized.json");
+        var assessment = PimaxCreatorChainAnalyzer.FromObservation(snapshot);
+
+        Assert.Equal("serviceControlManagerProbable", assessment.DeviceSettingRootResult);
+        Assert.Equal("confirmed", assessment.Confidence);
+        Assert.Equal("PiServiceLauncher", assessment.DeviceSettingCreator);
+        Assert.Equal("DeviceSetting", assessment.PiPlayServiceCreator);
+        Assert.Equal("DeviceSetting", assessment.PiServiceCreator);
+        Assert.Equal("PiService", assessment.PiServerCreator);
+        Assert.False(assessment.BackendExecutable);
+    }
+
+    [Fact]
+    public void CreatorChainClassifiesExistingPimaxBroker()
+    {
+        var snapshot = LoadObservationFixture("phase28d2b2b-existing-broker-sanitized.json");
+        var assessment = PimaxCreatorChainAnalyzer.FromObservation(snapshot);
+
+        Assert.Equal("existingPimaxProcessConfirmed", assessment.DeviceSettingRootResult);
+        Assert.Equal("confirmed", assessment.Confidence);
+        Assert.Equal("PimaxShellBroker", assessment.DeviceSettingCreator);
+        Assert.Contains(assessment.RootCandidates, item => item.ProcessName == "PimaxShellBroker" && item.Confidence == "confirmed");
+        Assert.False(assessment.BackendExecutable);
+    }
+
+    [Fact]
+    public void CreatorChainKeepsPidReuseTokensDistinct()
+    {
+        var snapshot = LoadObservationFixture("phase28d2b2b-pid-reuse-sanitized.json");
+        var assessment = PimaxCreatorChainAnalyzer.FromObservation(snapshot);
+        var launchers = snapshot.Processes.Where(item => item.ProcessName == "launcher").ToArray();
+
+        Assert.Equal(2, launchers.Length);
+        Assert.Equal(2, launchers.Select(item => item.Token).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Contains(assessment.Edges, edge => edge.CreatorToken == "process:0002" && edge.ChildProcessName == "DeviceSetting");
+        Assert.DoesNotContain(snapshot.Processes, item => item.Token.All(char.IsDigit));
+        Assert.False(assessment.BackendExecutable);
+    }
+
+    [Fact]
+    public void CreatorChainFixturePrivacyExcludesRawIdentifiers()
+    {
+        foreach (var name in new[]
+        {
+            "phase28d2b2b-transient-creator-sanitized.json",
+            "phase28d2b2b-service-broker-sanitized.json",
+            "phase28d2b2b-existing-broker-sanitized.json",
+            "phase28d2b2b-pid-reuse-sanitized.json"
+        })
+        {
+            var json = File.ReadAllText(FixturePath(name));
+
+            Assert.DoesNotContain(Environment.UserName, json, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(Environment.MachineName, json, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(@"C:\Users\", json, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("commandLine", json, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("ProcessId", json, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("USB\\", json, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
     private static string RepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, ".git"))) directory = directory.Parent;
         return directory?.FullName ?? throw new DirectoryNotFoundException("Repository root not found.");
     }
+
+    private static PimaxStartupObservationSnapshot LoadObservationFixture(string name)
+        => JsonSerializer.Deserialize<PimaxStartupObservationSnapshot>(File.ReadAllText(FixturePath(name)), PimaxRepairJson.Options)
+            ?? throw new InvalidOperationException("Fixture could not be parsed.");
+
+    private static string FixturePath(string name)
+        => Path.Combine(RepositoryRoot(), "PimaxVrcSupervisor.Tests", "Fixtures", name);
 }

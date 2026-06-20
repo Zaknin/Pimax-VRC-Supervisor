@@ -16,6 +16,8 @@ internal static class PimaxProcessGroupLaunchRecipeState
     public const string ReadyForControlledValidation = "readyForControlledValidation";
     public const string DirectLaunchRejected = "directLaunchRejected";
     public const string ShellActivationObserved = "shellActivationObserved";
+    public const string ActivationRootIdentified = "activationRootIdentified";
+    public const string ReadyForShellActivationValidation = "readyForShellActivationValidation";
     public const string ActivationMechanismIdentified = "activationMechanismIdentified";
     public const string ReadyForActivationValidation = "readyForActivationValidation";
     public const string Validated = "validated";
