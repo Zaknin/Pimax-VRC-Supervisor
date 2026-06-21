@@ -109,6 +109,7 @@ pub struct App {
     pub last_action_outcome: Option<ActionOutcome>,
     pub last_action_result: Option<String>,
     pub last_action_error: Option<String>,
+    pub action_result_dialog: Option<CompletedActionResult>,
     pub click_regions: Vec<ClickRegion>,
     pub mouse_enabled: bool,
     pub mouse_notice: Option<String>,
@@ -177,6 +178,7 @@ impl App {
             last_action_outcome: None,
             last_action_result: None,
             last_action_error: None,
+            action_result_dialog: None,
             click_regions: Vec::new(),
             mouse_enabled: false,
             mouse_notice: None,
@@ -248,9 +250,11 @@ impl App {
         }
 
         let mut should_refresh = false;
+        let mut latest_dialog = None;
         for result in completed_results {
             self.running_actions
                 .retain(|running| !running.command.eq_ignore_ascii_case(&result.command));
+            latest_dialog = Some(result.clone());
             self.record_action_result(
                 result.command.as_str(),
                 result.outcome,
@@ -265,6 +269,9 @@ impl App {
         } else {
             self.mark_render_needed();
         }
+
+        self.action_result_dialog = latest_dialog;
+        self.mark_render_needed();
     }
 
     pub fn drain_shutdown_result(&mut self) {
@@ -455,6 +462,11 @@ impl App {
             "Action cancelled.".to_string(),
             now,
         );
+    }
+
+    pub fn acknowledge_action_result(&mut self) {
+        self.action_result_dialog = None;
+        self.mark_render_needed();
     }
 
     pub fn confirm_action(&mut self, now: Instant) {
@@ -905,6 +917,10 @@ fn format_action_result(result: &CommandResult) -> String {
     let display_name = display_name_for_command(command);
     if command.eq_ignore_ascii_case("pimax-shell-launch-json") {
         if let Some(message) = format_pimax_shell_launch_result(result) {
+            if let Some(counts) = pimax_shell_launch_counts(result) {
+                return format!("{display_name}: {message} {counts}");
+            }
+
             return format!("{display_name}: {message}");
         }
     }
@@ -925,27 +941,46 @@ fn format_pimax_shell_launch_result(result: &CommandResult) -> Option<&'static s
         .and_then(|value| value.as_str())?;
 
     match state {
-        "launchedAndRegistered" => Some("Pimax Play launched and headset registered."),
-        "launchedButNotRegistered" => {
-            Some("Pimax Play launched, but registration did not recover.")
+        "launchedAndRegistered" => {
+            Some("Pimax Play launched successfully and the headset is registered.")
         }
-        "shellLaunchFailed" => Some("Windows Shell launch failed."),
+        "launchedButNotRegistered" => Some(
+            "Pimax Play launched, but headset registration did not recover. The existing manual USB reseat procedure may still be required.",
+        ),
+        "shellLaunchFailed" => Some("Windows could not launch the official Pimax Play shortcut."),
         "preconditionRefused" => {
-            let running = result
+            let blocking = result
                 .data
                 .as_ref()
-                .and_then(|data| data.get("preLaunchState"))
-                .and_then(|value| value.as_str())
-                .is_some_and(|value| value.eq_ignore_ascii_case("blocked"));
-            if running {
-                Some("Launch refused because Pimax Play is still running.")
+                .and_then(|data| data.get("blockingProcesses"))
+                .and_then(|value| value.as_array())
+                .and_then(|processes| processes.iter().find_map(|value| value.as_str()));
+            if blocking.is_some() {
+                Some("Relaunch refused because Pimax Play is still running.")
             } else {
-                Some("Launch refused because preconditions were not met.")
+                Some("Relaunch refused because preconditions were not met.")
             }
         }
-        "verificationInconclusive" => Some("Pimax Play launch verification was inconclusive."),
+        "verificationInconclusive" => {
+            Some("Pimax Play was launched, but the result could not be verified conclusively.")
+        }
         _ => None,
     }
+}
+
+pub fn pimax_shell_launch_counts(result: &CommandResult) -> Option<String> {
+    let data = result.data.as_ref()?;
+    let shell_requests = data
+        .get("shellRequestCount")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(0);
+    let retries = data
+        .get("retryCount")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(0);
+    Some(format!(
+        "Shell requests: {shell_requests}; Retries: {retries}"
+    ))
 }
 
 pub fn display_name_for_command(command: &str) -> String {
@@ -1131,16 +1166,19 @@ mod tests {
         let cases = [
             (
                 "launchedAndRegistered",
-                "Pimax Play launched and headset registered.",
+                "Pimax Play launched successfully and the headset is registered.",
             ),
             (
                 "launchedButNotRegistered",
-                "Pimax Play launched, but registration did not recover.",
+                "Pimax Play launched, but headset registration did not recover. The existing manual USB reseat procedure may still be required.",
             ),
-            ("shellLaunchFailed", "Windows Shell launch failed."),
+            (
+                "shellLaunchFailed",
+                "Windows could not launch the official Pimax Play shortcut.",
+            ),
             (
                 "verificationInconclusive",
-                "Pimax Play launch verification was inconclusive.",
+                "Pimax Play was launched, but the result could not be verified conclusively.",
             ),
         ];
 
@@ -1154,6 +1192,61 @@ mod tests {
 
             assert_eq!(format_pimax_shell_launch_result(&result), Some(expected));
         }
+    }
+
+    #[test]
+    fn pimax_shell_launch_action_result_includes_one_shot_counts_without_sdk_noise() {
+        let result = CommandResult {
+            command: Some("pimax-shell-launch-json".to_string()),
+            success: true,
+            data: Some(json!({
+                "result": "launchedAndRegistered",
+                "shellRequestCount": 1,
+                "retryCount": 0,
+                "errors": ["SDKServicePort", "HMDData Changed"]
+            })),
+            ..CommandResult::default()
+        };
+
+        let rendered = format_action_result(&result);
+
+        assert!(rendered.contains("Shell requests: 1; Retries: 0"));
+        assert!(!rendered.contains("SDKServicePort"));
+        assert!(!rendered.contains("HMDData Changed"));
+    }
+
+    #[test]
+    fn pimax_shell_launch_cannot_start_twice_while_running() {
+        let now = Instant::now();
+        let mut app = app(false);
+        app.connection = ConnectionState::Connected;
+        app.commands = vec![executable_pimax_command()];
+        app.running_actions.push(RunningAction {
+            action: TuiAction::RelaunchPimaxPlay,
+            command: TuiAction::RelaunchPimaxPlay.command_name().to_string(),
+            started_at: now,
+        });
+
+        let error = app
+            .validate_action_start(TuiAction::RelaunchPimaxPlay)
+            .unwrap_err();
+
+        assert_eq!(error, "Relaunch Pimax Play is already running.");
+    }
+
+    #[test]
+    fn acknowledging_action_result_returns_to_actions() {
+        let mut app = app(false);
+        app.action_result_dialog = Some(CompletedActionResult {
+            command: "pimax-shell-launch-json".to_string(),
+            completed_at: Instant::now(),
+            outcome: ActionOutcome::Succeeded,
+            message: "Pimax Play launched successfully and the headset is registered.".to_string(),
+        });
+
+        app.acknowledge_action_result();
+
+        assert!(app.action_result_dialog.is_none());
     }
 
     #[test]

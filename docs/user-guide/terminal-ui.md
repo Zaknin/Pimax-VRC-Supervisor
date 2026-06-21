@@ -58,10 +58,14 @@ Before using it, exit Pimax Play from its tray menu and wait for shutdown to com
 
 The action uses the official Windows Start Menu shortcut (`PimaxPlay.lnk`), sends exactly one Windows Shell open request, then waits up to 90 seconds for the Pimax software stack and headset registration to become healthy. It does not terminate processes, restart services, reset USB or DisplayPort devices, automate Connect, or retry the launch.
 
+During the wait, Terminal UI stays open and shows elapsed progress. The hidden command bridge captures stdout and stderr from the verification command so Pimax SDK/service output does not flood the terminal. The normal Pimax Play application UI remains visible when Windows Shell opens it.
+
+Phase 30A production validation confirmed the recovery path can report `Pimax Play launched successfully`, `Headset registered successfully`, `Shell request count: 1`, and `Retry count: 0` with headset evidence including `runtimeErrorCode: 0`, `isReady: 1`, `getHMDInfoResult: 0`, and `HMD_hmdName: Pimax Crystal`. Phase 30A.1 only contains the command-output containment and Terminal UI result-flow fix; it does not change recovery logic.
+
 Possible results are:
 
-- `launchedAndRegistered`: Pimax Play launched and the headset registered.
-- `launchedButNotRegistered`: Pimax Play launched, but registration did not recover. The manual USB reseat procedure remains a separate fallback.
-- `shellLaunchFailed`: Windows could not launch the official shortcut.
+- `launchedAndRegistered`: Pimax Play launched successfully and the headset is registered.
+- `launchedButNotRegistered`: Pimax Play launched, but headset registration did not recover. The manual USB reseat procedure remains a separate fallback.
+- `shellLaunchFailed`: Windows could not launch the official Pimax Play shortcut.
 - `preconditionRefused`: Pimax Play was still running, the shortcut was missing/untrusted, or the execution context was not a normal non-elevated Explorer session.
-- `verificationInconclusive`: the launch was accepted, but the available health evidence could not classify the result safely.
+- `verificationInconclusive`: Pimax Play was launched, but the result could not be verified conclusively.

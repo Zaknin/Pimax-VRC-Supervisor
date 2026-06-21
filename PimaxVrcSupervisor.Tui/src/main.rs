@@ -209,6 +209,16 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     let now = Instant::now();
     let shortcut = Shortcut::from_key(key);
 
+    if app.action_result_dialog.is_some() {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Esc => {
+                app.acknowledge_action_result();
+                return false;
+            }
+            _ => return false,
+        }
+    }
+
     if app.shutdown_confirmation {
         match key.code {
             KeyCode::Enter | KeyCode::Char(' ') => {
@@ -267,6 +277,22 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
 }
 
 fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
+    if app.action_result_dialog.is_some() {
+        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return false;
+        }
+
+        let Some(action) = app.click_action_at(mouse.column, mouse.row) else {
+            return false;
+        };
+
+        if matches!(action, ClickAction::ConfirmModal | ClickAction::CancelModal) {
+            app.acknowledge_action_result();
+        }
+
+        return false;
+    }
+
     if app.help_visible {
         app.close_help();
         return false;

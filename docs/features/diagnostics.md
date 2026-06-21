@@ -48,6 +48,10 @@ Use it only after exiting Pimax Play from its tray menu. The action refuses to r
 
 The action does not kill processes, stop or start services, reset USB, reset DisplayPort, automate Connect, retry, or write startup configuration. If Pimax Play launches but registration does not recover, use the existing manual USB reseat procedure as a separate operator-controlled fallback.
 
+The Terminal UI bridge runs the JSON command as a hidden child process with null stdin and captured stdout/stderr. SDK and service diagnostics are drained into bounded buffers and are not written directly into the TUI console. This containment does not hide the actual Pimax Play UI opened by Windows Shell.
+
+Phase 30A production validation confirmed one successful Shell request and zero retries, with Pimax Play launched and the headset registered. Phase 30A.1 only fixes the discovered console-inheritance defect and final Terminal UI result flow; the trusted shortcut, Shell-open mechanism, verification timeout, health checks, and result classifications are unchanged.
+
 Advanced users can run the explicit JSON command from a non-elevated console:
 
 ```powershell

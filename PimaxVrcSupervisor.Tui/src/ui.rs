@@ -59,6 +59,10 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App) {
     if app.confirmation.is_some() {
         render_action_confirmation(frame, area, app);
     }
+
+    if app.action_result_dialog.is_some() {
+        render_action_result_dialog(frame, area, app);
+    }
 }
 
 fn render_full_dashboard(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: Instant) {
@@ -366,12 +370,13 @@ fn render_compact_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, 
         lines.push(Line::from(vec![
             Span::styled("Running ", theme::label_style()),
             Span::styled(
-                format!(
-                    "{} {}",
-                    running_action_message(running.action, now.duration_since(running.started_at)),
-                    format_duration(now.duration_since(running.started_at))
-                ),
+                running_action_message(running.action, now.duration_since(running.started_at)),
                 theme::badge_success_style(),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                running_action_detail(running.action, now.duration_since(running.started_at)),
+                foreground(theme::TEXT_SECONDARY),
             ),
         ]));
     }
@@ -537,10 +542,7 @@ fn render_small_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Inst
             ),
             Span::raw(" "),
             Span::styled(
-                format!(
-                    "{} ago",
-                    format_duration(now.duration_since(running.started_at))
-                ),
+                running_action_detail(running.action, now.duration_since(running.started_at)),
                 foreground(theme::TEXT_SECONDARY),
             ),
         ]));
@@ -710,10 +712,7 @@ fn render_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Ins
                 ),
                 Span::raw("  "),
                 Span::styled(
-                    format!(
-                        "RUNNING {}",
-                        format_duration(now.duration_since(running.started_at))
-                    ),
+                    running_action_detail(running.action, now.duration_since(running.started_at)),
                     theme::success_style(),
                 ),
             ]));
@@ -1090,6 +1089,52 @@ fn render_action_confirmation(frame: &mut Frame<'_>, area: Rect, app: &mut App) 
     );
 }
 
+fn render_action_result_dialog(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
+    let Some(result) = app.action_result_dialog.as_ref() else {
+        return;
+    };
+
+    let popup = centered_rect(62, 36, area);
+    let display_name = display_name_for_command(&result.command);
+    let (status, style) = action_outcome_style(result.outcome);
+    let mut lines = vec![
+        Line::from(Span::styled("Action Result", theme::title_style())),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(display_name, theme::primary_style()),
+            Span::raw("  "),
+            Span::styled(status, style),
+        ]),
+        Line::from(""),
+        Line::from(result.message.clone()),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("ENTER / SPACE OK", theme::secondary_style()),
+            Span::raw("    "),
+            Span::styled("ESC Close", theme::secondary_style()),
+        ]),
+    ];
+
+    if result
+        .command
+        .eq_ignore_ascii_case("pimax-shell-launch-json")
+    {
+        lines.insert(
+            5,
+            Line::from("SDK and command diagnostics were captured, not written to the TUI."),
+        );
+    }
+
+    frame.render_widget(Clear, popup);
+    register_modal_clicks(app, popup);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(theme::accent_panel_block("Result"))
+            .wrap(Wrap { trim: true }),
+        popup,
+    );
+}
+
 fn action_card_line(app: &App, action: TuiAction, now: Instant, width: u16) -> Line<'static> {
     let state = action_state(app, action, now);
     let left = format!("{} {}", action.digit(), action.short_label());
@@ -1163,12 +1208,20 @@ fn running_action_message(action: TuiAction, elapsed: Duration) -> String {
         return action.display_name().to_string();
     }
 
-    if elapsed < Duration::from_secs(4) {
+    if elapsed < Duration::from_secs(5) {
         "Launching Pimax Play...".to_string()
     } else if elapsed < Duration::from_secs(20) {
         "Waiting for Pimax services...".to_string()
     } else {
         "Waiting for headset registration...".to_string()
+    }
+}
+
+fn running_action_detail(action: TuiAction, elapsed: Duration) -> String {
+    if action == TuiAction::RelaunchPimaxPlay {
+        format!("elapsed {} / 90s, no retry", format_duration(elapsed))
+    } else {
+        format!("RUNNING {}", format_duration(elapsed))
     }
 }
 
@@ -1588,5 +1641,34 @@ fn format_duration(duration: std::time::Duration) -> String {
         format!("{seconds}s")
     } else {
         format!("{}m{}s", seconds / 60, seconds % 60)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pimax_relaunch_progress_tracks_elapsed_stage_without_claiming_internal_state() {
+        assert_eq!(
+            running_action_message(TuiAction::RelaunchPimaxPlay, Duration::from_secs(0)),
+            "Launching Pimax Play..."
+        );
+        assert_eq!(
+            running_action_message(TuiAction::RelaunchPimaxPlay, Duration::from_secs(5)),
+            "Waiting for Pimax services..."
+        );
+        assert_eq!(
+            running_action_message(TuiAction::RelaunchPimaxPlay, Duration::from_secs(20)),
+            "Waiting for headset registration..."
+        );
+    }
+
+    #[test]
+    fn pimax_relaunch_progress_shows_elapsed_limit_and_no_retry() {
+        assert_eq!(
+            running_action_detail(TuiAction::RelaunchPimaxPlay, Duration::from_secs(12)),
+            "elapsed 12s / 90s, no retry"
+        );
     }
 }
