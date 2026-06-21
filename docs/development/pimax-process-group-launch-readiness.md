@@ -8,6 +8,7 @@ Phase 28D2-B2 adds a read-only model for Pimax Play/runtime startup orchestratio
 dotnet .\PimaxVrcSupervisor.dll pimax-launch-recipe-json
 dotnet .\PimaxVrcSupervisor.dll pimax-startup-sources-json
 dotnet .\PimaxVrcSupervisor.dll pimax-startup-observe-json --fake
+dotnet .\PimaxVrcSupervisor.dll pimax-startup-observe-elevated-json --preflight-only
 dotnet .\PimaxVrcSupervisor.dll pimax-startup-creator-chain-json --input .\startup-observation.json
 ```
 
@@ -17,6 +18,7 @@ Schema:
 pimax-launch-recipe-v1
 pimax-startup-sources-v1
 pimax-startup-observation-v1
+pimax-startup-observation-elevated-v1
 pimax-startup-creator-chain-v1
 ```
 
@@ -125,6 +127,10 @@ The command currently reports the normal `PimaxPlay.lnk` Start Menu entry as the
 
 `pimax-startup-creator-chain-json` analyzes a captured startup-observation result and emits the `pimax-startup-creator-chain-v1` assessment. It reports preserved creator edges, root candidates, `DeviceSetting`, `PiPlayService`, `PiService`, and `pi_server` creators, unresolved gaps, and a sanitized summary. It does not launch Pimax, stop Pimax, access hardware, automate the GUI, mutate services, run tasks, or access the network.
 
+`pimax-startup-observe-elevated-json` is the Phase 28D2-B2C elevated observer boundary. It requires an existing administrator token, refuses to self-elevate, does not weaken UAC, does not create a service, driver, scheduled task, or persistent helper, and terminates at the configured deadline. The formal elevated mode disables the WMI snapshot fallback; if process-creator trace subscription is unavailable, it reports the provider/session failure and stops before a Start Menu launch is requested.
+
+The elevated observer contract is scoped to process-creator evidence only. It preserves observation-local process tokens, parent tokens captured at process start, start/stop timestamps, sanitized image names and paths, session labels, and event source. Public output excludes raw PIDs, raw parent PIDs, command lines, environment blocks, handles, user SIDs, user names, machine names, certificate serial numbers, and raw event payloads.
+
 ## Formal Start Menu Comparison
 
 Phase 28D2-B2A ran one formal observer-backed normal Windows Start Menu launch comparison. The user exited Pimax Play through the official tray Exit command, then launched the normal Start Menu `PimaxPlay` entry once. The launch was not retried, and no missing runtime executable was manually started.
@@ -148,6 +154,10 @@ Operator-visible result:
 
 Creator-chain evidence remains partial after Phase 28D2-B2B. The B2B live run used the bounded snapshot fallback because process trace subscription returned access denied. It preserved the child chain and post-launch timing, but `DeviceSetting` still arrived with an `external-parent` token. The creator-chain result is `unknownExternalCreator` with `insufficient` confidence. Preserved child-process evidence showed `PiPlayService` created by `DeviceSetting`, `PiService` created by `DeviceSetting`, and the final `pi_server` created by `PiService`.
 
+The access-denied boundary occurred when the non-elevated observer attempted to start the Windows process start/stop trace subscription. ETW-style process events were modeled correctly enough for sanitized fixtures and non-live analysis, but the non-elevated live run could not enable the event stream. The WMI snapshot fallback preserved process presence and later parent observations, but it could not prove short-lived or already-exited parent identity with the same fidelity as event-time process creation evidence.
+
+Phase 28D2-B2C adds the elevated no-fallback observer to answer the remaining narrow question: what creates `DeviceSetting` during a successful normal Start Menu launch. The supported root classifications are `windowsExplorer`, `startMenuExperienceHost`, `windowsShellBroker`, `pimaxBootstrapHelper`, `pimaxServiceBroker`, `piServiceLauncher`, `serviceControlManager`, `scheduledTask`, `comDelegateActivation`, `existingPimaxProcess`, `unknownExternalCreator`, `multipleCandidateRoots`, `conflictingEvidence`, and `insufficientEvidence`. A confirmed result requires direct event-time parent evidence, not a later snapshot.
+
 B2B post-launch health was `healthy`; the software group was complete; registration was `registeredReady / confirmed` with current freshness. Operator-visible state was green LED, normal Pimax Play window, automatic headset recognition, image/audio/microphone/eye tracking present, Vive face tracker detected, no unrelated application restart, and no PC freeze, restart, blue screen, or abnormal behavior. Mechanism classification therefore remains `manualShellLaunchWorksMechanismStillUnresolved`, not `shellActivationMechanismIdentified`.
 
 ## Execution Boundary
@@ -160,8 +170,4 @@ Automatic restart remains disabled because these blockers are unresolved:
 - post-launch readiness and registration still require component-health proof;
 - no retry, shutdown, or rollback behavior is approved.
 
-Recommended next phase:
-
-```text
-Phase 28D2-B2C - Resolve Remaining Pimax DeviceSetting Creator Evidence
-```
+The next phase depends on the one B2C elevated result. If the root is confirmed or a safe Windows Shell activation path is clear, the follow-up is a Shell activation adapter validation phase. If the root remains unresolved after elevated observation, the follow-up should treat the official Start Menu shortcut as a black-box Windows Shell activation route rather than repeating creator-chain launch experiments.

@@ -13,6 +13,7 @@ dotnet .\PimaxVrcSupervisor.dll pimax-repair-targets-json
 dotnet .\PimaxVrcSupervisor.dll pimax-launch-recipe-json
 dotnet .\PimaxVrcSupervisor.dll pimax-startup-sources-json
 dotnet .\PimaxVrcSupervisor.dll pimax-startup-observe-json --fake
+dotnet .\PimaxVrcSupervisor.dll pimax-startup-observe-elevated-json --preflight-only
 dotnet .\PimaxVrcSupervisor.dll pimax-startup-creator-chain-json --input .\startup-observation.json
 dotnet .\PimaxVrcSupervisor.dll pimax-repair-status-json
 dotnet .\PimaxVrcSupervisor.dll pimax-repair-result-json
@@ -32,6 +33,7 @@ pimax-repair-targets-v1
 pimax-launch-recipe-v1
 pimax-startup-sources-v1
 pimax-startup-observation-v1
+pimax-startup-observation-elevated-v1
 pimax-startup-creator-chain-v1
 pimax-repair-start-v1
 pimax-repair-status-v1
@@ -185,6 +187,12 @@ Phase 28D2-B2B changes the observer to preserve an immutable process identity wh
 
 The B2B live run completed one normal Start Menu launch with no retry. Process trace subscription was denied in the non-elevated observer, so the observer used the bounded WMI snapshot fallback. The fallback preserved the known child chain and timing, but `DeviceSetting` still appeared with `external-parent`. The creator-chain result is `unknownExternalCreator` with `insufficient` confidence. Post-launch component health was `healthy`, software group was complete, registration was `registeredReady / confirmed`, and freshness was current.
 
+Phase 28D2-B2C adds `pimax-startup-observe-elevated-json` as a separate one-shot elevated observation boundary. The command requires the current process to already be elevated, refuses non-elevated live execution, refuses silent self-elevation, does not install a service, driver, scheduled task, or persistent elevated helper, and ends at the configured deadline. Its formal mode disables the WMI snapshot fallback: if the process-creator trace cannot start, the command reports the provider/session failure and no Start Menu launch should be performed.
+
+The elevated observer exists only to improve evidence quality for the `DeviceSetting` creator question. It does not start Pimax, stop Pimax, restart services, run tasks, invoke Connect, automate input, cycle USB, touch DisplayPort, restart SteamVR, restart VRChat, restart VRCFT, restart the Supervisor, restart the watcher, or access the network. Public output uses observation-local tokens and redacts raw PIDs, raw parent PIDs, command lines, environment blocks, handles, user SIDs, user names, machine names, certificate serial numbers, and raw event payloads.
+
+The creator-chain result categories are now aligned with the backend contract: `windowsExplorer`, `startMenuExperienceHost`, `windowsShellBroker`, `pimaxBootstrapHelper`, `pimaxServiceBroker`, `piServiceLauncher`, `serviceControlManager`, `scheduledTask`, `comDelegateActivation`, `existingPimaxProcess`, `unknownExternalCreator`, `multipleCandidateRoots`, `conflictingEvidence`, and `insufficientEvidence`. A confirmed root must come from event-time parent evidence. Even a confirmed root keeps backend execution disabled until a later Shell activation adapter is implemented and validated.
+
 The raw SHA-256 hash, raw certificate subject, raw process IDs, command lines, and local registry details are kept in private discovery evidence and are not committed.
 
 Lifecycle-root assessment is unresolved: the shortcut target is known, but the missing runtime members may be created by shell activation context, a service broker, a transient helper, state reset, or multiple mechanisms. `pimax-startup-sources-json` reports the activation-source candidates, and the formal `pimax-startup-observe-json` run is used to compare the Start Menu path against the rejected direct-launch evidence.
@@ -224,8 +232,8 @@ Pimax Play Connect and a physical USB reconnection may still be required.
 
 Recipe blockers that still prevent execution:
 
-- formal observer-backed Start Menu launch evidence formed the group but has not proven the `DeviceSetting` root creator;
-- `DeviceSetting` root creator ownership is still `unknownExternalCreator`;
+- formal observer-backed Start Menu launch evidence formed the group but has not yet proven the `DeviceSetting` root creator with elevated event-time parent evidence;
+- the last completed live result still has `DeviceSetting` root creator ownership as `unknownExternalCreator`;
 - a safe programmatic shell-equivalent is not validated;
 - registration after launch still requires post-health proof;
 - no shutdown/retry/rollback behavior is approved for product repair.

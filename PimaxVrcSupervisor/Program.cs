@@ -111,6 +111,14 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-startup-observe-json", 
     return;
 }
 
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-startup-observe-elevated-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var request = PimaxElevatedStartupObservationRequest.Parse(commandLineArgs);
+    var snapshot = await new PimaxStartupObserver().ObserveElevatedAsync(request, shutdown.Token);
+    Console.WriteLine(JsonSerializer.Serialize(snapshot, PimaxRepairJson.Options));
+    return;
+}
+
 if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-startup-creator-chain-json", StringComparison.OrdinalIgnoreCase)))
 {
     var request = PimaxStartupCreatorChainRequest.Parse(commandLineArgs);
@@ -4073,6 +4081,13 @@ internal sealed class AppSupervisor
                     "Json",
                     "Read-only launch recipe query. Does not start Pimax, stop Pimax, invoke Connect, automate GUI input, touch USB, touch DisplayPort, or change services."),
                 CommandDefinition(
+                    "pimax-startup-observe-elevated-json",
+                    "Pimax Elevated Startup Observer JSON",
+                    "Runs a bounded elevated process-creator observation mode for one approved Pimax Start Menu launch.",
+                    "Diagnostics",
+                    "Json",
+                    "Elevated read-only observer. Requires administrator token, refuses self-elevation, uses no fallback, and does not start or stop Pimax, services, tasks, USB, DisplayPort, SteamVR, VRChat, VRCFT, Supervisor, or watcher."),
+                CommandDefinition(
                     "pimax-repair-start-json",
                     "Pimax Repair Start JSON",
                     "Starts a software-stack-only Pimax repair operation, dry-run unless explicitly confirmed with a token.",
@@ -4511,7 +4526,7 @@ internal sealed class AppSupervisor
             "base-stations-off" => await ExecuteConfirmedBaseStationActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ManualPowerDownBaseStationsAsync, cancellationToken),
             "restart-osc-router" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, RestartOscRouterCommandAsync, cancellationToken),
             "reload-autostart-apps" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ReloadAutostartAppsCommandAsync, cancellationToken),
-            "status" or "status-json" or "commands-json" or "log" or "log-json" or "query-json" or "pimax-connectivity-json" or "pimax-component-health-json" or "pimax-repair-capabilities-json" or "pimax-repair-plan-json" or "pimax-repair-targets-json" or "pimax-launch-recipe-json" or "pimax-repair-status-json" or "pimax-repair-result-json" => ActionJsonResult(
+            "status" or "status-json" or "commands-json" or "log" or "log-json" or "query-json" or "pimax-connectivity-json" or "pimax-component-health-json" or "pimax-repair-capabilities-json" or "pimax-repair-plan-json" or "pimax-repair-targets-json" or "pimax-launch-recipe-json" or "pimax-startup-observe-elevated-json" or "pimax-repair-status-json" or "pimax-repair-result-json" => ActionJsonResult(
                 request.RequestId,
                 canonicalCommand,
                 success: false,

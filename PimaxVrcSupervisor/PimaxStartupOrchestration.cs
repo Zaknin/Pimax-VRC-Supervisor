@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Management;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Security.Principal;
 using Microsoft.Win32;
 
 internal static class PimaxStartupSourcesSchema
@@ -12,6 +13,11 @@ internal static class PimaxStartupSourcesSchema
 internal static class PimaxStartupObservationSchema
 {
     public const string Version = "pimax-startup-observation-v1";
+}
+
+internal static class PimaxElevatedStartupObservationSchema
+{
+    public const string Version = "pimax-startup-observation-elevated-v1";
 }
 
 internal static class PimaxStartupCreatorChainSchema
@@ -123,6 +129,55 @@ internal sealed record PimaxStartupObservationRequest(
         return fallback;
     }
 }
+
+internal sealed record PimaxElevatedStartupObservationRequest(
+    TimeSpan Duration,
+    TimeSpan PollInterval,
+    bool Fake,
+    bool PreflightOnly,
+    string ObservationId)
+{
+    public static PimaxElevatedStartupObservationRequest Parse(string[] args)
+    {
+        var baseRequest = PimaxStartupObservationRequest.Parse(args);
+        var preflightOnly = args.Any(arg => string.Equals(arg, "--preflight-only", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(arg, "--capability-only", StringComparison.OrdinalIgnoreCase));
+        return new PimaxElevatedStartupObservationRequest(
+            baseRequest.Duration,
+            baseRequest.PollInterval,
+            baseRequest.Fake,
+            preflightOnly,
+            baseRequest.ObservationId.Replace("pimax-startup-observe-", "pimax-startup-observe-elevated-", StringComparison.OrdinalIgnoreCase));
+    }
+
+    public PimaxStartupObservationRequest ToStartupRequest(bool fake)
+        => new(Duration, PollInterval, fake, ObservationId);
+}
+
+internal sealed record PimaxElevatedStartupObservationSnapshot(
+    string Schema,
+    string ObservationId,
+    DateTimeOffset CollectedAt,
+    bool Accepted,
+    bool ElevatedMode,
+    bool IsElevated,
+    bool PreflightOnly,
+    bool Bounded,
+    double DurationSeconds,
+    string Provider,
+    string EventSource,
+    string RequiredPrivilege,
+    bool ParentIdentityCapturedAtProcessStart,
+    bool ProcessStopCaptureRequired,
+    bool WmiSnapshotFallbackAllowed,
+    bool SelfElevationAllowed,
+    bool PersistentElevationAllowed,
+    string[] CapturedFields,
+    string[] PrivacyRedactions,
+    string[] Warnings,
+    string[] Errors,
+    string HumanReadableSummary,
+    PimaxStartupObservationSnapshot? Observation);
 
 internal sealed record PimaxStartupObservationSnapshot(
     string Schema,
@@ -783,13 +838,120 @@ internal sealed class PimaxStartupObserver
     internal static readonly string[] RequiredMembers = ["PimaxClient", "DeviceSetting", "PiPlayService", "pi_server", "PiServiceLauncher", "Tobii VR4PIMAXP3B Platform Runtime"];
     internal static readonly string[] ExpectedNames = ["PimaxClient", "DeviceSetting", "PiPlayService", "pi_server", "PiService", "PiServiceLauncher", "PiPlatformService_64", "PVRHome", "pi_overlay", "UnityCrashHandler64", "launcher", "fastlist-0.3.0-x64", "lighthouse_console", "platform_runtime_VR4PIMAXP3B_service"];
     private static readonly string[] BrokerNames = ["explorer", "ShellExperienceHost", "StartMenuExperienceHost", "RuntimeBroker", "ApplicationFrameHost", "services", "svchost", "taskhostw", "dllhost"];
+    private const string ElevatedProvider = "Microsoft-Windows-Kernel-Process";
+    private const string ElevatedEventSource = "elevated-process-start-stop-trace";
 
     public async Task<PimaxStartupObservationSnapshot> ObserveAsync(PimaxStartupObservationRequest request, CancellationToken cancellationToken)
+        => await ObserveProcessTraceAsync(request, cancellationToken, allowSnapshotFallback: true, eventSourceOnSuccess: "wmi-process-start-stop-trace");
+
+    public async Task<PimaxElevatedStartupObservationSnapshot> ObserveElevatedAsync(PimaxElevatedStartupObservationRequest request, CancellationToken cancellationToken)
+    {
+        var isElevated = IsCurrentProcessElevated();
+        if (!isElevated && !request.Fake)
+        {
+            return BuildElevatedSnapshot(
+                request,
+                isElevated,
+                accepted: false,
+                warnings: [],
+                errors: ["Administrative elevation is required to enable the bounded process-creator trace. The command refuses to self-elevate or install a persistent elevated component."],
+                summary: "Elevated startup observation refused because the current process is not running as administrator.",
+                observation: null);
+        }
+
+        if (request.PreflightOnly)
+        {
+            return BuildElevatedSnapshot(
+                request,
+                isElevated || request.Fake,
+                accepted: true,
+                warnings: request.Fake ? ["fake non-live elevated capability preflight"] : [],
+                errors: [],
+                summary: "Elevated startup observation preflight passed. The formal observer must still be started before the one allowed Start Menu launch.",
+                observation: null);
+        }
+
+        try
+        {
+            var observation = request.Fake
+                ? await ObserveProcessTraceAsync(request.ToStartupRequest(fake: true), cancellationToken, allowSnapshotFallback: false, eventSourceOnSuccess: ElevatedEventSource)
+                : await ObserveProcessTraceAsync(request.ToStartupRequest(fake: false), cancellationToken, allowSnapshotFallback: false, eventSourceOnSuccess: ElevatedEventSource);
+            return BuildElevatedSnapshot(
+                request,
+                isElevated || request.Fake,
+                accepted: true,
+                warnings: request.Fake ? ["fake non-live elevated observation"] : [],
+                errors: [],
+                summary: "Elevated bounded process-creator observation completed without WMI snapshot fallback.",
+                observation: observation);
+        }
+        catch (ManagementException ex)
+        {
+            return BuildElevatedSnapshot(
+                request,
+                isElevated || request.Fake,
+                accepted: false,
+                warnings: [],
+                errors: [$"Process trace subscription failed: {ex.ErrorCode}."],
+                summary: "Elevated startup observation stopped before formal launch because process trace subscription was unavailable.",
+                observation: null);
+        }
+        catch (Exception ex)
+        {
+            return BuildElevatedSnapshot(
+                request,
+                isElevated || request.Fake,
+                accepted: false,
+                warnings: [],
+                errors: [$"Process trace setup failed: {ex.GetType().Name}."],
+                summary: "Elevated startup observation stopped before formal launch because the bounded creator observer could not start.",
+                observation: null);
+        }
+    }
+
+    internal static PimaxElevatedStartupObservationSnapshot BuildElevatedSnapshot(
+        PimaxElevatedStartupObservationRequest request,
+        bool isElevated,
+        bool accepted,
+        IReadOnlyCollection<string> warnings,
+        IReadOnlyCollection<string> errors,
+        string summary,
+        PimaxStartupObservationSnapshot? observation)
+        => new(
+            PimaxElevatedStartupObservationSchema.Version,
+            request.ObservationId,
+            DateTimeOffset.Now,
+            accepted,
+            ElevatedMode: true,
+            isElevated,
+            request.PreflightOnly,
+            Bounded: true,
+            Math.Round(request.Duration.TotalSeconds, 3),
+            ElevatedProvider,
+            observation?.EventSource ?? ElevatedEventSource,
+            "Administrator token required for formal process-creator trace subscription.",
+            ParentIdentityCapturedAtProcessStart: accepted,
+            ProcessStopCaptureRequired: true,
+            WmiSnapshotFallbackAllowed: false,
+            SelfElevationAllowed: false,
+            PersistentElevationAllowed: false,
+            ["process token", "parent process token", "process start timestamp", "process stop timestamp", "image name", "sanitized image path", "session", "event source"],
+            ["raw PIDs", "raw parent PIDs", "raw command lines", "environment blocks", "handles", "user SID", "user name", "machine name", "certificate serial numbers", "raw event payloads"],
+            warnings.ToArray(),
+            errors.ToArray(),
+            summary,
+            observation);
+
+    private static async Task<PimaxStartupObservationSnapshot> ObserveProcessTraceAsync(
+        PimaxStartupObservationRequest request,
+        CancellationToken cancellationToken,
+        bool allowSnapshotFallback,
+        string eventSourceOnSuccess)
     {
         if (request.Fake)
         {
             var at = DateTimeOffset.Now;
-            return BuildSnapshot(request, at, at, FakeIdentities(at), [], ["fake non-live validation mode"], "fake-process-lifecycle");
+            return BuildSnapshot(request, at, at, FakeIdentities(at), [], ["fake non-live validation mode"], eventSourceOnSuccess == ElevatedEventSource ? "fake-elevated-process-lifecycle" : "fake-process-lifecycle");
         }
 
         var started = DateTimeOffset.Now;
@@ -850,6 +1012,11 @@ internal sealed class PimaxStartupObserver
         }
         catch (ManagementException ex) when (ex.ErrorCode == ManagementStatus.AccessDenied)
         {
+            if (!allowSnapshotFallback)
+            {
+                throw;
+            }
+
             return await ObserveByPollingAsync(request, started, tokenMap, identities, ["Process trace subscription denied; using bounded WMI process snapshot fallback."], cancellationToken);
         }
 
@@ -867,7 +1034,7 @@ internal sealed class PimaxStartupObserver
         }
 
         var ended = DateTimeOffset.Now;
-        return BuildSnapshot(request, started, ended, identities, errors, [], "wmi-process-start-stop-trace");
+        return BuildSnapshot(request, started, ended, identities, errors, [], eventSourceOnSuccess);
     }
 
     private static async Task<PimaxStartupObservationSnapshot> ObserveByPollingAsync(
@@ -1213,6 +1380,20 @@ internal sealed class PimaxStartupObserver
 
     private static string SafeString(object? value) => value?.ToString() ?? "";
 
+    private static bool IsCurrentProcessElevated()
+    {
+        try
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            var principal = new WindowsPrincipal(identity);
+            return principal.IsInRole(WindowsBuiltInRole.Administrator);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static void TryStop(ManagementEventWatcher watcher)
     {
         try { watcher.Stop(); }
@@ -1346,12 +1527,14 @@ internal static class PimaxCreatorChainAnalyzer
     }
 
     private static string CategoryFor(PimaxProcessStartIdentity identity)
-        => identity.ProcessName.Equals("explorer", StringComparison.OrdinalIgnoreCase) ? "windowsShellConfirmed" :
-            identity.ProcessName.Equals("StartMenuExperienceHost", StringComparison.OrdinalIgnoreCase) ? "startMenuHostConfirmed" :
-            identity.ProcessName.Equals("launcher", StringComparison.OrdinalIgnoreCase) ? "pimaxBootstrapHelperConfirmed" :
-            identity.ProcessName.Contains("PiService", StringComparison.OrdinalIgnoreCase) ? "pimaxServiceBrokerConfirmed" :
-            identity.ProcessName.Equals("services", StringComparison.OrdinalIgnoreCase) ? "serviceControlManagerProbable" :
-            identity.PresentInBaseline ? "existingPimaxProcessConfirmed" :
+        => identity.ProcessName.Equals("explorer", StringComparison.OrdinalIgnoreCase) ? "windowsExplorer" :
+            identity.ProcessName.Equals("StartMenuExperienceHost", StringComparison.OrdinalIgnoreCase) ? "startMenuExperienceHost" :
+            identity.ProcessName is "ShellExperienceHost" or "RuntimeBroker" or "ApplicationFrameHost" or "svchost" or "taskhostw" or "dllhost" ? "windowsShellBroker" :
+            identity.ProcessName.Equals("launcher", StringComparison.OrdinalIgnoreCase) ? "pimaxBootstrapHelper" :
+            identity.ProcessName.Equals("PiServiceLauncher", StringComparison.OrdinalIgnoreCase) ? "piServiceLauncher" :
+            identity.ProcessName.Contains("PiService", StringComparison.OrdinalIgnoreCase) ? "pimaxServiceBroker" :
+            identity.ProcessName.Equals("services", StringComparison.OrdinalIgnoreCase) ? "serviceControlManager" :
+            identity.PresentInBaseline ? "existingPimaxProcess" :
             "unknownExternalCreator";
 
     private static bool IsChainRelevant(PimaxProcessStartIdentity item)
@@ -1363,9 +1546,9 @@ internal static class PimaxCreatorChainAnalyzer
     private static string Summary(string rootResult, string deviceCreator)
         => rootResult switch
         {
-            "windowsShellConfirmed" => "DeviceSetting was traced back to the Windows shell activation chain; backend execution still requires separate programmatic validation.",
-            "pimaxBootstrapHelperConfirmed" => "DeviceSetting was traced to a transient Pimax bootstrap helper; backend execution remains disabled until a safe adapter is validated.",
-            "pimaxServiceBrokerConfirmed" => "DeviceSetting was traced to a Pimax service broker; backend execution remains disabled pending validation.",
+            "windowsExplorer" or "startMenuExperienceHost" or "windowsShellBroker" => "DeviceSetting was traced back to the Windows shell activation chain; backend execution still requires separate programmatic validation.",
+            "pimaxBootstrapHelper" => "DeviceSetting was traced to a transient Pimax bootstrap helper; backend execution remains disabled until a safe adapter is validated.",
+            "pimaxServiceBroker" or "piServiceLauncher" or "serviceControlManager" => "DeviceSetting was traced to a Pimax service-control path; backend execution remains disabled pending validation.",
             "unknownExternalCreator" => "DeviceSetting parent was external to the preserved observation graph.",
             "creatorExitedBeforeCapture" => "DeviceSetting creator exited before it could be resolved.",
             _ => $"DeviceSetting creator remains unresolved: {deviceCreator}."

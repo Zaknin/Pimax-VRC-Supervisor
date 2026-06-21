@@ -159,7 +159,7 @@ public sealed class PimaxStartupOrchestrationTests
         var assessment = PimaxCreatorChainAnalyzer.FromObservation(snapshot);
 
         Assert.Equal(PimaxStartupCreatorChainSchema.Version, assessment.Schema);
-        Assert.Equal("windowsShellConfirmed", assessment.DeviceSettingRootResult);
+        Assert.Equal("windowsExplorer", assessment.DeviceSettingRootResult);
         Assert.Equal("confirmed", assessment.Confidence);
         Assert.Equal("launcher", assessment.DeviceSettingCreator);
         Assert.Equal("DeviceSetting", assessment.PiPlayServiceCreator);
@@ -188,7 +188,7 @@ public sealed class PimaxStartupOrchestrationTests
         var snapshot = LoadObservationFixture("phase28d2b2b-service-broker-sanitized.json");
         var assessment = PimaxCreatorChainAnalyzer.FromObservation(snapshot);
 
-        Assert.Equal("serviceControlManagerProbable", assessment.DeviceSettingRootResult);
+        Assert.Equal("serviceControlManager", assessment.DeviceSettingRootResult);
         Assert.Equal("confirmed", assessment.Confidence);
         Assert.Equal("PiServiceLauncher", assessment.DeviceSettingCreator);
         Assert.Equal("DeviceSetting", assessment.PiPlayServiceCreator);
@@ -203,7 +203,7 @@ public sealed class PimaxStartupOrchestrationTests
         var snapshot = LoadObservationFixture("phase28d2b2b-existing-broker-sanitized.json");
         var assessment = PimaxCreatorChainAnalyzer.FromObservation(snapshot);
 
-        Assert.Equal("existingPimaxProcessConfirmed", assessment.DeviceSettingRootResult);
+        Assert.Equal("existingPimaxProcess", assessment.DeviceSettingRootResult);
         Assert.Equal("confirmed", assessment.Confidence);
         Assert.Equal("PimaxShellBroker", assessment.DeviceSettingCreator);
         Assert.Contains(assessment.RootCandidates, item => item.ProcessName == "PimaxShellBroker" && item.Confidence == "confirmed");
@@ -243,6 +243,136 @@ public sealed class PimaxStartupOrchestrationTests
             Assert.DoesNotContain("commandLine", json, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("ProcessId", json, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("USB\\", json, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public async Task ElevatedObserverRejectsNonElevatedLiveRunWithoutFallbackOrSelfElevation()
+    {
+        var request = new PimaxElevatedStartupObservationRequest(
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromMilliseconds(100),
+            Fake: false,
+            PreflightOnly: false,
+            "pimax-startup-observe-elevated-test");
+
+        var snapshot = await new PimaxStartupObserver().ObserveElevatedAsync(request, CancellationToken.None);
+
+        if (snapshot.IsElevated)
+        {
+            return;
+        }
+
+        Assert.Equal(PimaxElevatedStartupObservationSchema.Version, snapshot.Schema);
+        Assert.False(snapshot.Accepted);
+        Assert.False(snapshot.WmiSnapshotFallbackAllowed);
+        Assert.False(snapshot.SelfElevationAllowed);
+        Assert.False(snapshot.PersistentElevationAllowed);
+        Assert.Null(snapshot.Observation);
+        Assert.Contains("Administrative elevation", string.Join("\n", snapshot.Errors), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ElevatedObserverFakePreflightReportsProviderContract()
+    {
+        var request = new PimaxElevatedStartupObservationRequest(
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromMilliseconds(100),
+            Fake: true,
+            PreflightOnly: true,
+            "pimax-startup-observe-elevated-test");
+
+        var snapshot = await new PimaxStartupObserver().ObserveElevatedAsync(request, CancellationToken.None);
+
+        Assert.True(snapshot.Accepted);
+        Assert.True(snapshot.ElevatedMode);
+        Assert.True(snapshot.PreflightOnly);
+        Assert.True(snapshot.Bounded);
+        Assert.Equal("Microsoft-Windows-Kernel-Process", snapshot.Provider);
+        Assert.Equal("elevated-process-start-stop-trace", snapshot.EventSource);
+        Assert.True(snapshot.ParentIdentityCapturedAtProcessStart);
+        Assert.False(snapshot.WmiSnapshotFallbackAllowed);
+        Assert.Null(snapshot.Observation);
+    }
+
+    [Fact]
+    public async Task ElevatedObserverFakeRunProducesNestedObservationAndKeepsBackendDisabled()
+    {
+        var request = new PimaxElevatedStartupObservationRequest(
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromMilliseconds(100),
+            Fake: true,
+            PreflightOnly: false,
+            "pimax-startup-observe-elevated-test");
+
+        var snapshot = await new PimaxStartupObserver().ObserveElevatedAsync(request, CancellationToken.None);
+
+        Assert.True(snapshot.Accepted);
+        Assert.NotNull(snapshot.Observation);
+        Assert.Equal("fake-elevated-process-lifecycle", snapshot.Observation.EventSource);
+        Assert.False(snapshot.Observation.CreatorChain?.BackendExecutable);
+        Assert.Equal("windowsExplorer", snapshot.Observation.CreatorChain?.DeviceSettingRootResult);
+        Assert.Equal("launcher", snapshot.Observation.CreatorChain?.DeviceSettingCreator);
+    }
+
+    [Fact]
+    public void ElevatedObserverPublicContractExcludesPrivateIdentifiers()
+    {
+        var request = new PimaxElevatedStartupObservationRequest(
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromMilliseconds(100),
+            Fake: true,
+            PreflightOnly: true,
+            "pimax-startup-observe-elevated-test");
+        var snapshot = PimaxStartupObserver.BuildElevatedSnapshot(
+            request,
+            isElevated: true,
+            accepted: true,
+            warnings: [],
+            errors: [],
+            summary: "fixture",
+            observation: null);
+        var json = JsonSerializer.Serialize(snapshot, PimaxRepairJson.Options);
+
+        Assert.DoesNotContain(Environment.UserName, json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(Environment.MachineName, json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(@"C:\Users\", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("commandLine", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ProcessId", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("parentProcessId", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("S-1-", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ElevatedObserverStaticSafetyForbidsPersistentElevationAndMutation()
+    {
+        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "PimaxVrcSupervisor", "PimaxStartupOrchestration.cs"));
+        string[] forbidden =
+        [
+            "Verb = \"runas\"",
+            "UseShellExecute = true",
+            "ShellExecute",
+            "Register-ScheduledTask",
+            "New-Service",
+            "CreateService",
+            "Process.Start(",
+            ".Kill(",
+            "Stop-Service",
+            "Start-Service",
+            "Restart-Service",
+            "IOCTL_USB_HUB_CYCLE_PORT",
+            "CM_Reenumerate",
+            "SetupDiCallClassInstaller",
+            "SendInput",
+            "mouse_event",
+            "keybd_event",
+            "HttpClient",
+            "WebRequest"
+        ];
+
+        foreach (var token in forbidden)
+        {
+            Assert.DoesNotContain(token, source, StringComparison.OrdinalIgnoreCase);
         }
     }
 
