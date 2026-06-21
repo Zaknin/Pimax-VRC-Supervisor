@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>PimaxShellValidationHarness</AssemblyName>
+    <RootNamespace>PimaxShellValidationHarness</RootNamespace>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>PimaxShellValidationHarness.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Management" Version="9.0.6" />
+  </ItemGroup>
+
+  <Target Name="GenerateBuildCommitSource" BeforeTargets="BeforeCompile">
+    <Exec Command="git rev-parse HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_GitCommit" />
+    </Exec>
+    <PropertyGroup>
+      <_GitCommit Condition="'$(_GitCommit)' == ''">unknown</_GitCommit>
+    </PropertyGroup>
+    <WriteLinesToFile
+      File="$(IntermediateOutputPath)BuildCommit.g.cs"
+      Lines="namespace PimaxShellValidationHarness%3B internal static class BuildInfo { public const string Commit = &quot;$(_GitCommit)&quot;%3B }"
+      Overwrite="true" />
+    <ItemGroup>
+      <Compile Include="$(IntermediateOutputPath)BuildCommit.g.cs" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+</Project>
