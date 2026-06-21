@@ -15,7 +15,7 @@ Use it to:
 |---|---|
 | `0` | Help |
 | `F5` | Refresh |
-| `1`-`6` | Open action confirmation |
+| `1`-`7` | Open action confirmation |
 | `Enter` / `Space` | Confirm modal |
 | `Esc` | Cancel / back |
 | `Q` | Shutdown flow when connected, exit only when disconnected |
@@ -46,5 +46,26 @@ Terminal UI can run the same normal session actions as the classic console:
 - turn base stations off
 - restart OSC Router
 - reload Autostart apps
+- relaunch Pimax Play through the official Start Menu shortcut
 
 Actions are validated and confirmed. Force-stop behavior is not exposed in Terminal UI.
+
+## Relaunch Pimax Play
+
+**Relaunch Pimax Play** is a manual recovery action for cases where Pimax Play has been exited and you want Supervisor to open it through Windows Shell.
+
+Before using it, exit Pimax Play from its tray menu and wait for shutdown to complete. The action refuses to run if Pimax Play launch-owned processes are still present.
+
+The action uses the official Windows Start Menu shortcut (`PimaxPlay.lnk`), sends exactly one Windows Shell open request, then waits up to 90 seconds for the Pimax software stack and headset registration to become healthy. It does not terminate processes, restart services, reset USB or DisplayPort devices, automate Connect, or retry the launch.
+
+During the wait, Terminal UI stays open and shows elapsed progress. The hidden command bridge captures stdout and stderr from the verification command so Pimax SDK/service output does not flood the terminal. The normal Pimax Play application UI remains visible when Windows Shell opens it.
+
+Phase 30A production validation confirmed the recovery path can report `Pimax Play launched successfully`, `Headset registered successfully`, `Shell request count: 1`, and `Retry count: 0` with headset evidence including `runtimeErrorCode: 0`, `isReady: 1`, `getHMDInfoResult: 0`, and `HMD_hmdName: Pimax Crystal`. Phase 30A.1 only contains the command-output containment and Terminal UI result-flow fix; it does not change recovery logic.
+
+Possible results are:
+
+- `launchedAndRegistered`: Pimax Play launched successfully and the headset is registered.
+- `launchedButNotRegistered`: Pimax Play launched, but headset registration did not recover. The manual USB reseat procedure remains a separate fallback.
+- `shellLaunchFailed`: Windows could not launch the official Pimax Play shortcut.
+- `preconditionRefused`: Pimax Play was still running, the shortcut was missing/untrusted, or the execution context was not a normal non-elevated Explorer session.
+- `verificationInconclusive`: Pimax Play was launched, but the result could not be verified conclusively.

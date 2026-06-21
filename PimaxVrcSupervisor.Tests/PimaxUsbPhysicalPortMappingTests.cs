@@ -250,7 +250,13 @@ public sealed class PimaxUsbPhysicalPortMappingTests
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, ".git"))) directory = directory.Parent;
+        while (directory is not null && !HasGitMetadata(directory.FullName)) directory = directory.Parent;
         return directory?.FullName ?? throw new DirectoryNotFoundException("Repository root not found.");
+    }
+
+    private static bool HasGitMetadata(string directory)
+    {
+        var path = Path.Combine(directory, ".git");
+        return Directory.Exists(path) || File.Exists(path);
     }
 }
