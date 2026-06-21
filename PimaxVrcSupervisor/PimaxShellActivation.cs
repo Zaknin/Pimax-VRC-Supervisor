@@ -82,7 +82,8 @@ internal sealed record PimaxShellActivationCapabilitySnapshot(
     bool ReadinessForControlledValidation,
     string[] Warnings,
     string[] Errors,
-    string HumanReadableSummary);
+    string HumanReadableSummary,
+    PimaxShellActivationPreconditionSnapshot? ActivationPrecondition = null);
 
 internal sealed record PimaxShellActivationCandidate(
     string CandidateId,
@@ -268,6 +269,8 @@ internal sealed class PimaxShellActivationCoordinator(
     IPimaxShellActivationRequestor? activationRequestor = null,
     IPimaxShellExecutionContextInspector? executionContextInspector = null,
     Func<SupervisorConfig, CancellationToken, Task<PimaxComponentHealthSnapshot>>? healthCollector = null,
+    IPimaxShellQuiescenceProbe? quiescenceProbe = null,
+    Func<IEnumerable<PimaxShellShortcutCandidate>>? shortcutDiscovery = null,
     TimeSpan? validationTimeout = null,
     TimeSpan? validationPollInterval = null,
     Func<DateTimeOffset>? now = null)
@@ -297,29 +300,52 @@ internal sealed class PimaxShellActivationCoordinator(
     private readonly IPimaxShellActivationRequestor _activationRequestor = activationRequestor ?? new WindowsPimaxShellActivationRequestor();
     private readonly IPimaxShellExecutionContextInspector _executionContextInspector = executionContextInspector ?? new WindowsPimaxShellExecutionContextInspector();
     private readonly Func<SupervisorConfig, CancellationToken, Task<PimaxComponentHealthSnapshot>> _healthCollector = healthCollector ?? ((config, cancellationToken) => new PimaxComponentHealthCoordinator().CollectAsync(config, cancellationToken));
+    private readonly IPimaxShellQuiescenceProbe _quiescenceProbe = quiescenceProbe ?? new WindowsPimaxShellQuiescenceProbe();
+    private readonly Func<IEnumerable<PimaxShellShortcutCandidate>> _shortcutDiscovery = shortcutDiscovery ?? (() => []);
     private readonly TimeSpan _validationTimeout = validationTimeout ?? TimeSpan.FromSeconds(90);
     private readonly TimeSpan _validationPollInterval = validationPollInterval ?? TimeSpan.FromSeconds(1);
     private readonly Func<DateTimeOffset> _now = now ?? (() => DateTimeOffset.Now);
 
     public async Task<PimaxShellActivationCapabilitySnapshot> BuildCapabilityAsync(SupervisorConfig config, CancellationToken cancellationToken)
     {
-        PimaxComponentHealthSnapshot health;
+        var discovered = DiscoverCandidates().ToArray();
+        var shellEntryTrustState = ShellEntryTrustState(discovered);
+        PimaxShellActivationPreconditionSnapshot precondition;
         try
         {
-            health = await _healthCollector(config, cancellationToken);
+            precondition = await new PimaxShellActivationPreconditionCoordinator(
+                probe: _quiescenceProbe,
+                now: _now)
+                .AssessAsync(config, shellEntryTrustState, cancellationToken);
         }
         catch (Exception ex)
         {
-            health = UnknownHealth("shell-activation", _now(), $"Health collection failed: {ex.GetType().Name}");
+            precondition = UnknownPrecondition(shellEntryTrustState, $"Precondition collection failed: {ex.GetType().Name}");
         }
 
-        return BuildCapability(DiscoverCandidates(), health.SourceEvidence.SoftwareGroup, health.OverallStatus);
+        return BuildCapability(discovered, precondition);
+    }
+
+    public async Task<PimaxShellActivationPreconditionSnapshot> BuildPreconditionAsync(SupervisorConfig config, CancellationToken cancellationToken)
+    {
+        var shellEntryTrustState = ShellEntryTrustState(DiscoverCandidates().ToArray());
+        return await new PimaxShellActivationPreconditionCoordinator(
+            probe: _quiescenceProbe,
+            now: _now)
+            .AssessAsync(config, shellEntryTrustState, cancellationToken);
     }
 
     internal PimaxShellActivationCapabilitySnapshot BuildCapability(
         IEnumerable<PimaxShellShortcutCandidate> discovered,
         PimaxSoftwareGroupSnapshot softwareGroup,
         string componentHealthState)
+        => BuildCapability(
+            discovered,
+            SyntheticPrecondition(softwareGroup.State, componentHealthState, StateForSoftwareGroup(softwareGroup.State)));
+
+    internal PimaxShellActivationCapabilitySnapshot BuildCapability(
+        IEnumerable<PimaxShellShortcutCandidate> discovered,
+        PimaxShellActivationPreconditionSnapshot precondition)
     {
         var warnings = new List<string>();
         var errors = new List<string>();
@@ -329,13 +355,14 @@ internal sealed class PimaxShellActivationCoordinator(
                 PimaxShellActivationCapabilityState.UnsupportedPlatform,
                 [],
                 null,
-                softwareGroup.State,
-                componentHealthState,
+                precondition.GeneralSoftwareGroupState,
+                precondition.SoftwareGroupHealthState,
                 "unsupportedPlatform",
                 false,
                 warnings,
                 ["Windows Shell activation is only supported on Windows."],
-                "Windows Shell activation is unsupported on this platform.");
+                "Windows Shell activation is unsupported on this platform.",
+                precondition);
         }
 
         var candidates = discovered.Select(BuildCandidate).ToArray();
@@ -344,12 +371,12 @@ internal sealed class PimaxShellActivationCoordinator(
             .ToArray();
         if (candidates.Length == 0)
         {
-            return Capability(PimaxShellActivationCapabilityState.ShellEntryNotFound, candidates, null, softwareGroup.State, componentHealthState, "shellEntryNotFound", false, warnings, errors, "No official PimaxPlay Start Menu Shell entry was found.");
+            return Capability(PimaxShellActivationCapabilityState.ShellEntryNotFound, candidates, null, precondition.GeneralSoftwareGroupState, precondition.SoftwareGroupHealthState, "shellEntryNotFound", false, warnings, errors, "No official PimaxPlay Start Menu Shell entry was found.", precondition);
         }
 
         if (eligible.Length > 1)
         {
-            return Capability(PimaxShellActivationCapabilityState.ShellEntryAmbiguous, candidates, null, softwareGroup.State, componentHealthState, "shellEntryAmbiguous", false, warnings, errors, "More than one trusted PimaxPlay Start Menu Shell entry was found.");
+            return Capability(PimaxShellActivationCapabilityState.ShellEntryAmbiguous, candidates, null, precondition.GeneralSoftwareGroupState, precondition.SoftwareGroupHealthState, "shellEntryAmbiguous", false, warnings, errors, "More than one trusted PimaxPlay Start Menu Shell entry was found.", precondition);
         }
 
         if (eligible.Length == 0)
@@ -359,25 +386,26 @@ internal sealed class PimaxShellActivationCoordinator(
                     || blocker.Contains("publisher", StringComparison.OrdinalIgnoreCase)
                     || blocker.Contains("signature", StringComparison.OrdinalIgnoreCase)));
             var state = untrusted ? PimaxShellActivationCapabilityState.ShellEntryUntrusted : PimaxShellActivationCapabilityState.ShellEntryInvalid;
-            return Capability(state, candidates, null, softwareGroup.State, componentHealthState, state, false, warnings, errors, "PimaxPlay Start Menu Shell entry discovery produced no eligible trusted candidate.");
+            return Capability(state, candidates, null, precondition.GeneralSoftwareGroupState, precondition.SoftwareGroupHealthState, state, false, warnings, errors, "PimaxPlay Start Menu Shell entry discovery produced no eligible trusted candidate.", precondition);
         }
 
         var selected = eligible.Single();
-        var precondition = StateForSoftwareGroup(softwareGroup.State);
-        var ready = precondition == PimaxShellActivationCapabilityState.ReadyForControlledValidation;
+        var preconditionState = precondition.ActivationPreconditionState;
+        var ready = precondition.ReadinessForControlledValidation;
         return Capability(
-            precondition,
+            ready ? PimaxShellActivationCapabilityState.ReadyForControlledValidation : preconditionState,
             candidates,
             selected,
-            softwareGroup.State,
-            componentHealthState,
-            ready ? "readyForControlledValidation" : precondition,
+            precondition.GeneralSoftwareGroupState,
+            precondition.SoftwareGroupHealthState,
+            ready ? "readyForControlledValidation" : preconditionState,
             ready,
             warnings,
-            errors,
+            errors.Concat(precondition.Errors).ToArray(),
             ready
-                ? "A single trusted official PimaxPlay Start Menu Shell entry is ready for a later controlled validation. B2D does not execute it."
-                : $"A trusted Shell entry exists, but activation is refused for current software-group state: {softwareGroup.State}.");
+                ? "A single trusted official PimaxPlay Start Menu Shell entry and a quiescent launch-owned group are ready for a later controlled validation. Backend execution remains disabled."
+                : $"A trusted Shell entry exists, but activation is refused for activation precondition state: {preconditionState}.",
+            precondition);
     }
 
     public async Task<PimaxShellActivationResultSnapshot> ActivateAsync(
@@ -699,6 +727,17 @@ internal sealed class PimaxShellActivationCoordinator(
 
     private IEnumerable<PimaxShellShortcutCandidate> DiscoverCandidates()
     {
+        var injected = _shortcutDiscovery().ToArray();
+        if (injected.Length > 0)
+        {
+            return injected;
+        }
+
+        return DiscoverCandidatesFromStartMenu();
+    }
+
+    private IEnumerable<PimaxShellShortcutCandidate> DiscoverCandidatesFromStartMenu()
+    {
         foreach (var root in StartMenuRoots())
         {
             if (!Directory.Exists(root.Path)) continue;
@@ -730,6 +769,20 @@ internal sealed class PimaxShellActivationCoordinator(
         List<string> warnings,
         IReadOnlyCollection<string> errors,
         string summary)
+        => Capability(state, candidates, selected, groupState, componentHealthState, precondition, ready, warnings, errors, summary, activationPrecondition: null);
+
+    private static PimaxShellActivationCapabilitySnapshot Capability(
+        string state,
+        PimaxShellActivationCandidate[] candidates,
+        PimaxShellActivationCandidate? selected,
+        string groupState,
+        string componentHealthState,
+        string precondition,
+        bool ready,
+        List<string> warnings,
+        IReadOnlyCollection<string> errors,
+        string summary,
+        PimaxShellActivationPreconditionSnapshot? activationPrecondition)
         => new(
             PimaxShellActivationCapabilitySchema.Version,
             DateTimeOffset.Now,
@@ -758,7 +811,8 @@ internal sealed class PimaxShellActivationCoordinator(
             ReadinessForControlledValidation: ready,
             warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-            summary);
+            summary,
+            activationPrecondition);
 
     private static string[] Preconditions(PimaxShellActivationCapabilitySnapshot capability, bool confirmationAccepted)
     {
@@ -775,6 +829,86 @@ internal sealed class PimaxShellActivationCoordinator(
         };
         return result.ToArray();
     }
+
+    internal static string ShellEntryTrustState(IEnumerable<PimaxShellShortcutCandidate> discovered)
+    {
+        var coordinator = new PimaxShellActivationCoordinator(targetInspector: new WindowsPimaxShellTargetInspector());
+        var candidates = discovered.Select(coordinator.BuildCandidate).ToArray();
+        var eligible = candidates.Count(candidate => candidate.ValidationState == PimaxShellActivationCapabilityState.ReadyForControlledValidation);
+        if (candidates.Length == 0) return PimaxShellActivationCapabilityState.ShellEntryNotFound;
+        if (eligible > 1) return PimaxShellActivationCapabilityState.ShellEntryAmbiguous;
+        if (eligible == 1) return PimaxShellActivationCapabilityState.ReadyForControlledValidation;
+        return candidates.Any(candidate => candidate.Blockers.Length > 0
+            && candidate.Blockers.All(blocker => blocker.Contains("trust", StringComparison.OrdinalIgnoreCase)
+                || blocker.Contains("publisher", StringComparison.OrdinalIgnoreCase)
+                || blocker.Contains("signature", StringComparison.OrdinalIgnoreCase)))
+            ? PimaxShellActivationCapabilityState.ShellEntryUntrusted
+            : PimaxShellActivationCapabilityState.ShellEntryInvalid;
+    }
+
+    private static PimaxShellActivationPreconditionSnapshot SyntheticPrecondition(string softwareGroupState, string componentHealthState, string preconditionState)
+        => new(
+            PimaxShellActivationPreconditionSchema.Version,
+            DateTimeOffset.Now,
+            $"pimax-shell-precondition-synthetic-{Guid.NewGuid():N}",
+            componentHealthState,
+            softwareGroupState,
+            preconditionState == PimaxShellActivationCapabilityState.ReadyForControlledValidation ? PimaxShellActivationPreconditionState.QuiescentForShellActivation : preconditionState,
+            preconditionState == PimaxShellActivationCapabilityState.ReadyForControlledValidation,
+            Stable: true,
+            StableSampleCount: 3,
+            RequiredStableSampleCount: 3,
+            SampleIntervalSeconds: 1,
+            CoreMembersPresent: [],
+            LaunchOwnedMembersPresent: [],
+            PermittedPersistentMembersPresent: [],
+            UnclassifiedMembersPresent: [],
+            OwnershipEvidence: [],
+            PiServiceLauncherClassification: "notObserved",
+            RegistrationEvidenceState: "synthetic",
+            StaleRegistrationBlocking: false,
+            DuplicateInstallationEvidence: "none",
+            RecoveryLeaseState: "noneObserved",
+            ShellEntryTrustState: PimaxShellActivationCapabilityState.ReadyForControlledValidation,
+            ReadinessForControlledValidation: preconditionState == PimaxShellActivationCapabilityState.ReadyForControlledValidation,
+            BackendExecutable: false,
+            AutomaticRecoveryAllowed: false,
+            Warnings: [],
+            Errors: [],
+            PrivacyRedactions: ["raw PIDs", "raw parent PIDs", "raw command lines", "user names", "machine names", "handles", "environment blocks", "certificate serial numbers"],
+            HumanReadableSummary: "Synthetic precondition generated for unit compatibility.");
+
+    private PimaxShellActivationPreconditionSnapshot UnknownPrecondition(string shellEntryTrustState, string warning)
+        => new(
+            PimaxShellActivationPreconditionSchema.Version,
+            _now(),
+            $"pimax-shell-precondition-{Guid.NewGuid():N}",
+            PimaxHealthOverallStatus.Unknown,
+            PimaxSoftwareGroupState.Unknown,
+            PimaxShellActivationPreconditionState.Unknown,
+            Quiescent: false,
+            Stable: false,
+            StableSampleCount: 0,
+            RequiredStableSampleCount: 3,
+            SampleIntervalSeconds: 1,
+            CoreMembersPresent: [],
+            LaunchOwnedMembersPresent: [],
+            PermittedPersistentMembersPresent: [],
+            UnclassifiedMembersPresent: [],
+            OwnershipEvidence: [],
+            PiServiceLauncherClassification: "notObserved",
+            RegistrationEvidenceState: PimaxRegistrationState.Unknown,
+            StaleRegistrationBlocking: true,
+            DuplicateInstallationEvidence: "unknown",
+            RecoveryLeaseState: "unknown",
+            ShellEntryTrustState: shellEntryTrustState,
+            ReadinessForControlledValidation: false,
+            BackendExecutable: false,
+            AutomaticRecoveryAllowed: false,
+            Warnings: [warning],
+            Errors: ["Pimax Shell activation precondition could not be assessed."],
+            PrivacyRedactions: ["raw PIDs", "raw parent PIDs", "raw command lines", "user names", "machine names", "handles", "environment blocks", "certificate serial numbers"],
+            HumanReadableSummary: "Pimax Shell activation precondition is unknown.");
 
     private static string StateForSoftwareGroup(string state)
         => state switch
@@ -1072,5 +1206,23 @@ internal sealed class WindowsPimaxShellActivationRequestor : IPimaxShellActivati
         {
             return Task.FromResult(new PimaxShellActivationRequestResult(true, false, ex.GetType().Name + ": " + ex.Message));
         }
+    }
+}
+
+internal sealed class HealthCollectorQuiescenceProbe(Func<SupervisorConfig, CancellationToken, Task<PimaxComponentHealthSnapshot>> healthCollector) : IPimaxShellQuiescenceProbe
+{
+    private readonly WindowsPimaxShellQuiescenceProbe _windowsProbe = new();
+
+    public async Task<PimaxShellQuiescenceSample> CollectAsync(SupervisorConfig config, CancellationToken cancellationToken)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            var health = await healthCollector(config, cancellationToken);
+            return new PimaxShellQuiescenceSample(DateTimeOffset.Now, health, [], RecoveryLeaseActive: false);
+        }
+
+        var sample = await _windowsProbe.CollectAsync(config, cancellationToken);
+        var replacementHealth = await healthCollector(config, cancellationToken);
+        return sample with { Health = replacementHealth };
     }
 }

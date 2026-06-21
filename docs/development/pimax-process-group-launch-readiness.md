@@ -137,9 +137,15 @@ The elevated observer contract is scoped to process-creator evidence only. It pr
 
 `pimax-shell-activation-capability-json` validates the official Shell entry without launching it. It accepts only the bounded current-user and common Start Menu `PimaxPlay.lnk` locations, rejects duplicate or copied shortcuts, rejects direct executable substitutes, rejects unexpected arguments, and requires Pimax product/publisher trust evidence for the target executable.
 
+`pimax-shell-activation-precondition-json` is the read-only B2D-VG quiescence gate. It reports schema `pimax-shell-activation-precondition-v1` and keeps general software health separate from activation eligibility. The accepted state `quiescentForShellActivation` means launch-owned members are absent, permitted persistent members are stable for three one-second samples, `PiServiceLauncher` is proven service-owned, stale registration evidence is non-blocking only because the group is intentionally stopped, no unknown Pimax-root process remains, and no duplicate installation or recovery lease is present.
+
+The launch-owned members that block activation are `PimaxClient`, `DeviceSetting`, `PiPlayService`, `PiService`, `pi_server`, `PVRHome`, `pi_overlay`, `vrss_gaze_provider`, `lighthouse_console`, `launcher`, and `fastlist-0.3.0-x64`. Permitted persistent members are `PiPlatformService_64`, `Tobii VR4PIMAXP3B Platform Runtime`, and only the service-owned `PiServiceLauncher`; a DeviceSetting-owned, unknown-parent, stale, ambiguous, duplicate-root, or mixed `PiServiceLauncher` blocks activation.
+
 `pimax-shell-activate-json` exists only for the later controlled validation. In B2D it refuses with `implementationCompleteLiveValidationRequired` even with the exact confirmation string. It reports the intended one-shot Shell open-verb request, no-retry policy, no-direct-launch policy, no-service-mutation policy, expected readiness stages, 90-second bound, and `backendExecutable=false`.
 
 `pimax-shell-activate-validation-json` is the B2D-V development-only live boundary command. It emits schema `pimax-shell-activation-validation-v1`, requires `CONFIRM ONE CONTROLLED PIMAX SHELL ACTIVATION VALIDATION`, requires a valid GUID `--correlation-id`, refuses elevated, service, LocalSystem, session-0, scheduled-watcher, noninteractive, or Explorer-session-mismatched execution, requires a trusted unique official `PimaxPlay.lnk`, requires a stopped Pimax software group, makes exactly one Shell `open` request, performs no retry or fallback, and keeps `backendExecutable=false`, `automaticRecoveryAllowed=false`, `tuiExposureAllowed=false`, `configuratorExposureAllowed=false`, and `watcherExecutionAllowed=false`.
+
+The B2D-V safe abort consumed no activation budget: no correlation ID, no observer, no activation, `shellRequestCount=0`, and `retryCount=0`. B2D-VG read-only revalidation may prove the corrected quiescent gate, but it still stops before the actual activation confirmation boundary.
 
 ## Formal Start Menu Comparison
 

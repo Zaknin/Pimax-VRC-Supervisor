@@ -197,7 +197,7 @@ public sealed class PimaxShellActivationTests
             CancellationToken.None);
 
         Assert.False(result.ValidationExecutionAccepted);
-        Assert.Equal(PimaxShellActivationCapabilityState.SoftwareGroupAlreadyRunning, result.ShellEntryValidationResult);
+        Assert.Equal(PimaxShellActivationPreconditionState.LaunchOwnedMembersPresent, result.ShellEntryValidationResult);
         Assert.Equal(0, result.ShellRequestCount);
         Assert.Empty(requestor.RequestedPaths);
     }
@@ -292,11 +292,12 @@ public sealed class PimaxShellActivationTests
     {
         var states = new Queue<PimaxComponentHealthSnapshot>(healthStates ??
         [
-            Health(Group(PimaxSoftwareGroupState.Unavailable), PimaxHealthOverallStatus.SoftwareStackUnavailable),
             Health(CompleteRuntimeGroup(), PimaxHealthOverallStatus.Healthy),
             Health(CompleteRuntimeGroup(), PimaxHealthOverallStatus.Healthy),
             Health(CompleteRuntimeGroup(), PimaxHealthOverallStatus.Healthy)
         ]);
+        var runningPrecondition = healthStates?.Length == 1
+            && healthStates[0].SourceEvidence.SoftwareGroup.State == PimaxSoftwareGroupState.Complete;
 
         return new PimaxShellActivationCoordinator(
             shortcutReader: new FakeShortcutReader(),
@@ -304,6 +305,8 @@ public sealed class PimaxShellActivationTests
             activationRequestor: requestor ?? new FakeActivationRequestor(),
             executionContextInspector: context ?? new FakeExecutionContext(),
             healthCollector: (_, _) => Task.FromResult(states.Count > 1 ? states.Dequeue() : states.Peek()),
+            quiescenceProbe: new FakeQuiescenceProbe(runningPrecondition),
+            shortcutDiscovery: () => [ValidShortcut()],
             validationTimeout: TimeSpan.FromSeconds(1),
             validationPollInterval: TimeSpan.FromMilliseconds(1));
     }
@@ -405,5 +408,25 @@ public sealed class PimaxShellActivationTests
                 ExplorerSessionMatched: explorerMatched,
                 ExplorerSessionEvidence: explorerMatched ? ["explorerSession:1"] : [],
                 Summary: "synthetic");
+    }
+
+    private sealed class FakeQuiescenceProbe(bool running) : IPimaxShellQuiescenceProbe
+    {
+        public Task<PimaxShellQuiescenceSample> CollectAsync(SupervisorConfig config, CancellationToken cancellationToken)
+        {
+            var group = running ? CompleteRuntimeGroup() : Group(PimaxSoftwareGroupState.Unavailable);
+            var health = Health(group, running ? PimaxHealthOverallStatus.Healthy : PimaxHealthOverallStatus.SoftwareStackPartial);
+            var processes = running
+                ? group.Members
+                    .Select(member => new PimaxShellQuiescenceProcessSnapshot(member.ProcessName, member.SanitizedPath ?? "", "launchOrUserOwned", "other", "none", "expectedPimaxRoot", member.ProcessName))
+                    .ToArray()
+                :
+                [
+                    new PimaxShellQuiescenceProcessSnapshot("PiPlatformService_64", "<pimax>\\Runtime\\PiPlatformService_64.exe", "persistentPlatform", "approvedServiceHost", "none", "expectedPimaxRoot", "platform"),
+                    new PimaxShellQuiescenceProcessSnapshot("PiServiceLauncher", "<pimax>\\Runtime\\PiServiceLauncher.exe", "serviceOwned", "services", "PiServiceLauncher", "expectedPimaxRoot", "launcher"),
+                    new PimaxShellQuiescenceProcessSnapshot("Tobii VR4PIMAXP3B Platform Runtime", "<pimax>\\Runtime\\Tobii.exe", "persistentPlatform", "approvedServiceHost", "none", "expectedPimaxRoot", "tobii")
+                ];
+            return Task.FromResult(new PimaxShellQuiescenceSample(DateTimeOffset.UtcNow, health, processes, RecoveryLeaseActive: false));
+        }
     }
 }
