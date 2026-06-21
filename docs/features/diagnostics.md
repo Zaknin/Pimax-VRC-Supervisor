@@ -40,6 +40,22 @@ dotnet .\PimaxVrcSupervisor.dll pimax-connectivity-json > pimax-connectivity.jso
 
 Collect this snapshot before restarting Pimax Client or reconnecting USB when you are trying to capture a failed state.
 
+## Manual Pimax Play Shell Relaunch
+
+Terminal UI includes **Relaunch Pimax Play** for a manually requested Pimax Play restart path. It opens the official Windows Start Menu `PimaxPlay.lnk` shortcut with Windows Shell, then verifies Pimax software-stack and headset-registration health for up to 90 seconds.
+
+Use it only after exiting Pimax Play from its tray menu. The action refuses to run while launch-owned Pimax Play processes are still present, when the shortcut is missing or untrusted, when the caller is elevated, or when the process is not running in a normal interactive Explorer session.
+
+The action does not kill processes, stop or start services, reset USB, reset DisplayPort, automate Connect, retry, or write startup configuration. If Pimax Play launches but registration does not recover, use the existing manual USB reseat procedure as a separate operator-controlled fallback.
+
+Advanced users can run the explicit JSON command from a non-elevated console:
+
+```powershell
+dotnet .\PimaxVrcSupervisor.dll pimax-shell-launch-json > pimax-shell-launch.json
+```
+
+The command emits one JSON object with schema `pimax-shell-launch-result-v1`.
+
 ## Sharing Logs
 
 When asking for help, share only the relevant log snippets and remove personal paths if needed.

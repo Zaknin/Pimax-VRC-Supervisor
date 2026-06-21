@@ -26,6 +26,14 @@ The Phase 28C2 service-restart experiment was not executed. Target validation fa
 
 Phase 28C3 also stopped safely. No exact-devnode re-enumeration was implemented: no single PnP ancestor covered every Pimax USB branch without also including unrelated devices, and the first common scopes were the root hub and xHCI controller. Those broad mutation targets remain prohibited. Phase 28C3A therefore investigates the exact downstream external-hub connector with the read-only [`pimax-usb-physical-port-map-json`](pimax-external-hub-physical-port-mapping.md) command before any future recovery experiment is considered.
 
+## Production Manual Shell Relaunch
+
+`pimax-shell-launch-json` productizes only the isolated successful Windows Shell activation mechanism from `experiment/pimax-shell-one-shot` commit `36b601b40b8886009db4ee96ae04e73278956441`. That experiment proved that opening the official Start Menu `PimaxPlay.lnk` shortcut once through Windows Shell could restore the Pimax stack and registration.
+
+The production command is intentionally narrower than the research harness. It does not import the elevated observer, PR #22 recovery orchestration, ACL evidence handoff, VG/VG2/VG3 models, process termination, service restart, USB or DisplayPort mutation, Connect automation, or retry logic.
+
+The command requires a normal non-elevated interactive Explorer session, validates exactly one trusted Start Menu shortcut, refuses while launch-owned Pimax Play processes are still present, issues one Shell open request, and then performs read-only verification for up to 90 seconds with the existing production registration evidence.
+
 ## Experiment Matrix
 
 | Order | Experiment | Prerequisite state | Action | Expected transition | Success criterion | Failure criterion | Timeout | Rollback | Admin | SteamVR guard | Risk | Evidence captured | Status |

@@ -409,7 +409,9 @@ impl Shortcut {
     fn from_char(value: char) -> Option<Self> {
         match value {
             '0' => Some(Self::Help),
-            '1' | '2' | '3' | '4' | '5' | '6' => TuiAction::from_digit(value).map(Self::OpenAction),
+            '1' | '2' | '3' | '4' | '5' | '6' | '7' => {
+                TuiAction::from_digit(value).map(Self::OpenAction)
+            }
             'h' | 'H' => Some(Self::Help),
             'f' | 'F' => Some(Self::FollowLogs),
             'r' | 'R' | 'к' | 'К' => Some(Self::Refresh),

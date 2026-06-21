@@ -1,6 +1,9 @@
 use std::{
+    env,
     io::{BufRead, BufReader, Write},
     net::{SocketAddr, TcpStream},
+    path::PathBuf,
+    process::Command,
     time::{Duration, Instant},
 };
 
@@ -16,7 +19,7 @@ pub const BACKEND_HOST: &str = "127.0.0.1";
 pub const BACKEND_PORT: u16 = 37957;
 pub const CONNECT_TIMEOUT: Duration = Duration::from_millis(1000);
 pub const READ_WRITE_TIMEOUT: Duration = Duration::from_millis(1000);
-pub const ACTION_READ_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+pub const ACTION_READ_WRITE_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub struct SupervisorBridge {
     endpoint: SocketAddr,
@@ -59,6 +62,10 @@ impl SupervisorBridge {
     }
 
     pub fn execute_tui_action(&self, action: TuiAction) -> Result<CommandResult> {
+        if action == TuiAction::RelaunchPimaxPlay {
+            return execute_local_pimax_shell_launch();
+        }
+
         let request_json =
             serde_json::to_string(&json!({ "command": action.command_name(), "confirmed": true }))?;
         let response_line = self.send_line(
@@ -168,4 +175,114 @@ impl SupervisorBridge {
 fn is_timeout_error(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     message.contains("timed out") || message.contains("timeout") || message.contains("would block")
+}
+
+fn execute_local_pimax_shell_launch() -> Result<CommandResult> {
+    let spec = local_pimax_shell_launch_command()?;
+    let output = Command::new(&spec.program)
+        .args(&spec.args)
+        .output()
+        .map_err(|error| eyre!("could not start pimax-shell-launch-json: {error}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(eyre!(
+            "pimax-shell-launch-json did not produce JSON output: {stderr}"
+        ));
+    }
+
+    let data = serde_json::from_str::<Value>(&stdout)
+        .map_err(|error| eyre!("could not parse pimax-shell-launch-json output: {error}"))?;
+    let message = data
+        .get("humanReadableSummary")
+        .and_then(Value::as_str)
+        .unwrap_or("Pimax Play relaunch command completed.")
+        .to_string();
+
+    Ok(CommandResult {
+        command: Some("pimax-shell-launch-json".to_string()),
+        success: true,
+        message: Some(message),
+        result_type: Some("pimaxShellLaunch".to_string()),
+        data: Some(data),
+        error: if output.status.success() {
+            None
+        } else {
+            Some("pimax-shell-launch-json returned a non-zero exit code.".to_string())
+        },
+        ..CommandResult::default()
+    })
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct LocalCommandSpec {
+    program: String,
+    args: Vec<String>,
+}
+
+fn local_pimax_shell_launch_command() -> Result<LocalCommandSpec> {
+    let dll = supervisor_dll_path()?;
+    Ok(local_pimax_shell_launch_command_for_dll(dll))
+}
+
+fn local_pimax_shell_launch_command_for_dll(dll: PathBuf) -> LocalCommandSpec {
+    LocalCommandSpec {
+        program: "dotnet".to_string(),
+        args: vec![
+            dll.to_string_lossy().to_string(),
+            "pimax-shell-launch-json".to_string(),
+        ],
+    }
+}
+
+fn supervisor_dll_path() -> Result<PathBuf> {
+    let exe = env::current_exe()?;
+    let directory = exe
+        .parent()
+        .ok_or_else(|| eyre!("could not resolve Terminal UI directory"))?;
+    let dll = directory.join("PimaxVrcSupervisor.dll");
+    if dll.exists() {
+        return Ok(dll);
+    }
+
+    let development_dll = directory
+        .parent()
+        .and_then(|deps| deps.parent())
+        .and_then(|debug_or_release| debug_or_release.parent())
+        .and_then(|target| target.parent())
+        .map(|tui| {
+            tui.parent()
+                .unwrap_or(tui)
+                .join("PimaxVrcSupervisor")
+                .join("bin")
+                .join("Release")
+                .join("net9.0-windows10.0.19041.0")
+                .join("PimaxVrcSupervisor.dll")
+        });
+    if let Some(path) = development_dll {
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    Err(eyre!(
+        "could not find PimaxVrcSupervisor.dll next to Terminal UI"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_pimax_shell_launch_command_uses_json_command() {
+        let spec = local_pimax_shell_launch_command_for_dll(PathBuf::from(
+            r"C:\Release\PimaxVrcSupervisor.dll",
+        ));
+
+        assert_eq!(spec.program, "dotnet");
+        assert!(spec.args[0].ends_with("PimaxVrcSupervisor.dll"));
+        assert_eq!(spec.args[1], "pimax-shell-launch-json");
+    }
 }

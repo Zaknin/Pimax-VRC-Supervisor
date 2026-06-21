@@ -1,4 +1,7 @@
-use std::{borrow::Cow, time::Instant};
+use std::{
+    borrow::Cow,
+    time::{Duration, Instant},
+};
 
 use ratatui::{
     Frame,
@@ -365,7 +368,7 @@ fn render_compact_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, 
             Span::styled(
                 format!(
                     "{} {}",
-                    running.action.short_label(),
+                    running_action_message(running.action, now.duration_since(running.started_at)),
                     format_duration(now.duration_since(running.started_at))
                 ),
                 theme::badge_success_style(),
@@ -434,7 +437,7 @@ fn render_small_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(
         Paragraph::new(vec![
             line,
-            Line::from("0 Help  F5 Refresh  1-6 Actions  Q Shutdown"),
+            Line::from("0 Help  F5 Refresh  1-7 Actions  Q Shutdown"),
         ])
         .block(theme::accent_panel_block("Dashboard"))
         .wrap(Wrap { trim: true }),
@@ -475,7 +478,7 @@ fn render_small_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: I
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    for row_index in 0..2 {
+    for row_index in 0..3 {
         let row_y = inner.y.saturating_add(row_index as u16);
         if row_y >= inner.y.saturating_add(inner.height) {
             continue;
@@ -529,7 +532,7 @@ fn render_small_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Inst
         lines.push(Line::from(vec![
             Span::styled("Running: ", theme::label_style()),
             Span::styled(
-                running.action.display_name(),
+                running_action_message(running.action, now.duration_since(running.started_at)),
                 foreground(theme::TEXT_PRIMARY),
             ),
             Span::raw(" "),
@@ -602,12 +605,13 @@ fn render_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: Instant
         return;
     }
 
+    let row_count = TuiAction::ALL.len().div_ceil(3);
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints(vec![Constraint::Ratio(1, row_count as u32); row_count])
         .split(inner);
 
-    for row_index in 0..2 {
+    for row_index in 0..row_count {
         let columns = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -700,7 +704,10 @@ fn render_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Ins
     } else {
         for running in app.running_actions.iter().take(3) {
             lines.push(Line::from(vec![
-                Span::styled(running.action.display_name(), theme::primary_style()),
+                Span::styled(
+                    running_action_message(running.action, now.duration_since(running.started_at)),
+                    theme::primary_style(),
+                ),
                 Span::raw("  "),
                 Span::styled(
                     format!(
@@ -986,7 +993,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         help_line("5", "Restart OSC Router"),
         help_line("6", "Reload Autostart Apps"),
         Line::from(""),
-        help_line("1-6", "Open confirmation from keyboard"),
+        help_line("1-7", "Open confirmation from keyboard"),
         help_line("MOUSE", "Click action card to start immediately"),
         help_line("ENTER", "Confirm modal action"),
         help_line("SPACE", "Confirm modal action"),
@@ -1047,20 +1054,31 @@ fn render_action_confirmation(frame: &mut Frame<'_>, area: Rect, app: &mut App) 
     };
 
     let popup = centered_rect(62, 42, area);
-    let lines = vec![
+    let confirm_label = if action == TuiAction::RelaunchPimaxPlay {
+        "ENTER / SPACE Launch"
+    } else {
+        "ENTER / SPACE Confirm"
+    };
+    let mut lines = vec![
         Line::from(Span::styled("Confirm Action", theme::title_style())),
         Line::from(""),
         Line::from(Span::styled(action.display_name(), theme::title_style())),
         Line::from(""),
-        Line::from(action.expected_effect()),
-        Line::from("The Supervisor will run this action after confirmation."),
+    ];
+    lines.extend(action.expected_effect().lines().map(Line::from));
+    if action != TuiAction::RelaunchPimaxPlay {
+        lines.push(Line::from(
+            "The Supervisor will run this action after confirmation.",
+        ));
+    }
+    lines.extend([
         Line::from(""),
         Line::from(vec![
-            Span::styled("ENTER / SPACE Confirm", theme::secondary_style()),
+            Span::styled(confirm_label, theme::secondary_style()),
             Span::raw("    "),
             Span::styled("ESC Cancel", theme::secondary_style()),
         ]),
-    ];
+    ]);
 
     frame.render_widget(Clear, popup);
     register_modal_clicks(app, popup);
@@ -1128,13 +1146,29 @@ fn small_action_label(action: TuiAction) -> &'static str {
         TuiAction::BaseStationsOff => "Off",
         TuiAction::RestartOscRouter => "OSC",
         TuiAction::ReloadAutostartApps => "Auto",
+        TuiAction::RelaunchPimaxPlay => "Pmx",
     }
 }
 
 fn compact_action_label(action: TuiAction) -> &'static str {
     match action {
         TuiAction::ReloadAutostartApps => "Auto",
+        TuiAction::RelaunchPimaxPlay => "Pimax",
         _ => action.short_label(),
+    }
+}
+
+fn running_action_message(action: TuiAction, elapsed: Duration) -> String {
+    if action != TuiAction::RelaunchPimaxPlay {
+        return action.display_name().to_string();
+    }
+
+    if elapsed < Duration::from_secs(4) {
+        "Launching Pimax Play...".to_string()
+    } else if elapsed < Duration::from_secs(20) {
+        "Waiting for Pimax services...".to_string()
+    } else {
+        "Waiting for headset registration...".to_string()
     }
 }
 
@@ -1368,11 +1402,11 @@ fn register_modal_clicks(app: &mut App, popup: Rect) {
 
 fn shortcut_line(width: u16) -> &'static str {
     if width >= 120 {
-        "0 Help  F5 Refresh  Wheel Logs  End/F Follow  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  Q Shutdown"
+        "0 Help  F5 Refresh  Wheel Logs  End/F Follow  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  7 Pimax  Q Shutdown"
     } else if width >= 100 {
-        "0 Help  F5 Refresh  1-6 Actions  End/F Logs  Q Shutdown"
+        "0 Help  F5 Refresh  1-7 Actions  End/F Logs  Q Shutdown"
     } else {
-        "0 Help  F5 Refresh  1-6 Actions  Q Shutdown"
+        "0 Help  F5 Refresh  1-7 Actions  Q Shutdown"
     }
 }
 
