@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Management;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 
 internal static class PimaxShellActivationPreconditionSchema
 {
@@ -59,7 +61,21 @@ internal sealed record PimaxShellProcessOwnershipEvidence(
     string CreatorClassification,
     string AssociatedService,
     string InstallationRootClassification,
-    string StabilityKey);
+    string StabilityKey,
+    string SessionClassification,
+    string SignatureState,
+    string Sha256,
+    long FileSizeBytes,
+    string FileCreatedUtc,
+    string FileWrittenUtc,
+    string CanonicalPathClassification,
+    string ProvenanceEvidenceSource,
+    string ProvenanceConfidence,
+    string ParentState,
+    string ServiceIdentity,
+    string ServiceBinaryPathClassification,
+    string ServiceSignerClassification,
+    string ClassificationReason);
 
 internal sealed record PimaxShellQuiescenceProcessSnapshot(
     string ProcessName,
@@ -68,7 +84,21 @@ internal sealed record PimaxShellQuiescenceProcessSnapshot(
     string CreatorClassification,
     string AssociatedService,
     string InstallationRootClassification,
-    string StabilityKey);
+    string StabilityKey,
+    string SessionClassification = "unknown",
+    string SignatureState = "unavailable",
+    string Sha256 = "unavailable",
+    long FileSizeBytes = 0,
+    string FileCreatedUtc = "",
+    string FileWrittenUtc = "",
+    string CanonicalPathClassification = "unknown",
+    string ProvenanceEvidenceSource = "notApplicable",
+    string ProvenanceConfidence = "none",
+    string ParentState = "unknown",
+    string ServiceIdentity = "none",
+    string ServiceBinaryPathClassification = "unknown",
+    string ServiceSignerClassification = "unknown",
+    string ClassificationReason = "notClassified");
 
 internal sealed record PimaxShellQuiescenceSample(
     DateTimeOffset CapturedAt,
@@ -266,17 +296,37 @@ internal sealed class PimaxShellActivationPreconditionCoordinator(
 
     private static PimaxShellSampleEvaluation EvaluateSample(PimaxShellQuiescenceSample sample)
     {
-        var processes = sample.Processes;
+        var processes = sample.Processes
+            .Where(process => !IsTrustedSupervisorProcess(process))
+            .ToArray();
         var core = Present(processes, CoreRequiredAbsent);
         var launchOwned = Present(processes, LaunchOwnedRequiredAbsent);
         var permitted = new List<string>();
         var unclassified = new List<string>();
         var errors = new List<string>();
+        var vrssProcesses = processes
+            .Where(process => string.Equals(process.ProcessName, "vrss_gaze_provider", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
         foreach (var process in processes)
         {
             if (CoreRequiredAbsent.Contains(process.ProcessName, StringComparer.OrdinalIgnoreCase)
                 || LaunchOwnedRequiredAbsent.Contains(process.ProcessName, StringComparer.OrdinalIgnoreCase))
             {
+                continue;
+            }
+
+            if (string.Equals(process.ProcessName, "vrss_gaze_provider", StringComparison.OrdinalIgnoreCase))
+            {
+                if (IsPermittedPersistentVrss(process, vrssProcesses, out var vrssError))
+                {
+                    permitted.Add(process.ProcessName);
+                }
+                else
+                {
+                    unclassified.Add(process.ProcessName);
+                    errors.Add(vrssError);
+                }
+
                 continue;
             }
 
@@ -319,12 +369,26 @@ internal sealed class PimaxShellActivationPreconditionCoordinator(
                 process.CreatorClassification,
                 process.AssociatedService,
                 process.InstallationRootClassification,
-                process.StabilityKey))
+                process.StabilityKey,
+                process.SessionClassification,
+                process.SignatureState,
+                process.Sha256,
+                process.FileSizeBytes,
+                process.FileCreatedUtc,
+                process.FileWrittenUtc,
+                process.CanonicalPathClassification,
+                process.ProvenanceEvidenceSource,
+                process.ProvenanceConfidence,
+                process.ParentState,
+                process.ServiceIdentity,
+                process.ServiceBinaryPathClassification,
+                process.ServiceSignerClassification,
+                process.ClassificationReason))
             .ToArray();
         var fingerprint = string.Join("|", processes
             .OrderBy(process => process.ProcessName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(process => process.StabilityKey, StringComparer.Ordinal)
-            .Select(process => $"{process.ProcessName}:{process.OwnershipClassification}:{process.CreatorClassification}:{process.AssociatedService}:{process.InstallationRootClassification}"));
+            .Select(process => $"{process.ProcessName}:{process.OwnershipClassification}:{process.CreatorClassification}:{process.AssociatedService}:{process.InstallationRootClassification}:{process.SessionClassification}:{process.Sha256}:{process.CanonicalPathClassification}:{process.ProvenanceEvidenceSource}:{process.ProvenanceConfidence}:{process.ParentState}:{process.ServiceBinaryPathClassification}:{process.ServiceSignerClassification}"));
         return new PimaxShellSampleEvaluation(
             core,
             launchOwned,
@@ -352,6 +416,72 @@ internal sealed class PimaxShellActivationPreconditionCoordinator(
             || process.ProcessName.Equals("Tobii VR4PIMAXP3B Platform Runtime", StringComparison.OrdinalIgnoreCase)
             || process.ProcessName.Equals("platform_runtime_VR4PIMAXP3B_service", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsPermittedPersistentVrss(
+        PimaxShellQuiescenceProcessSnapshot process,
+        PimaxShellQuiescenceProcessSnapshot[] vrssProcesses,
+        out string error)
+    {
+        if (vrssProcesses.Length != 1)
+        {
+            error = "vrss_gaze_provider must have exactly one stable instance.";
+            return false;
+        }
+
+        if (process.CanonicalPathClassification != "exactExpectedRuntimePath"
+            || process.InstallationRootClassification != "expectedPimaxRuntimeRoot")
+        {
+            error = "vrss_gaze_provider path is not the exact expected Pimax Runtime executable.";
+            return false;
+        }
+
+        if (process.SessionClassification != "session0")
+        {
+            error = "vrss_gaze_provider is not confined to session 0.";
+            return false;
+        }
+
+        if (process.SignatureState is not "unsigned" and not "notSignedOrUnreadable")
+        {
+            error = "vrss_gaze_provider signature state is unexpected for the locally observed unsigned binary.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(process.Sha256) || process.Sha256 == "unavailable")
+        {
+            error = "vrss_gaze_provider hash could not be recorded.";
+            return false;
+        }
+
+        if (process.OwnershipClassification != "persistentServiceDescendant")
+        {
+            error = "vrss_gaze_provider provenance is not the approved persistent service-descendant lifecycle.";
+            return false;
+        }
+
+        if (process.CreatorClassification is not "serviceControlManagerViaLiveLauncher" and not "serviceControlManagerViaExitedLauncher" and not "persistentServiceDescendantFromPreservedEvidence")
+        {
+            error = "vrss_gaze_provider creator classification is not approved.";
+            return false;
+        }
+
+        if (process.ProvenanceConfidence is not "confirmed" and not "probable")
+        {
+            error = "vrss_gaze_provider provenance confidence is insufficient.";
+            return false;
+        }
+
+        if (!string.Equals(process.ServiceIdentity, "PiServiceLauncher", StringComparison.OrdinalIgnoreCase)
+            || process.ServiceBinaryPathClassification != "expectedPiServiceLauncherPath"
+            || process.ServiceSignerClassification != "trustedSignedExpectedLauncher")
+        {
+            error = "PiServiceLauncher service identity or signer evidence is not approved for vrss_gaze_provider.";
+            return false;
+        }
+
+        error = "";
+        return true;
+    }
+
     private static string ClassifyPiServiceLauncher(PimaxShellQuiescenceProcessSnapshot[] launchers)
     {
         if (launchers.Length == 0) return "none";
@@ -369,6 +499,29 @@ internal sealed class PimaxShellActivationPreconditionCoordinator(
         return "unknownParent";
     }
 
+    private static bool IsTrustedSupervisorProcess(PimaxShellQuiescenceProcessSnapshot process)
+    {
+        if (!TrustedSupervisorProcessNames.Contains(process.ProcessName, StringComparer.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(process.SanitizedPath))
+        {
+            return string.Equals(process.ProcessName, "PimaxVrcSupervisorWatcher", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (process.SanitizedPath.Contains(@"\Pimax\", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return process.SanitizedPath.Contains(@"\PimaxVrcSupervisor-TestDeployments\", StringComparison.OrdinalIgnoreCase)
+            || process.SanitizedPath.Contains(@"\PimaxVrcSupervisor\", StringComparison.OrdinalIgnoreCase)
+            || process.SanitizedPath.Contains(@"\New project\", StringComparison.OrdinalIgnoreCase)
+            || process.SanitizedPath.StartsWith("<app>", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static readonly string[] CoreRequiredAbsent =
     [
         "PimaxClient",
@@ -382,10 +535,18 @@ internal sealed class PimaxShellActivationPreconditionCoordinator(
     [
         "PVRHome",
         "pi_overlay",
-        "vrss_gaze_provider",
         "lighthouse_console",
         "launcher",
         "fastlist-0.3.0-x64"
+    ];
+
+    private static readonly string[] TrustedSupervisorProcessNames =
+    [
+        "PimaxVrcSupervisor",
+        "PimaxVrcSupervisorWatcher",
+        "PimaxVrcSupervisorConfigurator",
+        "PimaxVrcSupervisorSteamVrHost",
+        "PimaxVrcSupervisorTui"
     ];
 
     private sealed record PimaxShellSampleEvaluation(
@@ -413,6 +574,8 @@ internal sealed class WindowsPimaxShellQuiescenceProbe : IPimaxShellQuiescencePr
     private static PimaxShellQuiescenceProcessSnapshot[] CaptureProcesses()
     {
         var servicesByPid = ServiceProcesses();
+        var servicesByName = ServiceMetadata();
+        var wmiProcesses = WmiProcesses();
         var raw = new List<RawProcess>();
         foreach (var process in Process.GetProcesses())
         {
@@ -421,10 +584,11 @@ internal sealed class WindowsPimaxShellQuiescenceProbe : IPimaxShellQuiescencePr
                 try
                 {
                     var name = process.ProcessName;
-                    var path = Safe(() => process.MainModule?.FileName);
+                    var wmi = wmiProcesses.GetValueOrDefault(process.Id);
+                    var path = Safe(() => process.MainModule?.FileName) ?? wmi?.ExecutablePath;
                     if (!IsRelevant(name, path)) continue;
-                    var parentId = ParentProcessId(process);
-                    raw.Add(new RawProcess(process.Id, parentId, name, path, Safe(() => process.StartTime)));
+                    var parentId = ParentProcessId(process) ?? wmi?.ParentProcessId;
+                    raw.Add(new RawProcess(process.Id, parentId, name, path, SafeStartTime(process) ?? wmi?.CreationTime, SafeSessionId(process) ?? wmi?.SessionId));
                 }
                 catch
                 {
@@ -441,15 +605,51 @@ internal sealed class WindowsPimaxShellQuiescenceProbe : IPimaxShellQuiescencePr
             var service = servicesByPid.GetValueOrDefault(process.ProcessId) ?? "";
             var creator = CreatorClassification(parentName, service);
             var ownership = OwnershipClassification(process.ProcessName, creator, service);
-            var sanitized = PimaxConnectivityRedactor.SanitizePath(process.ExecutablePath) ?? "";
+            var file = FileIdentity(process.ExecutablePath);
+            var serviceIdentity = string.IsNullOrWhiteSpace(service) ? "none" : service;
+            var servicePathClassification = "unknown";
+            var serviceSignerClassification = "unknown";
+            var provenanceSource = "notApplicable";
+            var provenanceConfidence = "none";
+            var parentState = parentName is null ? "parentUnknown" : "parentPresent";
+            var classificationReason = "notClassified";
+            if (string.Equals(process.ProcessName, "vrss_gaze_provider", StringComparison.OrdinalIgnoreCase))
+            {
+                var vrss = ClassifyVrssProcess(process, parentName, byId, servicesByPid, servicesByName);
+                ownership = vrss.OwnershipClassification;
+                creator = vrss.CreatorClassification;
+                serviceIdentity = vrss.ServiceIdentity;
+                servicePathClassification = vrss.ServiceBinaryPathClassification;
+                serviceSignerClassification = vrss.ServiceSignerClassification;
+                provenanceSource = vrss.ProvenanceEvidenceSource;
+                provenanceConfidence = vrss.ProvenanceConfidence;
+                parentState = vrss.ParentState;
+                classificationReason = vrss.ClassificationReason;
+            }
+
+            var sanitized = PimaxConnectivityRedactor.SanitizePath(file.CanonicalPath ?? process.ExecutablePath) ?? "";
             return new PimaxShellQuiescenceProcessSnapshot(
                 process.ProcessName,
                 sanitized,
                 ownership,
                 creator,
-                string.IsNullOrWhiteSpace(service) ? "none" : service,
-                InstallationRootClassification(process.ExecutablePath),
-                StabilityKey(process.ProcessName, sanitized, ownership, creator, service));
+                serviceIdentity,
+                InstallationRootClassification(file.CanonicalPath ?? process.ExecutablePath, process.ProcessName),
+                StabilityKey(process.ProcessName, sanitized, ownership, creator, serviceIdentity, file.Sha256, SessionClassification(process.SessionId), CanonicalPathClassification(file.CanonicalPath, process.ProcessName), provenanceSource, provenanceConfidence),
+                SessionClassification(process.SessionId),
+                file.SignatureState,
+                file.Sha256,
+                file.FileSizeBytes,
+                file.CreatedUtc,
+                file.WrittenUtc,
+                CanonicalPathClassification(file.CanonicalPath, process.ProcessName),
+                provenanceSource,
+                provenanceConfidence,
+                parentState,
+                serviceIdentity,
+                servicePathClassification,
+                serviceSignerClassification,
+                classificationReason);
         })
             .OrderBy(process => process.ProcessName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(process => process.StabilityKey, StringComparer.Ordinal)
@@ -479,6 +679,72 @@ internal sealed class WindowsPimaxShellQuiescenceProbe : IPimaxShellQuiescencePr
         return result;
     }
 
+    private static Dictionary<int, WmiProcessSnapshot> WmiProcesses()
+    {
+        var result = new Dictionary<int, WmiProcessSnapshot>();
+        try
+        {
+            using var searcher = new ManagementObjectSearcher("SELECT ProcessId, ParentProcessId, Name, ExecutablePath, CreationDate, SessionId FROM Win32_Process");
+            foreach (ManagementObject process in searcher.Get().Cast<ManagementObject>())
+            {
+                var pid = Convert.ToInt32(process["ProcessId"]);
+                if (pid <= 0) continue;
+                var creation = WmiDate(process["CreationDate"]?.ToString());
+                result[pid] = new WmiProcessSnapshot(
+                    pid,
+                    Convert.ToInt32(process["ParentProcessId"]),
+                    process["Name"]?.ToString() ?? "",
+                    process["ExecutablePath"]?.ToString(),
+                    creation,
+                    process["SessionId"] is null ? null : Convert.ToInt32(process["SessionId"]));
+            }
+        }
+        catch
+        {
+        }
+
+        return result;
+    }
+
+    private static Dictionary<string, ServiceMetadataSnapshot> ServiceMetadata()
+    {
+        var result = new Dictionary<string, ServiceMetadataSnapshot>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var searcher = new ManagementObjectSearcher("SELECT Name, DisplayName, PathName, StartMode, StartName, State FROM Win32_Service");
+            foreach (ManagementObject service in searcher.Get().Cast<ManagementObject>())
+            {
+                var name = service["Name"]?.ToString() ?? "";
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                var display = service["DisplayName"]?.ToString() ?? "";
+                var path = NormalizeServiceExecutable(service["PathName"]?.ToString());
+                if (!name.Contains("Pimax", StringComparison.OrdinalIgnoreCase)
+                    && !name.Contains("PiService", StringComparison.OrdinalIgnoreCase)
+                    && !display.Contains("Pimax", StringComparison.OrdinalIgnoreCase)
+                    && !display.Contains("PiService", StringComparison.OrdinalIgnoreCase)
+                    && path?.Contains(@"\Pimax\", StringComparison.OrdinalIgnoreCase) != true)
+                {
+                    continue;
+                }
+
+                var file = FileIdentity(path);
+                result[name] = new ServiceMetadataSnapshot(
+                    name,
+                    display,
+                    file.CanonicalPath,
+                    service["StartMode"]?.ToString() ?? "",
+                    service["StartName"]?.ToString() ?? "",
+                    service["State"]?.ToString() ?? "",
+                    file.SignatureState);
+            }
+        }
+        catch
+        {
+        }
+
+        return result;
+    }
+
     private static string? ParentProcessName(int? parentProcessId)
     {
         if (parentProcessId is not int pid || pid <= 0) return null;
@@ -486,6 +752,18 @@ internal sealed class WindowsPimaxShellQuiescenceProbe : IPimaxShellQuiescencePr
         {
             using var process = Process.GetProcessById(pid);
             return process.ProcessName;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static DateTime? WmiDate(string? value)
+    {
+        try
+        {
+            return string.IsNullOrWhiteSpace(value) ? null : ManagementDateTimeConverter.ToDateTime(value);
         }
         catch
         {
@@ -517,18 +795,127 @@ internal sealed class WindowsPimaxShellQuiescenceProbe : IPimaxShellQuiescencePr
         return creator == "unknown" ? "unknown" : "launchOrUserOwned";
     }
 
-    private static string InstallationRootClassification(string? path)
+    private static VrssClassification ClassifyVrssProcess(
+        RawProcess process,
+        string? parentName,
+        IReadOnlyDictionary<int, RawProcess> byId,
+        IReadOnlyDictionary<int, string> servicesByPid,
+        IReadOnlyDictionary<string, ServiceMetadataSnapshot> servicesByName)
+    {
+        var service = servicesByName.GetValueOrDefault("PiServiceLauncher");
+        var servicePath = ServiceBinaryPathClassification(service?.CanonicalPath);
+        var serviceSigner = ServiceSignerClassification(service);
+        if (process.SessionId != 0)
+        {
+            return VrssClassification.Blocked("launchOrUserOwned", "interactiveOrUnknownSession", "PiServiceLauncher", servicePath, serviceSigner, "liveProcessSample", "none", parentName is null ? "parentUnknown" : "parentPresent", "VRSS is not running in session 0.");
+        }
+
+        var pathClassification = CanonicalPathClassification(FileIdentity(process.ExecutablePath).CanonicalPath, process.ProcessName);
+        if (pathClassification != "exactExpectedRuntimePath")
+        {
+            return VrssClassification.Blocked("unknown", "unexpectedPath", "PiServiceLauncher", servicePath, serviceSigner, "liveProcessSample", "none", parentName is null ? "parentUnknown" : "parentPresent", "VRSS path is not the exact expected Runtime executable.");
+        }
+
+        if (servicePath != "expectedPiServiceLauncherPath" || serviceSigner != "trustedSignedExpectedLauncher")
+        {
+            return VrssClassification.Blocked("unknown", "serviceIdentityUntrusted", "PiServiceLauncher", servicePath, serviceSigner, "liveServiceConfiguration", "none", parentName is null ? "parentUnknown" : "parentPresent", "PiServiceLauncher service configuration or signer evidence is not trusted.");
+        }
+
+        if (string.Equals(parentName, "PiServiceLauncher", StringComparison.OrdinalIgnoreCase)
+            && process.ParentProcessId is int parentId
+            && byId.TryGetValue(parentId, out var parent)
+            && string.Equals(servicesByPid.GetValueOrDefault(parent.ProcessId), "PiServiceLauncher", StringComparison.OrdinalIgnoreCase)
+            && ServiceBinaryPathClassification(FileIdentity(parent.ExecutablePath).CanonicalPath) == "expectedPiServiceLauncherPath")
+        {
+            return new VrssClassification(
+                "persistentServiceDescendant",
+                "serviceControlManagerViaLiveLauncher",
+                "PiServiceLauncher",
+                servicePath,
+                serviceSigner,
+                "liveParentProcessAndServiceTable",
+                "confirmed",
+                "parentPresent",
+                "VRSS is a live child of the trusted service-owned PiServiceLauncher.");
+        }
+
+        if (parentName is null)
+        {
+            return new VrssClassification(
+                "persistentServiceDescendant",
+                "persistentServiceDescendantFromPreservedEvidence",
+                "PiServiceLauncher",
+                servicePath,
+                serviceSigner,
+                "machineLocalServiceConfigurationAndOperatorConfirmedPhaseEvidence",
+                "probable",
+                "parentExitedOrUnavailable",
+                "VRSS parent is no longer live; exact session/path/service evidence matches the operator-confirmed service-descendant lifecycle for this controlled phase.");
+        }
+
+        return string.Equals(parentName, "DeviceSetting", StringComparison.OrdinalIgnoreCase)
+            ? VrssClassification.Blocked("deviceSettingOwned", "deviceSetting", "PiServiceLauncher", servicePath, serviceSigner, "liveParentProcess", "none", "parentPresent", "VRSS is owned by DeviceSetting, not the persistent service launcher lifecycle.")
+            : VrssClassification.Blocked("launchOrUserOwned", "contradictoryLiveParent", "PiServiceLauncher", servicePath, serviceSigner, "liveParentProcess", "none", "parentPresent", "VRSS has a live parent that is not the trusted PiServiceLauncher service lifecycle.");
+    }
+
+    private static string InstallationRootClassification(string? path, string processName)
     {
         if (string.IsNullOrWhiteSpace(path)) return "unknown";
+        var runtime = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Pimax", "Runtime");
         var expected = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Pimax");
+        if (string.Equals(processName, "vrss_gaze_provider", StringComparison.OrdinalIgnoreCase)
+            && path.StartsWith(runtime + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            return "expectedPimaxRuntimeRoot";
+        }
+
         if (path.StartsWith(expected, StringComparison.OrdinalIgnoreCase)) return "expectedPimaxRoot";
         if (path.Contains(@"\Pimax\", StringComparison.OrdinalIgnoreCase)) return "duplicateOrUnexpectedPimaxRoot";
         return "unknown";
     }
 
-    private static string StabilityKey(string processName, string sanitizedPath, string ownership, string creator, string serviceName)
+    private static string CanonicalPathClassification(string? path, string processName)
     {
-        var basis = $"{processName}|{sanitizedPath}|{ownership}|{creator}|{serviceName}".ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(path)) return "unavailable";
+        if (path.StartsWith(@"\\", StringComparison.Ordinal)) return "uncPath";
+        if (path.Contains("..", StringComparison.Ordinal)) return "pathTraversalRejected";
+        var expectedVrss = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Pimax", "Runtime", "vrss_gaze_provider.exe");
+        if (string.Equals(processName, "vrss_gaze_provider", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(path, expectedVrss, StringComparison.OrdinalIgnoreCase))
+        {
+            return "exactExpectedRuntimePath";
+        }
+
+        return "notExactExpectedRuntimePath";
+    }
+
+    private static string ServiceBinaryPathClassification(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return "unavailable";
+        var expected = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Pimax", "Runtime", "PiServiceLauncher.exe");
+        return string.Equals(path, expected, StringComparison.OrdinalIgnoreCase)
+            ? "expectedPiServiceLauncherPath"
+            : "unexpectedPiServiceLauncherPath";
+    }
+
+    private static string ServiceSignerClassification(ServiceMetadataSnapshot? service)
+        => service is not null
+            && ServiceBinaryPathClassification(service.CanonicalPath) == "expectedPiServiceLauncherPath"
+            && service.SignatureState is "valid" or "signaturePresent"
+                ? "trustedSignedExpectedLauncher"
+                : "untrustedOrUnsignedLauncher";
+
+    private static string SessionClassification(int? sessionId)
+        => sessionId switch
+        {
+            0 => "session0",
+            > 0 => "interactiveSession",
+            _ => "unknown"
+        };
+
+    private static string StabilityKey(string processName, string sanitizedPath, string ownership, string creator, string serviceName, string sha256, string session, string pathClassification, string provenanceSource, string provenanceConfidence)
+    {
+        var basis = $"{processName}|{sanitizedPath}|{ownership}|{creator}|{serviceName}|{sha256}|{session}|{pathClassification}|{provenanceSource}|{provenanceConfidence}".ToLowerInvariant();
         return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(basis)))[..16].ToLowerInvariant();
     }
 
@@ -541,6 +928,100 @@ internal sealed class WindowsPimaxShellQuiescenceProbe : IPimaxShellQuiescencePr
     {
         try { return action(); }
         catch { return default; }
+    }
+
+    private static DateTime? SafeStartTime(Process process)
+    {
+        try { return process.StartTime; }
+        catch { return null; }
+    }
+
+    private static int? SafeSessionId(Process process)
+    {
+        try { return process.SessionId; }
+        catch { return null; }
+    }
+
+    private static FileIdentitySnapshot FileIdentity(string? path)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(path) || path.StartsWith(@"\\", StringComparison.Ordinal))
+            {
+                return FileIdentitySnapshot.Unavailable;
+            }
+
+            var full = Path.GetFullPath(path);
+            if (!File.Exists(full))
+            {
+                return FileIdentitySnapshot.Unavailable with { CanonicalPath = full };
+            }
+
+            var attributes = File.GetAttributes(full);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                return FileIdentitySnapshot.Unavailable with { CanonicalPath = full, SignatureState = "reparsePointRejected" };
+            }
+
+            var info = new FileInfo(full);
+            return new FileIdentitySnapshot(
+                full,
+                SignatureState(full),
+                Hash(full),
+                info.Length,
+                info.CreationTimeUtc.ToString("O"),
+                info.LastWriteTimeUtc.ToString("O"));
+        }
+        catch
+        {
+            return FileIdentitySnapshot.Unavailable;
+        }
+    }
+
+    private static string SignatureState(string path)
+    {
+        try
+        {
+#pragma warning disable SYSLIB0057
+            using var certificate = new X509Certificate2(X509Certificate.CreateFromSignedFile(path));
+#pragma warning restore SYSLIB0057
+            return string.IsNullOrWhiteSpace(certificate.Subject) ? "signaturePresent" : "signaturePresent";
+        }
+        catch (CryptographicException)
+        {
+            return "unsigned";
+        }
+        catch
+        {
+            return "unavailable";
+        }
+    }
+
+    private static string Hash(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            return Convert.ToHexString(SHA256.HashData(stream));
+        }
+        catch
+        {
+            return "unavailable";
+        }
+    }
+
+    private static string? NormalizeServiceExecutable(string? image)
+    {
+        if (string.IsNullOrWhiteSpace(image)) return null;
+        var expanded = Environment.ExpandEnvironmentVariables(image.Trim());
+        if (expanded.StartsWith('"'))
+        {
+            var end = expanded.IndexOf('"', 1);
+            return end > 1 ? expanded[1..end] : expanded.Trim('"');
+        }
+
+        var exe = expanded.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+        return exe >= 0 ? expanded[..(exe + 4)] : expanded.Split(' ', 2)[0];
     }
 
     private static int? ParentProcessId(Process process)
@@ -572,5 +1053,35 @@ internal sealed class WindowsPimaxShellQuiescenceProbe : IPimaxShellQuiescencePr
         public IntPtr InheritedFromUniqueProcessId;
     }
 
-    private sealed record RawProcess(int ProcessId, int? ParentProcessId, string ProcessName, string? ExecutablePath, DateTime? StartTime);
+    private sealed record RawProcess(int ProcessId, int? ParentProcessId, string ProcessName, string? ExecutablePath, DateTime? StartTime, int? SessionId);
+    private sealed record WmiProcessSnapshot(int ProcessId, int? ParentProcessId, string ProcessName, string? ExecutablePath, DateTime? CreationTime, int? SessionId);
+    private sealed record ServiceMetadataSnapshot(string Name, string DisplayName, string? CanonicalPath, string StartMode, string StartName, string State, string SignatureState);
+    private sealed record FileIdentitySnapshot(string? CanonicalPath, string SignatureState, string Sha256, long FileSizeBytes, string CreatedUtc, string WrittenUtc)
+    {
+        public static FileIdentitySnapshot Unavailable { get; } = new(null, "unavailable", "unavailable", 0, "", "");
+    }
+
+    private sealed record VrssClassification(
+        string OwnershipClassification,
+        string CreatorClassification,
+        string ServiceIdentity,
+        string ServiceBinaryPathClassification,
+        string ServiceSignerClassification,
+        string ProvenanceEvidenceSource,
+        string ProvenanceConfidence,
+        string ParentState,
+        string ClassificationReason)
+    {
+        public static VrssClassification Blocked(
+            string ownership,
+            string creator,
+            string serviceIdentity,
+            string serviceBinaryPathClassification,
+            string serviceSignerClassification,
+            string provenanceEvidenceSource,
+            string provenanceConfidence,
+            string parentState,
+            string reason)
+            => new(ownership, creator, serviceIdentity, serviceBinaryPathClassification, serviceSignerClassification, provenanceEvidenceSource, provenanceConfidence, parentState, reason);
+    }
 }

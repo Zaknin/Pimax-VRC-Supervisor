@@ -31,7 +31,6 @@ public sealed class PimaxShellActivationPreconditionTests
     [InlineData("pi_server")]
     [InlineData("PVRHome")]
     [InlineData("pi_overlay")]
-    [InlineData("vrss_gaze_provider")]
     [InlineData("lighthouse_console")]
     [InlineData("launcher")]
     [InlineData("fastlist-0.3.0-x64")]
@@ -45,6 +44,115 @@ public sealed class PimaxShellActivationPreconditionTests
         Assert.Equal(PimaxShellActivationPreconditionState.LaunchOwnedMembersPresent, snapshot.ActivationPreconditionState);
         Assert.False(snapshot.ReadinessForControlledValidation);
         Assert.Contains(processName, snapshot.CoreMembersPresent.Concat(snapshot.LaunchOwnedMembersPresent), StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void LiveEquivalentVrssServiceDescendantAndProtectedWatcherAreAccepted()
+    {
+        var vrss = Vrss();
+        var watcher = Process("PimaxVrcSupervisorWatcher", "unknown", "unknown", path: @"C:\Users\operator\Documents\PimaxVrcSupervisor-TestDeployments\Phase29DE-ac140b5\PimaxVrcSupervisorWatcher.exe");
+
+        var snapshot = Evaluate(
+            PersistentSample(includeLauncher: false, extra: [vrss, watcher]),
+            PersistentSample(includeLauncher: false, extra: [vrss, watcher]),
+            PersistentSample(includeLauncher: false, extra: [vrss, watcher]));
+
+        Assert.Equal(PimaxShellActivationPreconditionState.QuiescentForShellActivation, snapshot.ActivationPreconditionState);
+        Assert.True(snapshot.ReadinessForControlledValidation);
+        Assert.Contains("vrss_gaze_provider", snapshot.PermittedPersistentMembersPresent);
+        Assert.DoesNotContain("PimaxVrcSupervisorWatcher", snapshot.UnclassifiedMembersPresent);
+        Assert.DoesNotContain(snapshot.OwnershipEvidence, evidence => evidence.ProcessName == "PimaxVrcSupervisorWatcher");
+        var evidence = Assert.Single(snapshot.OwnershipEvidence, evidence => evidence.ProcessName == "vrss_gaze_provider");
+        Assert.Equal("persistentServiceDescendant", evidence.OwnershipClassification);
+        Assert.Equal("persistentServiceDescendantFromPreservedEvidence", evidence.CreatorClassification);
+        Assert.Equal("session0", evidence.SessionClassification);
+        Assert.Equal("unsigned", evidence.SignatureState);
+        Assert.Equal("exactExpectedRuntimePath", evidence.CanonicalPathClassification);
+        Assert.Equal("probable", evidence.ProvenanceConfidence);
+        Assert.Equal("expectedPiServiceLauncherPath", evidence.ServiceBinaryPathClassification);
+        Assert.Equal("trustedSignedExpectedLauncher", evidence.ServiceSignerClassification);
+    }
+
+    [Theory]
+    [InlineData("unknown", "unknown", "unknown", "expectedPiServiceLauncherPath", "trustedSignedExpectedLauncher", "session0", "exactExpectedRuntimePath")]
+    [InlineData("persistentServiceDescendant", "deviceSetting", "none", "expectedPiServiceLauncherPath", "trustedSignedExpectedLauncher", "session0", "exactExpectedRuntimePath")]
+    [InlineData("launchOrUserOwned", "contradictoryLiveParent", "none", "expectedPiServiceLauncherPath", "trustedSignedExpectedLauncher", "session0", "exactExpectedRuntimePath")]
+    [InlineData("persistentServiceDescendant", "persistentServiceDescendantFromPreservedEvidence", "probable", "expectedPiServiceLauncherPath", "trustedSignedExpectedLauncher", "interactiveSession", "exactExpectedRuntimePath")]
+    [InlineData("persistentServiceDescendant", "persistentServiceDescendantFromPreservedEvidence", "probable", "unexpectedPiServiceLauncherPath", "trustedSignedExpectedLauncher", "session0", "exactExpectedRuntimePath")]
+    [InlineData("persistentServiceDescendant", "persistentServiceDescendantFromPreservedEvidence", "probable", "expectedPiServiceLauncherPath", "untrustedOrUnsignedLauncher", "session0", "exactExpectedRuntimePath")]
+    [InlineData("persistentServiceDescendant", "persistentServiceDescendantFromPreservedEvidence", "probable", "expectedPiServiceLauncherPath", "trustedSignedExpectedLauncher", "session0", "notExactExpectedRuntimePath")]
+    public void VrssRequiresExactPersistentServiceDescendantEvidence(string ownership, string creator, string confidence, string servicePath, string serviceSigner, string session, string pathClassification)
+    {
+        var vrss = Vrss(
+            ownership: ownership,
+            creator: creator,
+            confidence: confidence,
+            servicePath: servicePath,
+            serviceSigner: serviceSigner,
+            session: session,
+            pathClassification: pathClassification);
+
+        var snapshot = Evaluate(
+            PersistentSample(includeLauncher: false, extra: [vrss]),
+            PersistentSample(includeLauncher: false, extra: [vrss]),
+            PersistentSample(includeLauncher: false, extra: [vrss]));
+
+        Assert.Equal(PimaxShellActivationPreconditionState.UnclassifiedMembersPresent, snapshot.ActivationPreconditionState);
+        Assert.False(snapshot.ReadinessForControlledValidation);
+        Assert.Contains("vrss_gaze_provider", snapshot.UnclassifiedMembersPresent);
+    }
+
+    [Fact]
+    public void SecondVrssInstanceBlocksActivation()
+    {
+        var first = Vrss();
+        var second = Vrss(stabilityKey: "second", sha256: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+
+        var snapshot = Evaluate(
+            PersistentSample(includeLauncher: false, extra: [first, second]),
+            PersistentSample(includeLauncher: false, extra: [first, second]),
+            PersistentSample(includeLauncher: false, extra: [first, second]));
+
+        Assert.Equal(PimaxShellActivationPreconditionState.UnclassifiedMembersPresent, snapshot.ActivationPreconditionState);
+        Assert.Contains("vrss_gaze_provider", snapshot.UnclassifiedMembersPresent);
+    }
+
+    [Fact]
+    public void VrssHashChangeDuringSamplingIsUnstable()
+    {
+        var snapshot = Evaluate(
+            PersistentSample(includeLauncher: false, extra: [Vrss(sha256: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]),
+            PersistentSample(includeLauncher: false, extra: [Vrss(sha256: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")]),
+            PersistentSample(includeLauncher: false, extra: [Vrss(sha256: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]));
+
+        Assert.Equal(PimaxShellActivationPreconditionState.Incomplete, snapshot.ActivationPreconditionState);
+        Assert.False(snapshot.Stable);
+    }
+
+    [Fact]
+    public void SupervisorAliasesAreExcludedButUntrustedLookalikeIsNot()
+    {
+        var protectedAliases = new[]
+        {
+            Process("PimaxVrcSupervisor", "unknown", "unknown", path: @"C:\Users\operator\Documents\PimaxVrcSupervisor-TestDeployments\Phase29DE-ac140b5\PimaxVrcSupervisor.exe"),
+            Process("PimaxVrcSupervisorConfigurator", "unknown", "unknown", path: @"C:\Users\operator\Documents\PimaxVrcSupervisor-TestDeployments\Phase29DE-ac140b5\PimaxVrcSupervisorConfigurator.exe"),
+            Process("PimaxVrcSupervisorSteamVrHost", "unknown", "unknown", path: @"C:\Users\operator\Documents\PimaxVrcSupervisor-TestDeployments\Phase29DE-ac140b5\PimaxVrcSupervisorSteamVrHost.exe"),
+            Process("PimaxVrcSupervisorTui", "unknown", "unknown", path: @"C:\Users\operator\Documents\PimaxVrcSupervisor-TestDeployments\Phase29DE-ac140b5\PimaxVrcSupervisorTui.exe")
+        };
+        var accepted = Evaluate(
+            PersistentSample(includeLauncher: false, extra: protectedAliases),
+            PersistentSample(includeLauncher: false, extra: protectedAliases),
+            PersistentSample(includeLauncher: false, extra: protectedAliases));
+
+        var lookalike = Process("PimaxVrcSupervisorWatcher", "unknown", "unknown", path: @"C:\Temp\PimaxVrcSupervisorWatcher.exe");
+        var refused = Evaluate(
+            PersistentSample(includeLauncher: false, extra: [lookalike]),
+            PersistentSample(includeLauncher: false, extra: [lookalike]),
+            PersistentSample(includeLauncher: false, extra: [lookalike]));
+
+        Assert.True(accepted.ReadinessForControlledValidation);
+        Assert.Equal(PimaxShellActivationPreconditionState.UnclassifiedMembersPresent, refused.ActivationPreconditionState);
+        Assert.Contains("PimaxVrcSupervisorWatcher", refused.UnclassifiedMembersPresent);
     }
 
     [Fact]
@@ -236,8 +344,71 @@ public sealed class PimaxShellActivationPreconditionTests
         string creator,
         string service = "none",
         string root = "expectedPimaxRoot",
-        string stabilityKey = "stable")
-        => new(name, "<pimax>\\Runtime\\" + name + ".exe", ownership, creator, service, root, name + "-" + stabilityKey);
+        string stabilityKey = "stable",
+        string? path = null,
+        string session = "unknown",
+        string signature = "unavailable",
+        string sha256 = "unavailable",
+        string pathClassification = "unknown",
+        string provenanceSource = "notApplicable",
+        string confidence = "none",
+        string parentState = "unknown",
+        string serviceIdentity = "none",
+        string servicePath = "unknown",
+        string serviceSigner = "unknown",
+        string reason = "notClassified")
+        => new(
+            name,
+            path ?? "<pimax>\\Runtime\\" + name + ".exe",
+            ownership,
+            creator,
+            service,
+            root,
+            name + "-" + stabilityKey,
+            session,
+            signature,
+            sha256,
+            FileSizeBytes: sha256 == "unavailable" ? 0 : 123456,
+            FileCreatedUtc: "2026-06-21T00:00:00.0000000Z",
+            FileWrittenUtc: "2026-06-21T00:00:00.0000000Z",
+            pathClassification,
+            provenanceSource,
+            confidence,
+            parentState,
+            serviceIdentity,
+            servicePath,
+            serviceSigner,
+            reason);
+
+    private static PimaxShellQuiescenceProcessSnapshot Vrss(
+        string ownership = "persistentServiceDescendant",
+        string creator = "persistentServiceDescendantFromPreservedEvidence",
+        string confidence = "probable",
+        string servicePath = "expectedPiServiceLauncherPath",
+        string serviceSigner = "trustedSignedExpectedLauncher",
+        string session = "session0",
+        string pathClassification = "exactExpectedRuntimePath",
+        string stabilityKey = "stable",
+        string sha256 = "829327485C0B4B09CBF75F5FAE5E3AB5FC0D13FCFB7E273C682495094E6186CF")
+        => Process(
+            "vrss_gaze_provider",
+            ownership,
+            creator,
+            service: "PiServiceLauncher",
+            root: pathClassification == "exactExpectedRuntimePath" ? "expectedPimaxRuntimeRoot" : "duplicateOrUnexpectedPimaxRoot",
+            stabilityKey: stabilityKey,
+            path: pathClassification == "exactExpectedRuntimePath" ? @"C:\Program Files\Pimax\Runtime\vrss_gaze_provider.exe" : @"C:\Temp\vrss_gaze_provider.exe",
+            session: session,
+            signature: "unsigned",
+            sha256: sha256,
+            pathClassification: pathClassification,
+            provenanceSource: confidence == "probable" ? "machineLocalServiceConfigurationAndOperatorConfirmedPhaseEvidence" : "liveParentProcessAndServiceTable",
+            confidence: confidence,
+            parentState: confidence == "confirmed" ? "parentPresent" : "parentExitedOrUnavailable",
+            serviceIdentity: "PiServiceLauncher",
+            servicePath: servicePath,
+            serviceSigner: serviceSigner,
+            reason: "synthetic VRSS service descendant evidence");
 
     private static PimaxComponentHealthSnapshot Health(string registration)
     {
