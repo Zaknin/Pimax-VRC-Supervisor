@@ -296,6 +296,46 @@ public sealed class PimaxStartupOrchestrationTests
     }
 
     [Fact]
+    public async Task ElevatedObserverParsedDurationBelowMinimumIsRefusedWithoutFallback()
+    {
+        var request = PimaxElevatedStartupObservationRequest.Parse(["pimax-startup-observe-elevated-json", "--fake", "--duration-seconds", "14"]);
+
+        var snapshot = await new PimaxStartupObserver().ObserveElevatedAsync(request, CancellationToken.None);
+
+        Assert.False(snapshot.Accepted);
+        Assert.False(snapshot.WmiSnapshotFallbackAllowed);
+        Assert.Null(snapshot.Observation);
+        Assert.Contains("between 15 and 120", string.Join("\n", snapshot.Errors), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ElevatedObserverParsedDurationAboveMaximumIsRefusedWithoutFallback()
+    {
+        var request = PimaxElevatedStartupObservationRequest.Parse(["pimax-startup-observe-elevated-json", "--fake", "--duration-seconds", "121"]);
+
+        var snapshot = await new PimaxStartupObserver().ObserveElevatedAsync(request, CancellationToken.None);
+
+        Assert.False(snapshot.Accepted);
+        Assert.False(snapshot.WmiSnapshotFallbackAllowed);
+        Assert.Null(snapshot.Observation);
+        Assert.Contains("between 15 and 120", string.Join("\n", snapshot.Errors), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ElevatedObserverPreservesCorrelationIdForBoundedFakeRun()
+    {
+        var correlationId = Guid.NewGuid().ToString();
+        var request = PimaxElevatedStartupObservationRequest.Parse(["pimax-startup-observe-elevated-json", "--fake", "--duration-seconds", "15", "--correlation-id", correlationId]);
+
+        var snapshot = await new PimaxStartupObserver().ObserveElevatedAsync(request, CancellationToken.None);
+
+        Assert.True(snapshot.Accepted);
+        Assert.Equal(correlationId, snapshot.CorrelationId);
+        Assert.Equal(15, snapshot.DurationSeconds);
+        Assert.False(snapshot.WmiSnapshotFallbackAllowed);
+    }
+
+    [Fact]
     public async Task ElevatedObserverFakeRunProducesNestedObservationAndKeepsBackendDisabled()
     {
         var request = new PimaxElevatedStartupObservationRequest(

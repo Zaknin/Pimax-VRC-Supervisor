@@ -124,6 +124,7 @@ internal static class PimaxDevelopmentCommandLine
         "pimax-startup-creator-chain-json",
         "pimax-shell-activation-capability-json",
         "pimax-shell-activate-json",
+        "pimax-shell-activate-validation-json",
         "pimax-repair-start-json",
         "pimax-repair-status-json",
         "pimax-repair-cancel-json",

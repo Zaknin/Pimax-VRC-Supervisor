@@ -101,6 +101,108 @@ public sealed class PimaxShellActivationTests
     }
 
     [Fact]
+    public async Task ValidationCommandRefusesMissingConfirmationBeforeShellRequest()
+    {
+        var requestor = new FakeActivationRequestor();
+        var coordinator = ValidationCoordinator(requestor: requestor);
+
+        var result = await coordinator.ActivateValidationAsync(
+            new SupervisorConfig(),
+            new PimaxShellActivationCommandLine(null, Guid.NewGuid().ToString()),
+            CancellationToken.None);
+
+        Assert.Equal(PimaxShellActivationValidationSchema.Version, result.Schema);
+        Assert.False(result.ValidationExecutionAccepted);
+        Assert.False(result.ConfirmationAccepted);
+        Assert.Equal(0, result.ShellRequestCount);
+        Assert.False(result.ActivationRequestResult.Attempted);
+        Assert.False(result.BackendExecutable);
+        Assert.False(result.AutomaticRecoveryAllowed);
+        Assert.Contains("confirmation", string.Join("\n", result.Errors), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("not-a-guid")]
+    public async Task ValidationCommandRequiresValidCorrelationId(string? correlationId)
+    {
+        var coordinator = ValidationCoordinator();
+
+        var result = await coordinator.ActivateValidationAsync(
+            new SupervisorConfig(),
+            new PimaxShellActivationCommandLine(PimaxShellActivationCoordinator.ValidationConfirmationString, correlationId),
+            CancellationToken.None);
+
+        Assert.False(result.ValidationExecutionAccepted);
+        Assert.Equal(0, result.ShellRequestCount);
+        Assert.Contains("Correlation ID", string.Join("\n", result.Errors), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ValidationCommandRefusesElevatedOrExplorerMismatchedContext()
+    {
+        var coordinator = ValidationCoordinator(context: new FakeExecutionContext(elevated: true, explorerMatched: false));
+
+        var result = await coordinator.ActivateValidationAsync(
+            new SupervisorConfig(),
+            new PimaxShellActivationCommandLine(PimaxShellActivationCoordinator.ValidationConfirmationString, Guid.NewGuid().ToString()),
+            CancellationToken.None);
+
+        Assert.False(result.ValidationExecutionAccepted);
+        Assert.True(result.ElevatedState);
+        Assert.False(result.ExplorerSessionMatched);
+        Assert.Equal(0, result.ShellRequestCount);
+    }
+
+    [Fact]
+    public async Task ValidationCommandAcceptsStoppedGroupAndRequestsShellExactlyOnce()
+    {
+        var requestor = new FakeActivationRequestor();
+        var correlationId = Guid.NewGuid().ToString();
+        var coordinator = ValidationCoordinator(requestor: requestor);
+
+        var result = await coordinator.ActivateValidationAsync(
+            new SupervisorConfig(),
+            new PimaxShellActivationCommandLine(PimaxShellActivationCoordinator.ValidationConfirmationString, correlationId),
+            CancellationToken.None);
+
+        Assert.True(result.ValidationExecutionAccepted);
+        Assert.True(result.Accepted);
+        Assert.Equal(correlationId, result.CorrelationId);
+        Assert.Equal(1, result.ShellRequestCount);
+        var requestedPath = Assert.Single(requestor.RequestedPaths);
+        Assert.EndsWith("PimaxPlay.lnk", requestedPath, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, result.RetryCount);
+        Assert.False(result.DirectFallbackAttempted);
+        Assert.False(result.RuntimeComponentLaunchAttempted);
+        Assert.False(result.ServiceMutationAttempted);
+        Assert.False(result.ProcessTerminationAttempted);
+        Assert.Equal(PimaxSoftwareGroupState.Complete, result.FinalSoftwareGroupState);
+        Assert.Equal(3, result.StableSampleCount);
+        Assert.False(result.BackendExecutable);
+        Assert.False(result.TuiExposureAllowed);
+        Assert.False(result.ConfiguratorExposureAllowed);
+        Assert.False(result.WatcherExecutionAllowed);
+    }
+
+    [Fact]
+    public async Task ValidationCommandRefusesAlreadyRunningGroupWithoutShellRequest()
+    {
+        var requestor = new FakeActivationRequestor();
+        var coordinator = ValidationCoordinator(requestor: requestor, healthStates: [Health(CompleteRuntimeGroup(), PimaxHealthOverallStatus.Healthy)]);
+
+        var result = await coordinator.ActivateValidationAsync(
+            new SupervisorConfig(),
+            new PimaxShellActivationCommandLine(PimaxShellActivationCoordinator.ValidationConfirmationString, Guid.NewGuid().ToString()),
+            CancellationToken.None);
+
+        Assert.False(result.ValidationExecutionAccepted);
+        Assert.Equal(PimaxShellActivationCapabilityState.SoftwareGroupAlreadyRunning, result.ShellEntryValidationResult);
+        Assert.Equal(0, result.ShellRequestCount);
+        Assert.Empty(requestor.RequestedPaths);
+    }
+
+    [Fact]
     public void ReadinessRequiresThreeConsecutiveHealthySamplesAndToleratesChurn()
     {
         var samples = new[]
@@ -183,6 +285,29 @@ public sealed class PimaxShellActivationTests
         string source = "commonStartMenu")
         => Shortcut(path, @"C:\Program Files\Pimax\PimaxClient\pimaxui\PimaxClient.exe", "", @"C:\Program Files\Pimax\PimaxClient\pimaxui", source);
 
+    private static PimaxShellActivationCoordinator ValidationCoordinator(
+        FakeActivationRequestor? requestor = null,
+        IPimaxShellExecutionContextInspector? context = null,
+        PimaxComponentHealthSnapshot[]? healthStates = null)
+    {
+        var states = new Queue<PimaxComponentHealthSnapshot>(healthStates ??
+        [
+            Health(Group(PimaxSoftwareGroupState.Unavailable), PimaxHealthOverallStatus.SoftwareStackUnavailable),
+            Health(CompleteRuntimeGroup(), PimaxHealthOverallStatus.Healthy),
+            Health(CompleteRuntimeGroup(), PimaxHealthOverallStatus.Healthy),
+            Health(CompleteRuntimeGroup(), PimaxHealthOverallStatus.Healthy)
+        ]);
+
+        return new PimaxShellActivationCoordinator(
+            shortcutReader: new FakeShortcutReader(),
+            targetInspector: new FakeTargetInspector(),
+            activationRequestor: requestor ?? new FakeActivationRequestor(),
+            executionContextInspector: context ?? new FakeExecutionContext(),
+            healthCollector: (_, _) => Task.FromResult(states.Count > 1 ? states.Dequeue() : states.Peek()),
+            validationTimeout: TimeSpan.FromSeconds(1),
+            validationPollInterval: TimeSpan.FromMilliseconds(1));
+    }
+
     private static PimaxShellShortcutCandidate Shortcut(string path, string target, string args, string workingDirectory, string source = "commonStartMenu")
         => new(path, source, new PimaxShellShortcutInfo(target, args, workingDirectory));
 
@@ -205,6 +330,28 @@ public sealed class PimaxShellActivationTests
     private static PimaxSoftwareGroupSnapshot CompleteRuntimeGroup()
         => Group(PimaxSoftwareGroupState.Complete, "PimaxClient", "DeviceSetting", "PiPlayService", "PiService", "pi_server");
 
+    private static PimaxComponentHealthSnapshot Health(PimaxSoftwareGroupSnapshot group, string overall)
+    {
+        var registration = new PimaxRegistrationAssessmentResult(PimaxRegistrationState.RegisteredReady, PimaxRegistrationConfidence.Confirmed, PimaxEvidenceFreshness.Current, "synthetic", [], [], [], [], [], new PimaxRegistrationEvidence(true, 1, 1, true, 1, 1, true, true, true, true, true, [], []));
+        return new PimaxComponentHealthSnapshot(
+            PimaxComponentHealthSchema.Version,
+            DateTimeOffset.UtcNow,
+            "health",
+            overall,
+            registration,
+            "probable",
+            [],
+            [],
+            [],
+            [],
+            "summary",
+            "confirmed",
+            new PimaxHealthCapabilitySummary("available", "available", "available", "available", "available", "available", "ready", "summary"),
+            new PimaxHealthSanitizedEvidence(PimaxConnectivitySchema.Version, PimaxUsbEnumerationSchema.Version, PimaxRegistrationAssessmentSchema.Version, "synthetic", registration.State, 1, 1, [], [], group.Members.Select(member => member.ProcessName).ToArray(), ["PiServiceLauncher"], registration.EvidenceFreshness, group),
+            [],
+            []);
+    }
+
     private static string RepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -224,5 +371,39 @@ public sealed class PimaxShellActivationTests
                 targetPath.StartsWith(@"C:\Program Files\Pimax\", StringComparison.OrdinalIgnoreCase) ? "Pimax certificate subject present" : "untrusted",
                 targetPath.StartsWith(@"C:\Program Files\Pimax\", StringComparison.OrdinalIgnoreCase),
                 "asInvoker");
+    }
+
+    private sealed class FakeShortcutReader : IPimaxShellShortcutReader
+    {
+        public PimaxShellShortcutInfo? Read(string shortcutPath)
+            => new(@"C:\Program Files\Pimax\PimaxClient\pimaxui\PimaxClient.exe", "", @"C:\Program Files\Pimax\PimaxClient\pimaxui");
+    }
+
+    private sealed class FakeActivationRequestor : IPimaxShellActivationRequestor
+    {
+        public List<string> RequestedPaths { get; } = [];
+
+        public Task<PimaxShellActivationRequestResult> RequestAsync(string shortcutPath, CancellationToken cancellationToken)
+        {
+            RequestedPaths.Add(shortcutPath);
+            return Task.FromResult(new PimaxShellActivationRequestResult(true, true, "accepted"));
+        }
+    }
+
+    private sealed class FakeExecutionContext(bool elevated = false, bool explorerMatched = true, bool interactive = true, bool sessionZero = false) : IPimaxShellExecutionContextInspector
+    {
+        public PimaxShellActivationExecutionContext Inspect()
+            => new(
+                IsWindows: true,
+                IsLocalSystem: false,
+                IsSessionZero: sessionZero,
+                IsServiceContext: !interactive || sessionZero,
+                IsScheduledWatcherContext: false,
+                IsInteractive: interactive,
+                IsElevated: elevated,
+                CurrentSessionId: sessionZero ? 0 : 1,
+                ExplorerSessionMatched: explorerMatched,
+                ExplorerSessionEvidence: explorerMatched ? ["explorerSession:1"] : [],
+                Summary: "synthetic");
     }
 }

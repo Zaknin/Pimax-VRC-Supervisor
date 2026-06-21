@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Security.Principal;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json.Serialization;
@@ -12,6 +13,11 @@ internal static class PimaxShellActivationCapabilitySchema
 internal static class PimaxShellActivationResultSchema
 {
     public const string Version = "pimax-shell-activation-result-v1";
+}
+
+internal static class PimaxShellActivationValidationSchema
+{
+    public const string Version = "pimax-shell-activation-validation-v1";
 }
 
 internal static class PimaxShellActivationCapabilityState
@@ -98,7 +104,8 @@ internal sealed record PimaxShellActivationCandidate(
     string ShortcutArgumentsState,
     string ShortcutWorkingDirectoryState,
     string ValidationState,
-    string[] Blockers);
+    string[] Blockers,
+    [property: JsonIgnore] string RawShortcutPath);
 
 internal sealed record PimaxShellActivationResultSnapshot(
     string Schema,
@@ -142,6 +149,77 @@ internal sealed record PimaxShellReadinessSample(
     PimaxSoftwareGroupSnapshot SoftwareGroup,
     string ComponentHealthState);
 
+internal sealed record PimaxShellActivationExecutionContext(
+    bool IsWindows,
+    bool IsLocalSystem,
+    bool IsSessionZero,
+    bool IsServiceContext,
+    bool IsScheduledWatcherContext,
+    bool IsInteractive,
+    bool IsElevated,
+    int CurrentSessionId,
+    bool ExplorerSessionMatched,
+    string[] ExplorerSessionEvidence,
+    string Summary)
+{
+    public bool Accepted => IsWindows
+        && !IsLocalSystem
+        && !IsSessionZero
+        && !IsServiceContext
+        && !IsScheduledWatcherContext
+        && IsInteractive
+        && !IsElevated
+        && ExplorerSessionMatched;
+}
+
+internal sealed record PimaxShellActivationValidationResultSnapshot(
+    string Schema,
+    string ValidationId,
+    string CorrelationId,
+    DateTimeOffset CollectedAt,
+    DateTimeOffset StartedAt,
+    DateTimeOffset EndedAt,
+    bool Accepted,
+    bool ValidationExecutionAccepted,
+    bool ConfirmationAccepted,
+    PimaxShellActivationExecutionContext InteractiveSession,
+    bool ElevatedState,
+    bool ExplorerSessionMatched,
+    string ShellEntryValidationResult,
+    string SanitizedShortcutPath,
+    string SanitizedTargetPath,
+    string ActivationMethod,
+    int ShellRequestCount,
+    int RetryCount,
+    bool DirectFallbackAttempted,
+    bool RuntimeComponentLaunchAttempted,
+    bool ServiceMutationAttempted,
+    bool ProcessTerminationAttempted,
+    DateTimeOffset? ActivationRequestTimestamp,
+    PimaxShellActivationRequestResult ActivationRequestResult,
+    string[] ReadinessStateTransitions,
+    string FirstPimaxClientObservation,
+    string FirstDeviceSettingObservation,
+    string FirstPiPlayServiceObservation,
+    string FirstPiServiceObservation,
+    string FirstPiServerObservation,
+    DateTimeOffset? GroupStabilizationTimestamp,
+    string FinalSoftwareGroupState,
+    string FinalComponentHealthState,
+    string FinalRegistrationClassification,
+    int StableSampleCount,
+    string TimeoutState,
+    string CancellationState,
+    string[] Warnings,
+    string[] Errors,
+    string[] PrivacyRedactions,
+    bool BackendExecutable,
+    bool AutomaticRecoveryAllowed,
+    bool TuiExposureAllowed,
+    bool ConfiguratorExposureAllowed,
+    bool WatcherExecutionAllowed,
+    string HumanReadableSummary);
+
 internal sealed record PimaxShellShortcutCandidate(
     string ShortcutPath,
     string SourceLocation,
@@ -179,17 +257,28 @@ internal interface IPimaxShellActivationRequestor
 
 internal sealed record PimaxShellActivationRequestResult(bool Attempted, bool Accepted, string Message);
 
+internal interface IPimaxShellExecutionContextInspector
+{
+    PimaxShellActivationExecutionContext Inspect();
+}
+
 internal sealed class PimaxShellActivationCoordinator(
     IPimaxShellShortcutReader? shortcutReader = null,
     IPimaxShellTargetInspector? targetInspector = null,
     IPimaxShellActivationRequestor? activationRequestor = null,
+    IPimaxShellExecutionContextInspector? executionContextInspector = null,
+    Func<SupervisorConfig, CancellationToken, Task<PimaxComponentHealthSnapshot>>? healthCollector = null,
+    TimeSpan? validationTimeout = null,
+    TimeSpan? validationPollInterval = null,
     Func<DateTimeOffset>? now = null)
 {
     public const string ConfirmationString = "CONFIRM ONE PIMAX SHELL ACTIVATION";
+    public const string ValidationConfirmationString = "CONFIRM ONE CONTROLLED PIMAX SHELL ACTIVATION VALIDATION";
     private const string ExpectedDisplayName = "PimaxPlay";
     private const string ExpectedShortcutName = "PimaxPlay.lnk";
     private const string ExpectedTarget = @"C:\Program Files\Pimax\PimaxClient\pimaxui\PimaxClient.exe";
     private const string ExpectedWorkingDirectory = @"C:\Program Files\Pimax\PimaxClient\pimaxui";
+    private const string ValidationLeaseKey = "pimax-shell-activation-validation";
     private static readonly ConcurrentDictionary<string, byte> ActiveOperations = new(StringComparer.OrdinalIgnoreCase);
     private static readonly string[] ExpectedStages =
     [
@@ -206,6 +295,10 @@ internal sealed class PimaxShellActivationCoordinator(
     private readonly IPimaxShellShortcutReader _shortcutReader = shortcutReader ?? new WindowsPimaxShellShortcutReader();
     private readonly IPimaxShellTargetInspector _targetInspector = targetInspector ?? new WindowsPimaxShellTargetInspector();
     private readonly IPimaxShellActivationRequestor _activationRequestor = activationRequestor ?? new WindowsPimaxShellActivationRequestor();
+    private readonly IPimaxShellExecutionContextInspector _executionContextInspector = executionContextInspector ?? new WindowsPimaxShellExecutionContextInspector();
+    private readonly Func<SupervisorConfig, CancellationToken, Task<PimaxComponentHealthSnapshot>> _healthCollector = healthCollector ?? ((config, cancellationToken) => new PimaxComponentHealthCoordinator().CollectAsync(config, cancellationToken));
+    private readonly TimeSpan _validationTimeout = validationTimeout ?? TimeSpan.FromSeconds(90);
+    private readonly TimeSpan _validationPollInterval = validationPollInterval ?? TimeSpan.FromSeconds(1);
     private readonly Func<DateTimeOffset> _now = now ?? (() => DateTimeOffset.Now);
 
     public async Task<PimaxShellActivationCapabilitySnapshot> BuildCapabilityAsync(SupervisorConfig config, CancellationToken cancellationToken)
@@ -213,7 +306,7 @@ internal sealed class PimaxShellActivationCoordinator(
         PimaxComponentHealthSnapshot health;
         try
         {
-            health = await new PimaxComponentHealthCoordinator().CollectAsync(config, cancellationToken);
+            health = await _healthCollector(config, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -347,6 +440,149 @@ internal sealed class PimaxShellActivationCoordinator(
         }
     }
 
+    public async Task<PimaxShellActivationValidationResultSnapshot> ActivateValidationAsync(
+        SupervisorConfig config,
+        PimaxShellActivationCommandLine request,
+        CancellationToken cancellationToken)
+    {
+        var started = _now();
+        var validationId = $"pimax-shell-activation-validation-{Guid.NewGuid():N}";
+        var confirmationAccepted = string.Equals(request.Confirmation, ValidationConfirmationString, StringComparison.Ordinal);
+        var correlationAccepted = Guid.TryParse(request.CorrelationId, out var correlationGuid);
+        var correlationId = correlationAccepted ? correlationGuid.ToString("D") : request.CorrelationId ?? "";
+        var warnings = new List<string>();
+        var errors = new List<string>();
+        var context = _executionContextInspector.Inspect();
+        var capability = await BuildCapabilityAsync(config, cancellationToken);
+        var activationTimestamp = (DateTimeOffset?)null;
+        var activationResult = new PimaxShellActivationRequestResult(false, false, "Shell activation was not requested.");
+        var readiness = (PimaxShellReadinessObservation?)null;
+        var healthSamples = new List<PimaxComponentHealthSnapshot>();
+        var accepted = false;
+        var shellRequestCount = 0;
+        var cancellationState = "notCancelled";
+
+        if (!confirmationAccepted)
+        {
+            errors.Add(string.IsNullOrWhiteSpace(request.Confirmation)
+                ? "Exact validation confirmation is required: " + ValidationConfirmationString
+                : "Validation confirmation did not match the required phrase.");
+        }
+
+        if (!correlationAccepted)
+        {
+            errors.Add(string.IsNullOrWhiteSpace(request.CorrelationId)
+                ? "A valid GUID correlation ID is required."
+                : "Correlation ID is not a valid GUID.");
+        }
+
+        if (!context.Accepted)
+        {
+            errors.Add("Validation must run from a non-elevated interactive desktop session that matches Explorer.");
+        }
+
+        if (!capability.ReadinessForControlledValidation)
+        {
+            errors.Add("Shell activation validation preconditions are not ready: " + capability.PreconditionResult);
+        }
+
+        if (!ActiveOperations.TryAdd(ValidationLeaseKey, 0))
+        {
+            errors.Add("Another Pimax Shell activation validation operation already owns the lease.");
+        }
+        else
+        {
+            try
+            {
+                accepted = confirmationAccepted && correlationAccepted && context.Accepted && capability.ReadinessForControlledValidation;
+                if (accepted && capability.SelectedShellEntry is not null)
+                {
+                    activationTimestamp = _now();
+                    shellRequestCount = 1;
+                    activationResult = await _activationRequestor.RequestAsync(capability.SelectedShellEntry.RawShortcutPath, cancellationToken);
+                    if (activationResult.Accepted)
+                    {
+                        readiness = await ObserveReadinessAsync(config, started, healthSamples, cancellationToken);
+                    }
+                    else
+                    {
+                        errors.Add("Shell activation request failed: " + activationResult.Message);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                cancellationState = "cancelled";
+                errors.Add("Validation was cancelled after acceptance; no retry was attempted.");
+            }
+            finally
+            {
+                ActiveOperations.TryRemove(ValidationLeaseKey, out _);
+            }
+        }
+
+        var finalHealth = healthSamples.LastOrDefault();
+        var finalGroup = finalHealth?.SourceEvidence.SoftwareGroup ?? capability.CapabilityState switch
+        {
+            _ => null
+        };
+        readiness ??= healthSamples.Count == 0
+            ? null
+            : EvaluateReadiness(healthSamples.Select(sample => new PimaxShellReadinessSample(sample.Timestamp - started, sample.SourceEvidence.SoftwareGroup, sample.OverallStatus)).ToArray());
+        var stable = readiness?.ConsecutiveHealthySamples ?? 0;
+        var ended = _now();
+        var timeoutState = readiness?.State == PimaxShellActivationState.TimedOut ? "timedOut" : "withinBound";
+        return new PimaxShellActivationValidationResultSnapshot(
+            PimaxShellActivationValidationSchema.Version,
+            validationId,
+            correlationId,
+            ended,
+            started,
+            ended,
+            accepted && activationResult.Accepted,
+            accepted,
+            confirmationAccepted,
+            context,
+            context.IsElevated,
+            context.ExplorerSessionMatched,
+            capability.CapabilityState,
+            capability.SelectedShellEntry?.SanitizedShortcutPath ?? "none",
+            capability.SelectedShellEntry?.SanitizedTargetPath ?? "none",
+            "Windows Shell open verb against official Start Menu .lnk",
+            shellRequestCount,
+            RetryCount: 0,
+            DirectFallbackAttempted: false,
+            RuntimeComponentLaunchAttempted: false,
+            ServiceMutationAttempted: false,
+            ProcessTerminationAttempted: false,
+            activationTimestamp,
+            activationResult,
+            readiness?.Transitions ?? [],
+            FirstMemberObservation(healthSamples, "PimaxClient"),
+            FirstMemberObservation(healthSamples, "DeviceSetting"),
+            FirstMemberObservation(healthSamples, "PiPlayService"),
+            FirstMemberObservation(healthSamples, "PiService"),
+            FirstMemberObservation(healthSamples, "pi_server"),
+            readiness?.State == PimaxShellActivationState.Healthy ? ended : null,
+            finalGroup?.State ?? capability.CurrentSoftwareGroupState,
+            finalHealth?.OverallStatus ?? capability.CurrentComponentHealthState,
+            finalHealth is null ? "notObserved" : finalHealth.RegistrationAssessment.State + "/" + finalHealth.RegistrationAssessment.Confidence,
+            stable,
+            timeoutState,
+            cancellationState,
+            warnings.Concat(capability.Warnings).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            errors.Concat(capability.Errors).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            ["raw PIDs", "raw parent PIDs", "raw command lines", "user names", "machine names", "environment blocks", "handles", "certificate serial numbers"],
+            BackendExecutable: false,
+            AutomaticRecoveryAllowed: false,
+            TuiExposureAllowed: false,
+            ConfiguratorExposureAllowed: false,
+            WatcherExecutionAllowed: false,
+            accepted && activationResult.Accepted
+                ? "Exactly one Windows Shell activation request was accepted; readiness and registration are reported separately."
+                : "Controlled Windows Shell activation validation was refused or the Shell request failed before readiness could be proven.");
+    }
+
     internal static PimaxShellReadinessObservation EvaluateReadiness(IReadOnlyCollection<PimaxShellReadinessSample> samples)
     {
         var transitions = new List<string>();
@@ -386,6 +622,35 @@ internal sealed class PimaxShellActivationCoordinator(
         return last is null
             ? new PimaxShellReadinessObservation(PimaxShellActivationState.NotStarted, 0, PimaxSoftwareGroupState.Unknown, "unknown", 0, [], RequiredRuntimeMembers, [], "No readiness samples were observed.")
             : Observation(last.SoftwareGroup.State == PimaxSoftwareGroupState.Conflicting ? PimaxShellActivationState.Conflicting : PimaxShellActivationState.Partial, last, healthy, transitions, "Pimax software group did not reach the consecutive stable readiness threshold.");
+    }
+
+    private async Task<PimaxShellReadinessObservation> ObserveReadinessAsync(
+        SupervisorConfig config,
+        DateTimeOffset started,
+        List<PimaxComponentHealthSnapshot> healthSamples,
+        CancellationToken cancellationToken)
+    {
+        using var timeout = new CancellationTokenSource(_validationTimeout > TimeSpan.FromSeconds(90) ? TimeSpan.FromSeconds(90) : _validationTimeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+        while (!linked.IsCancellationRequested)
+        {
+            var health = await _healthCollector(config, linked.Token);
+            healthSamples.Add(health);
+            var observation = EvaluateReadiness(healthSamples
+                .Select(sample => new PimaxShellReadinessSample(sample.Timestamp - started, sample.SourceEvidence.SoftwareGroup, sample.OverallStatus))
+                .ToArray());
+            if (observation.State is PimaxShellActivationState.Healthy or PimaxShellActivationState.Conflicting or PimaxShellActivationState.TimedOut)
+            {
+                return observation;
+            }
+
+            await Task.Delay(_validationPollInterval, linked.Token).ContinueWith(_ => { }, CancellationToken.None);
+        }
+
+        return EvaluateReadiness(healthSamples
+            .Select(sample => new PimaxShellReadinessSample(sample.Timestamp - started, sample.SourceEvidence.SoftwareGroup, sample.OverallStatus))
+            .Append(new PimaxShellReadinessSample(TimeSpan.FromSeconds(90), healthSamples.LastOrDefault()?.SourceEvidence.SoftwareGroup ?? PimaxSoftwareGroupModel.Unknown(_now(), "pimax-shell-validation-timeout"), healthSamples.LastOrDefault()?.OverallStatus ?? "unknown"))
+            .ToArray());
     }
 
     private PimaxShellActivationCandidate BuildCandidate(PimaxShellShortcutCandidate candidate)
@@ -428,7 +693,8 @@ internal sealed class PimaxShellActivationCoordinator(
             string.IsNullOrWhiteSpace(shortcut?.Arguments) ? "none" : "unexpectedArguments",
             string.Equals(shortcut?.WorkingDirectory ?? "", ExpectedWorkingDirectory, StringComparison.OrdinalIgnoreCase) ? "expectedPimaxClientProgramDirectory" : "unexpectedOrMissing",
             valid ? PimaxShellActivationCapabilityState.ReadyForControlledValidation : PimaxShellActivationCapabilityState.ShellEntryInvalid,
-            blockers.ToArray());
+            blockers.ToArray(),
+            candidate.ShortcutPath);
     }
 
     private IEnumerable<PimaxShellShortcutCandidate> DiscoverCandidates()
@@ -539,6 +805,12 @@ internal sealed class PimaxShellActivationCoordinator(
     private static bool RequiredRuntimeMembersPresent(PimaxSoftwareGroupSnapshot group)
         => RequiredRuntimeMembers.All(required => group.Members.Any(member => string.Equals(member.ProcessName, required, StringComparison.OrdinalIgnoreCase)));
 
+    private static string FirstMemberObservation(IEnumerable<PimaxComponentHealthSnapshot> healthSamples, string member)
+    {
+        var sample = healthSamples.FirstOrDefault(health => health.SourceEvidence.SoftwareGroup.Members.Any(groupMember => string.Equals(groupMember.ProcessName, member, StringComparison.OrdinalIgnoreCase)));
+        return sample is null ? $"{member}:notObserved" : $"{member}:observed";
+    }
+
     private static bool IsExpectedTarget(string path)
         => string.Equals(path, ExpectedTarget, StringComparison.OrdinalIgnoreCase);
 
@@ -611,10 +883,10 @@ internal sealed class PimaxShellActivationCoordinator(
             []);
 }
 
-internal sealed record PimaxShellActivationCommandLine(string? Confirmation)
+internal sealed record PimaxShellActivationCommandLine(string? Confirmation, string? CorrelationId = null)
 {
     public static PimaxShellActivationCommandLine Parse(string[] args)
-        => new(Option(args, "--confirm"));
+        => new(Option(args, "--confirm"), Option(args, "--correlation-id"));
 
     private static string? Option(string[] args, string name)
     {
@@ -627,6 +899,71 @@ internal sealed record PimaxShellActivationCommandLine(string? Confirmation)
 
         return null;
     }
+}
+
+internal sealed class WindowsPimaxShellExecutionContextInspector : IPimaxShellExecutionContextInspector
+{
+    public PimaxShellActivationExecutionContext Inspect()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return new PimaxShellActivationExecutionContext(false, false, false, false, false, Environment.UserInteractive, false, -1, false, [], "Windows Shell activation validation is only supported on Windows.");
+        }
+
+        var currentSession = SafeCurrentSessionId();
+        var explorerSessions = ExplorerSessions();
+        var explorerMatched = explorerSessions.Contains(currentSession);
+        var identity = WindowsIdentity.GetCurrent();
+        var isLocalSystem = identity.User?.IsWellKnown(WellKnownSidType.LocalSystemSid) == true;
+        var isElevated = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+        var sessionZero = currentSession == 0;
+        var interactive = Environment.UserInteractive;
+        var serviceContext = !interactive || sessionZero;
+        return new PimaxShellActivationExecutionContext(
+            true,
+            isLocalSystem,
+            sessionZero,
+            serviceContext,
+            IsLikelyScheduledWatcherProcess(),
+            interactive,
+            isElevated,
+            currentSession,
+            explorerMatched,
+            explorerSessions.Select(session => $"explorerSession:{session}").ToArray(),
+            explorerMatched ? "Current process session matches an active Explorer session." : "Current process session does not match an active Explorer session.");
+    }
+
+    private static int SafeCurrentSessionId()
+    {
+        try { return Process.GetCurrentProcess().SessionId; }
+        catch { return -1; }
+    }
+
+    private static int[] ExplorerSessions()
+    {
+        try
+        {
+            return Process.GetProcessesByName("explorer")
+                .Select(process =>
+                {
+                    try { return process.SessionId; }
+                    catch { return -1; }
+                    finally { process.Dispose(); }
+                })
+                .Where(session => session >= 0)
+                .Distinct()
+                .ToArray();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static bool IsLikelyScheduledWatcherProcess()
+        => Environment.GetCommandLineArgs().Any(arg => arg.Contains("watch", StringComparison.OrdinalIgnoreCase)
+            || arg.Contains("startup", StringComparison.OrdinalIgnoreCase)
+            || arg.Contains("scheduled", StringComparison.OrdinalIgnoreCase));
 }
 
 internal sealed class WindowsPimaxShellShortcutReader : IPimaxShellShortcutReader

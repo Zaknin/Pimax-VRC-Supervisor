@@ -138,26 +138,79 @@ internal sealed record PimaxElevatedStartupObservationRequest(
     bool PreflightOnly,
     string ObservationId)
 {
+    public string CorrelationId { get; init; } = "";
+    public string[] ValidationErrors { get; init; } = [];
+
     public static PimaxElevatedStartupObservationRequest Parse(string[] args)
     {
         var baseRequest = PimaxStartupObservationRequest.Parse(args);
         var preflightOnly = args.Any(arg => string.Equals(arg, "--preflight-only", StringComparison.OrdinalIgnoreCase)
             || string.Equals(arg, "--capability-only", StringComparison.OrdinalIgnoreCase));
+        var errors = new List<string>();
+        var duration = baseRequest.Duration;
+        if (TryOption(args, "--duration-seconds", out var durationText))
+        {
+            if (!int.TryParse(durationText, out var parsedDuration))
+            {
+                errors.Add("Duration must be an integer number of seconds.");
+            }
+            else if (parsedDuration is < 15 or > 120)
+            {
+                errors.Add("Elevated observer duration must be between 15 and 120 seconds.");
+            }
+            else
+            {
+                duration = TimeSpan.FromSeconds(parsedDuration);
+            }
+        }
+
+        var correlationId = TryOption(args, "--correlation-id", out var correlationText) ? correlationText ?? "" : "";
+        if (!string.IsNullOrWhiteSpace(correlationId) && !Guid.TryParse(correlationId, out _))
+        {
+            errors.Add("Correlation ID must be a valid GUID.");
+        }
+
         return new PimaxElevatedStartupObservationRequest(
-            baseRequest.Duration,
+            duration,
             baseRequest.PollInterval,
             baseRequest.Fake,
             preflightOnly,
-            baseRequest.ObservationId.Replace("pimax-startup-observe-", "pimax-startup-observe-elevated-", StringComparison.OrdinalIgnoreCase));
+            baseRequest.ObservationId.Replace("pimax-startup-observe-", "pimax-startup-observe-elevated-", StringComparison.OrdinalIgnoreCase))
+        {
+            CorrelationId = correlationId,
+            ValidationErrors = errors.ToArray()
+        };
     }
 
     public PimaxStartupObservationRequest ToStartupRequest(bool fake)
         => new(Duration, PollInterval, fake, ObservationId);
+
+    private static bool TryOption(string[] args, string name, out string? value)
+    {
+        value = null;
+        for (var index = 0; index < args.Length; index++)
+        {
+            if (!string.Equals(args[index], name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                value = args[index + 1];
+            }
+
+            return true;
+        }
+
+        return false;
+    }
 }
 
 internal sealed record PimaxElevatedStartupObservationSnapshot(
     string Schema,
     string ObservationId,
+    string CorrelationId,
     DateTimeOffset CollectedAt,
     bool Accepted,
     bool ElevatedMode,
@@ -848,6 +901,18 @@ internal sealed class PimaxStartupObserver
     public async Task<PimaxElevatedStartupObservationSnapshot> ObserveElevatedAsync(PimaxElevatedStartupObservationRequest request, CancellationToken cancellationToken)
     {
         var isElevated = IsCurrentProcessElevated();
+        if (request.ValidationErrors.Length > 0)
+        {
+            return BuildElevatedSnapshot(
+                request,
+                isElevated || request.Fake,
+                accepted: false,
+                warnings: [],
+                errors: request.ValidationErrors,
+                summary: "Elevated startup observation refused because one or more command-line arguments are outside the formal validation contract.",
+                observation: null);
+        }
+
         if (!isElevated && !request.Fake)
         {
             return BuildElevatedSnapshot(
@@ -921,6 +986,7 @@ internal sealed class PimaxStartupObserver
         => new(
             PimaxElevatedStartupObservationSchema.Version,
             request.ObservationId,
+            request.CorrelationId,
             DateTimeOffset.Now,
             accepted,
             ElevatedMode: true,

@@ -139,6 +139,8 @@ The elevated observer contract is scoped to process-creator evidence only. It pr
 
 `pimax-shell-activate-json` exists only for the later controlled validation. In B2D it refuses with `implementationCompleteLiveValidationRequired` even with the exact confirmation string. It reports the intended one-shot Shell open-verb request, no-retry policy, no-direct-launch policy, no-service-mutation policy, expected readiness stages, 90-second bound, and `backendExecutable=false`.
 
+`pimax-shell-activate-validation-json` is the B2D-V development-only live boundary command. It emits schema `pimax-shell-activation-validation-v1`, requires `CONFIRM ONE CONTROLLED PIMAX SHELL ACTIVATION VALIDATION`, requires a valid GUID `--correlation-id`, refuses elevated, service, LocalSystem, session-0, scheduled-watcher, noninteractive, or Explorer-session-mismatched execution, requires a trusted unique official `PimaxPlay.lnk`, requires a stopped Pimax software group, makes exactly one Shell `open` request, performs no retry or fallback, and keeps `backendExecutable=false`, `automaticRecoveryAllowed=false`, `tuiExposureAllowed=false`, `configuratorExposureAllowed=false`, and `watcherExecutionAllowed=false`.
+
 ## Formal Start Menu Comparison
 
 Phase 28D2-B2A ran one formal observer-backed normal Windows Start Menu launch comparison. The user exited Pimax Play through the official tray Exit command, then launched the normal Start Menu `PimaxPlay` entry once. The launch was not retried, and no missing runtime executable was manually started.
