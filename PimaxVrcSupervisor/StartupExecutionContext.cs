@@ -122,6 +122,8 @@ internal static class PimaxDevelopmentCommandLine
         "pimax-startup-observe-json",
         "pimax-startup-observe-elevated-json",
         "pimax-startup-creator-chain-json",
+        "pimax-shell-activation-evidence-collect-elevated-json",
+        "pimax-shell-activation-evidence-assess-json",
         "pimax-shell-activation-precondition-json",
         "pimax-shell-activation-capability-json",
         "pimax-shell-activate-json",

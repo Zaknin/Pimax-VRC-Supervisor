@@ -69,6 +69,8 @@ public sealed class StartupExecutionContextTests
     }
 
     [Theory]
+    [InlineData("pimax-shell-activation-evidence-collect-elevated-json")]
+    [InlineData("pimax-shell-activation-evidence-assess-json")]
     [InlineData("pimax-shell-activation-precondition-json")]
     [InlineData("pimax-shell-activation-capability-json")]
     [InlineData("pimax-shell-activate-json")]
