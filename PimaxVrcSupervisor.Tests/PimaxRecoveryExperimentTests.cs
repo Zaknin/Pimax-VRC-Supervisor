@@ -397,6 +397,7 @@ public sealed class PimaxRecoveryExperimentTests
         var result = new PimaxRegistrationAssessmentResult(
             state,
             confidence,
+            state == PimaxRegistrationState.ConflictingEvidence ? PimaxEvidenceFreshness.Contradicted : PimaxEvidenceFreshness.Current,
             "synthetic",
             [],
             [],

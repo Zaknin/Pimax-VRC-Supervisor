@@ -1,0 +1,62 @@
+{
+  "schema": "phase28d2b2a-startmenu-observation-sanitized-v1",
+  "source": "formalManualStartMenuActivation",
+  "directLaunchComparison": {
+    "source": "directProcessCreation",
+    "result": "groupPartial",
+    "formedMembers": [
+      "PimaxClient"
+    ],
+    "missingMembers": [
+      "DeviceSetting",
+      "PiPlayService",
+      "pi_server"
+    ],
+    "operatorVisibleResult": "blankWindowBlueHeadset"
+  },
+  "formalStartMenuLaunch": {
+    "source": "manualStartMenuActivation",
+    "result": "groupReadyAndRegistered",
+    "registration": "registeredReady",
+    "registrationConfidence": "confirmed",
+    "freshness": "current",
+    "operatorVisibleResult": {
+      "headsetLed": "green",
+      "pimaxPlayWindow": "normal",
+      "imagePresent": true,
+      "audioAvailable": true,
+      "microphoneAvailable": true,
+      "eyeTrackingAvailable": true,
+      "viveFaceTrackingDetected": true,
+      "pcInstability": false,
+      "unrelatedApplicationRestart": false
+    }
+  },
+  "observedRequiredMembers": [
+    "PimaxClient",
+    "DeviceSetting",
+    "PiPlayService",
+    "pi_server",
+    "PiServiceLauncher",
+    "Tobii VR4PIMAXP3B Platform Runtime"
+  ],
+  "parentSnapshotSummary": {
+    "deviceSettingCreator": "external-parent-or-exited-broker",
+    "piPlayServiceCreator": "DeviceSetting",
+    "piServiceCreator": "DeviceSetting",
+    "piServerCreator": "PiService",
+    "rootCreatorStatus": "unresolved"
+  },
+  "mechanismResult": "manualShellLaunchWorksMechanismStillUnresolved",
+  "backendExecutable": false,
+  "recommendedNextPhase": "Phase 28D2-B2B - Resolve the Pimax Start Menu Activation Creator Chain",
+  "privacyRedactions": [
+    "raw PIDs",
+    "raw command lines",
+    "user profile paths",
+    "machine name",
+    "certificate serial numbers",
+    "raw PnP IDs",
+    "raw Pimax log contents"
+  ]
+}

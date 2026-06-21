@@ -68,6 +68,28 @@ public sealed class StartupExecutionContextTests
         Assert.True(StartupExecutionContext.Parse(["--apply-startup-integration"]).CanApplyStartupIntegration);
     }
 
+    [Theory]
+    [InlineData("pimax-shell-activation-evidence-collect-elevated-json")]
+    [InlineData("pimax-shell-activation-evidence-assess-json")]
+    [InlineData("pimax-shell-activation-precondition-json")]
+    [InlineData("pimax-shell-activation-capability-json")]
+    [InlineData("pimax-shell-activate-json")]
+    [InlineData("pimax-shell-activate-validation-json")]
+    [InlineData("pimax-component-health-json")]
+    [InlineData("pimax-repair-plan-json")]
+    [InlineData("pimax-repair-start-json")]
+    [InlineData("pimax-startup-observe-elevated-json")]
+    public void PimaxDevelopmentCommandsBypassInteractiveFirstRunAndStartupMutation(string command)
+    {
+        var context = StartupExecutionContext.Parse([command, "--apply-startup-integration"]);
+
+        Assert.True(context.IsPimaxDevelopmentCommand);
+        Assert.Equal(command, context.PimaxDevelopmentCommand);
+        Assert.False(context.IsInteractiveSupervisorLaunch);
+        Assert.False(context.CanApplyStartupIntegration);
+        Assert.False(context.ShouldHideConsole);
+    }
+
     [Fact]
     public void TerminalUiLaunchIntentDoesNotOwnSteamVrLifecycle()
     {

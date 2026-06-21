@@ -33,6 +33,9 @@ internal static class PimaxRepairClassification
 {
     public const string AlreadyHealthy = "alreadyHealthy";
     public const string SoftwareStackUnhealthy = "softwareStackUnhealthy";
+    public const string SoftwareStackUnavailable = "softwareStackUnavailable";
+    public const string SoftwareStackPartial = "softwareStackPartial";
+    public const string StaleRegistrationEvidence = "staleRegistrationEvidence";
     public const string PoweredOnAwaitingRegistration = "poweredOnAwaitingRegistration";
     public const string CoreUsbMissing = "coreUsbMissing";
     public const string SuperSpeedMissing = "superSpeedMissing";
@@ -266,6 +269,21 @@ internal sealed class PimaxRepairPlanner
             return PimaxRepairClassification.ConflictingEvidence;
         }
 
+        if (health.OverallStatus == PimaxHealthOverallStatus.SoftwareStackUnavailable || health.RegistrationAssessment.State == PimaxRegistrationState.SoftwareStackUnavailable)
+        {
+            return PimaxRepairClassification.SoftwareStackUnavailable;
+        }
+
+        if (health.OverallStatus == PimaxHealthOverallStatus.SoftwareStackPartial)
+        {
+            return PimaxRepairClassification.SoftwareStackPartial;
+        }
+
+        if (health.OverallStatus == PimaxHealthOverallStatus.StaleRegistrationEvidence || health.RegistrationAssessment.State == PimaxRegistrationState.RegistrationEvidenceStale)
+        {
+            return PimaxRepairClassification.StaleRegistrationEvidence;
+        }
+
         if (health.OverallStatus == PimaxHealthOverallStatus.Unknown || health.Components.Length == 0)
         {
             return PimaxRepairClassification.Unknown;
@@ -325,8 +343,7 @@ internal sealed class PimaxRepairPlanner
             case PimaxRepairClassification.PoweredOnAwaitingRegistration:
                 yield return all["verifyServiceState"];
                 yield return all["verifyProcessState"];
-                yield return all["restartValidatedPimaxServices"];
-                yield return all["startValidatedPimaxProcesses"];
+                yield return all["requireApprovedGroupRestartRecipe"];
                 yield return all["waitForSoftwareStack"];
                 yield return all["waitForRegistration"];
                 yield return all["requirePimaxConnect"];
@@ -338,12 +355,18 @@ internal sealed class PimaxRepairPlanner
             case PimaxRepairClassification.SoftwareStackUnhealthy:
                 yield return all["verifyProcessState"];
                 yield return all["verifyServiceState"];
-                yield return all["stopValidatedPimaxProcesses"];
-                yield return all["restartValidatedPimaxServices"];
-                yield return all["startValidatedPimaxProcesses"];
+                yield return all["requireApprovedGroupRestartRecipe"];
                 yield return all["waitForSoftwareStack"];
                 yield return all["capturePostHealth"];
                 yield return all["compareHealth"];
+                yield return all["reportResult"];
+                break;
+            case PimaxRepairClassification.SoftwareStackUnavailable:
+            case PimaxRepairClassification.SoftwareStackPartial:
+            case PimaxRepairClassification.StaleRegistrationEvidence:
+                yield return all["verifyProcessState"];
+                yield return all["verifyServiceState"];
+                yield return all["requireApprovedGroupRestartRecipe"];
                 yield return all["reportResult"];
                 break;
             case PimaxRepairClassification.CoreUsbMissing:
@@ -360,7 +383,7 @@ internal sealed class PimaxRepairPlanner
             case PimaxRepairClassification.EyeChipMissing:
                 yield return all["waitForRegistration"];
                 yield return all["verifyServiceState"];
-                yield return all["restartValidatedPimaxServices"];
+                yield return all["requireApprovedGroupRestartRecipe"];
                 yield return all["waitForSoftwareStack"];
                 yield return all["capturePostHealth"];
                 yield return all["compareHealth"];
@@ -370,7 +393,7 @@ internal sealed class PimaxRepairPlanner
             case PimaxRepairClassification.MicrophoneMissing:
                 yield return all["waitForRegistration"];
                 yield return all["verifyProcessState"];
-                yield return all["restartValidatedPimaxServices"];
+                yield return all["requireApprovedGroupRestartRecipe"];
                 yield return all["waitForSoftwareStack"];
                 yield return all["capturePostHealth"];
                 yield return all["compareHealth"];
@@ -380,7 +403,7 @@ internal sealed class PimaxRepairPlanner
             case PimaxRepairClassification.TrackingInterfacesMissing:
                 yield return all["waitForRegistration"];
                 yield return all["verifyProcessState"];
-                yield return all["restartValidatedPimaxServices"];
+                yield return all["requireApprovedGroupRestartRecipe"];
                 yield return all["capturePostHealth"];
                 yield return all["compareHealth"];
                 yield return all["reportResult"];
@@ -412,7 +435,10 @@ internal sealed class PimaxRepairPlanner
     private static string OutcomeFor(string classification) => classification switch
     {
         PimaxRepairClassification.AlreadyHealthy => PimaxRepairOutcome.NoRepairNeeded,
-        PimaxRepairClassification.SoftwareStackUnhealthy => PimaxRepairOutcome.SoftwareRepairCandidate,
+        PimaxRepairClassification.SoftwareStackUnhealthy => PimaxRepairOutcome.UnsupportedAutomaticRecovery,
+        PimaxRepairClassification.SoftwareStackUnavailable => PimaxRepairOutcome.UnsupportedAutomaticRecovery,
+        PimaxRepairClassification.SoftwareStackPartial => PimaxRepairOutcome.UnsupportedAutomaticRecovery,
+        PimaxRepairClassification.StaleRegistrationEvidence => PimaxRepairOutcome.UnsupportedAutomaticRecovery,
         PimaxRepairClassification.PoweredOnAwaitingRegistration => PimaxRepairOutcome.PhysicalUsbConnectionRequired,
         PimaxRepairClassification.CoreUsbMissing => PimaxRepairOutcome.PhysicalUsbConnectionRequired,
         PimaxRepairClassification.DisplayPathMissing => PimaxRepairOutcome.DisplayPortConnectionRequired,
@@ -425,12 +451,15 @@ internal sealed class PimaxRepairPlanner
     private static string SummaryFor(string classification) => classification switch
     {
         PimaxRepairClassification.AlreadyHealthy => "No repair is needed.\n\nPimax registration is ready and all required core headset components are present.",
-        PimaxRepairClassification.PoweredOnAwaitingRegistration => "Windows detects the Pimax headset USB stack, but Pimax Play has not registered the headset.\n\nA future software-stack restart may be attempted, but automatic registration cannot currently be guaranteed.\n\nPimax Play Connect and a real physical USB reconnection may still be required.",
+        PimaxRepairClassification.PoweredOnAwaitingRegistration => "Windows detects the Pimax headset USB stack, but Pimax Play has not registered the headset.\n\nNo Pimax Play/runtime restart is approved until a complete group launch and readiness recipe is proven.\n\nPimax Play Connect and a real physical USB reconnection may still be required.",
         PimaxRepairClassification.EyeChipMissing => "EyeChip is not detected.\n\nEye tracking is unavailable.\n\nThe planned repair will verify the Pimax software stack and reassess EyeChip after the stack settles.",
         PimaxRepairClassification.DisplayPathMissing => "Pimax registration may be ready, but the DisplayPort video path is not detected.\n\nThe headset may have no image.\n\nAutomatic DisplayPort reconnection is not available.",
         PimaxRepairClassification.ViveFaceTrackerMissing => "The Vive face tracker is not detected.\n\nCore Pimax VR may still be available, but VRCFT face or mouth tracking will be unavailable.",
         PimaxRepairClassification.CoreUsbMissing => "The core Pimax USB connection is not detected.\n\nA software restart is unlikely to restore a physically absent USB link, and logical USB reset is not an approved repair action.",
-        PimaxRepairClassification.SoftwareStackUnhealthy => "Pimax core devices are present, but the Pimax software stack appears unhealthy.\n\nA future confirmed software-stack restart may be a repair candidate, followed by post-health verification.",
+        PimaxRepairClassification.SoftwareStackUnavailable => "The full Pimax Play/runtime group is unavailable.\n\nA verified Pimax Play launcher candidate has been identified, but the complete process-group launch and readiness recipe has not yet been validated from a stopped state.\n\nAutomatic restart remains disabled.",
+        PimaxRepairClassification.SoftwareStackPartial => "The Pimax Play/runtime group is partial or inconsistent.\n\nStandalone member restart is prohibited; group-level recovery semantics and a complete recipe are required.",
+        PimaxRepairClassification.StaleRegistrationEvidence => "Previously ready registration evidence is stale because the owning Pimax software group changed or is absent.\n\nNo mutating action is allowed solely from stale readiness.",
+        PimaxRepairClassification.SoftwareStackUnhealthy => "Pimax core devices are present, but the Pimax software stack appears unhealthy.\n\nA complete Pimax Play/runtime group restart recipe is required before any software mutation can run.",
         PimaxRepairClassification.SuperSpeedMissing => "The Pimax SuperSpeed connection is missing.\n\nHigh-bandwidth camera or sensor features may be unavailable, and full repair cannot be guaranteed by software.",
         PimaxRepairClassification.AudioOutputMissing => "The Pimax audio output is not detected.\n\nA future software-stack restart candidate would need to verify the audio endpoint after settling.",
         PimaxRepairClassification.MicrophoneMissing => "The Pimax microphone is not detected.\n\nA future software-stack restart candidate would need to verify the recording endpoint after settling.",
@@ -442,7 +471,10 @@ internal sealed class PimaxRepairPlanner
 
     private static string[] DependencyRules(string classification) => classification switch
     {
-        PimaxRepairClassification.PoweredOnAwaitingRegistration => ["capture health", "verify core USB", "verify Pimax processes and services", "propose software-stack restart only as a later confirmed phase", "settle", "verify registration", "report Connect and physical USB limitation", "final health assessment"],
+        PimaxRepairClassification.PoweredOnAwaitingRegistration => ["capture health", "verify core USB", "verify Pimax processes and services", "require complete group restart recipe before software mutation", "settle", "verify registration", "report Connect and physical USB limitation", "final health assessment"],
+        PimaxRepairClassification.SoftwareStackUnavailable => ["capture health", "detect unavailable Pimax Play/runtime group", "report launcher candidate as unvalidated", "return unsupported automatic recovery"],
+        PimaxRepairClassification.SoftwareStackPartial => ["capture health", "detect partial Pimax Play/runtime group", "refuse standalone member restart", "require group-level recovery semantics"],
+        PimaxRepairClassification.StaleRegistrationEvidence => ["capture health", "reject stale registration readiness", "reassess only with current software-group evidence", "return unsupported automatic recovery if owner is missing"],
         PimaxRepairClassification.EyeChipMissing => ["verify registration", "verify USB 2 and SuperSpeed", "verify Pimax software stack", "propose software restart candidate", "verify EyeChip", "report eye tracking availability"],
         PimaxRepairClassification.DisplayPathMissing => ["verify registration", "verify DisplayPort path", "do not treat USB registration repair as guaranteed display repair", "report DisplayPort reconnect limitation"],
         PimaxRepairClassification.AudioOutputMissing => ["verify registration", "verify MMDEVAPI/audio endpoint", "propose safe software-stack restart candidate", "recheck endpoint", "report sound availability"],
@@ -453,7 +485,10 @@ internal sealed class PimaxRepairPlanner
     private static string[] ExpectedOutcomes(string classification) => classification switch
     {
         PimaxRepairClassification.AlreadyHealthy => ["No repair needed."],
-        PimaxRepairClassification.PoweredOnAwaitingRegistration => ["Software-stack repair may be attempted in a later phase.", "Automatic registration is not guaranteed.", "Pimax Play Connect and physical USB reconnection may still be required."],
+        PimaxRepairClassification.PoweredOnAwaitingRegistration => ["No Pimax Play/runtime restart is approved without a complete group recipe.", "Automatic registration is not guaranteed.", "Pimax Play Connect and physical USB reconnection may still be required."],
+        PimaxRepairClassification.SoftwareStackUnavailable => ["A verified Pimax Play launcher candidate has been identified, but the complete process-group launch and readiness recipe has not yet been validated from a stopped state.", "Automatic restart remains disabled.", "PimaxClient must not be restarted by itself."],
+        PimaxRepairClassification.SoftwareStackPartial => ["No standalone member restart is allowed.", "Group-level launch and readiness semantics must be proven first."],
+        PimaxRepairClassification.StaleRegistrationEvidence => ["Stale registration evidence cannot be used as proof of current health.", "The current software owner must be reassessed before any repair decision."],
         PimaxRepairClassification.DisplayPathMissing => ["Registration and video path are distinct.", "Automatic DisplayPort reconnection is unavailable."],
         PimaxRepairClassification.CoreUsbMissing => ["Operator physical USB action is required if the core link is absent.", "Logical USB reset is not proposed."],
         _ => ["Post-health verification is required before any future repair can be called successful."]
@@ -470,6 +505,11 @@ internal sealed class PimaxRepairPlanner
         if (classification == PimaxRepairClassification.PoweredOnAwaitingRegistration)
         {
             warnings.Add("Automatic Pimax registration is unavailable; do not claim Connect or physical USB reconnection capability.");
+        }
+
+        if (classification is PimaxRepairClassification.SoftwareStackUnavailable or PimaxRepairClassification.SoftwareStackPartial or PimaxRepairClassification.StaleRegistrationEvidence)
+        {
+            warnings.Add("A launcher candidate does not make the Pimax Play/runtime group executable; stopped-state validation is still required.");
         }
 
         return warnings.ToArray();
@@ -589,7 +629,10 @@ internal static class PimaxRepairPolicy
             Capability("beforeAfterComponentComparison", "Before/after component comparison", PimaxRepairCapabilityAvailability.Available, "probable", ["Phase 28D1 component IDs"], "Pre-health and post-health snapshots can be compared by stable component IDs.", "Repair success can depend on observed component recovery."),
             Capability("boundedWaitDesign", "Bounded wait design", PimaxRepairCapabilityAvailability.Available, "probable", ["Phase 28D2-L state machine"], "Future waits are represented with explicit settle and verification stages.", "Long-running repair can avoid unbounded polling."),
             Capability("humanReadableDiagnosis", "Human-readable diagnosis", PimaxRepairCapabilityAvailability.Available, "probable", ["Phase 28D1 component explanations"], "Component-specific summaries are available.", "TUI and CLI can explain limitations without raw device identities."),
-            Capability("softwareStackRestartCandidate", "Software-stack restart candidate identification", PimaxRepairCapabilityAvailability.AvailableWithLimitations, "probable", ["Phase 28C service/client experiments", "Phase 28D2-L descriptors"], "Potential software restart actions can be represented for a later confirmed phase.", "The planner may propose candidates but cannot execute them in this phase."),
+            Capability("softwareStackRestartCandidate", "Software-stack restart candidate identification", PimaxRepairCapabilityAvailability.NotApproved, "confirmed", ["Phase 28D2-BV live validation", "Phase 28D2-BV2 direct-launch rejection", "Phase 28D2-B2 startup-source discovery", "Phase 28D2-B2C elevated creator-chain result", "Phase 28D2-B2D Shell adapter"], "PimaxClient is a coupled group member and direct process creation is rejected. B2C confirmed Windows Explorer-rooted Start Menu Shell activation as the successful manual mechanism. B2D adds a programmatic Shell adapter, but the safe programmatic equivalent is not live validated.", "The planner must refuse automatic group restart until one controlled B2D-V Shell activation validates equivalence."),
+            Capability("officialStartMenuShellActivationAdapter", "Official Start Menu Shell activation adapter", PimaxRepairCapabilityAvailability.AvailableWithLimitations, "confirmed", ["pimax-shell-activation-capability-v1", "pimax-shell-activation-result-v1"], "The backend can discover and validate the official PimaxPlay.lnk Start Menu entry and model one Windows Shell open-verb activation request with no direct executable fallback, retry, or service mutation.", "The adapter is policy-disabled for live execution in B2D and reports backendExecutable=false until B2D-V succeeds."),
+            Capability("pimaxPlayLauncherCandidate", "Pimax Play launcher candidate", PimaxRepairCapabilityAvailability.AvailableWithLimitations, "probable", ["Phase 28D2-B2 Start Menu and registry discovery"], "The installed Pimax Play shortcut can identify a launcher candidate and working directory without launching it.", "Discovery alone does not approve restart or repair execution."),
+            Capability("processGroupLaunchRecipeModel", "Process-group launch recipe model", PimaxRepairCapabilityAvailability.AvailableWithLimitations, "confirmed", ["pimax-launch-recipe-v1", "pimax-startup-sources-v1", "pimax-startup-observation-v1", "pimax-startup-observation-elevated-v1", "pimax-startup-creator-chain-v1", "pimax-shell-activation-capability-v1"], "The backend can report launcher metadata, startup sources, expected members, B2C Explorer-rooted creator-chain evidence, readiness criteria, failure criteria, and prohibited side effects.", "The recipe state may reach readyForShellActivationValidation, but it remains non-executable until the B2D adapter is validated once live."),
             Capability("operationProgressReporting", "Operation progress reporting", PimaxRepairCapabilityAvailability.AvailableWithLimitations, "probable", ["Phase 28D2-L operation state"], "The state machine defines stages, progress ordinal, active action, and completed actions.", "Future TUI status can share a backend contract."),
             Capability("cancellationBeforeMutation", "Cancellation before mutating software actions", PimaxRepairCapabilityAvailability.AvailableWithLimitations, "probable", ["Phase 28D2-L state machine"], "Cancellation points are defined before mutating actions start.", "Future repair can avoid leaving partial action ownership."),
             Capability("finalVerification", "Final verification", PimaxRepairCapabilityAvailability.Available, "probable", ["Phase 28D1 health model"], "A future repair result must depend on post-health verification.", "Process or service restart alone cannot be reported as success."),
@@ -612,6 +655,7 @@ internal static class PimaxRepairPolicy
             Action("verifyProcessState", "Verify Pimax process state", "observation", false, true, true, false, true, false, 15, ["Read-only process enumeration is available."], ["Relevant Pimax process state is summarized."], ["Process state cannot be assessed."], "Observes process state without stopping or starting anything."),
             Action("verifyServiceState", "Verify Pimax service state", "observation", false, true, true, false, true, false, 15, ["Read-only service enumeration is available."], ["Relevant Pimax service state is summarized."], ["Service state cannot be assessed."], "Observes service state without restarting services."),
             Action("requestOperatorConfirmation", "Request operator confirmation", "operator", false, true, true, true, true, false, 300, ["A mutating software plan exists."], ["Operator confirms or cancels."], ["Confirmation times out."], "Future execution must pause before any mutating software action."),
+            Action("requireApprovedGroupRestartRecipe", "Require approved Pimax group restart recipe", "softwareStack", false, false, false, false, true, false, 0, ["Pimax Play/runtime group recovery is needed."], ["A complete safe launch, readiness, side-effect, and verification recipe is validated from a stopped state."], ["A launcher candidate exists but the recipe is not yet live validated."], "A verified Pimax Play launcher candidate has been identified, but the complete process-group launch and readiness recipe has not yet been validated from a stopped state. Automatic restart remains disabled."),
             Action("stopValidatedPimaxProcesses", "Stop validated Pimax processes", "softwareStack", true, false, false, true, true, false, 30, ["Targets are validated and operator confirmed."], ["Validated targets exit."], ["A target cannot be stopped or validation changes."], "Descriptor only in this phase; no process stop implementation is present."),
             Action("restartValidatedPimaxServices", "Restart validated Pimax services", "softwareStack", true, false, false, true, true, false, 60, ["Targets are validated and operator confirmed."], ["Validated services return to running state."], ["A service fails to restart or validation changes."], "Descriptor only in this phase; no service restart implementation is present."),
             Action("startValidatedPimaxProcesses", "Start validated Pimax processes", "softwareStack", true, false, false, true, true, false, 30, ["Executable target is validated and operator confirmed."], ["Validated process is observed."], ["Process launch fails or target is unsafe."], "Descriptor only in this phase; no process start implementation is present."),

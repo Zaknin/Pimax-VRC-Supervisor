@@ -1,0 +1,52 @@
+{
+  "schema": "phase-28d2bv-coupled-exit-regression-v1",
+  "source": "sanitized Phase 28D2-BV live validation",
+  "beforeAction": {
+    "softwareGroupState": "complete",
+    "overallHealth": "healthy",
+    "registrationState": "registeredReady",
+    "registrationFreshness": "current",
+    "requiredComponentsPresent": true
+  },
+  "action": {
+    "target": "PimaxClient",
+    "method": "CloseMainWindow",
+    "forceKillUsed": false,
+    "backendRepairStarted": false
+  },
+  "observedSideEffect": {
+    "exitedProcesses": [
+      "PimaxClient",
+      "DeviceSetting",
+      "PiPlayService",
+      "PiService"
+    ],
+    "remainingPimaxProcesses": [
+      "pi_overlay",
+      "pi_server",
+      "PiPlatformService_64",
+      "PVRHome",
+      "UnityCrashHandler64"
+    ],
+    "unexpectedRuntimeExit": true
+  },
+  "machineRemnants": {
+    "usbDeviceDescendantsRemainPresent": true,
+    "oldRegistrationEvidenceRemainAvailable": true,
+    "softwareGroupState": "unavailable"
+  },
+  "operatorState": {
+    "led": "blue",
+    "pimaxPlay": "closed",
+    "headsetWorking": false,
+    "viveFaceTrackerDetected": true
+  },
+  "expectedCorrectedResult": {
+    "overallHealth": "softwareStackUnavailable",
+    "registrationState": "softwareStackUnavailable",
+    "registrationFreshness": "unowned",
+    "targetClassification": "groupMemberNotIndependentlyRestartable",
+    "plannerOutcome": "unsupportedAutomaticRecovery",
+    "executableRepairAction": false
+  }
+}

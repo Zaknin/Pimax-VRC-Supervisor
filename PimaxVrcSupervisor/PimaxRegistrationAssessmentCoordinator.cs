@@ -62,6 +62,7 @@ internal sealed class PimaxRegistrationAssessmentCoordinator
             var emptyAssessment = new PimaxRegistrationAssessmentResult(
                 PimaxRegistrationState.Unknown,
                 PimaxRegistrationConfidence.Insufficient,
+                PimaxEvidenceFreshness.Unknown,
                 "One or more required read-only probes failed.",
                 [],
                 [],
