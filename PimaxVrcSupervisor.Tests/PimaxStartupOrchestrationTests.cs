@@ -34,7 +34,7 @@ public sealed class PimaxStartupOrchestrationTests
                     ["formal observer-backed Start Menu launch"])
             ]);
 
-        Assert.Equal(PimaxStartupMechanism.ManualShellLaunchWorksMechanismStillUnresolved, assessment.Mechanism);
+        Assert.Equal(PimaxStartupMechanism.ShellActivationMechanismConfirmed, assessment.Mechanism);
         Assert.False(assessment.BackendExecutable);
         Assert.Contains("programmatic", string.Join("\n", assessment.Blockers), StringComparison.OrdinalIgnoreCase);
     }

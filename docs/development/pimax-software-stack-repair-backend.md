@@ -11,6 +11,7 @@ Read-only:
 ```powershell
 dotnet .\PimaxVrcSupervisor.dll pimax-repair-targets-json
 dotnet .\PimaxVrcSupervisor.dll pimax-launch-recipe-json
+dotnet .\PimaxVrcSupervisor.dll pimax-shell-activation-capability-json
 dotnet .\PimaxVrcSupervisor.dll pimax-startup-sources-json
 dotnet .\PimaxVrcSupervisor.dll pimax-startup-observe-json --fake
 dotnet .\PimaxVrcSupervisor.dll pimax-startup-observe-elevated-json --preflight-only
@@ -23,14 +24,19 @@ Operation:
 
 ```powershell
 dotnet .\PimaxVrcSupervisor.dll pimax-repair-start-json --mode software-stack-only --dry-run
+dotnet .\PimaxVrcSupervisor.dll pimax-shell-activate-json --confirm "CONFIRM ONE PIMAX SHELL ACTIVATION"
 dotnet .\PimaxVrcSupervisor.dll pimax-repair-cancel-json
 ```
+
+`pimax-shell-activate-json` is present for the later B2D-V validation only. In B2D it returns a structured policy refusal even with the exact confirmation string and performs no live Shell activation.
 
 Schemas:
 
 ```text
 pimax-repair-targets-v1
 pimax-launch-recipe-v1
+pimax-shell-activation-capability-v1
+pimax-shell-activation-result-v1
 pimax-startup-sources-v1
 pimax-startup-observation-v1
 pimax-startup-observation-elevated-v1
@@ -69,7 +75,7 @@ Each target is classified as exactly one of:
 
 Phase 28D2-B1 does not approve any standalone Pimax Play/runtime process. A validated `PimaxClient` is classified as `groupMemberNotIndependentlyRestartable` because closing it terminated other runtime members during Phase 28D2-BV.
 
-The complete Pimax Play/runtime group is represented as a `processGroup` target. When the current group is complete, the target may still be listed as a non-executable validation candidate, but its launch recipe state is `shellActivationObserved`, not executable. Phase 28D2-BV2 rejected direct `PimaxClient.exe` process creation because it produced only a blank `PimaxClient` window and left `DeviceSetting`, `PiPlayService`, and `pi_server` missing. Phase 28D2-B2A proved the normal Start Menu path can form the group, but did not preserve the transient root creator of `DeviceSetting`. Automatic restart remains disabled until a creator-chain observation identifies the activation root and a later one-shot phase validates a safe programmatic equivalent.
+The complete Pimax Play/runtime group is represented as a `processGroup` target. When the current group is complete, the target may still be listed as a non-executable validation candidate, but its launch recipe state is `readyForShellActivationValidation`, not executable. Phase 28D2-BV2 rejected direct `PimaxClient.exe` process creation because it produced only a blank `PimaxClient` window and left `DeviceSetting`, `PiPlayService`, and `pi_server` missing. Phase 28D2-B2C later confirmed the successful manual chain as Windows Explorer-rooted Start Menu Shell activation. Automatic restart remains disabled until one controlled programmatic Shell activation proves equivalence.
 
 Pimax services, including `PiServiceLauncher` and Tobii Eye Tracking runtime services, remain observe-only in this phase. Previous evidence did not prove that restarting them is a safe or correct persistent recovery target.
 
@@ -191,11 +197,32 @@ Phase 28D2-B2C adds `pimax-startup-observe-elevated-json` as a separate one-shot
 
 The elevated observer exists only to improve evidence quality for the `DeviceSetting` creator question. It does not start Pimax, stop Pimax, restart services, run tasks, invoke Connect, automate input, cycle USB, touch DisplayPort, restart SteamVR, restart VRChat, restart VRCFT, restart the Supervisor, restart the watcher, or access the network. Public output uses observation-local tokens and redacts raw PIDs, raw parent PIDs, command lines, environment blocks, handles, user SIDs, user names, machine names, certificate serial numbers, and raw event payloads.
 
-The creator-chain result categories are now aligned with the backend contract: `windowsExplorer`, `startMenuExperienceHost`, `windowsShellBroker`, `pimaxBootstrapHelper`, `pimaxServiceBroker`, `piServiceLauncher`, `serviceControlManager`, `scheduledTask`, `comDelegateActivation`, `existingPimaxProcess`, `unknownExternalCreator`, `multipleCandidateRoots`, `conflictingEvidence`, and `insufficientEvidence`. A confirmed root must come from event-time parent evidence. Even a confirmed root keeps backend execution disabled until a later Shell activation adapter is implemented and validated.
+The B2C elevated result identified the root as `windowsExplorer` with confirmed confidence and no unresolved gaps. The observed chain was Windows Explorer to `PimaxClient`, short-lived `launcher` helpers, `DeviceSetting`, `PiPlayService`, `PiService`, `pi_server`, `PiServiceLauncher`, and `lighthouse_console`. Runtime members may churn during startup, and Tobii may already be present before activation. Direct executable launch remains non-equivalent, and the backend remains disabled because programmatic Shell activation has not been live validated.
+
+The creator-chain result categories are aligned with the backend contract: `windowsExplorer`, `startMenuExperienceHost`, `windowsShellBroker`, `pimaxBootstrapHelper`, `pimaxServiceBroker`, `piServiceLauncher`, `serviceControlManager`, `scheduledTask`, `comDelegateActivation`, `existingPimaxProcess`, `unknownExternalCreator`, `multipleCandidateRoots`, `conflictingEvidence`, and `insufficientEvidence`.
+
+## Phase 28D2-B2D Shell Adapter
+
+B2D adds two development-only commands:
+
+```powershell
+dotnet .\PimaxVrcSupervisor.dll pimax-shell-activation-capability-json
+dotnet .\PimaxVrcSupervisor.dll pimax-shell-activate-json --confirm "CONFIRM ONE PIMAX SHELL ACTIVATION"
+```
+
+The capability command discovers only bounded Start Menu locations: current-user Programs and common/all-users Programs. A candidate is eligible only when it is the official `PimaxPlay.lnk`, resolves to `C:\Program Files\Pimax\PimaxClient\pimaxui\PimaxClient.exe`, has no arguments, uses the expected working directory, is not a URL, UNC path, script, command interpreter, PowerShell, `cmd.exe`, or copied arbitrary launcher, and matches Pimax product/publisher trust evidence.
+
+The adapter requests Windows Shell activation of the `.lnk` with the normal open verb. It does not start `PimaxClient.exe` directly, does not start runtime components, does not mutate or restart services, does not terminate processes, does not press Connect, does not touch USB or DisplayPort, and has no fallback or retry path. The B2D command returns `implementationCompleteLiveValidationRequired` and performs no live Shell activation.
+
+Capability states include `unsupportedPlatform`, `shellEntryNotFound`, `shellEntryAmbiguous`, `shellEntryUntrusted`, `shellEntryInvalid`, `softwareGroupAlreadyRunning`, `softwareGroupPartial`, `softwareGroupStateUnknown`, `readyForControlledValidation`, `validated`, and `disabledByPolicy`. B2D never returns `validated`; `backendExecutable` remains `false`.
+
+The readiness observer contract uses `notStarted`, `validatingPreconditions`, `requestingShellActivation`, `activationRequested`, `waitingForPimaxClient`, `waitingForDeviceSetting`, `waitingForRuntimeGroup`, `stabilizing`, `healthy`, `partial`, `conflicting`, `timedOut`, `refused`, `failed`, and `cancelled`. It tolerates normal B2C startup churn and requires three consecutive healthy samples before reporting software-stack readiness. Process readiness is reported separately from headset registration.
+
+B2D also adds command-dispatch regression coverage for the B2C accidental first-run incident. Pimax development commands dispatch before interactive first-run, direct-launch migration, configuration migration, scheduled-task migration/rebinding, watcher startup, dashboard startup, and managed application startup.
 
 The raw SHA-256 hash, raw certificate subject, raw process IDs, command lines, and local registry details are kept in private discovery evidence and are not committed.
 
-Lifecycle-root assessment is unresolved: the shortcut target is known, but the missing runtime members may be created by shell activation context, a service broker, a transient helper, state reset, or multiple mechanisms. `pimax-startup-sources-json` reports the activation-source candidates, and the formal `pimax-startup-observe-json` run is used to compare the Start Menu path against the rejected direct-launch evidence.
+Lifecycle-root assessment is now resolved for the manual path: Windows Explorer-rooted official Start Menu Shell activation is the confirmed manual mechanism. Programmatic equivalence remains unvalidated until B2D-V.
 
 Expected required members:
 
@@ -232,9 +259,7 @@ Pimax Play Connect and a physical USB reconnection may still be required.
 
 Recipe blockers that still prevent execution:
 
-- formal observer-backed Start Menu launch evidence formed the group but has not yet proven the `DeviceSetting` root creator with elevated event-time parent evidence;
-- the last completed live result still has `DeviceSetting` root creator ownership as `unknownExternalCreator`;
-- a safe programmatic shell-equivalent is not validated;
+- B2C proved the manual Explorer-rooted Start Menu Shell activation chain, but the B2D programmatic adapter has not been live validated;
 - registration after launch still requires post-health proof;
 - no shutdown/retry/rollback behavior is approved for product repair.
 
@@ -371,8 +396,8 @@ Live validation is optional. It may occur only after a dry run and only with exp
 
 ## Future TUI Integration
 
-The TUI phase remains blocked while no validated executable Pimax Play/runtime restart recipe exists. The current prerequisite phase is the creator-chain observation that identifies the root owner of `DeviceSetting` without approving backend execution:
+The TUI phase remains blocked while no validated executable Pimax Play/runtime restart recipe exists. The current prerequisite phase is one controlled programmatic Shell activation validation:
 
 ```text
-Phase 28D2-B2C - Resolve Remaining Pimax DeviceSetting Creator Evidence
+Phase 28D2-B2D-V - One Controlled Programmatic Windows Shell Activation Validation
 ```

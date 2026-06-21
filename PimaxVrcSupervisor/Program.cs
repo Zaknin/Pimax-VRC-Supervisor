@@ -96,6 +96,23 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-launch-recipe-json", St
     return;
 }
 
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-shell-activation-capability-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var diagnosticConfig = SupervisorConfig.Load(configPath);
+    var snapshot = await new PimaxShellActivationCoordinator().BuildCapabilityAsync(diagnosticConfig, shutdown.Token);
+    Console.WriteLine(JsonSerializer.Serialize(snapshot, PimaxRepairJson.Options));
+    return;
+}
+
+if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-shell-activate-json", StringComparison.OrdinalIgnoreCase)))
+{
+    var diagnosticConfig = SupervisorConfig.Load(configPath);
+    var request = PimaxShellActivationCommandLine.Parse(commandLineArgs);
+    var result = await new PimaxShellActivationCoordinator().ActivateAsync(diagnosticConfig, request, shutdown.Token);
+    Console.WriteLine(JsonSerializer.Serialize(result, PimaxRepairJson.Options));
+    return;
+}
+
 if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-startup-sources-json", StringComparison.OrdinalIgnoreCase)))
 {
     var snapshot = PimaxStartupSourcesCollector.Collect();
@@ -211,6 +228,25 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-recovery-experiment-jso
         new DefaultPimaxRecoveryEnvironment());
     var result = await runner.RunAsync(request, shutdown.Token);
     Console.WriteLine(JsonSerializer.Serialize(result, PimaxRecoveryExperimentJson.Options));
+    return;
+}
+
+if (startupContext.IsPimaxDevelopmentCommand)
+{
+    Console.WriteLine(JsonSerializer.Serialize(
+        new
+        {
+            schema = "pimax-development-command-dispatch-v1",
+            accepted = false,
+            command = startupContext.PimaxDevelopmentCommand,
+            error = "Recognized Pimax development command reached the normal startup guard without an early handler.",
+            bypassedInteractiveSetup = true,
+            bypassedConfigurationMigration = true,
+            bypassedScheduledTaskRebinding = true,
+            bypassedWatcherStartup = true,
+            bypassedManagedApplicationStartup = true
+        },
+        PimaxRepairJson.Options));
     return;
 }
 
@@ -3847,6 +3883,8 @@ internal sealed class AppSupervisor
                 "pimax-repair-plan-json" => JsonSerializer.Serialize(await BuildPimaxRepairPlanSnapshotAsync(cancellationToken), PimaxRepairJson.Options),
                 "pimax-repair-targets-json" => JsonSerializer.Serialize(await BuildPimaxRepairTargetsSnapshotAsync(cancellationToken), PimaxRepairJson.Options),
                 "pimax-launch-recipe-json" => JsonSerializer.Serialize(await BuildPimaxLaunchRecipeSnapshotAsync(cancellationToken), PimaxRepairJson.Options),
+                "pimax-shell-activation-capability-json" => JsonSerializer.Serialize(await BuildPimaxShellActivationCapabilitySnapshotAsync(cancellationToken), PimaxRepairJson.Options),
+                "pimax-shell-activate-json" => JsonSerializer.Serialize(await BuildPimaxShellActivationPolicyRefusalAsync(rawCommand, cancellationToken), PimaxRepairJson.Options),
                 "pimax-repair-status-json" => JsonSerializer.Serialize(BuildPimaxRepairStatusSnapshot(), PimaxRepairJson.Options),
                 "pimax-repair-result-json" => JsonSerializer.Serialize(BuildPimaxRepairResultSnapshot(), PimaxRepairJson.Options),
                 "restart-core-apps" => await RestartCoreAppsCommandAsync(cancellationToken),
@@ -4081,6 +4119,22 @@ internal sealed class AppSupervisor
                     "Json",
                     "Read-only launch recipe query. Does not start Pimax, stop Pimax, invoke Connect, automate GUI input, touch USB, touch DisplayPort, or change services."),
                 CommandDefinition(
+                    "pimax-shell-activation-capability-json",
+                    "Pimax Shell Activation Capability JSON",
+                    "Reports the official PimaxPlay Start Menu Shell-entry capability and controlled-validation readiness.",
+                    "Diagnostics",
+                    "Json",
+                    "Read-only Shell capability query. Does not start Pimax, stop Pimax, invoke Connect, automate GUI input, touch USB, touch DisplayPort, mutate services, or change scheduled tasks."),
+                CommandDefinition(
+                    "pimax-shell-activate-json",
+                    "Pimax Shell Activate JSON",
+                    "Reports the B2D policy-refused one-shot Windows Shell activation plan for later controlled validation.",
+                    "Diagnostics",
+                    "Json",
+                    "Policy-disabled in B2D even with exact confirmation. Does not perform live Shell activation, direct executable launch, retry, service mutation, GUI automation, USB, DisplayPort, task, SteamVR, VRChat, VRCFT, Supervisor, or watcher changes.",
+                    requiresConfirmation: true,
+                    blockedReason: "Live execution is disabled until Phase 28D2-B2D-V."),
+                CommandDefinition(
                     "pimax-startup-observe-elevated-json",
                     "Pimax Elevated Startup Observer JSON",
                     "Runs a bounded elevated process-creator observation mode for one approved Pimax Start Menu launch.",
@@ -4304,7 +4358,7 @@ internal sealed class AppSupervisor
                 message: "query-json request requires a resource.",
                 resultType: "error",
                 data: null,
-                error: "Missing resource. Supported resources: status, commands, log, pimax-connectivity, pimax-component-health, pimax-repair-capabilities, pimax-repair-plan, pimax-repair-targets, pimax-launch-recipe, pimax-repair-status, pimax-repair-result.");
+                error: "Missing resource. Supported resources: status, commands, log, pimax-connectivity, pimax-component-health, pimax-repair-capabilities, pimax-repair-plan, pimax-repair-targets, pimax-launch-recipe, pimax-shell-activation-capability, pimax-repair-status, pimax-repair-result.");
         }
 
         return resource.ToLowerInvariant() switch
@@ -4372,6 +4426,13 @@ internal sealed class AppSupervisor
                 resultType: "pimaxLaunchRecipe",
                 data: await BuildPimaxLaunchRecipeSnapshotAsync(cancellationToken),
                 error: null),
+            "pimax-shell-activation-capability" => ReadOnlyJsonQueryResult(
+                requestId,
+                success: true,
+                message: "Pimax Shell activation capability returned.",
+                resultType: "pimaxShellActivationCapability",
+                data: await BuildPimaxShellActivationCapabilitySnapshotAsync(cancellationToken),
+                error: null),
             "pimax-repair-status" => ReadOnlyJsonQueryResult(
                 requestId,
                 success: true,
@@ -4392,7 +4453,7 @@ internal sealed class AppSupervisor
                 message: $"Unsupported query-json resource: {resource}.",
                 resultType: "error",
                 data: null,
-                error: "Supported resources: status, commands, log, pimax-connectivity, pimax-component-health, pimax-repair-capabilities, pimax-repair-plan, pimax-repair-targets, pimax-launch-recipe, pimax-repair-status, pimax-repair-result.")
+                error: "Supported resources: status, commands, log, pimax-connectivity, pimax-component-health, pimax-repair-capabilities, pimax-repair-plan, pimax-repair-targets, pimax-launch-recipe, pimax-shell-activation-capability, pimax-repair-status, pimax-repair-result.")
         };
     }
 
@@ -4413,6 +4474,50 @@ internal sealed class AppSupervisor
 
     private async Task<PimaxLaunchRecipeSnapshot> BuildPimaxLaunchRecipeSnapshotAsync(CancellationToken cancellationToken)
         => await PimaxProcessGroupLaunchRecipeModel.CollectAsync(_config, cancellationToken);
+
+    private async Task<PimaxShellActivationCapabilitySnapshot> BuildPimaxShellActivationCapabilitySnapshotAsync(CancellationToken cancellationToken)
+        => await new PimaxShellActivationCoordinator().BuildCapabilityAsync(_config, cancellationToken);
+
+    private async Task<PimaxShellActivationResultSnapshot> BuildPimaxShellActivationPolicyRefusalAsync(string rawCommand, CancellationToken cancellationToken)
+    {
+        var args = SplitBridgeCommandLine(rawCommand).ToArray();
+        return await new PimaxShellActivationCoordinator().ActivateAsync(_config, PimaxShellActivationCommandLine.Parse(args), cancellationToken);
+    }
+
+    private static List<string> SplitBridgeCommandLine(string command)
+    {
+        var tokens = new List<string>();
+        var builder = new StringBuilder();
+        var inQuotes = false;
+        foreach (var character in command)
+        {
+            if (character == '"')
+            {
+                inQuotes = !inQuotes;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(character) && !inQuotes)
+            {
+                if (builder.Length > 0)
+                {
+                    tokens.Add(builder.ToString());
+                    builder.Clear();
+                }
+
+                continue;
+            }
+
+            builder.Append(character);
+        }
+
+        if (builder.Length > 0)
+        {
+            tokens.Add(builder.ToString());
+        }
+
+        return tokens;
+    }
 
     private PimaxRepairStatusResponse BuildPimaxRepairStatusSnapshot()
         => PimaxSoftwareStackRepairBackend.ForConfig(_config).Status();
@@ -4526,7 +4631,7 @@ internal sealed class AppSupervisor
             "base-stations-off" => await ExecuteConfirmedBaseStationActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ManualPowerDownBaseStationsAsync, cancellationToken),
             "restart-osc-router" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, RestartOscRouterCommandAsync, cancellationToken),
             "reload-autostart-apps" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ReloadAutostartAppsCommandAsync, cancellationToken),
-            "status" or "status-json" or "commands-json" or "log" or "log-json" or "query-json" or "pimax-connectivity-json" or "pimax-component-health-json" or "pimax-repair-capabilities-json" or "pimax-repair-plan-json" or "pimax-repair-targets-json" or "pimax-launch-recipe-json" or "pimax-startup-observe-elevated-json" or "pimax-repair-status-json" or "pimax-repair-result-json" => ActionJsonResult(
+            "status" or "status-json" or "commands-json" or "log" or "log-json" or "query-json" or "pimax-connectivity-json" or "pimax-component-health-json" or "pimax-repair-capabilities-json" or "pimax-repair-plan-json" or "pimax-repair-targets-json" or "pimax-launch-recipe-json" or "pimax-shell-activation-capability-json" or "pimax-shell-activate-json" or "pimax-startup-observe-elevated-json" or "pimax-repair-status-json" or "pimax-repair-result-json" => ActionJsonResult(
                 request.RequestId,
                 canonicalCommand,
                 success: false,

@@ -11,7 +11,7 @@ public sealed class PimaxProcessGroupLaunchRecipeTests
             DateTimeOffset.Parse("2026-06-20T00:00:00Z"));
 
         Assert.Equal(PimaxLaunchRecipeSchema.Version, snapshot.Schema);
-        Assert.Equal(PimaxProcessGroupLaunchRecipeState.ShellActivationObserved, snapshot.Recipe.State);
+        Assert.Equal(PimaxProcessGroupLaunchRecipeState.ReadyForShellActivationValidation, snapshot.Recipe.State);
         Assert.False(snapshot.Recipe.Executable);
         Assert.Equal(PimaxProcessGroupReadinessState.GroupReadyAndRegistered, snapshot.Readiness.State);
         Assert.Equal(@"<pimax>\PimaxClient\pimaxui\PimaxClient.exe", snapshot.SelectedCandidate?.SanitizedPath);
@@ -30,7 +30,7 @@ public sealed class PimaxProcessGroupLaunchRecipeTests
         var candidate = Candidate(source: source, exists: exists, root: root, product: product, signer: signer);
         var snapshot = PimaxProcessGroupLaunchRecipeModel.Build(Input(candidate), DateTimeOffset.UtcNow);
 
-        Assert.NotEqual(PimaxProcessGroupLaunchRecipeState.ShellActivationObserved, snapshot.Recipe.State);
+        Assert.NotEqual(PimaxProcessGroupLaunchRecipeState.ReadyForShellActivationValidation, snapshot.Recipe.State);
         Assert.Contains(snapshot.LauncherCandidates.Single().Blockers, blocker => blocker.Contains(expectedBlocker, StringComparison.OrdinalIgnoreCase));
         Assert.False(snapshot.Recipe.Executable);
     }
@@ -128,8 +128,8 @@ public sealed class PimaxProcessGroupLaunchRecipeTests
             confidence,
             freshness,
             PimaxHealthOverallStatus.Healthy,
-            "PimaxClient.exe starts the visible Electron client; runtime members are coordinated through DeviceSetting and service-owned processes.",
-            "probable",
+            "Windows Explorer-rooted official Start Menu Shell activation starts the Pimax runtime group.",
+            "confirmed",
             [],
             []);
 

@@ -243,13 +243,13 @@ internal static class PimaxSoftwareGroupModel
     public static PimaxSoftwareGroupRecipe ReadyForControlledValidationRecipe()
         => new(
             false,
-            PimaxProcessGroupLaunchRecipeState.ShellActivationObserved,
+            PimaxProcessGroupLaunchRecipeState.ReadyForShellActivationValidation,
             [
                 "one formal observer-backed Start Menu launch comparison",
                 "post-launch process-group formation proof",
                 "post-launch readiness and registration verification",
-                "creator-chain proof",
-                "separate programmatic-equivalent validation before backend execution"
+                "B2C Explorer-rooted creator-chain proof",
+                "B2D Shell adapter programmatic-equivalent validation before backend execution"
             ],
-            "Direct PimaxClient.exe process creation is rejected. Normal Start Menu activation is modeled, but the recipe is not executable until a formal observer-backed comparison and later programmatic-equivalent validation prove it safe.");
+            "Direct PimaxClient.exe process creation is rejected. Normal Start Menu Shell activation is the confirmed manual mechanism, but the recipe is not executable until the B2D adapter is validated once programmatically.");
 }

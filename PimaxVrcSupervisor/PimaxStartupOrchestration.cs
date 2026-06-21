@@ -32,6 +32,7 @@ internal static class PimaxStartupMechanism
     public const string BootstrapHelperRequired = "bootstrapHelperRequired";
     public const string StateResetRequired = "stateResetRequired";
     public const string MultipleMechanisms = "multipleMechanisms";
+    public const string ShellActivationMechanismConfirmed = "shellActivationMechanismConfirmed";
     public const string ManualShellLaunchWorksMechanismStillUnresolved = "manualShellLaunchWorksMechanismStillUnresolved";
     public const string ManualShellLaunchAlsoPartial = "manualShellLaunchAlsoPartial";
     public const string ConflictingEvidence = "conflictingEvidence";
@@ -373,21 +374,21 @@ internal static class PimaxStartupSourcesCollector
         if (bootstrap) evidence.Add("Signed or installation-root Pimax helper executables exist and may participate in startup.");
         var blockers = new List<string>
         {
-            "The formal observer-backed Start Menu launch has not yet identified the creator chain.",
-            "A safe programmatic shell-equivalent has not been validated."
+            "B2C confirmed Windows Explorer as the manual Start Menu activation root.",
+            "A safe programmatic Shell-equivalent has not been live validated."
         };
         var mechanism = shortcut is not null
-            ? PimaxStartupMechanism.ManualShellLaunchWorksMechanismStillUnresolved
+            ? PimaxStartupMechanism.ShellActivationMechanismConfirmed
             : PimaxStartupMechanism.InsufficientEvidence;
         return new PimaxStartupMechanismAssessment(
             mechanism,
-            shortcut is null ? "insufficient" : "probable",
+            shortcut is null ? "insufficient" : "confirmed",
             evidence.ToArray(),
             blockers.ToArray(),
             false,
             shortcut is null
                 ? "Pimax startup activation sources are insufficiently identified."
-                : "The Start Menu activation source is visible, but backend execution remains disabled until observer evidence proves a safe creator chain and programmatic equivalent.");
+                : "The official Start Menu Shell activation mechanism is confirmed for manual launch, but backend execution remains disabled until the B2D Shell adapter is live validated once.");
     }
 
     private static IEnumerable<PimaxStartupActivationPath> BuildActivationPaths(IEnumerable<PimaxStartupSource> sources)
@@ -1098,7 +1099,7 @@ internal sealed class PimaxStartupObserver
         var formed = observation.RequiredMembersPresent;
         var missing = observation.RequiredMembersMissing;
         var mechanism = missing.Length == 0
-            ? PimaxStartupMechanism.ManualShellLaunchWorksMechanismStillUnresolved
+            ? PimaxStartupMechanism.ShellActivationMechanismConfirmed
             : PimaxStartupMechanism.ManualShellLaunchAlsoPartial;
         var earliest = observation.Events.FirstOrDefault()?.ProcessName ?? "no startup event captured";
         return new PimaxStartupComparison(
@@ -1110,7 +1111,7 @@ internal sealed class PimaxStartupObserver
             ["DeviceSetting", "PiPlayService", "pi_server"],
             formed,
             mechanism,
-            observation.Events.Length == 0 ? "insufficient" : "probable",
+            observation.Events.Length == 0 ? "insufficient" : "confirmed",
             false,
             observation.Events.Select(e => $"{e.EventType}:{e.ProcessName}:{e.GroupRole}:{e.ParentToken}").ToArray(),
             ["safe programmatic equivalent remains unvalidated"]);

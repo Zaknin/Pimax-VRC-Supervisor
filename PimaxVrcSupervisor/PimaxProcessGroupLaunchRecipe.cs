@@ -186,8 +186,8 @@ internal static class PimaxProcessGroupLaunchRecipeModel
             health.RegistrationAssessment.Confidence,
             health.RegistrationAssessment.EvidenceFreshness,
             health.OverallStatus,
-            "PimaxClient.exe starts the visible Electron client; runtime members are coordinated through DeviceSetting and service-owned processes.",
-            "probable",
+            "Windows Explorer-rooted official Start Menu Shell activation starts PimaxClient, transient launcher helpers, DeviceSetting, and the runtime group.",
+            "confirmed",
             [],
             []);
         return Build(input, DateTimeOffset.Now);
@@ -221,7 +221,7 @@ internal static class PimaxProcessGroupLaunchRecipeModel
         }
 
         var state = blockers.Count == 0
-            ? PimaxProcessGroupLaunchRecipeState.ShellActivationObserved
+            ? PimaxProcessGroupLaunchRecipeState.ReadyForShellActivationValidation
             : selected is null
                 ? PimaxProcessGroupLaunchRecipeState.Incomplete
                 : PimaxProcessGroupLaunchRecipeState.VerifiedReadOnly;
@@ -238,8 +238,8 @@ internal static class PimaxProcessGroupLaunchRecipeModel
             "Use the installed Pimax environment. Do not inject transient command-line, IPC, token, or PID values.",
             "Launch only in the interactive user session during a later explicit stopped-state validation.",
             selected?.RequestedExecutionLevel == "asInvoker" ? "asInvoker; no elevation indicated by launcher manifest." : "unknown",
-            "Direct process creation was rejected by Phase 28D2-BV2; normal Start Menu shell activation is a distinct candidate and must be formally observed.",
-            "Normal Windows Start Menu PimaxPlay activation; the shortcut target is PimaxClient.exe, but direct process creation is rejected.",
+            "Direct process creation was rejected by Phase 28D2-BV2; B2C confirmed the normal Start Menu Shell activation root as Windows Explorer.",
+            "Official Windows Start Menu PimaxPlay Shell activation through PimaxPlay.lnk; the shortcut target is PimaxClient.exe, but direct process creation is rejected.",
             RequiredMembers,
             OptionalMembers,
             ["Start Menu PimaxPlay activation", "PimaxClient", "DeviceSetting", "PiPlayService", "PiServiceLauncher", "pi_server", "optional PVRHome/pi_overlay"],
@@ -248,7 +248,8 @@ internal static class PimaxProcessGroupLaunchRecipeModel
             input.LifecycleRootConfidence,
             [
                 "Direct PimaxClient.exe process creation is rejected for complete process-group recovery.",
-                "Normal Start Menu activation must be observed with the bounded startup observer before selecting a mechanism.",
+                "B2C confirmed the Explorer-rooted manual Start Menu Shell activation chain.",
+                "The B2D Shell adapter must be validated once programmatically before backend execution is enabled.",
                 "Required members are present from the same current software-group snapshot.",
                 "Launcher path and Pimax signer/product metadata validate.",
                 "No unexpected required group member is missing.",
@@ -272,8 +273,8 @@ internal static class PimaxProcessGroupLaunchRecipeModel
                 "Do not change scheduled tasks."
             ],
             "Cancellation is only safe before any future launch request is issued.",
-            state == PimaxProcessGroupLaunchRecipeState.ShellActivationObserved
-                ? "Direct PimaxClient.exe process creation is rejected. Normal Start Menu activation is the current candidate, but the creator chain and safe programmatic equivalent remain unvalidated, so backend execution is disabled."
+            state == PimaxProcessGroupLaunchRecipeState.ReadyForShellActivationValidation
+                ? "Direct PimaxClient.exe process creation is rejected. Official Start Menu Shell activation is the confirmed manual mechanism and a programmatic Shell adapter exists, but equivalence remains unvalidated, so backend execution is disabled."
                 : "The launch recipe remains incomplete and is not executable.");
 
         var evidence = new PimaxProcessGroupLaunchEvidence(
@@ -284,7 +285,7 @@ internal static class PimaxProcessGroupLaunchRecipeModel
             selected?.RegistryDisplayName ?? "PimaxPlay version 1.43.9.272",
             selected?.RegistryDisplayVersion ?? "unknown",
             "none",
-            input.LifecycleRoot,
+            input.LifecycleRoot + " Programmatic equivalence remains unvalidated.",
             input.RequiredMembersPresent,
             input.OptionalMembersPresent,
             ["raw PIDs", "raw command lines", "user profile paths", "machine name", "certificate serial numbers", "raw PnP IDs"]);

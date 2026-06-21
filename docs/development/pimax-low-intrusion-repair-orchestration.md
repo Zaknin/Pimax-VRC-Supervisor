@@ -81,6 +81,7 @@ Available now:
 - Pimax Play/runtime process-group observation;
 - Pimax Play launcher candidate discovery;
 - Pimax process-group launch recipe modeling;
+- official Start Menu Shell activation capability modeling;
 - operation progress reporting;
 - cancellation before mutating software actions;
 - final verification.
@@ -94,6 +95,7 @@ Unavailable or not approved:
 - approved software USB cycle for registration recovery;
 - standalone `PimaxClient` restart;
 - unvalidated Pimax Play/runtime group restart;
+- unvalidated live programmatic Shell activation;
 - DisplayPort electrical reconnect;
 - automatic physical-cable recovery.
 
@@ -186,7 +188,9 @@ C:\Program Files\Pimax\PimaxClient\pimaxui\PimaxClient.exe
 
 The shortcut has no arguments and uses the `pimaxui` directory as its working directory. The executable is a Pimax metadata-matched, 64-bit Windows GUI process with an `asInvoker` requested execution level. Installed-application registry evidence identifies Pimax Play, and no App Paths launcher override was observed.
 
-BV2 later proved that direct process creation of this executable is not sufficient: it started `PimaxClient` but left the required runtime group partial. B2A proved the normal Start Menu path can form the complete group, but the post-launch snapshot did not preserve the transient creator of `DeviceSetting`. B2B added creator-chain tooling and completed one normal Start Menu launch, but the non-elevated observer used its bounded WMI snapshot fallback after process trace subscription was denied; `DeviceSetting` still resolved to `unknownExternalCreator`. The backend now reports the process-group launch recipe as `shellActivationObserved` when the group is healthy: the normal Start Menu path is the candidate, direct executable launch is rejected, and backend execution remains disabled until the root is identified and a later one-shot phase validates a safe programmatic equivalent.
+BV2 later proved that direct process creation of this executable is not sufficient: it started `PimaxClient` but left the required runtime group partial. B2C later confirmed that the successful manual Start Menu launch is Windows Explorer-rooted Shell activation. The observed chain was Explorer to `PimaxClient`, transient `launcher` helpers, `DeviceSetting`, `PiPlayService`, `PiService`, `pi_server`, `PiServiceLauncher`, and `lighthouse_console`.
+
+B2D adds a development-only Windows Shell activation adapter. It validates the official `PimaxPlay.lnk` Start Menu entry, models exactly one Shell open-verb request, has no direct executable fallback, no runtime-component fallback, no service mutation, and no retry. The adapter is policy-disabled for live execution in B2D, performs no activation, and keeps `backendExecutable=false` until B2D-V validates programmatic equivalence.
 
 ## Dependency-Aware Ordering
 
@@ -381,7 +385,7 @@ It implements the software-stack-only execution backend, target allowlist, durab
 Recommended next implementation phase:
 
 ```text
-Phase 28D2-B2C - Resolve Remaining Pimax DeviceSetting Creator Evidence
+Phase 28D2-B2D-V - One Controlled Programmatic Windows Shell Activation Validation
 ```
 
-That phase must preserve event-time parent ownership with sufficient privileges or another provider that exposes the root creator, and stop without retry if the required process-group or readiness evidence does not form. TUI exposure should wait until the allowlist contains an executable target with a validated side-effect declaration and restart recipe.
+That phase must start from a healthy complete group, exit Pimax Play normally through the tray, verify a stopped group, invoke the Shell adapter exactly once, observe the startup chain, verify whether the root and descendants match B2C, verify software readiness and headset registration, perform no retries, and keep automatic recovery and TUI exposure disabled pending the result.

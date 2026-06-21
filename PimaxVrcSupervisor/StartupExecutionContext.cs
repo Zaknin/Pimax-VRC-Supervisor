@@ -13,12 +13,14 @@ internal sealed record StartupExecutionContext(
     bool DesktopTuiDefaultInterface,
     bool InstallAutoLaunchTask,
     bool EmergencyBaseStationCleanup,
+    string? PimaxDevelopmentCommand,
     bool ExplicitConfigOptionPresent,
     string? ExplicitConfigPath,
     string? EmergencyBaseStationCleanupConfigPath,
     int EmergencyBaseStationCleanupDelaySeconds)
 {
     public bool ExplicitConfigSupplied => ExplicitConfigOptionPresent;
+    public bool IsPimaxDevelopmentCommand => !string.IsNullOrWhiteSpace(PimaxDevelopmentCommand);
 
     public bool ShouldHideConsole
         => DesktopTuiStart
@@ -35,9 +37,10 @@ internal sealed record StartupExecutionContext(
             && !WatchVrchatAutoLaunch
             && !ApplyStartupIntegration
             && !InstallAutoLaunchTask
-            && !EmergencyBaseStationCleanup;
+            && !EmergencyBaseStationCleanup
+            && !IsPimaxDevelopmentCommand;
 
-    public bool CanApplyStartupIntegration => ApplyStartupIntegration;
+    public bool CanApplyStartupIntegration => ApplyStartupIntegration && !IsPimaxDevelopmentCommand;
 
     public static StartupExecutionContext Parse(IEnumerable<string> args)
     {
@@ -56,6 +59,7 @@ internal sealed record StartupExecutionContext(
                 : 0;
         var explicitConfigOptionPresent =
             TryGetCommandOption(commandLineArgs, "--config", out var explicitConfigPath);
+        var pimaxDevelopmentCommand = PimaxDevelopmentCommandLine.Find(commandLineArgs);
 
         return new StartupExecutionContext(
             commandLineArgs,
@@ -70,6 +74,7 @@ internal sealed record StartupExecutionContext(
             HasFlag(commandLineArgs, "--desktop-tui-default-interface"),
             HasFlag(commandLineArgs, "--install-auto-launch-task"),
             emergencyBaseStationCleanup,
+            pimaxDevelopmentCommand,
             explicitConfigOptionPresent,
             explicitConfigPath,
             emergencyConfigPath,
@@ -99,4 +104,36 @@ internal sealed record StartupExecutionContext(
 
         return false;
     }
+}
+
+internal static class PimaxDevelopmentCommandLine
+{
+    private static readonly string[] Commands =
+    [
+        "pimax-connectivity-json",
+        "pimax-usb-enumeration-json",
+        "pimax-registration-assessment-json",
+        "pimax-component-health-json",
+        "pimax-repair-capabilities-json",
+        "pimax-repair-plan-json",
+        "pimax-repair-targets-json",
+        "pimax-launch-recipe-json",
+        "pimax-startup-sources-json",
+        "pimax-startup-observe-json",
+        "pimax-startup-observe-elevated-json",
+        "pimax-startup-creator-chain-json",
+        "pimax-shell-activation-capability-json",
+        "pimax-shell-activate-json",
+        "pimax-repair-start-json",
+        "pimax-repair-status-json",
+        "pimax-repair-cancel-json",
+        "pimax-repair-result-json",
+        "pimax-connect-routine-observe-json",
+        "pimax-connect-lifecycle-observe-json",
+        "pimax-usb-physical-port-map-json",
+        "pimax-recovery-experiment-json"
+    ];
+
+    public static string? Find(IEnumerable<string> args)
+        => args.FirstOrDefault(arg => Commands.Contains(arg, StringComparer.OrdinalIgnoreCase));
 }
