@@ -927,7 +927,7 @@ internal sealed class ConfigEditorForm : Form
                 scanSessionId: scanSessionId,
                 currentStage: "scan");
             var discovered = await BaseStationDiscovery.ScanAsync(
-                TimeSpan.FromSeconds(10),
+                BaseStationDiscovery.ConfiguratorScanDuration,
                 CancellationToken.None,
                 _baseStationDiagnostics,
                 scanSessionId,
