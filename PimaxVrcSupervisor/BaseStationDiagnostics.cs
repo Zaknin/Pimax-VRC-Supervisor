@@ -24,6 +24,7 @@ internal sealed class BaseStationDiagnosticEvent
     public string ApplicationVersion { get; init; } = "";
     public string SessionId { get; init; } = "";
     public string? OperationId { get; init; }
+    public string? OperationName { get; init; }
     public string? ScanSessionId { get; init; }
     public string? Trigger { get; init; }
     public int? BurstNumber { get; init; }
@@ -36,6 +37,7 @@ internal sealed class BaseStationDiagnosticEvent
     public bool? StageStart { get; init; }
     public double? StageDurationMilliseconds { get; init; }
     public double? TotalAttemptDurationMilliseconds { get; init; }
+    public double? ScanDurationMilliseconds { get; init; }
     public double? TimeoutLimitMilliseconds { get; init; }
     public string? AdapterState { get; init; }
     public string? DiscoveryState { get; init; }
@@ -46,6 +48,9 @@ internal sealed class BaseStationDiagnosticEvent
     public string? CharacteristicResult { get; init; }
     public string? WriteResult { get; init; }
     public string? Outcome { get; init; }
+    public int? FoundDeviceCount { get; init; }
+    public string? SkipReason { get; init; }
+    public string? CleanupResult { get; init; }
     public string? ErrorCategory { get; init; }
     public string? ExceptionType { get; init; }
     public string? SanitizedErrorMessage { get; init; }
@@ -214,6 +219,7 @@ internal sealed partial class BaseStationDiagnosticSink
             ApplicationVersion = string.IsNullOrWhiteSpace(diagnosticEvent.ApplicationVersion) ? _applicationVersion : diagnosticEvent.ApplicationVersion,
             SessionId = string.IsNullOrWhiteSpace(diagnosticEvent.SessionId) ? SessionId : diagnosticEvent.SessionId,
             OperationId = diagnosticEvent.OperationId,
+            OperationName = diagnosticEvent.OperationName,
             ScanSessionId = diagnosticEvent.ScanSessionId,
             Trigger = diagnosticEvent.Trigger,
             BurstNumber = diagnosticEvent.BurstNumber,
@@ -226,6 +232,7 @@ internal sealed partial class BaseStationDiagnosticSink
             StageStart = diagnosticEvent.StageStart,
             StageDurationMilliseconds = diagnosticEvent.StageDurationMilliseconds,
             TotalAttemptDurationMilliseconds = diagnosticEvent.TotalAttemptDurationMilliseconds,
+            ScanDurationMilliseconds = diagnosticEvent.ScanDurationMilliseconds,
             TimeoutLimitMilliseconds = diagnosticEvent.TimeoutLimitMilliseconds,
             AdapterState = diagnosticEvent.AdapterState,
             DiscoveryState = diagnosticEvent.DiscoveryState,
@@ -236,6 +243,9 @@ internal sealed partial class BaseStationDiagnosticSink
             CharacteristicResult = diagnosticEvent.CharacteristicResult,
             WriteResult = diagnosticEvent.WriteResult,
             Outcome = diagnosticEvent.Outcome,
+            FoundDeviceCount = diagnosticEvent.FoundDeviceCount,
+            SkipReason = diagnosticEvent.SkipReason,
+            CleanupResult = diagnosticEvent.CleanupResult,
             ErrorCategory = diagnosticEvent.ErrorCategory,
             ExceptionType = diagnosticEvent.ExceptionType,
             SanitizedErrorMessage = diagnosticEvent.SanitizedErrorMessage,

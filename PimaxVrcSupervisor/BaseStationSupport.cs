@@ -337,11 +337,25 @@ internal static class BluetoothAddressConverter
     }
 }
 
+internal sealed record BaseStationDiscoveryCleanupResult(
+    int WatcherCount,
+    int StartedWatcherCount,
+    int StopRequestCount,
+    bool HandlersDetached,
+    bool Succeeded,
+    string Result)
+{
+    public static BaseStationDiscoveryCleanupResult NotStarted(string result)
+        => new(0, 0, 0, true, true, result);
+}
+
 internal static class BaseStationDiscovery
 {
-    public static async Task<bool> HasBluetoothLeAdapterAsync()
+    public static readonly TimeSpan ConfiguratorScanDuration = TimeSpan.FromSeconds(10);
+
+    public static async Task<bool> HasBluetoothLeAdapterAsync(CancellationToken cancellationToken = default)
     {
-        var adapter = await BluetoothAdapter.GetDefaultAsync().AsTask();
+        var adapter = await BluetoothAdapter.GetDefaultAsync().AsTask(cancellationToken);
         return adapter is not null && adapter.IsLowEnergySupported;
     }
 
@@ -350,8 +364,11 @@ internal static class BaseStationDiscovery
         CancellationToken cancellationToken,
         BaseStationDiagnosticSink? diagnostics = null,
         string? scanSessionId = null,
-        string trigger = "unspecified")
+        string trigger = "unspecified",
+        Action<BaseStationDiscoveryCleanupResult>? cleanupObserver = null)
     {
+        using var scanLifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var scanLifetimeToken = scanLifetimeCancellation.Token;
         scanSessionId ??= BaseStationDiagnosticSink.CreateId("bs-scan");
         var isConfiguratorScan = string.Equals(trigger, "Configurator Scan", StringComparison.OrdinalIgnoreCase);
         diagnostics?.WriteEvent(
@@ -364,8 +381,24 @@ internal static class BaseStationDiscovery
             trigger,
             scanSessionId: scanSessionId,
             currentStage: "adapterLookup");
-        if (!await HasBluetoothLeAdapterAsync())
+        bool hasBluetoothLeAdapter;
+        try
         {
+            hasBluetoothLeAdapter = await HasBluetoothLeAdapterAsync(scanLifetimeToken);
+        }
+        catch
+        {
+            NotifyCleanup(
+                cleanupObserver,
+                BaseStationDiscoveryCleanupResult.NotStarted("bluetoothAdapterLookupFailed"));
+            throw;
+        }
+
+        if (!hasBluetoothLeAdapter)
+        {
+            NotifyCleanup(
+                cleanupObserver,
+                BaseStationDiscoveryCleanupResult.NotStarted("bluetoothAdapterUnavailable"));
             diagnostics?.WriteEvent(
                 "bluetoothAdapterLookupCompleted",
                 trigger,
@@ -416,7 +449,7 @@ internal static class BaseStationDiscovery
                 var address = TryReadBluetoothAddress(deviceInfo);
                 if (string.IsNullOrWhiteSpace(address))
                 {
-                    using var device = await BluetoothLEDevice.FromIdAsync(deviceInfo.Id).AsTask();
+                    using var device = await BluetoothLEDevice.FromIdAsync(deviceInfo.Id).AsTask(scanLifetimeToken);
                     if (device is null)
                     {
                         return;
@@ -478,23 +511,27 @@ internal static class BaseStationDiscovery
                 outcome: "observed");
         }
 
-        foreach (var watcher in watchers)
-        {
-            watcher.Added += OnAdded;
-            watcher.Start();
-        }
-        advertisementWatcher.Received += OnAdvertisementReceived;
-        advertisementWatcher.Start();
-        diagnostics?.WriteEvent(
-            isConfiguratorScan ? "configuratorWatcherStarted" : "discoveryWatcherStarted",
-            trigger,
-            scanSessionId: scanSessionId,
-            currentStage: "scan",
-            discoveryState: "started");
-
+        var startedWatcherCount = 0;
         try
         {
-            await Task.Delay(duration, cancellationToken);
+            foreach (var watcher in watchers)
+            {
+                watcher.Added += OnAdded;
+                watcher.Start();
+                startedWatcherCount++;
+            }
+
+            advertisementWatcher.Received += OnAdvertisementReceived;
+            advertisementWatcher.Start();
+            startedWatcherCount++;
+            diagnostics?.WriteEvent(
+                isConfiguratorScan ? "configuratorWatcherStarted" : "discoveryWatcherStarted",
+                trigger,
+                scanSessionId: scanSessionId,
+                currentStage: "scan",
+                discoveryState: "started");
+
+            await Task.Delay(duration, scanLifetimeToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -505,26 +542,77 @@ internal static class BaseStationDiscovery
         }
         finally
         {
+            scanLifetimeCancellation.Cancel();
+            var cleanupErrors = new List<string>();
+            var stopRequestCount = 0;
+            var handlersDetached = true;
             foreach (var watcher in watchers)
             {
-                watcher.Added -= OnAdded;
-                if (watcher.Status is DeviceWatcherStatus.Created or DeviceWatcherStatus.Started or DeviceWatcherStatus.EnumerationCompleted)
+                try
                 {
-                    watcher.Stop();
+                    watcher.Added -= OnAdded;
+                }
+                catch (Exception ex)
+                {
+                    handlersDetached = false;
+                    cleanupErrors.Add(ex.GetType().Name);
+                }
+
+                try
+                {
+                    if (watcher.Status is DeviceWatcherStatus.Created or DeviceWatcherStatus.Started or DeviceWatcherStatus.EnumerationCompleted)
+                    {
+                        watcher.Stop();
+                        stopRequestCount++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    cleanupErrors.Add(ex.GetType().Name);
                 }
             }
 
-            advertisementWatcher.Received -= OnAdvertisementReceived;
-            if (advertisementWatcher.Status is BluetoothLEAdvertisementWatcherStatus.Created or BluetoothLEAdvertisementWatcherStatus.Started)
+            try
             {
-                advertisementWatcher.Stop();
+                advertisementWatcher.Received -= OnAdvertisementReceived;
             }
+            catch (Exception ex)
+            {
+                handlersDetached = false;
+                cleanupErrors.Add(ex.GetType().Name);
+            }
+
+            try
+            {
+                if (advertisementWatcher.Status is BluetoothLEAdvertisementWatcherStatus.Created or BluetoothLEAdvertisementWatcherStatus.Started)
+                {
+                    advertisementWatcher.Stop();
+                    stopRequestCount++;
+                }
+            }
+            catch (Exception ex)
+            {
+                cleanupErrors.Add(ex.GetType().Name);
+            }
+
+            var cleanupSucceeded = handlersDetached && cleanupErrors.Count == 0;
+            var cleanupResult = new BaseStationDiscoveryCleanupResult(
+                watchers.Length + 1,
+                startedWatcherCount,
+                stopRequestCount,
+                handlersDetached,
+                cleanupSucceeded,
+                cleanupSucceeded
+                    ? $"stopRequests={stopRequestCount}; handlersDetached=true; scanLifetimeCancelled=true"
+                    : $"stopRequests={stopRequestCount}; handlersDetached={handlersDetached.ToString().ToLowerInvariant()}; scanLifetimeCancelled=true; errors={string.Join(',', cleanupErrors)}");
+            NotifyCleanup(cleanupObserver, cleanupResult);
             diagnostics?.WriteEvent(
                 isConfiguratorScan ? "configuratorWatcherStopped" : "discoveryWatcherStopped",
                 trigger,
                 scanSessionId: scanSessionId,
                 currentStage: "scan",
-                discoveryState: "stopped");
+                discoveryState: "stopped",
+                outcome: cleanupSucceeded ? "succeeded" : "failed");
         }
 
         var result = found.Values
@@ -539,6 +627,20 @@ internal static class BaseStationDiscovery
             discoveryState: "complete",
             outcome: "succeeded");
         return result;
+    }
+
+    private static void NotifyCleanup(
+        Action<BaseStationDiscoveryCleanupResult>? cleanupObserver,
+        BaseStationDiscoveryCleanupResult cleanupResult)
+    {
+        try
+        {
+            cleanupObserver?.Invoke(cleanupResult);
+        }
+        catch
+        {
+            // Cleanup observation is diagnostic-only and must not alter discovery behavior.
+        }
     }
 
     private static string TryReadBluetoothAddress(DeviceInformation deviceInfo)

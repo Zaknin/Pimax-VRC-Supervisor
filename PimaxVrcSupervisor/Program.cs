@@ -165,7 +165,7 @@ if (applyStartupIntegration)
 if (watchVrchatAutoLaunch)
 {
     var skipCurrentSteamVrSession = commandLineArgs.Any(arg => string.Equals(arg, "--skip-current-vrserver-session", StringComparison.OrdinalIgnoreCase));
-    await AutoLaunchWatcher.RunAsync(skipCurrentSteamVrSession, desktopTuiDefaultInterface, configPath, shutdown.Token);
+    await AutoLaunchWatcher.RunAsync(skipCurrentSteamVrSession, desktopTuiDefaultInterface, config, configPath, shutdown.Token);
     return;
 }
 
@@ -4599,8 +4599,8 @@ internal sealed class AppSupervisor
         var tabIndex = rawCommand.IndexOf('\t');
         return (spaceIndex, tabIndex) switch
         {
-            (< 0, < 0) => -1,
-            (< 0, _) => tabIndex,
+            ( < 0, < 0) => -1,
+            ( < 0, _) => tabIndex,
             (_, < 0) => spaceIndex,
             _ => Math.Min(spaceIndex, tabIndex)
         };
@@ -5613,7 +5613,8 @@ internal sealed class AppSupervisor
             mode,
             _baseStationGattClient,
             Console.WriteLine,
-            manualOverride ? () => { } : _config.SaveBaseStationSettings,
+            manualOverride ? () => { }
+        : _config.SaveBaseStationSettings,
             cancellationToken,
             SetShutdownProgress);
         WriteDiagnosticEvent(
@@ -8529,6 +8530,7 @@ internal static class AutoLaunchWatcher
     public static async Task RunAsync(
         bool skipCurrentSteamVrSession,
         bool useDesktopTuiDefaultInterface,
+        SupervisorConfig config,
         string? configPath,
         CancellationToken cancellationToken)
     {
@@ -8542,7 +8544,41 @@ internal static class AutoLaunchWatcher
         var supervisorProcessName = Path.GetFileNameWithoutExtension(supervisorPath);
         var launchedForCurrentSteamVrSession = (skipCurrentSteamVrSession || TryConsumeSkipCurrentSteamVrSessionMarker())
             && IsProcessRunning(VrServerProcessName);
+        var startupInitializer = new BluetoothStartupInitializer(
+            new SharedBaseStationDiscoveryScanner(),
+            BaseStationDiagnosticSink.ForProcess("Watcher", AppVersion.Current));
 
+        await RunStartupAndWatchLoopAsync(
+            config,
+            startupInitializer,
+            token => RunWatchLoopAsync(
+                supervisorPath,
+                supervisorProcessName,
+                configPath,
+                useDesktopTuiDefaultInterface,
+                launchedForCurrentSteamVrSession,
+                token),
+            cancellationToken);
+    }
+
+    internal static async Task RunStartupAndWatchLoopAsync(
+        SupervisorConfig config,
+        BluetoothStartupInitializer startupInitializer,
+        Func<CancellationToken, Task> watchLoop,
+        CancellationToken cancellationToken)
+    {
+        await startupInitializer.RunOnceAsync(config, cancellationToken);
+        await watchLoop(cancellationToken);
+    }
+
+    private static async Task RunWatchLoopAsync(
+        string supervisorPath,
+        string supervisorProcessName,
+        string? configPath,
+        bool useDesktopTuiDefaultInterface,
+        bool launchedForCurrentSteamVrSession,
+        CancellationToken cancellationToken)
+    {
         while (!cancellationToken.IsCancellationRequested)
         {
             var vrServerRunning = IsProcessRunning(VrServerProcessName);
