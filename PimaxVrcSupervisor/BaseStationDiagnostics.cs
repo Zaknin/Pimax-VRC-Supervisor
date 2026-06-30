@@ -25,6 +25,7 @@ internal sealed class BaseStationDiagnosticEvent
     public string SessionId { get; init; } = "";
     public string? OperationId { get; init; }
     public string? OperationName { get; init; }
+    public string? WakeSequenceId { get; init; }
     public string? ScanSessionId { get; init; }
     public string? Trigger { get; init; }
     public int? BurstNumber { get; init; }
@@ -38,6 +39,7 @@ internal sealed class BaseStationDiagnosticEvent
     public double? StageDurationMilliseconds { get; init; }
     public double? TotalAttemptDurationMilliseconds { get; init; }
     public double? ScanDurationMilliseconds { get; init; }
+    public double? ScanElapsedMilliseconds { get; init; }
     public double? TimeoutLimitMilliseconds { get; init; }
     public string? AdapterState { get; init; }
     public string? DiscoveryState { get; init; }
@@ -49,12 +51,17 @@ internal sealed class BaseStationDiagnosticEvent
     public string? WriteResult { get; init; }
     public string? Outcome { get; init; }
     public int? FoundDeviceCount { get; init; }
+    public int? UnresolvedStationCount { get; init; }
+    public int? RetryStationCount { get; init; }
+    public int? RetrySuccessCount { get; init; }
+    public string? TriggerFailureStage { get; init; }
     public string? SkipReason { get; init; }
     public string? CleanupResult { get; init; }
     public string? ErrorCategory { get; init; }
     public string? ExceptionType { get; init; }
     public string? SanitizedErrorMessage { get; init; }
     public bool? CancellationRequested { get; init; }
+    public bool? Terminal { get; init; }
 }
 
 internal sealed partial class BaseStationDiagnosticSink
@@ -220,6 +227,7 @@ internal sealed partial class BaseStationDiagnosticSink
             SessionId = string.IsNullOrWhiteSpace(diagnosticEvent.SessionId) ? SessionId : diagnosticEvent.SessionId,
             OperationId = diagnosticEvent.OperationId,
             OperationName = diagnosticEvent.OperationName,
+            WakeSequenceId = diagnosticEvent.WakeSequenceId,
             ScanSessionId = diagnosticEvent.ScanSessionId,
             Trigger = diagnosticEvent.Trigger,
             BurstNumber = diagnosticEvent.BurstNumber,
@@ -233,6 +241,7 @@ internal sealed partial class BaseStationDiagnosticSink
             StageDurationMilliseconds = diagnosticEvent.StageDurationMilliseconds,
             TotalAttemptDurationMilliseconds = diagnosticEvent.TotalAttemptDurationMilliseconds,
             ScanDurationMilliseconds = diagnosticEvent.ScanDurationMilliseconds,
+            ScanElapsedMilliseconds = diagnosticEvent.ScanElapsedMilliseconds,
             TimeoutLimitMilliseconds = diagnosticEvent.TimeoutLimitMilliseconds,
             AdapterState = diagnosticEvent.AdapterState,
             DiscoveryState = diagnosticEvent.DiscoveryState,
@@ -244,12 +253,17 @@ internal sealed partial class BaseStationDiagnosticSink
             WriteResult = diagnosticEvent.WriteResult,
             Outcome = diagnosticEvent.Outcome,
             FoundDeviceCount = diagnosticEvent.FoundDeviceCount,
+            UnresolvedStationCount = diagnosticEvent.UnresolvedStationCount,
+            RetryStationCount = diagnosticEvent.RetryStationCount,
+            RetrySuccessCount = diagnosticEvent.RetrySuccessCount,
+            TriggerFailureStage = diagnosticEvent.TriggerFailureStage,
             SkipReason = diagnosticEvent.SkipReason,
             CleanupResult = diagnosticEvent.CleanupResult,
             ErrorCategory = diagnosticEvent.ErrorCategory,
             ExceptionType = diagnosticEvent.ExceptionType,
             SanitizedErrorMessage = diagnosticEvent.SanitizedErrorMessage,
-            CancellationRequested = diagnosticEvent.CancellationRequested
+            CancellationRequested = diagnosticEvent.CancellationRequested,
+            Terminal = diagnosticEvent.Terminal
         };
 
     private void RotateIfNeeded(string nextLine)

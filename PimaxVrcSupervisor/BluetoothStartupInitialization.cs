@@ -198,7 +198,8 @@ internal sealed class BluetoothStartupInitializer
                 },
                 ExceptionType = exception?.GetType().Name,
                 SanitizedErrorMessage = exception is null ? null : BaseStationDiagnosticSink.SanitizeMessage(exception.Message),
-                CancellationRequested = cancellationRequested
+                CancellationRequested = cancellationRequested,
+                Terminal = eventType == "complete"
             });
         }
     }

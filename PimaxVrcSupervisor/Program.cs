@@ -1855,6 +1855,8 @@ internal sealed class AppSupervisor
     private readonly bool _autoLaunchTaskBindingDeferredByUser;
     private readonly BaseStationGattClient _baseStationGattClient = new();
     private readonly BaseStationDiagnosticSink _baseStationDiagnostics;
+    private BluetoothResolutionRefresh _baseStationResolutionRefresh = null!;
+    private string _baseStationWakeSequenceId = "";
     private readonly SteamVrTrackingReferenceReader _steamVrTrackingReferenceReader = new();
     private readonly MonitorLayoutController _monitorLayout = new();
     private readonly TimeSpan _pollInterval;
@@ -1937,6 +1939,7 @@ internal sealed class AppSupervisor
         _shutdown = shutdown;
         _steamVrLifecycle = new SteamVrLifecycleCoordinator(managedSteamVrSession, Environment.ProcessId);
         _baseStationDiagnostics = BaseStationDiagnosticSink.ForProcess("Supervisor", AppVersion.Current);
+        ResetBaseStationResolutionRefresh();
         _pollInterval = TimeSpan.FromSeconds(Math.Max(1, config.PollIntervalSeconds));
     }
 
@@ -4784,6 +4787,7 @@ internal sealed class AppSupervisor
         _baseStationSteamVrConfirmedActive.Clear();
         _baseStationPowerOnLastFailure.Clear();
         _nextBaseStationPowerOnAttemptAt = null;
+        ResetBaseStationResolutionRefresh();
         await TryPowerOnBaseStationsForSessionAsync(BaseStationCommandTiming.PowerOnPasses, cancellationToken, manualOverride: true);
         return new ManualBaseStationActionResult(true, resultMessage);
     }
@@ -4920,6 +4924,11 @@ internal sealed class AppSupervisor
                 TransitionBaseStationStartupScheduler(BaseStationStartupSchedulerState.Cancelled, caller, "SteamVR disappeared before base-station startup executed");
             }
 
+            if (_baseStationStartupEpoch is not null)
+            {
+                ResetBaseStationResolutionRefresh();
+            }
+
             _baseStationStartupEpoch = null;
             _baseStationStartupScheduledAt = null;
             _baseStationStartupInitialWakeSentForEpoch = false;
@@ -4937,6 +4946,7 @@ internal sealed class AppSupervisor
             _baseStationStartupInitialWakeSentForEpoch = false;
             _baseStationStartupStabilizationWaitLoggedForEpoch = false;
             _baseStationStartupAlreadyScheduledLoggedForEpoch = false;
+            ResetBaseStationResolutionRefresh();
             WriteDiagnosticEvent(
                 "steamvr_presence_transition"
                 + $"; previousPresence={previousPresence}"
@@ -5326,7 +5336,13 @@ internal sealed class AppSupervisor
                 continue;
             }
 
-            var passSucceeded = await SendBaseStationPowerOnPassAsync(passBaseStations, pass, maximumPowerOnPasses, cancellationToken);
+            var passSucceeded = await SendBaseStationPowerOnPassAsync(
+                passBaseStations,
+                pass,
+                maximumPowerOnPasses,
+                _baseStationWakeSequenceId,
+                _baseStationResolutionRefresh,
+                cancellationToken);
             for (var index = 0; index < passBaseStations.Length; index++)
             {
                 if (passSucceeded[index])
@@ -5778,7 +5794,7 @@ internal sealed class AppSupervisor
         }
     }
 
-    private async Task<int> SendBaseStationCommandsAsync(
+    private async Task<BaseStationWakeAttemptResult[]> SendBaseStationCommandsAsync(
         BaseStationDevice[] baseStations,
         string action,
         Func<BaseStationDevice, CancellationToken, BaseStationOperationDiagnostics?, Task> commandAsync,
@@ -5789,7 +5805,7 @@ internal sealed class AppSupervisor
         int attemptsPerStation = 1,
         Action<int>? onSuccess = null)
     {
-        var successes = 0;
+        var results = new BaseStationWakeAttemptResult[baseStations.Length];
         for (var index = 0; index < baseStations.Length; index++)
         {
             var baseStation = baseStations[index];
@@ -5822,10 +5838,10 @@ internal sealed class AppSupervisor
                             token => commandAsync(baseStation, token, operation),
                             cancellationToken,
                             operation);
-                        successes++;
                         onSuccess?.Invoke(index);
                         _baseStationPowerOnLastFailure.Remove(baseStation.BluetoothAddress);
                         lastException = null;
+                        results[index] = BaseStationWakeAttemptResult.Success(baseStation);
                         operation.Succeeded();
                         Console.WriteLine($"Base station {baseStation.DisplayName}: {action} succeeded.");
                         break;
@@ -5849,6 +5865,10 @@ internal sealed class AppSupervisor
             if (lastException is not null)
             {
                 _baseStationPowerOnLastFailure[baseStation.BluetoothAddress] = lastException.Message;
+                results[index] = BaseStationWakeAttemptResult.Failure(
+                    baseStation,
+                    GetBaseStationCommandFailureStage(lastException),
+                    lastException);
                 Console.WriteLine($"Base station {baseStation.DisplayName}: could not {action}: {lastException.Message}");
             }
 
@@ -5858,8 +5878,27 @@ internal sealed class AppSupervisor
             }
         }
 
-        return successes;
+        return results;
     }
+
+    private static BaseStationCommandFailureStage GetBaseStationCommandFailureStage(Exception exception)
+        => exception switch
+        {
+            BaseStationCommandException commandException => commandException.FailureStage,
+            OperationCanceledException => BaseStationCommandFailureStage.Cancelled,
+            _ => BaseStationCommandFailureStage.Unknown
+        };
+
+    private static BaseStationCommandFailureStage GetBaseStationCommandFailureStage(string? diagnosticStage)
+        => diagnosticStage switch
+        {
+            "bluetoothAdapterLookup" => BaseStationCommandFailureStage.BluetoothAdapter,
+            "deviceResolution" => BaseStationCommandFailureStage.DeviceResolution,
+            "gattServiceQuery" => BaseStationCommandFailureStage.GattService,
+            "characteristicResolution" => BaseStationCommandFailureStage.Characteristic,
+            "powerWrite" => BaseStationCommandFailureStage.Write,
+            _ => BaseStationCommandFailureStage.Unknown
+        };
 
     private static async Task RunBaseStationPowerOnCommandWithTimeoutAsync(
         Func<CancellationToken, Task> action,
@@ -5876,7 +5915,10 @@ internal sealed class AppSupervisor
         {
             var timeout = new TimeoutException($"Bluetooth power-on command did not finish within {BaseStationCommandTiming.PowerOnCommandTimeout.TotalSeconds:0} seconds. Stage: {diagnostics?.CurrentStage ?? "unknown"}.");
             diagnostics?.TimedOut(timeout);
-            throw timeout;
+            throw new BaseStationCommandException(
+                GetBaseStationCommandFailureStage(diagnostics?.CurrentStage),
+                timeout.Message,
+                timeout);
         }
         catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
@@ -5890,7 +5932,13 @@ internal sealed class AppSupervisor
         }
     }
 
-    private async Task<bool[]> SendBaseStationPowerOnPassAsync(BaseStationDevice[] baseStations, int pass, int totalPasses, CancellationToken cancellationToken)
+    private async Task<bool[]> SendBaseStationPowerOnPassAsync(
+        BaseStationDevice[] baseStations,
+        int pass,
+        int totalPasses,
+        string wakeSequenceId,
+        BluetoothResolutionRefresh resolutionRefresh,
+        CancellationToken cancellationToken)
     {
         var stationSucceeded = new bool[baseStations.Length];
         var startedAt = Stopwatch.GetTimestamp();
@@ -5931,16 +5979,72 @@ internal sealed class AppSupervisor
                     + $"; stations={DescribeBaseStations(baseStations)}");
             }
 
-            await SendBaseStationCommandsAsync(
+            var attemptResults = await SendBaseStationCommandsAsync(
                 baseStations,
                 GetBaseStationPowerOnAction(pass, burstCycles, burstCycle),
-                (baseStation, token, operation) => _baseStationGattClient.PowerOnAsync(baseStation, token, operation),
+                (baseStation, token, operation) => _baseStationGattClient.PowerOnAsync(
+                    baseStation,
+                    token,
+                    operation,
+                    stopAfterResolutionFailure: true),
                 cancellationToken,
                 pass,
                 totalPasses,
                 pass - 1,
-                BaseStationCommandTiming.PowerOnAttempts,
-                index => stationSucceeded[index] = true);
+                attemptsPerStation: 1);
+            attemptResults = (await resolutionRefresh.RetryUnresolvedOnceAsync(
+                attemptResults,
+                wakeSequenceId,
+                async (stations, token) => await SendBaseStationCommandsAsync(
+                    stations.ToArray(),
+                    $"{GetBaseStationPowerOnAction(pass, burstCycles, burstCycle)} after Bluetooth discovery refresh",
+                    (baseStation, commandToken, operation) => _baseStationGattClient.PowerOnAsync(
+                        baseStation,
+                        commandToken,
+                        operation,
+                        stopAfterResolutionFailure: true),
+                    token,
+                    pass,
+                    totalPasses,
+                    pass - 1,
+                    attemptsPerStation: 1),
+                cancellationToken)).ToArray();
+
+            var nonResolutionFailures = attemptResults
+                .Where(result => !result.Succeeded && result.FailureStage != BaseStationCommandFailureStage.DeviceResolution)
+                .Select(result => result.Station)
+                .ToArray();
+            if (nonResolutionFailures.Length > 0 && BaseStationCommandTiming.PowerOnAttempts > 1)
+            {
+                var retryResults = await SendBaseStationCommandsAsync(
+                    nonResolutionFailures,
+                    $"{GetBaseStationPowerOnAction(pass, burstCycles, burstCycle)} retry",
+                    (baseStation, token, operation) => _baseStationGattClient.PowerOnAsync(
+                        baseStation,
+                        token,
+                        operation,
+                        stopAfterResolutionFailure: true),
+                    cancellationToken,
+                    pass,
+                    totalPasses,
+                    pass - 1,
+                    attemptsPerStation: BaseStationCommandTiming.PowerOnAttempts - 1);
+                attemptResults = MergeBaseStationWakeAttemptResults(attemptResults, retryResults);
+            }
+
+            foreach (var result in attemptResults.Where(result => result.Succeeded))
+            {
+                var index = Array.FindIndex(
+                    baseStations,
+                    station => string.Equals(
+                        station.BluetoothAddress,
+                        result.Station.BluetoothAddress,
+                        StringComparison.OrdinalIgnoreCase));
+                if (index >= 0)
+                {
+                    stationSucceeded[index] = true;
+                }
+            }
 
             if (burstCycles > 1)
             {
@@ -5975,6 +6079,36 @@ internal sealed class AppSupervisor
             outcome: $"{stationSucceeded.Count(value => value)}/{baseStations.Length} succeeded");
 
         return stationSucceeded;
+    }
+
+    private static BaseStationWakeAttemptResult[] MergeBaseStationWakeAttemptResults(
+        IReadOnlyList<BaseStationWakeAttemptResult> original,
+        IReadOnlyList<BaseStationWakeAttemptResult> replacements)
+    {
+        var merged = original.ToArray();
+        foreach (var replacement in replacements)
+        {
+            var index = Array.FindIndex(
+                merged,
+                result => string.Equals(
+                    result.Station.BluetoothAddress,
+                    replacement.Station.BluetoothAddress,
+                    StringComparison.OrdinalIgnoreCase));
+            if (index >= 0)
+            {
+                merged[index] = replacement;
+            }
+        }
+
+        return merged;
+    }
+
+    private void ResetBaseStationResolutionRefresh()
+    {
+        _baseStationWakeSequenceId = BaseStationDiagnosticSink.CreateId("base-station-wake");
+        _baseStationResolutionRefresh = new BluetoothResolutionRefresh(
+            new SharedBaseStationDiscoveryScanner(),
+            _baseStationDiagnostics);
     }
 
     private static bool ShouldUseUnsupportedV2PowerOnBurst(BaseStationDevice[] baseStations, int pass)

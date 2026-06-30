@@ -32,6 +32,32 @@ internal enum BaseStationPowerState
     Waking
 }
 
+internal enum BaseStationCommandFailureStage
+{
+    None,
+    BluetoothAdapter,
+    DeviceResolution,
+    GattService,
+    Characteristic,
+    Write,
+    Cancelled,
+    Unknown
+}
+
+internal sealed class BaseStationCommandException : InvalidOperationException
+{
+    public BaseStationCommandException(
+        BaseStationCommandFailureStage failureStage,
+        string message,
+        Exception? innerException = null)
+        : base(message, innerException)
+    {
+        FailureStage = failureStage;
+    }
+
+    public BaseStationCommandFailureStage FailureStage { get; }
+}
+
 internal static class BaseStationCommandTiming
 {
     public static readonly TimeSpan InterStationDelay = TimeSpan.FromSeconds(1);
@@ -675,12 +701,13 @@ internal sealed class BaseStationGattClient
     public Task PowerOnAsync(
         BaseStationDevice baseStation,
         CancellationToken cancellationToken,
-        BaseStationOperationDiagnostics? diagnostics = null)
+        BaseStationOperationDiagnostics? diagnostics = null,
+        bool stopAfterResolutionFailure = false)
     {
         var version = GetSupportedVersion(baseStation);
         return version == BaseStationVersion.V1
-            ? ControlV1Async(baseStation, powerOn: true, cancellationToken, diagnostics)
-            : WriteV2PowerCharacteristicAsync(baseStation, 0x01, cancellationToken, diagnostics);
+            ? ControlV1Async(baseStation, powerOn: true, cancellationToken, diagnostics, stopAfterResolutionFailure)
+            : WriteV2PowerCharacteristicAsync(baseStation, 0x01, cancellationToken, diagnostics, stopAfterResolutionFailure);
     }
 
     public Task SleepAsync(
@@ -776,14 +803,23 @@ internal sealed class BaseStationGattClient
         BaseStationDevice baseStation,
         byte value,
         CancellationToken cancellationToken,
-        BaseStationOperationDiagnostics? diagnostics)
-        => WritePowerCharacteristicAsync(baseStation, V2ControlService, V2PowerCharacteristic, [value], cancellationToken, diagnostics);
+        BaseStationOperationDiagnostics? diagnostics,
+        bool stopAfterResolutionFailure = false)
+        => WritePowerCharacteristicAsync(
+            baseStation,
+            V2ControlService,
+            V2PowerCharacteristic,
+            [value],
+            cancellationToken,
+            diagnostics,
+            stopAfterResolutionFailure);
 
     private static Task ControlV1Async(
         BaseStationDevice baseStation,
         bool powerOn,
         CancellationToken cancellationToken,
-        BaseStationOperationDiagnostics? diagnostics)
+        BaseStationOperationDiagnostics? diagnostics,
+        bool stopAfterResolutionFailure = false)
     {
         var id = baseStation.Id.Trim();
         if (id.Length != 8)
@@ -802,7 +838,14 @@ internal sealed class BaseStationGattClient
             .Concat(Enumerable.Repeat<byte>(0x00, 12))
             .ToArray();
 
-        return WritePowerCharacteristicAsync(baseStation, V1ControlService, V1PowerCharacteristic, data, cancellationToken, diagnostics);
+        return WritePowerCharacteristicAsync(
+            baseStation,
+            V1ControlService,
+            V1PowerCharacteristic,
+            data,
+            cancellationToken,
+            diagnostics,
+            stopAfterResolutionFailure);
     }
 
     private static async Task WritePowerCharacteristicAsync(
@@ -811,7 +854,8 @@ internal sealed class BaseStationGattClient
         Guid characteristicGuid,
         byte[] data,
         CancellationToken cancellationToken,
-        BaseStationOperationDiagnostics? diagnostics = null)
+        BaseStationOperationDiagnostics? diagnostics = null,
+        bool stopAfterResolutionFailure = false)
     {
         diagnostics?.BeginStage("bluetoothAdapterLookup");
         if (!await BaseStationDiscovery.HasBluetoothLeAdapterAsync())
@@ -822,24 +866,39 @@ internal sealed class BaseStationGattClient
 
         const int retryCount = 10;
         Exception? lastException = null;
+        var failureStage = BaseStationCommandFailureStage.Unknown;
         for (var attempt = 1; attempt <= retryCount; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
+                failureStage = BaseStationCommandFailureStage.DeviceResolution;
                 diagnostics?.BeginStage("deviceResolution");
                 using var device = await GetBluetoothLeDeviceAsync(baseStation.BluetoothAddressValue, cancellationToken);
                 diagnostics?.CompleteStage("deviceResolution", deviceResolutionResult: "succeeded");
+                failureStage = BaseStationCommandFailureStage.GattService;
                 diagnostics?.BeginStage("gattServiceQuery");
                 using var service = await GetServiceAsync(device, serviceGuid, cancellationToken);
                 diagnostics?.CompleteStage("gattServiceQuery", gattServiceResult: "succeeded");
+                failureStage = BaseStationCommandFailureStage.Characteristic;
                 diagnostics?.BeginStage("characteristicResolution");
                 var characteristic = await GetCharacteristicAsync(service, characteristicGuid, cancellationToken);
                 diagnostics?.CompleteStage("characteristicResolution", characteristicResult: "succeeded");
+                failureStage = BaseStationCommandFailureStage.Write;
                 diagnostics?.BeginStage("powerWrite");
                 await WriteCharacteristicAsync(characteristic, data, cancellationToken);
                 diagnostics?.CompleteStage("powerWrite", writeResult: "succeeded");
                 return;
+            }
+            catch (Exception ex) when (
+                failureStage == BaseStationCommandFailureStage.DeviceResolution
+                && stopAfterResolutionFailure
+                && !cancellationToken.IsCancellationRequested)
+            {
+                throw new BaseStationCommandException(
+                    BaseStationCommandFailureStage.DeviceResolution,
+                    $"Could not resolve {baseStation.DisplayName}.",
+                    ex);
             }
             catch (Exception ex) when (attempt < retryCount && !cancellationToken.IsCancellationRequested)
             {
@@ -850,6 +909,14 @@ internal sealed class BaseStationGattClient
             {
                 lastException = ex;
             }
+        }
+
+        if (stopAfterResolutionFailure)
+        {
+            throw new BaseStationCommandException(
+                failureStage,
+                $"Could not communicate with {baseStation.DisplayName}.",
+                lastException);
         }
 
         throw new InvalidOperationException($"Could not communicate with {baseStation.DisplayName}.", lastException);

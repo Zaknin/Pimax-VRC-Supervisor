@@ -4,7 +4,7 @@ This page describes the Phase 29A instrumentation for intermittent base-station 
 
 ## Scope
 
-The instrumentation observes existing Supervisor base-station startup and Configurator Scan behavior. It does not add a preflight scan, change startup timing, change retry counts, change command payloads, reset Bluetooth, restart services, or alter Configurator Scan.
+The instrumentation observes Supervisor base-station startup and Configurator Scan behavior. The Watcher startup initializer and the targeted resolution-failure refresh use the same shared discovery implementation as Configurator Scan. Neither discovery operation sends power commands, resets Bluetooth, restarts services, or alters Configurator Scan.
 
 ## Issue Being Measured
 
@@ -32,7 +32,13 @@ Events are written as JSONL under:
 %LOCALAPPDATA%\PimaxVrcSupervisor\Diagnostics\BaseStations
 ```
 
-The Supervisor and Configurator use separate active files. Each active file is capped at about 5 MB and keeps up to three rotated copies. Diagnostic write failures are best-effort and do not affect base-station operations.
+Process roles use separate active files:
+
+- normal wake attempts and `bluetoothResolutionRefresh`: `base-station-startup-supervisor.jsonl`
+- Configurator Scan: `base-station-startup-configurator.jsonl`
+- `bluetoothStartupInitialization`: `base-station-startup-watcher.jsonl`, but only when the auto-launch Watcher process actually runs
+
+Each active file is capped at about 5 MB and keeps up to three rotated copies. Diagnostic write failures are best-effort and do not affect base-station operations. A SteamVR-start task that directly launches `PimaxVrcSupervisor.exe --steamvr-start` does not execute the Watcher initializer and therefore does not create the Watcher file.
 
 ## Key Fields
 
@@ -40,6 +46,8 @@ Important fields include:
 
 - `sessionId`
 - `operationId`
+- `operationName`
+- `wakeSequenceId`
 - `scanSessionId`
 - `process`
 - `eventType`
@@ -51,6 +59,7 @@ Important fields include:
 - `currentStage`
 - `stageDurationMilliseconds`
 - `totalAttemptDurationMilliseconds`
+- `scanElapsedMilliseconds`
 - `timeoutLimitMilliseconds`
 - `configuredStationObserved`
 - `observationAgeMilliseconds`
@@ -59,6 +68,11 @@ Important fields include:
 - `characteristicResult`
 - `writeResult`
 - `outcome`
+- `unresolvedStationCount`
+- `retryStationCount`
+- `retrySuccessCount`
+- `triggerFailureStage`
+- `terminal`
 - `exceptionType`
 - `sanitizedErrorMessage`
 
@@ -98,6 +112,19 @@ Configurator Scan records:
 - `configuratorSavedStationMatched`
 - `configuratorWatcherStopped`
 - `configuratorScanCompleted`
+
+The Watcher startup initializer uses operation name `bluetoothStartupInitialization`. The normal wake fallback uses `bluetoothResolutionRefresh` and records:
+
+- `start`
+- `triggered`
+- `scanStarted`
+- `scanCompleted`, `timedOut`, `cancelled`, or `failed`
+- `watchersStopped`
+- `retryStarted`
+- `retryCompleted`
+- `complete`
+
+Only `complete` has `terminal = true`, so each refresh operation has exactly one terminal event.
 
 Only stages that the code can observe are emitted.
 
