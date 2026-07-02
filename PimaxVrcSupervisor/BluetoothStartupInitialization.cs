@@ -10,7 +10,8 @@ internal interface IBaseStationDiscoveryScanner
         BaseStationDiagnosticSink diagnostics,
         string scanSessionId,
         string trigger,
-        Action<BaseStationDiscoveryCleanupResult> cleanupObserver);
+        Action<BaseStationDiscoveryCleanupResult> cleanupObserver,
+        IBaseStationDiscoveryObserver? observer = null);
 }
 
 internal sealed class SharedBaseStationDiscoveryScanner : IBaseStationDiscoveryScanner
@@ -21,14 +22,16 @@ internal sealed class SharedBaseStationDiscoveryScanner : IBaseStationDiscoveryS
         BaseStationDiagnosticSink diagnostics,
         string scanSessionId,
         string trigger,
-        Action<BaseStationDiscoveryCleanupResult> cleanupObserver)
+        Action<BaseStationDiscoveryCleanupResult> cleanupObserver,
+        IBaseStationDiscoveryObserver? observer = null)
         => BaseStationDiscovery.ScanAsync(
             duration,
             cancellationToken,
             diagnostics,
             scanSessionId,
             trigger,
-            cleanupObserver);
+            cleanupObserver,
+            observer);
 }
 
 internal sealed record BluetoothStartupInitializationResult(

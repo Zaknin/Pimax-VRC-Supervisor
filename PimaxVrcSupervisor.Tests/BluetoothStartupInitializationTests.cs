@@ -283,7 +283,8 @@ public sealed class BluetoothStartupInitializationTests
             BaseStationDiagnosticSink diagnostics,
             string scanSessionId,
             string trigger,
-            Action<BaseStationDiscoveryCleanupResult> cleanupObserver)
+            Action<BaseStationDiscoveryCleanupResult> cleanupObserver,
+            IBaseStationDiscoveryObserver? observer = null)
         {
             Calls++;
             try

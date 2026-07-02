@@ -375,6 +375,15 @@ internal sealed record BaseStationDiscoveryCleanupResult(
         => new(0, 0, 0, true, true, result);
 }
 
+internal sealed record BaseStationDiscoveryObservation(
+    BaseStationDevice Station,
+    string Source);
+
+internal interface IBaseStationDiscoveryObserver
+{
+    void OnStationObserved(BaseStationDiscoveryObservation observation);
+}
+
 internal static class BaseStationDiscovery
 {
     public static readonly TimeSpan ConfiguratorScanDuration = TimeSpan.FromSeconds(10);
@@ -391,7 +400,8 @@ internal static class BaseStationDiscovery
         BaseStationDiagnosticSink? diagnostics = null,
         string? scanSessionId = null,
         string trigger = "unspecified",
-        Action<BaseStationDiscoveryCleanupResult>? cleanupObserver = null)
+        Action<BaseStationDiscoveryCleanupResult>? cleanupObserver = null,
+        IBaseStationDiscoveryObserver? observer = null)
     {
         using var scanLifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var scanLifetimeToken = scanLifetimeCancellation.Token;
@@ -492,13 +502,15 @@ internal static class BaseStationDiscovery
                     Version = version,
                     Enabled = true
                 };
-                BaseStationObservationTracker.Record(found[address], DateTimeOffset.UtcNow);
+                var station = found[address];
+                BaseStationObservationTracker.Record(station, DateTimeOffset.UtcNow);
+                NotifyObserver(observer, new BaseStationDiscoveryObservation(station, "deviceWatcher"));
                 diagnostics?.WriteEvent(
                     isConfiguratorScan ? "configuratorStationObserved" : "discoveryStationObserved",
                     trigger,
                     scanSessionId: scanSessionId,
                     currentStage: "deviceWatcher",
-                    station: found[address],
+                    station: station,
                     discoveryState: "deviceWatcher",
                     outcome: "observed");
             }
@@ -526,13 +538,15 @@ internal static class BaseStationDiscovery
                 Version = version,
                 Enabled = true
             };
-            BaseStationObservationTracker.Record(found[address], DateTimeOffset.UtcNow);
+            var station = found[address];
+            BaseStationObservationTracker.Record(station, DateTimeOffset.UtcNow);
+            NotifyObserver(observer, new BaseStationDiscoveryObservation(station, "advertisementWatcher"));
             diagnostics?.WriteEvent(
                 isConfiguratorScan ? "configuratorStationObserved" : "discoveryStationObserved",
                 trigger,
                 scanSessionId: scanSessionId,
                 currentStage: "advertisementWatcher",
-                station: found[address],
+                station: station,
                 discoveryState: "advertisementWatcher",
                 outcome: "observed");
         }
@@ -666,6 +680,20 @@ internal static class BaseStationDiscovery
         catch
         {
             // Cleanup observation is diagnostic-only and must not alter discovery behavior.
+        }
+    }
+
+    private static void NotifyObserver(
+        IBaseStationDiscoveryObserver? observer,
+        BaseStationDiscoveryObservation observation)
+    {
+        try
+        {
+            observer?.OnStationObserved(observation);
+        }
+        catch
+        {
+            // Streaming observation is advisory and must not affect shared discovery.
         }
     }
 

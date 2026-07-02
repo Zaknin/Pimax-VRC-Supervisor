@@ -61,6 +61,19 @@ Important fields include:
 - `totalAttemptDurationMilliseconds`
 - `scanElapsedMilliseconds`
 - `timeoutLimitMilliseconds`
+- `firstFailureElapsedMilliseconds`
+- `firstFailingStationIndex`
+- `candidateStationCount`
+- `alreadySuccessfulStationCount`
+- `observedConfiguredStationCount`
+- `duplicateObservationCount`
+- `queueCount`
+- `streamingWakeAttemptCount`
+- `streamingWakeSuccessCount`
+- `streamingWakeFailureCount`
+- `fallbackRetryCount`
+- `finalSuccessCount`
+- `earlyStopReason`
 - `configuredStationObserved`
 - `observationAgeMilliseconds`
 - `deviceResolutionResult`
@@ -117,16 +130,34 @@ The Watcher startup initializer uses operation name `bluetoothStartupInitializat
 
 - `start`
 - `triggered`
+- `firstResolutionFailure`
 - `scanStarted`
+- `stationObserved`
+- `stationQueued`
+- `stationWakeStarted`
+- `stationWakeSucceeded`
+- `stationWakeFailed`
+- `allCandidatesSucceeded`
+- `scanStoppedEarly`
 - `scanCompleted`, `timedOut`, `cancelled`, or `failed`
 - `watchersStopped`
-- `retryStarted`
-- `retryCompleted`
+- `fallbackRetryStarted`
+- `fallbackRetryCompleted`
 - `complete`
 
 Only `complete` has `terminal = true`, so each refresh operation has exactly one terminal event.
 
 Only stages that the code can observe are emitted.
+
+## Bluetooth Resolution Refresh Synchronization
+
+The reactive refresh starts after the first typed `DeviceResolution` wake failure in a logical wake sequence. The initial wake pass is sequential, so later not-yet-started station attempts are marked as recovery candidates instead of spending their own pre-refresh resolution timeout. Stations that already succeeded are preserved and are not queued.
+
+`BaseStationDiscovery.ScanAsync` still owns the two Windows device watchers and the Bluetooth LE advertisement watcher. It now accepts an optional streaming observer. Configurator Scan and Watcher startup initialization do not supply that observer, so they keep the same aggregate scan behavior.
+
+When the optional observer is supplied, discovery callbacks only publish observations. They do not run GATT connection, service lookup, characteristic lookup, or power writes. The refresh coordinator deduplicates observations by the same safe station identity used in diagnostics, writes one queue item per unresolved configured station, and returns from the callback. A single-reader queue then performs deterministic serialized wake attempts while the scan remains active.
+
+If every recovery candidate succeeds during streaming wake, the coordinator cancels the scan lifetime, the shared scanner detaches handlers and stops watchers, and the refresh completes without the final fallback retry. If discovery completes, times out, observes no candidates, partially succeeds, or fails nonfatally, the coordinator performs one final fallback retry for only the stations still unresolved.
 
 ## Timeout Analysis
 

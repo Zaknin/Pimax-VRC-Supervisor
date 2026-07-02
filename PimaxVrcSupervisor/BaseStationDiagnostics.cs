@@ -54,6 +54,19 @@ internal sealed class BaseStationDiagnosticEvent
     public int? UnresolvedStationCount { get; init; }
     public int? RetryStationCount { get; init; }
     public int? RetrySuccessCount { get; init; }
+    public double? FirstFailureElapsedMilliseconds { get; init; }
+    public int? FirstFailingStationIndex { get; init; }
+    public int? CandidateStationCount { get; init; }
+    public int? AlreadySuccessfulStationCount { get; init; }
+    public int? ObservedConfiguredStationCount { get; init; }
+    public int? DuplicateObservationCount { get; init; }
+    public int? QueueCount { get; init; }
+    public int? StreamingWakeAttemptCount { get; init; }
+    public int? StreamingWakeSuccessCount { get; init; }
+    public int? StreamingWakeFailureCount { get; init; }
+    public int? FallbackRetryCount { get; init; }
+    public int? FinalSuccessCount { get; init; }
+    public string? EarlyStopReason { get; init; }
     public string? TriggerFailureStage { get; init; }
     public string? SkipReason { get; init; }
     public string? CleanupResult { get; init; }
@@ -256,6 +269,19 @@ internal sealed partial class BaseStationDiagnosticSink
             UnresolvedStationCount = diagnosticEvent.UnresolvedStationCount,
             RetryStationCount = diagnosticEvent.RetryStationCount,
             RetrySuccessCount = diagnosticEvent.RetrySuccessCount,
+            FirstFailureElapsedMilliseconds = diagnosticEvent.FirstFailureElapsedMilliseconds,
+            FirstFailingStationIndex = diagnosticEvent.FirstFailingStationIndex,
+            CandidateStationCount = diagnosticEvent.CandidateStationCount,
+            AlreadySuccessfulStationCount = diagnosticEvent.AlreadySuccessfulStationCount,
+            ObservedConfiguredStationCount = diagnosticEvent.ObservedConfiguredStationCount,
+            DuplicateObservationCount = diagnosticEvent.DuplicateObservationCount,
+            QueueCount = diagnosticEvent.QueueCount,
+            StreamingWakeAttemptCount = diagnosticEvent.StreamingWakeAttemptCount,
+            StreamingWakeSuccessCount = diagnosticEvent.StreamingWakeSuccessCount,
+            StreamingWakeFailureCount = diagnosticEvent.StreamingWakeFailureCount,
+            FallbackRetryCount = diagnosticEvent.FallbackRetryCount,
+            FinalSuccessCount = diagnosticEvent.FinalSuccessCount,
+            EarlyStopReason = diagnosticEvent.EarlyStopReason,
             TriggerFailureStage = diagnosticEvent.TriggerFailureStage,
             SkipReason = diagnosticEvent.SkipReason,
             CleanupResult = diagnosticEvent.CleanupResult,

@@ -5803,7 +5803,9 @@ internal sealed class AppSupervisor
         int totalBursts,
         int retryNumber,
         int attemptsPerStation = 1,
-        Action<int>? onSuccess = null)
+        Action<int>? onSuccess = null,
+        Func<BaseStationWakeAttemptResult, int, bool>? stopAfterResult = null,
+        Func<BaseStationDevice, BaseStationWakeAttemptResult>? skippedResultFactory = null)
     {
         var results = new BaseStationWakeAttemptResult[baseStations.Length];
         for (var index = 0; index < baseStations.Length; index++)
@@ -5811,6 +5813,7 @@ internal sealed class AppSupervisor
             var baseStation = baseStations[index];
             cancellationToken.ThrowIfCancellationRequested();
             Exception? lastException = null;
+            var stationStartedAt = Stopwatch.GetTimestamp();
             try
             {
                 for (var attempt = 1; attempt <= Math.Max(1, attemptsPerStation); attempt++)
@@ -5841,7 +5844,9 @@ internal sealed class AppSupervisor
                         onSuccess?.Invoke(index);
                         _baseStationPowerOnLastFailure.Remove(baseStation.BluetoothAddress);
                         lastException = null;
-                        results[index] = BaseStationWakeAttemptResult.Success(baseStation);
+                        results[index] = BaseStationWakeAttemptResult.Success(
+                            baseStation,
+                            Stopwatch.GetElapsedTime(stationStartedAt).TotalMilliseconds);
                         operation.Succeeded();
                         Console.WriteLine($"Base station {baseStation.DisplayName}: {action} succeeded.");
                         break;
@@ -5868,8 +5873,30 @@ internal sealed class AppSupervisor
                 results[index] = BaseStationWakeAttemptResult.Failure(
                     baseStation,
                     GetBaseStationCommandFailureStage(lastException),
-                    lastException);
+                    lastException,
+                    elapsedMilliseconds: Stopwatch.GetElapsedTime(stationStartedAt).TotalMilliseconds);
                 Console.WriteLine($"Base station {baseStation.DisplayName}: could not {action}: {lastException.Message}");
+            }
+
+            if (results[index] is not null
+                && stopAfterResult?.Invoke(results[index], index) == true)
+            {
+                for (var remainingIndex = index + 1; remainingIndex < baseStations.Length; remainingIndex++)
+                {
+                    results[remainingIndex] = skippedResultFactory?.Invoke(baseStations[remainingIndex])
+                        ?? BaseStationWakeAttemptResult.UnattemptedResolutionCandidate(baseStations[remainingIndex]);
+                    _baseStationDiagnostics.WriteEvent(
+                        "stationAttemptSkipped",
+                        "SteamVR autostart",
+                        configuredStationCount: baseStations.Length,
+                        currentStage: "shortCircuited",
+                        burstNumber: burstNumber,
+                        retryNumber: retryNumber,
+                        station: baseStations[remainingIndex],
+                        outcome: "skipped after first DeviceResolution failure");
+                }
+
+                return results;
             }
 
             if (index < baseStations.Length - 1)
@@ -5991,13 +6018,33 @@ internal sealed class AppSupervisor
                 pass,
                 totalPasses,
                 pass - 1,
-                attemptsPerStation: 1);
+                attemptsPerStation: 1,
+                stopAfterResult: (result, _) =>
+                    !result.Succeeded && result.FailureStage == BaseStationCommandFailureStage.DeviceResolution,
+                skippedResultFactory: BaseStationWakeAttemptResult.UnattemptedResolutionCandidate);
             attemptResults = (await resolutionRefresh.RetryUnresolvedOnceAsync(
                 attemptResults,
                 wakeSequenceId,
+                async (station, token) =>
+                {
+                    var streamingResults = await SendBaseStationCommandsAsync(
+                        [station],
+                        $"{GetBaseStationPowerOnAction(pass, burstCycles, burstCycle)} during Bluetooth discovery refresh",
+                        (baseStation, commandToken, operation) => _baseStationGattClient.PowerOnAsync(
+                            baseStation,
+                            commandToken,
+                            operation,
+                            stopAfterResolutionFailure: true),
+                        token,
+                        pass,
+                        totalPasses,
+                        pass - 1,
+                        attemptsPerStation: 1);
+                    return streamingResults[0];
+                },
                 async (stations, token) => await SendBaseStationCommandsAsync(
                     stations.ToArray(),
-                    $"{GetBaseStationPowerOnAction(pass, burstCycles, burstCycle)} after Bluetooth discovery refresh",
+                    $"{GetBaseStationPowerOnAction(pass, burstCycles, burstCycle)} final Bluetooth discovery retry",
                     (baseStation, commandToken, operation) => _baseStationGattClient.PowerOnAsync(
                         baseStation,
                         commandToken,
