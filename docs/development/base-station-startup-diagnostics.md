@@ -73,6 +73,12 @@ Important fields include:
 - `streamingWakeFailureCount`
 - `fallbackRetryCount`
 - `finalSuccessCount`
+- `confirmedActiveStationCount`
+- `missingStationCount`
+- `steamVrAvailable`
+- `confirmationTimedOut`
+- `burstDisposition`
+- `reason`
 - `earlyStopReason`
 - `configuredStationObserved`
 - `observationAgeMilliseconds`
@@ -158,6 +164,25 @@ The reactive refresh starts after the first typed `DeviceResolution` wake failur
 When the optional observer is supplied, discovery callbacks only publish observations. They do not run GATT connection, service lookup, characteristic lookup, or power writes. The refresh coordinator deduplicates observations by the same safe station identity used in diagnostics, writes one queue item per unresolved configured station, and returns from the callback. A single-reader queue then performs deterministic serialized wake attempts while the scan remains active.
 
 If every recovery candidate succeeds during streaming wake, the coordinator cancels the scan lifetime, the shared scanner detaches handlers and stops watchers, and the refresh completes without the final fallback retry. If discovery completes, times out, observes no candidates, partially succeeds, or fails nonfatally, the coordinator performs one final fallback retry for only the stations still unresolved.
+
+## SteamVR-Confirmed Burst Suppression
+
+Phase30B.3 adds a bounded confirmation between unsupported V2 wake burst 1 and burst 2. After the existing two-second inter-burst delay, Supervisor allows up to two additional seconds for one SteamVR tracking-reference read and applies the existing `SteamVrBaseStationMatcher`.
+
+Burst 2 is skipped only when every enabled configured base station matches an active SteamVR tracking reference by exact identity. An equal active-reference count, a count fallback, or successful BLE writes are not sufficient: a BLE write confirms command delivery, not that SteamVR recognizes the intended station as active.
+
+If exact confirmation is partial, the serialized command pipeline targets only missing or unconfirmed stations when that is a strict subset of the stations already eligible for burst 2. If SteamVR is unavailable, not ready, times out, throws an error, has the wrong identities, or cannot produce a safe strict subset, Supervisor retains the current full burst-2 fallback. The later startup confirmation and retry behavior remains unchanged.
+
+The suppression decision records one start and one completion event, followed by the selected disposition:
+
+- `steamVrBurstSuppressionCheckStarted`
+- `steamVrBurstSuppressionCheckCompleted`
+- `burstSuppressed`
+- `burstSuppressionBypassed`
+- `partialBurstRetryStarted`
+- `partialBurstRetryCompleted`
+
+The completion and disposition events include configured, confirmed, and missing station counts; SteamVR availability and timeout state; `skipped`, `subsetTargeted`, or `fullBurst` disposition; and the reason/outcome. These are decision-level events and do not duplicate per-observation discovery events.
 
 ## Timeout Analysis
 

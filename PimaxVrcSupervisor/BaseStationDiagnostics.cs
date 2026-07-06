@@ -66,6 +66,12 @@ internal sealed class BaseStationDiagnosticEvent
     public int? StreamingWakeFailureCount { get; init; }
     public int? FallbackRetryCount { get; init; }
     public int? FinalSuccessCount { get; init; }
+    public int? ConfirmedActiveStationCount { get; init; }
+    public int? MissingStationCount { get; init; }
+    public bool? SteamVrAvailable { get; init; }
+    public bool? ConfirmationTimedOut { get; init; }
+    public string? BurstDisposition { get; init; }
+    public string? Reason { get; init; }
     public string? EarlyStopReason { get; init; }
     public string? TriggerFailureStage { get; init; }
     public string? SkipReason { get; init; }
@@ -281,6 +287,12 @@ internal sealed partial class BaseStationDiagnosticSink
             StreamingWakeFailureCount = diagnosticEvent.StreamingWakeFailureCount,
             FallbackRetryCount = diagnosticEvent.FallbackRetryCount,
             FinalSuccessCount = diagnosticEvent.FinalSuccessCount,
+            ConfirmedActiveStationCount = diagnosticEvent.ConfirmedActiveStationCount,
+            MissingStationCount = diagnosticEvent.MissingStationCount,
+            SteamVrAvailable = diagnosticEvent.SteamVrAvailable,
+            ConfirmationTimedOut = diagnosticEvent.ConfirmationTimedOut,
+            BurstDisposition = diagnosticEvent.BurstDisposition,
+            Reason = diagnosticEvent.Reason,
             EarlyStopReason = diagnosticEvent.EarlyStopReason,
             TriggerFailureStage = diagnosticEvent.TriggerFailureStage,
             SkipReason = diagnosticEvent.SkipReason,

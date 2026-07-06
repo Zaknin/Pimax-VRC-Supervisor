@@ -5338,6 +5338,7 @@ internal sealed class AppSupervisor
 
             var passSucceeded = await SendBaseStationPowerOnPassAsync(
                 passBaseStations,
+                baseStations,
                 pass,
                 maximumPowerOnPasses,
                 _baseStationWakeSequenceId,
@@ -5961,6 +5962,7 @@ internal sealed class AppSupervisor
 
     private async Task<bool[]> SendBaseStationPowerOnPassAsync(
         BaseStationDevice[] baseStations,
+        BaseStationDevice[] enabledConfiguredBaseStations,
         int pass,
         int totalPasses,
         string wakeSequenceId,
@@ -5970,6 +5972,11 @@ internal sealed class AppSupervisor
         var stationSucceeded = new bool[baseStations.Length];
         var startedAt = Stopwatch.GetTimestamp();
         var burstCycles = ShouldUseUnsupportedV2PowerOnBurst(baseStations, pass) ? 2 : 1;
+        var burstSuppressionChecker = new SteamVrBurstSuppressionChecker(
+            _baseStationDiagnostics,
+            BaseStationCommandTiming.SteamVrBurstSuppressionTimeout);
+        SteamVrBurstSuppressionResult? partialRetry = null;
+        var burstCycleBaseStations = baseStations;
         if (pass > 1)
         {
             Console.WriteLine($"Repeating base station power-on pass {pass}/{totalPasses}...");
@@ -6007,7 +6014,7 @@ internal sealed class AppSupervisor
             }
 
             var attemptResults = await SendBaseStationCommandsAsync(
-                baseStations,
+                burstCycleBaseStations,
                 GetBaseStationPowerOnAction(pass, burstCycles, burstCycle),
                 (baseStation, token, operation) => _baseStationGattClient.PowerOnAsync(
                     baseStation,
@@ -6102,10 +6109,100 @@ internal sealed class AppSupervisor
                     + $"; succeededSoFar={stationSucceeded.Count(value => value)}/{baseStations.Length}");
             }
 
+            if (partialRetry is not null && burstCycle == 2)
+            {
+                var successfulAddresses = baseStations
+                    .Where((_, index) => stationSucceeded[index])
+                    .Select(station => station.BluetoothAddress)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var retrySuccessCount = partialRetry.MissingBluetoothAddresses.Count(successfulAddresses.Contains);
+                burstSuppressionChecker.WriteDisposition(
+                    "partialBurstRetryCompleted",
+                    partialRetry,
+                    wakeSequenceId,
+                    pass,
+                    burstCycle,
+                    "subsetTargeted",
+                    retryStationCount: burstCycleBaseStations.Length,
+                    retrySuccessCount: retrySuccessCount);
+            }
+
             if (burstCycle < burstCycles)
             {
                 Console.WriteLine($"Waiting {BaseStationCommandTiming.UnsupportedV2PowerOnBurstDelay.TotalSeconds:0.0} seconds before the next unsupported V2 base-station wake burst...");
                 await Task.Delay(BaseStationCommandTiming.UnsupportedV2PowerOnBurstDelay, cancellationToken);
+                Console.WriteLine("Checking SteamVR exact identities before unsupported V2 base-station wake burst 2/2...");
+                var suppression = await burstSuppressionChecker.CheckAsync(
+                    enabledConfiguredBaseStations,
+                    enabled: true,
+                    () =>
+                    {
+                        var available = _steamVrTrackingReferenceReader.IsAvailable(out var reason);
+                        return (available, reason);
+                    },
+                    ignoredCancellationToken => Task.Run<IReadOnlyList<SteamVrTrackingReference>>(
+                        () =>
+                        {
+                            using var probe = BeginOpenVrProbe();
+                            _ = ObserveSteamVrLifecycle("base-station-burst-suppression-probe-before");
+                            var references = _steamVrTrackingReferenceReader.ReadActiveTrackingReferences();
+                            _ = ObserveSteamVrLifecycle("base-station-burst-suppression-probe-after");
+                            return references;
+                        },
+                        CancellationToken.None),
+                    wakeSequenceId,
+                    pass,
+                    burstCycle,
+                    cancellationToken);
+                foreach (var address in suppression.ConfirmedBluetoothAddresses)
+                {
+                    _baseStationSteamVrConfirmedActive.Add(address);
+                }
+
+                if (suppression.SuppressBurst)
+                {
+                    Console.WriteLine("SteamVR already reports all enabled base station(s) active by exact identity; skipping redundant wake burst 2/2.");
+                    burstSuppressionChecker.WriteDisposition(
+                        "burstSuppressed",
+                        suppression,
+                        wakeSequenceId,
+                        pass,
+                        burstCycle + 1,
+                        "skipped");
+                    break;
+                }
+
+                var retryPlan = SteamVrBurstRetryPlanner.Plan(suppression, baseStations);
+                if (retryPlan.Disposition == "subsetTargeted")
+                {
+                    burstCycleBaseStations = retryPlan.Stations;
+                    partialRetry = suppression;
+                    Console.WriteLine(
+                        $"SteamVR confirms {suppression.ConfirmedActiveStationCount}/{suppression.ConfiguredStationCount} enabled base station(s) by exact identity; "
+                        + $"retrying wake burst 2/2 for {retryPlan.Stations.Length} missing/unconfirmed station(s) only.");
+                    burstSuppressionChecker.WriteDisposition(
+                        "partialBurstRetryStarted",
+                        suppression,
+                        wakeSequenceId,
+                        pass,
+                        burstCycle + 1,
+                        "subsetTargeted",
+                        retryStationCount: retryPlan.Stations.Length);
+                }
+                else
+                {
+                    burstCycleBaseStations = baseStations;
+                    Console.WriteLine(
+                        $"SteamVR exact-identity confirmation did not safely suppress wake burst 2/2 ({SteamVrBurstSuppressionChecker.OutcomeName(suppression.Outcome)}: {suppression.Reason}). "
+                        + "Running the current full burst 2/2 fallback.");
+                    burstSuppressionChecker.WriteDisposition(
+                        "burstSuppressionBypassed",
+                        suppression,
+                        wakeSequenceId,
+                        pass,
+                        burstCycle + 1,
+                        "fullBurst");
+                }
             }
         }
 
