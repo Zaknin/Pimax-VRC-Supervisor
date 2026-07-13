@@ -16,6 +16,7 @@ using System.Xml.Linq;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using Microsoft.Win32;
+using PimaxVrcSupervisor;
 using PimaxVrcSupervisor.BaseStations;
 using Windows.Devices.Bluetooth.Advertisement;
 
@@ -1859,6 +1860,7 @@ internal sealed class AppSupervisor
     private string _baseStationWakeSequenceId = "";
     private readonly SteamVrTrackingReferenceReader _steamVrTrackingReferenceReader = new();
     private readonly MonitorLayoutController _monitorLayout = new();
+    private readonly XsOverlaySafeMonitorTransitionCoordinator _xsOverlayMonitorTransition;
     private readonly TimeSpan _pollInterval;
     private readonly SupervisorDiagnosticsSession _diagnostics;
     private readonly CancellationTokenSource _shutdown;
@@ -1939,6 +1941,16 @@ internal sealed class AppSupervisor
         _shutdown = shutdown;
         _steamVrLifecycle = new SteamVrLifecycleCoordinator(managedSteamVrSession, Environment.ProcessId);
         _baseStationDiagnostics = BaseStationDiagnosticSink.ForProcess("Supervisor", AppVersion.Current);
+        _xsOverlayMonitorTransition = new XsOverlaySafeMonitorTransitionCoordinator(
+            new WindowsXsOverlayProcessPlatform(),
+            token =>
+            {
+                token.ThrowIfCancellationRequested();
+                _monitorLayout.KeepPrimaryMonitorOnly();
+                return Task.CompletedTask;
+            },
+            diagnosticEvent => WriteDiagnosticEvent(JsonSerializer.Serialize(diagnosticEvent, CommandBridgeJsonOptions)),
+            Console.WriteLine);
         ResetBaseStationResolutionRefresh();
         _pollInterval = TimeSpan.FromSeconds(Math.Max(1, config.PollIntervalSeconds));
     }
@@ -3488,7 +3500,7 @@ internal sealed class AppSupervisor
         var startedAt = Stopwatch.GetTimestamp();
         WriteDiagnosticEvent("lifecycle; managed app startup routine begin");
         _managedAppsStarted = true;
-        PrepareMonitorLayoutForVrSession();
+        await PrepareMonitorLayoutForVrSessionAsync(cancellationToken);
         await StartCoreAppsAsync(cancellationToken);
         await StartAutoLaunchAppsAsync(cancellationToken);
         WriteDiagnosticEvent($"lifecycle; managed app startup routine complete; elapsedMs={Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds:0.0}");
@@ -3556,21 +3568,14 @@ internal sealed class AppSupervisor
         }
     }
 
-    private void PrepareMonitorLayoutForVrSession()
+    private async Task PrepareMonitorLayoutForVrSessionAsync(CancellationToken cancellationToken)
     {
         if (!_turnOffSecondaryMonitors)
         {
             return;
         }
 
-        try
-        {
-            _monitorLayout.KeepPrimaryMonitorOnly();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Could not switch to primary monitor only before launching Broken Eye: {ex.Message}");
-        }
+        await _xsOverlayMonitorTransition.RunAsync(turnOffSecondaryMonitors: true, cancellationToken);
     }
 
     private async Task StartBrokenEyeWithRetriesAsync(CancellationToken cancellationToken)
