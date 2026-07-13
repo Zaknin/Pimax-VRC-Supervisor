@@ -20,6 +20,11 @@ internal sealed record StartupExecutionContext(
 {
     public bool ExplicitConfigSupplied => ExplicitConfigOptionPresent;
 
+    public string? UnsupportedExplicitCommand
+        => Args.FirstOrDefault(arg =>
+            arg.EndsWith("-json", StringComparison.OrdinalIgnoreCase)
+            && !SupportedExplicitCommands.Contains(arg));
+
     public bool ShouldHideConsole
         => DesktopTuiStart
             || LaunchDesktopTuiAfterReady
@@ -38,6 +43,15 @@ internal sealed record StartupExecutionContext(
             && !EmergencyBaseStationCleanup;
 
     public bool CanApplyStartupIntegration => ApplyStartupIntegration;
+
+    private static readonly HashSet<string> SupportedExplicitCommands = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "pimax-connectivity-json",
+        "pimax-usb-enumeration-json",
+        "pimax-registration-assessment-json",
+        "pimax-connect-lifecycle-observe-json",
+        "pimax-usb-physical-port-map-json",
+    };
 
     public static StartupExecutionContext Parse(IEnumerable<string> args)
     {

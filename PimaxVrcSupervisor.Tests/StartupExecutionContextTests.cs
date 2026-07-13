@@ -96,4 +96,43 @@ public sealed class StartupExecutionContextTests
         Assert.True(hidden.ShouldHideConsole);
         Assert.False(visibleResult.ShouldHideConsole);
     }
+
+    [Fact]
+    public void RemovedExplicitCommandsFailFastBeforeNormalStartup()
+    {
+        var removedCommands = new[]
+        {
+            string.Concat("pimax-shell", "-launch-json"),
+            string.Concat("pimax-recovery", "-experiment-json"),
+        };
+
+        foreach (var command in removedCommands)
+        {
+            var context = StartupExecutionContext.Parse([command]);
+
+            Assert.Equal(command, context.UnsupportedExplicitCommand);
+            Assert.True(context.IsInteractiveSupervisorLaunch);
+        }
+    }
+
+    [Fact]
+    public void UnknownExplicitDiagnosticCommandFailsFast()
+    {
+        var context = StartupExecutionContext.Parse(["unknown-diagnostic-json"]);
+
+        Assert.Equal("unknown-diagnostic-json", context.UnsupportedExplicitCommand);
+    }
+
+    [Theory]
+    [InlineData("pimax-connectivity-json")]
+    [InlineData("pimax-usb-enumeration-json")]
+    [InlineData("pimax-registration-assessment-json")]
+    [InlineData("pimax-connect-lifecycle-observe-json")]
+    [InlineData("pimax-usb-physical-port-map-json")]
+    public void RetainedExplicitDiagnosticCommandsRemainSupported(string command)
+    {
+        var context = StartupExecutionContext.Parse([command]);
+
+        Assert.Null(context.UnsupportedExplicitCommand);
+    }
 }

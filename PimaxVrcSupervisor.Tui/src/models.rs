@@ -35,18 +35,16 @@ pub enum TuiAction {
     BaseStationsOff,
     RestartOscRouter,
     ReloadAutostartApps,
-    RelaunchPimaxPlay,
 }
 
 impl TuiAction {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 6] = [
         Self::RestartCoreApps,
         Self::StartOscGoesBrrr,
         Self::BaseStationsOn,
         Self::BaseStationsOff,
         Self::RestartOscRouter,
         Self::ReloadAutostartApps,
-        Self::RelaunchPimaxPlay,
     ];
 
     pub fn from_digit(value: char) -> Option<Self> {
@@ -57,7 +55,6 @@ impl TuiAction {
             '4' => Some(Self::BaseStationsOff),
             '5' => Some(Self::RestartOscRouter),
             '6' => Some(Self::ReloadAutostartApps),
-            '7' => Some(Self::RelaunchPimaxPlay),
             _ => None,
         }
     }
@@ -70,7 +67,6 @@ impl TuiAction {
             Self::BaseStationsOff => '4',
             Self::RestartOscRouter => '5',
             Self::ReloadAutostartApps => '6',
-            Self::RelaunchPimaxPlay => '7',
         }
     }
 
@@ -82,7 +78,6 @@ impl TuiAction {
             Self::BaseStationsOff => "BS Off",
             Self::RestartOscRouter => "OSC",
             Self::ReloadAutostartApps => "Autostart",
-            Self::RelaunchPimaxPlay => "Pimax",
         }
     }
 
@@ -94,7 +89,6 @@ impl TuiAction {
             Self::BaseStationsOff => "base-stations-off",
             Self::RestartOscRouter => "restart-osc-router",
             Self::ReloadAutostartApps => "reload-autostart-apps",
-            Self::RelaunchPimaxPlay => "pimax-shell-launch-json",
         }
     }
 
@@ -106,7 +100,6 @@ impl TuiAction {
             Self::BaseStationsOff => "Base Stations Off",
             Self::RestartOscRouter => "Restart OSC Router",
             Self::ReloadAutostartApps => "Reload Autostart Apps",
-            Self::RelaunchPimaxPlay => "Relaunch Pimax Play",
         }
     }
 
@@ -125,9 +118,6 @@ impl TuiAction {
             Self::BaseStationsOff => "Runs the configured base-station power-off routine.",
             Self::RestartOscRouter => "Restarts or manually starts OSC routing.",
             Self::ReloadAutostartApps => "Reloads or starts configured Autostart apps.",
-            Self::RelaunchPimaxPlay => {
-                "This launches Pimax Play through its official Windows Start Menu shortcut.\n\nExit Pimax Play from its tray menu before continuing.\n\nThe Supervisor will not terminate processes, restart services, retry the launch, or reset USB/DisplayPort devices."
-            }
         }
     }
 }
@@ -277,4 +267,30 @@ where
     D: Deserializer<'de>,
 {
     Ok(Option::<bool>::deserialize(deserializer)?.unwrap_or(false))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn action_list_contains_exactly_the_six_retained_actions() {
+        assert_eq!(TuiAction::ALL.len(), 6);
+        assert_eq!(
+            TuiAction::ALL.map(TuiAction::command_name),
+            [
+                "restart-core-apps",
+                "start-osc-goes-brrr",
+                "base-stations-on",
+                "base-stations-off",
+                "restart-osc-router",
+                "reload-autostart-apps",
+            ]
+        );
+    }
+
+    #[test]
+    fn digit_seven_does_not_map_to_an_action() {
+        assert_eq!(TuiAction::from_digit('7'), None);
+    }
 }

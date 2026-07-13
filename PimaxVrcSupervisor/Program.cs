@@ -35,19 +35,18 @@ var showStartupIntegrationResult = startupContext.ShowStartupIntegrationResult;
 var desktopTuiDefaultInterface = startupContext.DesktopTuiDefaultInterface;
 var explicitConfigSupplied = startupContext.ExplicitConfigSupplied;
 var configPath = startupContext.ExplicitConfigPath;
+if (startupContext.UnsupportedExplicitCommand is { } unsupportedExplicitCommand)
+{
+    Console.Error.WriteLine($"Unknown or unsupported command: {unsupportedExplicitCommand}");
+    Environment.ExitCode = 2;
+    return;
+}
+
 if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-connectivity-json", StringComparison.OrdinalIgnoreCase)))
 {
     var diagnosticConfig = SupervisorConfig.Load(configPath);
     var snapshot = await new PimaxConnectivitySnapshotCollector().CollectAsync(diagnosticConfig, shutdown.Token);
     Console.WriteLine(JsonSerializer.Serialize(snapshot, PimaxConnectivityJson.Options));
-    return;
-}
-
-if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-shell-launch-json", StringComparison.OrdinalIgnoreCase)))
-{
-    var diagnosticConfig = SupervisorConfig.Load(configPath);
-    var result = await PimaxShellLaunchCommand.RunAsync(diagnosticConfig, commandLineArgs, shutdown.Token);
-    Console.WriteLine(JsonSerializer.Serialize(result, PimaxShellLaunchJson.Options));
     return;
 }
 
@@ -81,19 +80,6 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-usb-physical-port-map-j
     var request = PimaxUsbPhysicalPortMapRequest.Parse(commandLineArgs);
     var result = await new PimaxUsbPhysicalPortMapper(diagnosticConfig).RunAsync(request, shutdown.Token);
     Console.WriteLine(JsonSerializer.Serialize(result, PimaxUsbPhysicalPortMapJson.Options));
-    return;
-}
-
-if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-recovery-experiment-json", StringComparison.OrdinalIgnoreCase)))
-{
-    var diagnosticConfig = SupervisorConfig.Load(configPath);
-    var request = BuildPimaxRecoveryExperimentRequest(commandLineArgs);
-    var runner = new PimaxRecoveryExperimentRunner(
-        new DefaultPimaxRegistrationAssessmentCollector(diagnosticConfig),
-        new WindowsPimaxClientProcessController(),
-        new DefaultPimaxRecoveryEnvironment());
-    var result = await runner.RunAsync(request, shutdown.Token);
-    Console.WriteLine(JsonSerializer.Serialize(result, PimaxRecoveryExperimentJson.Options));
     return;
 }
 
@@ -258,61 +244,6 @@ static async Task InstallAutoLaunchScheduledTaskFromCommandLineAsync(SupervisorC
     Console.WriteLine(taskResult.OperatorMessage);
     Console.WriteLine($"Task: {taskResult.TaskName}");
     Console.WriteLine($"Trigger: {taskResult.TriggerDescription}");
-}
-
-static PimaxRecoveryExperimentRequest BuildPimaxRecoveryExperimentRequest(string[] args)
-{
-    var experiment = TryGetTopLevelCommandOption(args, "--experiment", out var experimentValue)
-        && !string.IsNullOrWhiteSpace(experimentValue)
-        ? experimentValue.Trim()
-        : PimaxRecoveryExperimentKind.WaitControl;
-    var duration = TryGetTopLevelCommandOption(args, "--duration-seconds", out var durationText)
-        && int.TryParse(durationText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedDuration)
-        ? parsedDuration
-        : 30;
-    var token = TryGetTopLevelCommandOption(args, "--confirmation-token", out var tokenValue)
-        ? tokenValue
-        : null;
-    var evidenceDirectory = TryGetTopLevelCommandOption(args, "--evidence-dir", out var evidenceDirectoryValue)
-        ? evidenceDirectoryValue
-        : null;
-    return new PimaxRecoveryExperimentRequest(
-        experiment,
-        HasTopLevelFlag(args, "--confirm"),
-        token,
-        duration,
-        evidenceDirectory);
-}
-
-static bool HasTopLevelFlag(string[] args, string name)
-    => args.Any(arg => string.Equals(arg, name, StringComparison.OrdinalIgnoreCase));
-
-static bool TryGetTopLevelCommandOption(string[] args, string name, out string? value)
-{
-    value = null;
-    var prefix = name + "=";
-    for (var index = 0; index < args.Length; index++)
-    {
-        if (args[index].StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-        {
-            value = args[index][prefix.Length..];
-            return true;
-        }
-
-        if (!string.Equals(args[index], name, StringComparison.OrdinalIgnoreCase))
-        {
-            continue;
-        }
-
-        if (index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
-        {
-            value = args[index + 1];
-        }
-
-        return true;
-    }
-
-    return false;
 }
 
 internal static class AppVersion
@@ -3732,7 +3663,6 @@ internal sealed class AppSupervisor
                 "log-json" => JsonSerializer.Serialize(BuildSupervisorRecentLogSnapshot(14), CommandBridgeJsonOptions),
                 "commands-json" => JsonSerializer.Serialize(BuildSupervisorCommandCapabilitiesSnapshot(), CommandBridgeJsonOptions),
                 "pimax-connectivity-json" => JsonSerializer.Serialize(await BuildPimaxConnectivitySnapshotAsync(cancellationToken), PimaxConnectivityJson.Options),
-                "pimax-shell-launch-json" => JsonSerializer.Serialize(await RunPimaxShellLaunchActionAsync(cancellationToken), PimaxShellLaunchJson.Options),
                 "restart-core-apps" => await RestartCoreAppsCommandAsync(cancellationToken),
                 "start-osc-goes-brrr" => await StartOscGoesBrrrCommandAsync(cancellationToken),
                 "base-stations-on" => await ManualPowerOnBaseStationsCommandAsync(cancellationToken),
@@ -3929,18 +3859,6 @@ internal sealed class AppSupervisor
                     "Diagnostics",
                     "Json",
                     "Explicit diagnostic query. May take several seconds and does not restart processes, services, SteamVR, or USB devices."),
-                CommandDefinition(
-                    "pimax-shell-launch-json",
-                    "Relaunch Pimax Play",
-                    "Launches Pimax Play once through the official Windows Start Menu shortcut, then verifies software stack and headset registration.",
-                    "Diagnostics",
-                    "Json",
-                    "Manual production recovery action. Requires non-elevated interactive Explorer session and a stopped Pimax Play stack. Does not terminate processes, restart services, retry, or reset USB/DisplayPort devices.",
-                    requiresConfirmation: true,
-                    actionSupported: true,
-                    actionSafetyCategory: "Disruptive",
-                    tuiExecutable: true,
-                    blockedReason: null),
                 CommandDefinition(
                     "action-json",
                     "Structured Action JSON",
@@ -4176,19 +4094,6 @@ internal sealed class AppSupervisor
     private async Task<PimaxConnectivitySnapshot> BuildPimaxConnectivitySnapshotAsync(CancellationToken cancellationToken)
         => await new PimaxConnectivitySnapshotCollector().CollectAsync(_config, cancellationToken);
 
-    private async Task<PimaxShellLaunchResult> RunPimaxShellLaunchActionAsync(CancellationToken cancellationToken)
-    {
-        WriteDiagnosticEvent("manual Pimax Play Shell relaunch requested");
-        var result = await PimaxShellLaunchCommand.RunAsync(_config, Environment.GetCommandLineArgs().Skip(1).ToArray(), cancellationToken);
-        WriteDiagnosticEvent(
-            "manual Pimax Play Shell relaunch completed"
-            + $"; result={result.Result}"
-            + $"; shellRequestCount={result.ShellRequestCount}"
-            + $"; retryCount={result.RetryCount}"
-            + $"; samples={result.SamplesCollected}");
-        return result;
-    }
-
     private static SupervisorCommandResult ReadOnlyJsonQueryResult(
         string? requestId,
         bool success,
@@ -4259,7 +4164,7 @@ internal sealed class AppSupervisor
                 success: false,
                 message: "action-json request requires a command.",
                 data: null,
-                error: "Missing command. Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps, pimax-shell-launch-json.");
+                error: "Missing command. Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps.");
         }
 
         if (string.Equals(canonicalCommand, "force-stop-supervisor", StringComparison.Ordinal))
@@ -4292,7 +4197,6 @@ internal sealed class AppSupervisor
             "base-stations-off" => await ExecuteConfirmedBaseStationActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ManualPowerDownBaseStationsAsync, cancellationToken),
             "restart-osc-router" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, RestartOscRouterCommandAsync, cancellationToken),
             "reload-autostart-apps" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ReloadAutostartAppsCommandAsync, cancellationToken),
-            "pimax-shell-launch-json" => await ExecuteConfirmedJsonActionAsync(request.RequestId, canonicalCommand, request.Confirmed, RunPimaxShellLaunchActionAsync, cancellationToken),
             "status" or "status-json" or "commands-json" or "log" or "log-json" or "query-json" or "pimax-connectivity-json" => ActionJsonResult(
                 request.RequestId,
                 canonicalCommand,
@@ -4306,7 +4210,7 @@ internal sealed class AppSupervisor
                 success: false,
                 message: $"Unsupported action-json command: {canonicalCommand}.",
                 data: null,
-                error: "Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps, pimax-shell-launch-json.")
+                error: "Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps.")
         };
     }
 
@@ -4442,51 +4346,6 @@ internal sealed class AppSupervisor
                 success: true,
                 message,
                 data: null,
-                error: null);
-        }
-        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
-        {
-            return ActionJsonResult(
-                requestId,
-                canonicalCommand,
-                success: false,
-                message: $"{canonicalCommand} action failed.",
-                data: null,
-                error: ex.Message);
-        }
-    }
-
-    private async Task<SupervisorCommandResult> ExecuteConfirmedJsonActionAsync<T>(
-        string? requestId,
-        string canonicalCommand,
-        bool? confirmed,
-        Func<CancellationToken, Task<T>> executeAsync,
-        CancellationToken cancellationToken)
-    {
-        if (confirmed != true)
-        {
-            return ActionJsonResult(
-                requestId,
-                canonicalCommand,
-                success: false,
-                message: $"{canonicalCommand} requires confirmed=true.",
-                data: null,
-                error: "Structured action requires JSON boolean confirmed=true.");
-        }
-
-        try
-        {
-            var data = await executeAsync(cancellationToken);
-            var message = data is PimaxShellLaunchResult shellLaunchResult
-                ? shellLaunchResult.HumanReadableSummary
-                : $"{canonicalCommand} completed.";
-
-            return ActionJsonResult(
-                requestId,
-                canonicalCommand,
-                success: true,
-                message,
-                data,
                 error: null);
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)

@@ -104,7 +104,6 @@ public sealed class PimaxConnectLifecycleObservationTests
         Assert.Equal("pimax-connectivity-v1", PimaxConnectivitySchema.Version);
         Assert.Equal("pimax-usb-enumeration-v1", PimaxUsbEnumerationSchema.Version);
         Assert.Equal("pimax-registration-assessment-v1", PimaxRegistrationAssessmentSchema.Version);
-        Assert.Equal("pimax-recovery-experiment-v1", PimaxRecoveryExperimentSchema.Version);
         Assert.Equal("pimax-connect-lifecycle-observation-v1", PimaxConnectLifecycleObservationSchema.Version);
     }
 

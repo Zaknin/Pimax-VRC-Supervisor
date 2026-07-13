@@ -442,7 +442,7 @@ fn render_small_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(
         Paragraph::new(vec![
             line,
-            Line::from("0 Help  F5 Refresh  1-7 Actions  Q Shutdown"),
+            Line::from("0 Help  F5 Refresh  1-6 Actions  Q Shutdown"),
         ])
         .block(theme::accent_panel_block("Dashboard"))
         .wrap(Wrap { trim: true }),
@@ -483,7 +483,7 @@ fn render_small_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: I
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    for row_index in 0..3 {
+    for row_index in 0..TuiAction::ALL.len().div_ceil(3) {
         let row_y = inner.y.saturating_add(row_index as u16);
         if row_y >= inner.y.saturating_add(inner.height) {
             continue;
@@ -992,7 +992,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         help_line("5", "Restart OSC Router"),
         help_line("6", "Reload Autostart Apps"),
         Line::from(""),
-        help_line("1-7", "Open confirmation from keyboard"),
+        help_line("1-6", "Open confirmation from keyboard"),
         help_line("MOUSE", "Click action card to start immediately"),
         help_line("ENTER", "Confirm modal action"),
         help_line("SPACE", "Confirm modal action"),
@@ -1053,11 +1053,6 @@ fn render_action_confirmation(frame: &mut Frame<'_>, area: Rect, app: &mut App) 
     };
 
     let popup = centered_rect(62, 42, area);
-    let confirm_label = if action == TuiAction::RelaunchPimaxPlay {
-        "ENTER / SPACE Launch"
-    } else {
-        "ENTER / SPACE Confirm"
-    };
     let mut lines = vec![
         Line::from(Span::styled("Confirm Action", theme::title_style())),
         Line::from(""),
@@ -1065,15 +1060,13 @@ fn render_action_confirmation(frame: &mut Frame<'_>, area: Rect, app: &mut App) 
         Line::from(""),
     ];
     lines.extend(action.expected_effect().lines().map(Line::from));
-    if action != TuiAction::RelaunchPimaxPlay {
-        lines.push(Line::from(
-            "The Supervisor will run this action after confirmation.",
-        ));
-    }
+    lines.push(Line::from(
+        "The Supervisor will run this action after confirmation.",
+    ));
     lines.extend([
         Line::from(""),
         Line::from(vec![
-            Span::styled(confirm_label, theme::secondary_style()),
+            Span::styled("ENTER / SPACE Confirm", theme::secondary_style()),
             Span::raw("    "),
             Span::styled("ESC Cancel", theme::secondary_style()),
         ]),
@@ -1097,7 +1090,7 @@ fn render_action_result_dialog(frame: &mut Frame<'_>, area: Rect, app: &mut App)
     let popup = centered_rect(62, 36, area);
     let display_name = display_name_for_command(&result.command);
     let (status, style) = action_outcome_style(result.outcome);
-    let mut lines = vec![
+    let lines = vec![
         Line::from(Span::styled("Action Result", theme::title_style())),
         Line::from(""),
         Line::from(vec![
@@ -1114,16 +1107,6 @@ fn render_action_result_dialog(frame: &mut Frame<'_>, area: Rect, app: &mut App)
             Span::styled("ESC Close", theme::secondary_style()),
         ]),
     ];
-
-    if result
-        .command
-        .eq_ignore_ascii_case("pimax-shell-launch-json")
-    {
-        lines.insert(
-            5,
-            Line::from("SDK and command diagnostics were captured, not written to the TUI."),
-        );
-    }
 
     frame.render_widget(Clear, popup);
     register_modal_clicks(app, popup);
@@ -1191,38 +1174,23 @@ fn small_action_label(action: TuiAction) -> &'static str {
         TuiAction::BaseStationsOff => "Off",
         TuiAction::RestartOscRouter => "OSC",
         TuiAction::ReloadAutostartApps => "Auto",
-        TuiAction::RelaunchPimaxPlay => "Pmx",
     }
 }
 
 fn compact_action_label(action: TuiAction) -> &'static str {
     match action {
         TuiAction::ReloadAutostartApps => "Auto",
-        TuiAction::RelaunchPimaxPlay => "Pimax",
         _ => action.short_label(),
     }
 }
 
-fn running_action_message(action: TuiAction, elapsed: Duration) -> String {
-    if action != TuiAction::RelaunchPimaxPlay {
-        return action.display_name().to_string();
-    }
-
-    if elapsed < Duration::from_secs(5) {
-        "Launching Pimax Play...".to_string()
-    } else if elapsed < Duration::from_secs(20) {
-        "Waiting for Pimax services...".to_string()
-    } else {
-        "Waiting for headset registration...".to_string()
-    }
+fn running_action_message(action: TuiAction, _elapsed: Duration) -> String {
+    action.display_name().to_string()
 }
 
 fn running_action_detail(action: TuiAction, elapsed: Duration) -> String {
-    if action == TuiAction::RelaunchPimaxPlay {
-        format!("elapsed {} / 90s, no retry", format_duration(elapsed))
-    } else {
-        format!("RUNNING {}", format_duration(elapsed))
-    }
+    let _ = action;
+    format!("RUNNING {}", format_duration(elapsed))
 }
 
 fn small_action_badge_offset(action: TuiAction) -> u16 {
@@ -1455,11 +1423,11 @@ fn register_modal_clicks(app: &mut App, popup: Rect) {
 
 fn shortcut_line(width: u16) -> &'static str {
     if width >= 120 {
-        "0 Help  F5 Refresh  Wheel Logs  End/F Follow  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  7 Pimax  Q Shutdown"
+        "0 Help  F5 Refresh  Wheel Logs  End/F Follow  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  Q Shutdown"
     } else if width >= 100 {
-        "0 Help  F5 Refresh  1-7 Actions  End/F Logs  Q Shutdown"
+        "0 Help  F5 Refresh  1-6 Actions  End/F Logs  Q Shutdown"
     } else {
-        "0 Help  F5 Refresh  1-7 Actions  Q Shutdown"
+        "0 Help  F5 Refresh  1-6 Actions  Q Shutdown"
     }
 }
 
@@ -1649,26 +1617,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pimax_relaunch_progress_tracks_elapsed_stage_without_claiming_internal_state() {
+    fn retained_action_progress_uses_generic_name_and_elapsed_time() {
         assert_eq!(
-            running_action_message(TuiAction::RelaunchPimaxPlay, Duration::from_secs(0)),
-            "Launching Pimax Play..."
+            running_action_message(TuiAction::RestartCoreApps, Duration::from_secs(12)),
+            "Restart Core Apps"
         );
         assert_eq!(
-            running_action_message(TuiAction::RelaunchPimaxPlay, Duration::from_secs(5)),
-            "Waiting for Pimax services..."
-        );
-        assert_eq!(
-            running_action_message(TuiAction::RelaunchPimaxPlay, Duration::from_secs(20)),
-            "Waiting for headset registration..."
-        );
-    }
-
-    #[test]
-    fn pimax_relaunch_progress_shows_elapsed_limit_and_no_retry() {
-        assert_eq!(
-            running_action_detail(TuiAction::RelaunchPimaxPlay, Duration::from_secs(12)),
-            "elapsed 12s / 90s, no retry"
+            running_action_detail(TuiAction::RestartCoreApps, Duration::from_secs(12)),
+            "RUNNING 12s"
         );
     }
 }
