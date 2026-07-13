@@ -70,6 +70,14 @@ internal sealed class BaseStationDiagnosticEvent
     public int? MissingStationCount { get; init; }
     public bool? SteamVrAvailable { get; init; }
     public bool? ConfirmationTimedOut { get; init; }
+    public int? PollCount { get; init; }
+    public int? HighestConfirmedCount { get; init; }
+    public bool? SteamVrEverReachable { get; init; }
+    public double? ConfirmationMaximumDurationMilliseconds { get; init; }
+    public double? ConfirmationPollingIntervalMilliseconds { get; init; }
+    public int? MaximumPassCount { get; init; }
+    public string? IntendedAction { get; init; }
+    public string? ActualAction { get; init; }
     public string? BurstDisposition { get; init; }
     public string? Reason { get; init; }
     public string? EarlyStopReason { get; init; }
@@ -291,6 +299,14 @@ internal sealed partial class BaseStationDiagnosticSink
             MissingStationCount = diagnosticEvent.MissingStationCount,
             SteamVrAvailable = diagnosticEvent.SteamVrAvailable,
             ConfirmationTimedOut = diagnosticEvent.ConfirmationTimedOut,
+            PollCount = diagnosticEvent.PollCount,
+            HighestConfirmedCount = diagnosticEvent.HighestConfirmedCount,
+            SteamVrEverReachable = diagnosticEvent.SteamVrEverReachable,
+            ConfirmationMaximumDurationMilliseconds = diagnosticEvent.ConfirmationMaximumDurationMilliseconds,
+            ConfirmationPollingIntervalMilliseconds = diagnosticEvent.ConfirmationPollingIntervalMilliseconds,
+            MaximumPassCount = diagnosticEvent.MaximumPassCount,
+            IntendedAction = diagnosticEvent.IntendedAction,
+            ActualAction = diagnosticEvent.ActualAction,
             BurstDisposition = diagnosticEvent.BurstDisposition,
             Reason = diagnosticEvent.Reason,
             EarlyStopReason = diagnosticEvent.EarlyStopReason,

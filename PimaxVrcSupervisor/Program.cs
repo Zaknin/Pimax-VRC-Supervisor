@@ -5336,14 +5336,118 @@ internal sealed class AppSupervisor
                 continue;
             }
 
-            var passSucceeded = await SendBaseStationPowerOnPassAsync(
-                passBaseStations,
-                baseStations,
-                pass,
-                maximumPowerOnPasses,
-                _baseStationWakeSequenceId,
-                _baseStationResolutionRefresh,
-                cancellationToken);
+            bool[] passSucceeded;
+            if (pass > 1 && useSteamVrTrackingConfirmation)
+            {
+                Console.WriteLine($"Waiting briefly for SteamVR exact-identity confirmation before base station power-on pass {pass}/{maximumPowerOnPasses}...");
+                var checker = new SteamVrBurstSuppressionChecker(
+                    _baseStationDiagnostics,
+                    BaseStationCommandTiming.SteamVrBurstSuppressionTimeout);
+                var confirmation = await checker.CheckAsync(
+                    baseStations,
+                    enabled: true,
+                    GetSteamVrTrackingConfirmationAvailability,
+                    _ => ReadSteamVrTrackingReferencesForConfirmationAsync("base-station-later-wake-pass"),
+                    _baseStationWakeSequenceId,
+                    pass,
+                    burstCycle: 0,
+                    cancellationToken,
+                    SteamVrBurstSuppressionChecker.LaterWakePassDecisionPoint);
+                foreach (var address in confirmation.ConfirmedBluetoothAddresses)
+                {
+                    _baseStationSteamVrConfirmedActive.Add(address);
+                }
+
+                var execution = await SteamVrLaterWakePassCoordinator.ExecuteAsync(
+                    confirmation,
+                    passBaseStations,
+                    subsetTargetingSafe: true,
+                    stations => SendBaseStationPowerOnPassAsync(
+                        stations,
+                        baseStations,
+                        pass,
+                        maximumPowerOnPasses,
+                        _baseStationWakeSequenceId,
+                        _baseStationResolutionRefresh,
+                        cancellationToken));
+                if (execution.EndSequence)
+                {
+                    Console.WriteLine(
+                        $"SteamVR confirmed all {confirmation.ConfiguredStationCount} enabled base stations after "
+                        + $"{confirmation.ElapsedMilliseconds / 1000:0.0} seconds; ending remaining wake passes.");
+                    checker.WriteDisposition(
+                        "laterWakePassSuppressed",
+                        confirmation,
+                        _baseStationWakeSequenceId,
+                        pass,
+                        burstCycle: 0,
+                        disposition: "suppress",
+                        maximumPassCount: maximumPowerOnPasses,
+                        decisionPoint: SteamVrBurstSuppressionChecker.LaterWakePassDecisionPoint);
+                    checker.WriteDisposition(
+                        "wakeSequenceCompletedEarly",
+                        confirmation,
+                        _baseStationWakeSequenceId,
+                        pass,
+                        burstCycle: 0,
+                        disposition: "suppress",
+                        maximumPassCount: maximumPowerOnPasses,
+                        decisionPoint: SteamVrBurstSuppressionChecker.LaterWakePassDecisionPoint);
+                    _baseStationsPoweredOn = true;
+                    _baseStationPowerOnComplete = true;
+                    _nextBaseStationPowerOnAttemptAt = null;
+                    WriteDiagnosticEvent($"base-station wake routine complete; result=exact-confirmed-before-pass-{pass}; elapsedMs={Stopwatch.GetElapsedTime(routineStartedAt).TotalMilliseconds:0.0}");
+                    return BaseStationWakeRoutineResult.Ran;
+                }
+
+                passBaseStations = execution.Stations;
+                passSucceeded = execution.Results;
+                if (execution.Disposition == "subsetTargeted")
+                {
+                    Console.WriteLine(
+                        $"SteamVR confirms {confirmation.ConfirmedActiveStationCount} of {confirmation.ConfiguredStationCount} enabled base stations; "
+                        + $"retrying only the {passBaseStations.Length} missing station(s).");
+                    checker.WriteDisposition(
+                        "laterWakePassReducedToMissingStations",
+                        confirmation,
+                        _baseStationWakeSequenceId,
+                        pass,
+                        burstCycle: 0,
+                        disposition: "missing-only retry",
+                        retryStationCount: passBaseStations.Length,
+                        retrySuccessCount: passSucceeded.Count(value => value),
+                        maximumPassCount: maximumPowerOnPasses,
+                        decisionPoint: SteamVrBurstSuppressionChecker.LaterWakePassDecisionPoint);
+                }
+                else
+                {
+                    Console.WriteLine(
+                        $"SteamVR confirmation remained incomplete ({SteamVrBurstSuppressionChecker.OutcomeName(confirmation.Outcome)}); "
+                        + "retaining the normal wake pass.");
+                    checker.WriteDisposition(
+                        "laterWakePassSuppressionBypassed",
+                        confirmation,
+                        _baseStationWakeSequenceId,
+                        pass,
+                        burstCycle: 0,
+                        disposition: "full fallback",
+                        retryStationCount: passBaseStations.Length,
+                        retrySuccessCount: passSucceeded.Count(value => value),
+                        maximumPassCount: maximumPowerOnPasses,
+                        decisionPoint: SteamVrBurstSuppressionChecker.LaterWakePassDecisionPoint);
+                }
+            }
+            else
+            {
+                passSucceeded = await SendBaseStationPowerOnPassAsync(
+                    passBaseStations,
+                    baseStations,
+                    pass,
+                    maximumPowerOnPasses,
+                    _baseStationWakeSequenceId,
+                    _baseStationResolutionRefresh,
+                    cancellationToken);
+            }
             for (var index = 0; index < passBaseStations.Length; index++)
             {
                 if (passSucceeded[index])
@@ -6131,25 +6235,12 @@ internal sealed class AppSupervisor
             {
                 Console.WriteLine($"Waiting {BaseStationCommandTiming.UnsupportedV2PowerOnBurstDelay.TotalSeconds:0.0} seconds before the next unsupported V2 base-station wake burst...");
                 await Task.Delay(BaseStationCommandTiming.UnsupportedV2PowerOnBurstDelay, cancellationToken);
-                Console.WriteLine("Checking SteamVR exact identities before unsupported V2 base-station wake burst 2/2...");
+                Console.WriteLine("Waiting briefly for SteamVR exact-identity confirmation before wake burst 2/2...");
                 var suppression = await burstSuppressionChecker.CheckAsync(
                     enabledConfiguredBaseStations,
                     enabled: true,
-                    () =>
-                    {
-                        var available = _steamVrTrackingReferenceReader.IsAvailable(out var reason);
-                        return (available, reason);
-                    },
-                    ignoredCancellationToken => Task.Run<IReadOnlyList<SteamVrTrackingReference>>(
-                        () =>
-                        {
-                            using var probe = BeginOpenVrProbe();
-                            _ = ObserveSteamVrLifecycle("base-station-burst-suppression-probe-before");
-                            var references = _steamVrTrackingReferenceReader.ReadActiveTrackingReferences();
-                            _ = ObserveSteamVrLifecycle("base-station-burst-suppression-probe-after");
-                            return references;
-                        },
-                        CancellationToken.None),
+                    GetSteamVrTrackingConfirmationAvailability,
+                    _ => ReadSteamVrTrackingReferencesForConfirmationAsync("base-station-burst-suppression"),
                     wakeSequenceId,
                     pass,
                     burstCycle,
@@ -6161,7 +6252,9 @@ internal sealed class AppSupervisor
 
                 if (suppression.SuppressBurst)
                 {
-                    Console.WriteLine("SteamVR already reports all enabled base station(s) active by exact identity; skipping redundant wake burst 2/2.");
+                    Console.WriteLine(
+                        $"SteamVR confirmed all {suppression.ConfiguredStationCount} enabled base stations after "
+                        + $"{suppression.ElapsedMilliseconds / 1000:0.0} seconds; skipping wake burst 2/2.");
                     burstSuppressionChecker.WriteDisposition(
                         "burstSuppressed",
                         suppression,
@@ -6224,6 +6317,24 @@ internal sealed class AppSupervisor
 
         return stationSucceeded;
     }
+
+    private (bool Available, string Reason) GetSteamVrTrackingConfirmationAvailability()
+    {
+        var available = _steamVrTrackingReferenceReader.IsAvailable(out var reason);
+        return (available, reason);
+    }
+
+    private Task<IReadOnlyList<SteamVrTrackingReference>> ReadSteamVrTrackingReferencesForConfirmationAsync(string caller)
+        => Task.Run<IReadOnlyList<SteamVrTrackingReference>>(
+            () =>
+            {
+                using var probe = BeginOpenVrProbe();
+                _ = ObserveSteamVrLifecycle($"{caller}-probe-before");
+                var references = _steamVrTrackingReferenceReader.ReadActiveTrackingReferences();
+                _ = ObserveSteamVrLifecycle($"{caller}-probe-after");
+                return references;
+            },
+            CancellationToken.None);
 
     private static BaseStationWakeAttemptResult[] MergeBaseStationWakeAttemptResults(
         IReadOnlyList<BaseStationWakeAttemptResult> original,

@@ -71,6 +71,7 @@ internal static class BaseStationCommandTiming
     public static readonly TimeSpan PowerOnRetryPassDelay = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan OpenVrTrackingCheckDelay = TimeSpan.FromSeconds(10);
     public static readonly TimeSpan SteamVrBurstSuppressionTimeout = TimeSpan.FromSeconds(2);
+    public static readonly TimeSpan SteamVrConfirmationPollingInterval = TimeSpan.FromMilliseconds(150);
     public const int PowerOnPasses = 3;
     public const int OpenVrPowerOnCycles = 5;
     public const int PowerOnAttempts = 2;

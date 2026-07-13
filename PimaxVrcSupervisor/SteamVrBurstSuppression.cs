@@ -6,9 +6,10 @@ internal enum SteamVrBurstSuppressionOutcome
 {
     AllConfirmed,
     PartialConfirmed,
+    DeadlineExpired,
     Unavailable,
-    TimedOut,
     Errored,
+    Cancelled,
     Disabled
 }
 
@@ -20,6 +21,10 @@ internal sealed record SteamVrBurstSuppressionResult(
     string[] MissingBluetoothAddresses,
     bool SteamVrAvailable,
     bool ConfirmationTimedOut,
+    int PollCount,
+    double ElapsedMilliseconds,
+    int HighestConfirmedCount,
+    bool SteamVrEverReachable,
     string Reason)
 {
     public bool SuppressBurst => Outcome == SteamVrBurstSuppressionOutcome.AllConfirmed;
@@ -33,14 +38,15 @@ internal static class SteamVrBurstRetryPlanner
 {
     public static SteamVrBurstRetryPlan Plan(
         SteamVrBurstSuppressionResult result,
-        BaseStationDevice[] eligibleStations)
+        BaseStationDevice[] eligibleStations,
+        bool subsetTargetingSafe = true)
     {
         if (result.SuppressBurst)
         {
             return new("skipped", []);
         }
 
-        if (result.Outcome == SteamVrBurstSuppressionOutcome.PartialConfirmed)
+        if (subsetTargetingSafe && result.Outcome == SteamVrBurstSuppressionOutcome.PartialConfirmed)
         {
             var missingSet = new HashSet<string>(
                 result.MissingBluetoothAddresses,
@@ -59,17 +65,58 @@ internal static class SteamVrBurstRetryPlanner
     }
 }
 
+internal sealed record SteamVrLaterWakePassExecution(
+    string Disposition,
+    BaseStationDevice[] Stations,
+    bool[] Results,
+    bool EndSequence);
+
+internal static class SteamVrLaterWakePassCoordinator
+{
+    public static async Task<SteamVrLaterWakePassExecution> ExecuteAsync(
+        SteamVrBurstSuppressionResult confirmation,
+        BaseStationDevice[] eligibleStations,
+        bool subsetTargetingSafe,
+        Func<BaseStationDevice[], Task<bool[]>> executePassAsync)
+    {
+        var plan = SteamVrBurstRetryPlanner.Plan(confirmation, eligibleStations, subsetTargetingSafe);
+        if (plan.Disposition == "skipped")
+        {
+            return new(plan.Disposition, [], [], EndSequence: true);
+        }
+
+        var results = await executePassAsync(plan.Stations);
+        return new(plan.Disposition, plan.Stations, results, EndSequence: false);
+    }
+}
+
 internal sealed class SteamVrBurstSuppressionChecker
 {
     internal const string OperationName = "steamVrBurstSuppression";
+    internal const string InnerBurstDecisionPoint = "unsupportedV2BurstSuppression";
+    internal const string LaterWakePassDecisionPoint = "laterWakePassSuppression";
 
     private readonly BaseStationDiagnosticSink _diagnostics;
-    private readonly TimeSpan _timeout;
+    private readonly TimeSpan _maximumDuration;
+    private readonly TimeSpan _pollingInterval;
 
-    public SteamVrBurstSuppressionChecker(BaseStationDiagnosticSink diagnostics, TimeSpan timeout)
+    public SteamVrBurstSuppressionChecker(
+        BaseStationDiagnosticSink diagnostics,
+        TimeSpan maximumDuration,
+        TimeSpan? pollingInterval = null)
     {
+        if (maximumDuration <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumDuration));
+        }
+
         _diagnostics = diagnostics;
-        _timeout = timeout;
+        _maximumDuration = maximumDuration;
+        _pollingInterval = pollingInterval ?? BaseStationCommandTiming.SteamVrConfirmationPollingInterval;
+        if (_pollingInterval <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(pollingInterval));
+        }
     }
 
     public async Task<SteamVrBurstSuppressionResult> CheckAsync(
@@ -80,13 +127,14 @@ internal sealed class SteamVrBurstSuppressionChecker
         string wakeSequenceId,
         int pass,
         int burstCycle,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string decisionPoint = InnerBurstDecisionPoint)
     {
-        var operationId = BaseStationDiagnosticSink.CreateId("bs-burst-suppression");
-        var startedAt = Stopwatch.GetTimestamp();
+        var operationId = BaseStationDiagnosticSink.CreateId("bs-steamvr-confirmation");
         Write(
             "steamVrBurstSuppressionCheckStarted",
             "started",
+            decisionPoint,
             configuredStationCount: enabledConfiguredStations.Length,
             operationId: operationId,
             wakeSequenceId: wakeSequenceId,
@@ -94,119 +142,60 @@ internal sealed class SteamVrBurstSuppressionChecker
             burstCycle: burstCycle,
             steamVrAvailable: null,
             confirmationTimedOut: false,
-            reason: enabled ? "checking exact identities" : "disabled");
+            pollCount: 0,
+            highestConfirmedCount: 0,
+            steamVrEverReachable: false,
+            reason: enabled ? "polling for exact identities" : "disabled");
+        var startedAt = Stopwatch.GetTimestamp();
 
-        SteamVrBurstSuppressionResult? result = null;
+        SteamVrBurstSuppressionResult result;
         if (!enabled || enabledConfiguredStations.Length == 0)
         {
             result = CreateResult(
                 SteamVrBurstSuppressionOutcome.Disabled,
                 enabledConfiguredStations,
                 [],
-                steamVrAvailable: false,
+                steamVrEverReachable: false,
                 confirmationTimedOut: false,
+                pollCount: 0,
+                elapsedMilliseconds: Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                highestConfirmedCount: 0,
                 reason: enabled ? "no enabled configured stations" : "suppression check disabled");
         }
         else
         {
-            (bool Available, string Reason) availability;
-            try
-            {
-                availability = getAvailability();
-            }
-            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
-            {
-                result = CreateResult(
-                    SteamVrBurstSuppressionOutcome.Errored,
-                    enabledConfiguredStations,
-                    [],
-                    steamVrAvailable: false,
-                    confirmationTimedOut: false,
-                    reason: ex.Message);
-                availability = default;
-            }
-
-            if (result is null)
-            {
-                if (!availability.Available)
-                {
-                    result = CreateResult(
-                        SteamVrBurstSuppressionOutcome.Unavailable,
-                        enabledConfiguredStations,
-                        [],
-                        steamVrAvailable: false,
-                        confirmationTimedOut: false,
-                        reason: availability.Reason ?? "SteamVR tracking confirmation is unavailable");
-                }
-                else
-                {
-                    Task<IReadOnlyList<SteamVrTrackingReference>>? readTask = null;
-                    try
-                    {
-                        readTask = readActiveTrackingReferencesAsync(cancellationToken);
-                        var trackingReferences = await readTask.WaitAsync(_timeout, cancellationToken);
-                        var match = SteamVrBaseStationMatcher.Match(enabledConfiguredStations, trackingReferences);
-                        result = CreateResult(
-                            match.AllMatchedExactly
-                                ? SteamVrBurstSuppressionOutcome.AllConfirmed
-                                : SteamVrBurstSuppressionOutcome.PartialConfirmed,
-                            enabledConfiguredStations,
-                            match.ExactMatchedBluetoothAddresses,
-                            steamVrAvailable: true,
-                            confirmationTimedOut: false,
-                            reason: match.AllMatchedExactly
-                                ? "all enabled configured stations matched active SteamVR tracking references by exact identity"
-                                : $"exact identity confirmation incomplete ({match.ExactMatchCount}/{enabledConfiguredStations.Length}); count fallback is not eligible");
-                    }
-                    catch (TimeoutException)
-                    {
-                        if (readTask is not null)
-                        {
-                            _ = readTask.ContinueWith(
-                                completed => _ = completed.Exception,
-                                CancellationToken.None,
-                                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                                TaskScheduler.Default);
-                        }
-
-                        result = CreateResult(
-                            SteamVrBurstSuppressionOutcome.TimedOut,
-                            enabledConfiguredStations,
-                            [],
-                            steamVrAvailable: true,
-                            confirmationTimedOut: true,
-                            reason: $"SteamVR exact-identity confirmation exceeded {_timeout.TotalMilliseconds:0} ms");
-                    }
-                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
-                    {
-                        result = CreateResult(
-                            SteamVrBurstSuppressionOutcome.Errored,
-                            enabledConfiguredStations,
-                            [],
-                            steamVrAvailable: true,
-                            confirmationTimedOut: false,
-                            reason: ex.Message);
-                    }
-                }
-            }
+            result = await PollAsync(
+                enabledConfiguredStations,
+                getAvailability,
+                readActiveTrackingReferencesAsync,
+                operationId,
+                wakeSequenceId,
+                pass,
+                burstCycle,
+                decisionPoint,
+                startedAt,
+                cancellationToken);
         }
 
-        var completedResult = result ?? throw new InvalidOperationException("Burst suppression check did not produce a result.");
         Write(
             "steamVrBurstSuppressionCheckCompleted",
-            OutcomeName(completedResult.Outcome),
-            configuredStationCount: completedResult.ConfiguredStationCount,
-            confirmedActiveStationCount: completedResult.ConfirmedActiveStationCount,
-            missingStationCount: completedResult.MissingBluetoothAddresses.Length,
+            OutcomeName(result.Outcome),
+            decisionPoint,
+            configuredStationCount: result.ConfiguredStationCount,
+            confirmedActiveStationCount: result.ConfirmedActiveStationCount,
+            missingStationCount: result.MissingBluetoothAddresses.Length,
             operationId: operationId,
             wakeSequenceId: wakeSequenceId,
             pass: pass,
             burstCycle: burstCycle,
-            steamVrAvailable: completedResult.SteamVrAvailable,
-            confirmationTimedOut: completedResult.ConfirmationTimedOut,
-            reason: completedResult.Reason,
-            elapsedMilliseconds: Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
-        return completedResult;
+            steamVrAvailable: result.SteamVrAvailable,
+            confirmationTimedOut: result.ConfirmationTimedOut,
+            pollCount: result.PollCount,
+            highestConfirmedCount: result.HighestConfirmedCount,
+            steamVrEverReachable: result.SteamVrEverReachable,
+            reason: result.Reason,
+            elapsedMilliseconds: result.ElapsedMilliseconds);
+        return result;
     }
 
     public void WriteDisposition(
@@ -217,29 +206,239 @@ internal sealed class SteamVrBurstSuppressionChecker
         int burstCycle,
         string disposition,
         int? retryStationCount = null,
-        int? retrySuccessCount = null)
+        int? retrySuccessCount = null,
+        int? maximumPassCount = null,
+        string decisionPoint = InnerBurstDecisionPoint)
         => Write(
             eventType,
             OutcomeName(result.Outcome),
+            decisionPoint,
             configuredStationCount: result.ConfiguredStationCount,
             confirmedActiveStationCount: result.ConfirmedActiveStationCount,
             missingStationCount: result.MissingBluetoothAddresses.Length,
             wakeSequenceId: wakeSequenceId,
             pass: pass,
             burstCycle: burstCycle,
+            maximumPassCount: maximumPassCount,
             steamVrAvailable: result.SteamVrAvailable,
             confirmationTimedOut: result.ConfirmationTimedOut,
+            pollCount: result.PollCount,
+            highestConfirmedCount: result.HighestConfirmedCount,
+            steamVrEverReachable: result.SteamVrEverReachable,
             disposition: disposition,
             reason: result.Reason,
             retryStationCount: retryStationCount,
-            retrySuccessCount: retrySuccessCount);
+            retrySuccessCount: retrySuccessCount,
+            elapsedMilliseconds: result.ElapsedMilliseconds);
+
+    private async Task<SteamVrBurstSuppressionResult> PollAsync(
+        BaseStationDevice[] configuredStations,
+        Func<(bool Available, string Reason)> getAvailability,
+        Func<CancellationToken, Task<IReadOnlyList<SteamVrTrackingReference>>> readAsync,
+        string operationId,
+        string wakeSequenceId,
+        int pass,
+        int burstCycle,
+        string decisionPoint,
+        long startedAt,
+        CancellationToken cancellationToken)
+    {
+        var pollCount = 0;
+        var highestConfirmedCount = 0;
+        var lastReportedCount = -1;
+        var steamVrEverReachable = false;
+        IReadOnlyCollection<string> bestConfirmedAddresses = [];
+
+        try
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var elapsed = Stopwatch.GetElapsedTime(startedAt);
+                if (elapsed >= _maximumDuration)
+                {
+                    return DeadlineResult();
+                }
+
+                (bool Available, string Reason) availability;
+                try
+                {
+                    availability = getAvailability();
+                }
+                catch (Exception ex)
+                {
+                    return CreateResult(
+                        SteamVrBurstSuppressionOutcome.Errored,
+                        configuredStations,
+                        bestConfirmedAddresses,
+                        steamVrEverReachable,
+                        confirmationTimedOut: false,
+                        pollCount,
+                        Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                        highestConfirmedCount,
+                        ex.Message);
+                }
+
+                if (!availability.Available)
+                {
+                    return CreateResult(
+                        SteamVrBurstSuppressionOutcome.Unavailable,
+                        configuredStations,
+                        bestConfirmedAddresses,
+                        steamVrEverReachable,
+                        confirmationTimedOut: false,
+                        pollCount,
+                        Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                        highestConfirmedCount,
+                        availability.Reason ?? "SteamVR tracking confirmation is unavailable");
+                }
+
+                pollCount++;
+                Task<IReadOnlyList<SteamVrTrackingReference>>? readTask = null;
+                try
+                {
+                    var remaining = _maximumDuration - Stopwatch.GetElapsedTime(startedAt);
+                    if (remaining <= TimeSpan.Zero)
+                    {
+                        return DeadlineResult();
+                    }
+
+                    readTask = readAsync(cancellationToken);
+                    var trackingReferences = await readTask.WaitAsync(remaining, cancellationToken);
+                    steamVrEverReachable = true;
+                    var match = SteamVrBaseStationMatcher.Match(configuredStations, trackingReferences);
+                    if (match.ExactMatchCount > highestConfirmedCount)
+                    {
+                        highestConfirmedCount = match.ExactMatchCount;
+                        bestConfirmedAddresses = match.ExactMatchedBluetoothAddresses;
+                    }
+
+                    if (match.ExactMatchCount != lastReportedCount)
+                    {
+                        lastReportedCount = match.ExactMatchCount;
+                        Write(
+                            "steamVrConfirmationPollProgress",
+                            match.AllMatchedExactly ? "allConfirmed" : "incomplete",
+                            decisionPoint,
+                            configuredStationCount: configuredStations.Length,
+                            confirmedActiveStationCount: match.ExactMatchCount,
+                            missingStationCount: configuredStations.Length - match.ExactMatchCount,
+                            operationId: operationId,
+                            wakeSequenceId: wakeSequenceId,
+                            pass: pass,
+                            burstCycle: burstCycle,
+                            steamVrAvailable: true,
+                            confirmationTimedOut: false,
+                            pollCount: pollCount,
+                            highestConfirmedCount: highestConfirmedCount,
+                            steamVrEverReachable: true,
+                            elapsedMilliseconds: Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                            reason: match.AllMatchedExactly
+                                ? "all configured identities confirmed in one SteamVR snapshot"
+                                : "exact identity confirmation remains incomplete");
+                    }
+
+                    if (match.AllMatchedExactly)
+                    {
+                        return CreateResult(
+                            SteamVrBurstSuppressionOutcome.AllConfirmed,
+                            configuredStations,
+                            match.ExactMatchedBluetoothAddresses,
+                            steamVrEverReachable,
+                            confirmationTimedOut: false,
+                            pollCount,
+                            Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                            highestConfirmedCount,
+                            "all enabled configured stations matched active SteamVR tracking references by exact identity");
+                    }
+                }
+                catch (TimeoutException)
+                {
+                    ObserveLateFault(readTask);
+                    return DeadlineResult();
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    return CreateResult(
+                        SteamVrBurstSuppressionOutcome.Errored,
+                        configuredStations,
+                        bestConfirmedAddresses,
+                        steamVrEverReachable,
+                        confirmationTimedOut: false,
+                        pollCount,
+                        Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                        highestConfirmedCount,
+                        ex.Message);
+                }
+
+                var delay = _maximumDuration - Stopwatch.GetElapsedTime(startedAt);
+                if (delay <= TimeSpan.Zero)
+                {
+                    return DeadlineResult();
+                }
+
+                await Task.Delay(delay < _pollingInterval ? delay : _pollingInterval, cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return CreateResult(
+                SteamVrBurstSuppressionOutcome.Cancelled,
+                configuredStations,
+                bestConfirmedAddresses,
+                steamVrEverReachable,
+                confirmationTimedOut: false,
+                pollCount,
+                Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                highestConfirmedCount,
+                "SteamVR exact-identity confirmation was cancelled");
+        }
+
+        SteamVrBurstSuppressionResult DeadlineResult()
+        {
+            var outcome = highestConfirmedCount > 0
+                ? SteamVrBurstSuppressionOutcome.PartialConfirmed
+                : SteamVrBurstSuppressionOutcome.DeadlineExpired;
+            return CreateResult(
+                outcome,
+                configuredStations,
+                bestConfirmedAddresses,
+                steamVrEverReachable,
+                confirmationTimedOut: true,
+                pollCount,
+                Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                highestConfirmedCount,
+                $"SteamVR exact-identity confirmation remained incomplete through the {_maximumDuration.TotalMilliseconds:0} ms deadline");
+        }
+    }
+
+    private static void ObserveLateFault(Task? task)
+    {
+        if (task is null)
+        {
+            return;
+        }
+
+        _ = task.ContinueWith(
+            completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
 
     private static SteamVrBurstSuppressionResult CreateResult(
         SteamVrBurstSuppressionOutcome outcome,
         BaseStationDevice[] configuredStations,
         IReadOnlyCollection<string> confirmedAddresses,
-        bool steamVrAvailable,
+        bool steamVrEverReachable,
         bool confirmationTimedOut,
+        int pollCount,
+        double elapsedMilliseconds,
+        int highestConfirmedCount,
         string reason)
     {
         var confirmed = confirmedAddresses
@@ -257,23 +456,32 @@ internal sealed class SteamVrBurstSuppressionChecker
             confirmed.Length,
             confirmed,
             missing,
-            steamVrAvailable,
+            steamVrEverReachable,
             confirmationTimedOut,
+            pollCount,
+            elapsedMilliseconds,
+            highestConfirmedCount,
+            steamVrEverReachable,
             reason);
     }
 
     private void Write(
         string eventType,
         string outcome,
+        string decisionPoint,
         int configuredStationCount,
         string? operationId = null,
         string? wakeSequenceId = null,
         int? pass = null,
         int? burstCycle = null,
+        int? maximumPassCount = null,
         int? confirmedActiveStationCount = null,
         int? missingStationCount = null,
         bool? steamVrAvailable = null,
         bool? confirmationTimedOut = null,
+        int? pollCount = null,
+        int? highestConfirmedCount = null,
+        bool? steamVrEverReachable = null,
         string? disposition = null,
         string? reason = null,
         int? retryStationCount = null,
@@ -286,20 +494,29 @@ internal sealed class SteamVrBurstSuppressionChecker
             WakeSequenceId = wakeSequenceId,
             Trigger = "SteamVR autostart",
             EventType = eventType,
-            CurrentStage = "unsupportedV2BurstSuppression",
+            CurrentStage = decisionPoint,
             ConfiguredStationCount = configuredStationCount,
             ConfirmedActiveStationCount = confirmedActiveStationCount,
             MissingStationCount = missingStationCount,
             SteamVrAvailable = steamVrAvailable,
             ConfirmationTimedOut = confirmationTimedOut,
+            PollCount = pollCount,
+            HighestConfirmedCount = highestConfirmedCount,
+            SteamVrEverReachable = steamVrEverReachable,
+            ConfirmationMaximumDurationMilliseconds = _maximumDuration.TotalMilliseconds,
+            ConfirmationPollingIntervalMilliseconds = _pollingInterval.TotalMilliseconds,
             BurstDisposition = disposition,
+            ActualAction = disposition,
             Reason = BaseStationDiagnosticSink.SanitizeMessage(reason),
             BurstNumber = pass,
             RetryNumber = burstCycle,
+            MaximumPassCount = maximumPassCount,
             RetryStationCount = retryStationCount,
             RetrySuccessCount = retrySuccessCount,
             TotalAttemptDurationMilliseconds = elapsedMilliseconds,
-            Outcome = outcome
+            CancellationRequested = outcome == "cancelled",
+            Outcome = outcome,
+            Terminal = eventType.EndsWith("Completed", StringComparison.Ordinal)
         });
 
     internal static string OutcomeName(SteamVrBurstSuppressionOutcome outcome)
@@ -307,9 +524,10 @@ internal sealed class SteamVrBurstSuppressionChecker
         {
             SteamVrBurstSuppressionOutcome.AllConfirmed => "allConfirmed",
             SteamVrBurstSuppressionOutcome.PartialConfirmed => "partialConfirmed",
+            SteamVrBurstSuppressionOutcome.DeadlineExpired => "deadlineExpired",
             SteamVrBurstSuppressionOutcome.Unavailable => "unavailable",
-            SteamVrBurstSuppressionOutcome.TimedOut => "timedOut",
             SteamVrBurstSuppressionOutcome.Errored => "errored",
+            SteamVrBurstSuppressionOutcome.Cancelled => "cancelled",
             SteamVrBurstSuppressionOutcome.Disabled => "disabled",
             _ => throw new ArgumentOutOfRangeException(nameof(outcome))
         };

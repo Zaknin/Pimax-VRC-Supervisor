@@ -5,122 +5,86 @@ using Xunit;
 public sealed class SteamVrBurstSuppressionTests
 {
     [Fact]
-    public async Task CheckAsync_SuppressesSecondBurst_WhenAllStationsMatchExactly()
+    public async Task CheckAsync_PollsFromZeroToAll_AndSuppressesSecondBurst()
     {
         using var temp = new TempDirectory();
-        var stations = Stations(2);
-        var checker = CreateChecker(temp);
+        var stations = Stations(4);
+        var poll = 0;
 
-        var result = await checker.CheckAsync(
+        var result = await CreateChecker(temp).CheckAsync(
             stations,
             enabled: true,
             Available,
-            _ => Task.FromResult<IReadOnlyList<SteamVrTrackingReference>>(ReferencesFor(stations)),
+            _ => Task.FromResult<IReadOnlyList<SteamVrTrackingReference>>(
+                ++poll == 1 ? [] : ReferencesFor(stations)),
             "wake-all",
             pass: 1,
             burstCycle: 1,
             CancellationToken.None);
-        var plan = SteamVrBurstRetryPlanner.Plan(result, stations);
-        checker.WriteDisposition("burstSuppressed", result, "wake-all", 1, 2, plan.Disposition);
 
         Assert.Equal(SteamVrBurstSuppressionOutcome.AllConfirmed, result.Outcome);
         Assert.True(result.SuppressBurst);
-        Assert.Equal("skipped", plan.Disposition);
-        Assert.Empty(plan.Stations);
-        var events = ReadEvents(temp);
-        Assert.Equal(
-            ["steamVrBurstSuppressionCheckStarted", "steamVrBurstSuppressionCheckCompleted", "burstSuppressed"],
-            events.Select(EventType));
-        var completed = events[1];
-        Assert.Equal(2, completed.GetProperty("configuredStationCount").GetInt32());
-        Assert.Equal(2, completed.GetProperty("confirmedActiveStationCount").GetInt32());
-        Assert.Equal(0, completed.GetProperty("missingStationCount").GetInt32());
-        Assert.True(completed.GetProperty("steamVrAvailable").GetBoolean());
-        Assert.False(completed.GetProperty("confirmationTimedOut").GetBoolean());
-        Assert.Equal("allConfirmed", completed.GetProperty("outcome").GetString());
-        Assert.Equal("skipped", events[2].GetProperty("burstDisposition").GetString());
+        Assert.Equal(2, result.PollCount);
+        Assert.Equal(4, result.HighestConfirmedCount);
+        Assert.True(result.SteamVrEverReachable);
+        Assert.Equal("skipped", SteamVrBurstRetryPlanner.Plan(result, stations).Disposition);
     }
 
     [Fact]
-    public async Task CheckAsync_UsesFullBurstFallback_WhenSteamVrIsUnavailable()
+    public async Task CheckAsync_ReportsProgressOnlyWhenExactCountChanges_AndOneTerminalEvent()
+    {
+        using var temp = new TempDirectory();
+        var stations = Stations(4);
+        var snapshots = new[]
+        {
+            Array.Empty<SteamVrTrackingReference>(),
+            ReferencesFor(stations[..2]),
+            ReferencesFor(stations)
+        };
+        var poll = 0;
+
+        var result = await CreateChecker(temp).CheckAsync(
+            stations,
+            true,
+            Available,
+            _ => Task.FromResult<IReadOnlyList<SteamVrTrackingReference>>(snapshots[Math.Min(poll++, snapshots.Length - 1)]),
+            "wake-progress",
+            1,
+            1,
+            CancellationToken.None);
+
+        Assert.Equal(SteamVrBurstSuppressionOutcome.AllConfirmed, result.Outcome);
+        Assert.Equal(3, result.PollCount);
+        Assert.Equal(4, result.HighestConfirmedCount);
+        var events = ReadEvents(temp);
+        Assert.Equal(3, events.Count(element => EventType(element) == "steamVrConfirmationPollProgress"));
+        Assert.Single(events, element => EventType(element) == "steamVrBurstSuppressionCheckCompleted");
+        var completed = Assert.Single(events, element => EventType(element) == "steamVrBurstSuppressionCheckCompleted");
+        Assert.Equal(3, completed.GetProperty("pollCount").GetInt32());
+        Assert.Equal(4, completed.GetProperty("highestConfirmedCount").GetInt32());
+        Assert.True(completed.GetProperty("steamVrEverReachable").GetBoolean());
+    }
+
+    [Fact]
+    public async Task CheckAsync_UsesFullFallback_WhenExactIdentitiesRemainAbsentThroughDeadline()
     {
         using var temp = new TempDirectory();
         var stations = Stations(2);
-        var checker = CreateChecker(temp);
-        var readerCalled = false;
 
-        var result = await checker.CheckAsync(
+        var result = await CreateChecker(temp, TimeSpan.FromMilliseconds(15)).CheckAsync(
             stations,
-            enabled: true,
-            () => (false, "OpenVR API unavailable"),
-            _ =>
-            {
-                readerCalled = true;
-                return Task.FromResult<IReadOnlyList<SteamVrTrackingReference>>([]);
-            },
-            "wake-unavailable",
-            pass: 1,
-            burstCycle: 1,
-            CancellationToken.None);
-        var plan = SteamVrBurstRetryPlanner.Plan(result, stations);
-        checker.WriteDisposition("burstSuppressionBypassed", result, "wake-unavailable", 1, 2, plan.Disposition);
-
-        Assert.False(readerCalled);
-        Assert.Equal(SteamVrBurstSuppressionOutcome.Unavailable, result.Outcome);
-        Assert.Equal("fullBurst", plan.Disposition);
-        Assert.Equal(stations, plan.Stations);
-        var bypassed = Assert.Single(ReadEvents(temp), element => EventType(element) == "burstSuppressionBypassed");
-        Assert.False(bypassed.GetProperty("steamVrAvailable").GetBoolean());
-        Assert.Equal("fullBurst", bypassed.GetProperty("burstDisposition").GetString());
-        Assert.Equal("unavailable", bypassed.GetProperty("outcome").GetString());
-    }
-
-    [Fact]
-    public async Task CheckAsync_TargetsOnlyMissingStations_WhenSteamVrConfirmsPartialSet()
-    {
-        using var temp = new TempDirectory();
-        var stations = Stations(3);
-        var checker = CreateChecker(temp);
-
-        var result = await checker.CheckAsync(
-            stations,
-            enabled: true,
+            true,
             Available,
-            _ => Task.FromResult<IReadOnlyList<SteamVrTrackingReference>>(ReferencesFor([stations[0]])),
-            "wake-partial",
-            pass: 1,
-            burstCycle: 1,
+            _ => Task.FromResult<IReadOnlyList<SteamVrTrackingReference>>([]),
+            "wake-deadline",
+            1,
+            1,
             CancellationToken.None);
-        var plan = SteamVrBurstRetryPlanner.Plan(result, stations);
-        checker.WriteDisposition(
-            "partialBurstRetryStarted",
-            result,
-            "wake-partial",
-            1,
-            2,
-            plan.Disposition,
-            retryStationCount: plan.Stations.Length);
-        checker.WriteDisposition(
-            "partialBurstRetryCompleted",
-            result,
-            "wake-partial",
-            1,
-            2,
-            plan.Disposition,
-            retryStationCount: plan.Stations.Length,
-            retrySuccessCount: plan.Stations.Length);
 
-        Assert.Equal(SteamVrBurstSuppressionOutcome.PartialConfirmed, result.Outcome);
-        Assert.Equal(1, result.ConfirmedActiveStationCount);
-        Assert.Equal(2, result.MissingBluetoothAddresses.Length);
-        Assert.Equal("subsetTargeted", plan.Disposition);
-        Assert.Equal(stations.Skip(1).Select(station => station.BluetoothAddress), plan.Stations.Select(station => station.BluetoothAddress));
-        var events = ReadEvents(temp);
-        Assert.Contains(events, element => EventType(element) == "partialBurstRetryStarted");
-        var completed = Assert.Single(events, element => EventType(element) == "partialBurstRetryCompleted");
-        Assert.Equal(2, completed.GetProperty("retryStationCount").GetInt32());
-        Assert.Equal(2, completed.GetProperty("retrySuccessCount").GetInt32());
-        Assert.Equal("partialConfirmed", completed.GetProperty("outcome").GetString());
+        Assert.Equal(SteamVrBurstSuppressionOutcome.DeadlineExpired, result.Outcome);
+        Assert.True(result.ConfirmationTimedOut);
+        Assert.True(result.PollCount > 1);
+        Assert.Equal("fullBurst", SteamVrBurstRetryPlanner.Plan(result, stations).Disposition);
     }
 
     [Fact]
@@ -128,57 +92,200 @@ public sealed class SteamVrBurstSuppressionTests
     {
         using var temp = new TempDirectory();
         var stations = Stations(2);
-        var wrongReferences = new[]
-        {
-            new SteamVrTrackingReference(1, ["LHB-WRONG001"]),
-            new SteamVrTrackingReference(2, ["LHB-WRONG002"])
-        };
+        SteamVrTrackingReference[] wrongReferences =
+        [
+            new(1, ["LHB-WRONG001"]),
+            new(2, ["LHB-WRONG002"])
+        ];
 
-        var result = await CreateChecker(temp).CheckAsync(
+        var result = await CreateChecker(temp, TimeSpan.FromMilliseconds(15)).CheckAsync(
             stations,
-            enabled: true,
+            true,
             Available,
             _ => Task.FromResult<IReadOnlyList<SteamVrTrackingReference>>(wrongReferences),
             "wake-mismatch",
-            pass: 1,
-            burstCycle: 1,
+            1,
+            1,
             CancellationToken.None);
-        var plan = SteamVrBurstRetryPlanner.Plan(result, stations);
 
-        Assert.Equal(SteamVrBurstSuppressionOutcome.PartialConfirmed, result.Outcome);
+        Assert.Equal(SteamVrBurstSuppressionOutcome.DeadlineExpired, result.Outcome);
         Assert.Equal(0, result.ConfirmedActiveStationCount);
         Assert.False(result.SuppressBurst);
-        Assert.Equal("fullBurst", plan.Disposition);
-        Assert.Contains("count fallback is not eligible", result.Reason, StringComparison.Ordinal);
+        Assert.Equal("fullBurst", SteamVrBurstRetryPlanner.Plan(result, stations).Disposition);
     }
 
     [Fact]
-    public async Task CheckAsync_UsesFullBurstFallback_WhenConfirmationTimesOut()
+    public async Task CheckAsync_ContinuesAfterTransientEmptySnapshots()
     {
         using var temp = new TempDirectory();
         var stations = Stations(2);
-        var checker = CreateChecker(temp, TimeSpan.FromMilliseconds(10));
-        var never = new TaskCompletionSource<IReadOnlyList<SteamVrTrackingReference>>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        var poll = 0;
 
-        var result = await checker.CheckAsync(
+        var result = await CreateChecker(temp).CheckAsync(
             stations,
-            enabled: true,
+            true,
             Available,
-            _ => never.Task,
-            "wake-timeout",
-            pass: 1,
-            burstCycle: 1,
+            _ => Task.FromResult<IReadOnlyList<SteamVrTrackingReference>>(
+                ++poll < 3 ? [] : ReferencesFor(stations)),
+            "wake-empty",
+            1,
+            1,
             CancellationToken.None);
-        var plan = SteamVrBurstRetryPlanner.Plan(result, stations);
-        checker.WriteDisposition("burstSuppressionBypassed", result, "wake-timeout", 1, 2, plan.Disposition);
 
-        Assert.Equal(SteamVrBurstSuppressionOutcome.TimedOut, result.Outcome);
-        Assert.True(result.ConfirmationTimedOut);
-        Assert.Equal("fullBurst", plan.Disposition);
-        var completed = Assert.Single(ReadEvents(temp), element => EventType(element) == "steamVrBurstSuppressionCheckCompleted");
-        Assert.True(completed.GetProperty("confirmationTimedOut").GetBoolean());
-        Assert.Equal("timedOut", completed.GetProperty("outcome").GetString());
+        Assert.Equal(SteamVrBurstSuppressionOutcome.AllConfirmed, result.Outcome);
+        Assert.Equal(3, result.PollCount);
+    }
+
+    [Fact]
+    public async Task CheckAsync_TerminatesWithoutReading_WhenSteamVrIsUnavailable()
+    {
+        using var temp = new TempDirectory();
+        var readerCalled = false;
+
+        var result = await CreateChecker(temp).CheckAsync(
+            Stations(2),
+            true,
+            () => (false, "OpenVR API unavailable"),
+            _ =>
+            {
+                readerCalled = true;
+                return Task.FromResult<IReadOnlyList<SteamVrTrackingReference>>([]);
+            },
+            "wake-unavailable",
+            1,
+            1,
+            CancellationToken.None);
+
+        Assert.False(readerCalled);
+        Assert.Equal(SteamVrBurstSuppressionOutcome.Unavailable, result.Outcome);
+        Assert.False(result.SteamVrEverReachable);
+    }
+
+    [Fact]
+    public async Task CheckAsync_ReturnsErrored_AndRetainsFallback_WhenQueryFails()
+    {
+        using var temp = new TempDirectory();
+        var stations = Stations(2);
+
+        var result = await CreateChecker(temp).CheckAsync(
+            stations,
+            true,
+            Available,
+            _ => Task.FromException<IReadOnlyList<SteamVrTrackingReference>>(new InvalidOperationException("query failed")),
+            "wake-error",
+            1,
+            1,
+            CancellationToken.None);
+
+        Assert.Equal(SteamVrBurstSuppressionOutcome.Errored, result.Outcome);
+        Assert.Equal("fullBurst", SteamVrBurstRetryPlanner.Plan(result, stations).Disposition);
+    }
+
+    [Fact]
+    public async Task CheckAsync_ReturnsCancelledPromptly_DuringPollingDelay()
+    {
+        using var temp = new TempDirectory();
+        using var cancellation = new CancellationTokenSource();
+        var firstPoll = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var check = CreateChecker(temp, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(100)).CheckAsync(
+            Stations(2),
+            true,
+            Available,
+            _ =>
+            {
+                firstPoll.TrySetResult();
+                return Task.FromResult<IReadOnlyList<SteamVrTrackingReference>>([]);
+            },
+            "wake-cancelled",
+            1,
+            1,
+            cancellation.Token);
+        await firstPoll.Task;
+        cancellation.Cancel();
+        var result = await check.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(SteamVrBurstSuppressionOutcome.Cancelled, result.Outcome);
+        Assert.False(result.SuppressBurst);
+    }
+
+    [Fact]
+    public async Task LaterWakePass_AllConfirmed_DoesNotExecuteBluetoothAndEndsSequence()
+    {
+        using var temp = new TempDirectory();
+        var stations = Stations(4);
+        var confirmation = await ConfirmAsync(temp, stations, ReferencesFor(stations));
+        var executed = false;
+
+        var result = await SteamVrLaterWakePassCoordinator.ExecuteAsync(
+            confirmation,
+            stations,
+            subsetTargetingSafe: true,
+            _ =>
+            {
+                executed = true;
+                return Task.FromResult(Array.Empty<bool>());
+            });
+
+        Assert.False(executed);
+        Assert.True(result.EndSequence);
+        Assert.Equal("skipped", result.Disposition);
+    }
+
+    [Fact]
+    public async Task LaterWakePass_PartialConfirmation_RetriesOnlyMissingStations_WhenSafe()
+    {
+        using var temp = new TempDirectory();
+        var stations = Stations(4);
+        var confirmation = await ConfirmAsync(
+            temp,
+            stations,
+            ReferencesFor(stations[..3]),
+            TimeSpan.FromMilliseconds(15));
+        BaseStationDevice[]? executedStations = null;
+
+        var result = await SteamVrLaterWakePassCoordinator.ExecuteAsync(
+            confirmation,
+            stations,
+            subsetTargetingSafe: true,
+            selected =>
+            {
+                executedStations = selected;
+                return Task.FromResult(selected.Select(_ => true).ToArray());
+            });
+
+        Assert.Equal(SteamVrBurstSuppressionOutcome.PartialConfirmed, confirmation.Outcome);
+        Assert.Equal("subsetTargeted", result.Disposition);
+        Assert.NotNull(executedStations);
+        Assert.Single(executedStations!);
+        Assert.Equal(stations[3].BluetoothAddress, executedStations![0].BluetoothAddress);
+        Assert.DoesNotContain(executedStations, station => stations[..3].Contains(station));
+    }
+
+    [Fact]
+    public async Task LaterWakePass_PartialConfirmation_UsesFullPass_WhenSubsetIsUnsafe()
+    {
+        using var temp = new TempDirectory();
+        var stations = Stations(3);
+        var confirmation = await ConfirmAsync(
+            temp,
+            stations,
+            ReferencesFor(stations[..1]),
+            TimeSpan.FromMilliseconds(15));
+        BaseStationDevice[]? executedStations = null;
+
+        var result = await SteamVrLaterWakePassCoordinator.ExecuteAsync(
+            confirmation,
+            stations,
+            subsetTargetingSafe: false,
+            selected =>
+            {
+                executedStations = selected;
+                return Task.FromResult(selected.Select(_ => true).ToArray());
+            });
+
+        Assert.Equal("fullBurst", result.Disposition);
+        Assert.Equal(stations, executedStations);
     }
 
     [Fact]
@@ -188,23 +295,43 @@ public sealed class SteamVrBurstSuppressionTests
 
         var result = await CreateChecker(temp).CheckAsync(
             [],
-            enabled: true,
+            true,
             Available,
             _ => Task.FromResult<IReadOnlyList<SteamVrTrackingReference>>([]),
             "wake-disabled",
-            pass: 1,
-            burstCycle: 1,
+            1,
+            1,
             CancellationToken.None);
 
         Assert.Equal(SteamVrBurstSuppressionOutcome.Disabled, result.Outcome);
+        Assert.Equal(0, result.PollCount);
         Assert.Empty(result.MissingBluetoothAddresses);
-        Assert.Equal("fullBurst", SteamVrBurstRetryPlanner.Plan(result, []).Disposition);
     }
 
-    private static SteamVrBurstSuppressionChecker CreateChecker(TempDirectory temp, TimeSpan? timeout = null)
+    private static Task<SteamVrBurstSuppressionResult> ConfirmAsync(
+        TempDirectory temp,
+        BaseStationDevice[] stations,
+        SteamVrTrackingReference[] references,
+        TimeSpan? maximumDuration = null)
+        => CreateChecker(temp, maximumDuration).CheckAsync(
+            stations,
+            true,
+            Available,
+            _ => Task.FromResult<IReadOnlyList<SteamVrTrackingReference>>(references),
+            "wake-later",
+            2,
+            0,
+            CancellationToken.None,
+            SteamVrBurstSuppressionChecker.LaterWakePassDecisionPoint);
+
+    private static SteamVrBurstSuppressionChecker CreateChecker(
+        TempDirectory temp,
+        TimeSpan? maximumDuration = null,
+        TimeSpan? pollingInterval = null)
         => new(
             new BaseStationDiagnosticSink(temp.Path, "Supervisor", "test"),
-            timeout ?? TimeSpan.FromSeconds(1));
+            maximumDuration ?? TimeSpan.FromMilliseconds(100),
+            pollingInterval ?? TimeSpan.FromMilliseconds(1));
 
     private static (bool Available, string Reason) Available()
         => (true, "available");
