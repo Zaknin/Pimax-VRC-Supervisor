@@ -1874,6 +1874,8 @@ internal sealed class AppSupervisor
         _baseStationDiagnostics = BaseStationDiagnosticSink.ForProcess("Supervisor", AppVersion.Current);
         _xsOverlayMonitorTransition = new XsOverlaySafeMonitorTransitionCoordinator(
             new WindowsXsOverlayProcessPlatform(),
+            new WindowsXsOverlayLauncher(),
+            new WindowsXsOverlayWindowObserver(),
             token =>
             {
                 token.ThrowIfCancellationRequested();
@@ -10234,6 +10236,7 @@ internal sealed class OpenVrApplicationRegistry : IDisposable
     private readonly RemoveApplicationManifestDelegate _removeApplicationManifest;
     private readonly SetApplicationAutoLaunchDelegate _setApplicationAutoLaunch;
     private readonly GetApplicationsErrorNameFromEnumDelegate _getApplicationsErrorNameFromEnum;
+    private readonly LaunchApplicationDelegate _launchApplication;
     private bool _initialized = true;
 
     private OpenVrApplicationRegistry(
@@ -10248,6 +10251,7 @@ internal sealed class OpenVrApplicationRegistry : IDisposable
         _addApplicationManifest = CreateDelegate<AddApplicationManifestDelegate>(table.AddApplicationManifest);
         _removeApplicationManifest = CreateDelegate<RemoveApplicationManifestDelegate>(table.RemoveApplicationManifest);
         _setApplicationAutoLaunch = CreateDelegate<SetApplicationAutoLaunchDelegate>(table.SetApplicationAutoLaunch);
+        _launchApplication = CreateDelegate<LaunchApplicationDelegate>(table.LaunchApplication);
         _getApplicationsErrorNameFromEnum = CreateDelegate<GetApplicationsErrorNameFromEnumDelegate>(table.GetApplicationsErrorNameFromEnum);
     }
 
@@ -10311,6 +10315,9 @@ internal sealed class OpenVrApplicationRegistry : IDisposable
 
     public void SetApplicationAutoLaunch(string appKey, bool autoLaunch)
         => ThrowIfApplicationError(_setApplicationAutoLaunch(appKey, autoLaunch), "SetApplicationAutoLaunch");
+
+    public void LaunchApplication(string appKey)
+        => ThrowIfApplicationError(_launchApplication(appKey), "LaunchApplication");
 
     public void TrySetApplicationAutoLaunch(string appKey, bool autoLaunch)
     {
@@ -10493,6 +10500,7 @@ internal sealed class OpenVrApplicationRegistry : IDisposable
     private delegate int AddApplicationManifestDelegate([MarshalAs(UnmanagedType.LPStr)] string manifestPath, [MarshalAs(UnmanagedType.I1)] bool temporary);
     private delegate int RemoveApplicationManifestDelegate([MarshalAs(UnmanagedType.LPStr)] string manifestPath);
     private delegate int SetApplicationAutoLaunchDelegate([MarshalAs(UnmanagedType.LPStr)] string appKey, [MarshalAs(UnmanagedType.I1)] bool autoLaunch);
+    private delegate int LaunchApplicationDelegate([MarshalAs(UnmanagedType.LPStr)] string appKey);
     private delegate IntPtr GetApplicationsErrorNameFromEnumDelegate(int error);
 }
 

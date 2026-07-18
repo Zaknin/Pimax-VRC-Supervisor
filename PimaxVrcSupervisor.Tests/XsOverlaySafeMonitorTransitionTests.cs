@@ -27,7 +27,7 @@ public sealed class XsOverlaySafeMonitorTransitionTests
         Assert.Equal(1, fixture.MonitorCalls);
         Assert.Equal(0, fixture.Platform.GracefulCalls);
         Assert.Equal(0, fixture.Platform.ForceCalls);
-        Assert.Equal(0, fixture.Platform.StartCalls);
+        Assert.Equal(0, fixture.Launcher.RequestCalls);
     }
 
     [Fact]
@@ -43,7 +43,7 @@ public sealed class XsOverlaySafeMonitorTransitionTests
         Assert.True(result.RestartSucceeded);
         Assert.Equal(1, fixture.Platform.GracefulCalls);
         Assert.Equal(0, fixture.Platform.ForceCalls);
-        Assert.Equal(1, fixture.Platform.StartCalls);
+        Assert.Equal(1, fixture.Launcher.RequestCalls);
         Assert.True(fixture.TopologyDelayObserved);
         Assert.Equal(
             ["graceful", "monitor", "settle", "start"],
@@ -73,7 +73,7 @@ public sealed class XsOverlaySafeMonitorTransitionTests
 
         Assert.True(result.XsOverlayStoppedBySupervisor);
         Assert.Equal([Fixture.OriginalPid], fixture.Platform.ForcedPids);
-        Assert.Equal(1, fixture.Platform.StartCalls);
+        Assert.Equal(1, fixture.Launcher.RequestCalls);
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public sealed class XsOverlaySafeMonitorTransitionTests
 
         Assert.False(result.XsOverlayStoppedBySupervisor);
         Assert.Equal(0, fixture.Platform.ForceCalls);
-        Assert.Equal(0, fixture.Platform.StartCalls);
+        Assert.Equal(0, fixture.Launcher.RequestCalls);
         Assert.Equal(1, fixture.MonitorCalls);
     }
 
@@ -101,7 +101,7 @@ public sealed class XsOverlaySafeMonitorTransitionTests
         Assert.False(result.XsOverlayStoppedBySupervisor);
         Assert.Equal(0, fixture.Platform.GracefulCalls);
         Assert.Equal(0, fixture.Platform.ForceCalls);
-        Assert.Equal(0, fixture.Platform.StartCalls);
+        Assert.Equal(0, fixture.Launcher.RequestCalls);
         Assert.Contains(fixture.Platform.Running, item =>
             item.ProcessId == Fixture.OriginalPid && item.StartTimeUtc != Fixture.Original().StartTimeUtc);
     }
@@ -116,14 +116,21 @@ public sealed class XsOverlaySafeMonitorTransitionTests
 
         Assert.Equal("stopFailed", result.Outcome);
         Assert.Equal(0, fixture.MonitorCalls);
-        Assert.Equal(0, fixture.Platform.StartCalls);
+        Assert.Equal(0, fixture.Launcher.RequestCalls);
     }
 
     [Fact]
     public async Task MissingRestartInformation_DoesNotStopOrMutateMonitors()
     {
         var fixture = new Fixture(running: true);
-        fixture.Platform.RestartInformationAvailable = false;
+        fixture.Launcher.Target = new(
+            XsOverlayLaunchRoute.Unavailable,
+            null,
+            null,
+            null,
+            false,
+            "no registered launch route",
+            false);
 
         var result = await fixture.Coordinator.RunAsync(true, CancellationToken.None);
 
@@ -143,7 +150,7 @@ public sealed class XsOverlaySafeMonitorTransitionTests
         Assert.False(result.MonitorShutdownSucceeded);
         Assert.True(result.RestartAttempted);
         Assert.True(result.RestartSucceeded);
-        Assert.Equal(1, fixture.Platform.StartCalls);
+        Assert.Equal(1, fixture.Launcher.RequestCalls);
     }
 
     [Fact]
@@ -180,17 +187,58 @@ public sealed class XsOverlaySafeMonitorTransitionTests
     }
 
     [Fact]
+    public async Task VisibleUnwantedDesktopWindow_IsRecordedAsRegression()
+    {
+        var fixture = new Fixture(running: true);
+        fixture.Platform.GracefulExit = true;
+        fixture.WindowObserver.Result = XsOverlayWindowVerificationResult.UnwantedDesktopWindowDetected;
+
+        var result = await fixture.Coordinator.RunAsync(true, CancellationToken.None);
+
+        Assert.Equal("completedWithDesktopWindowRegression", result.Outcome);
+        Assert.Equal(XsOverlayWindowVerificationResult.UnwantedDesktopWindowDetected, result.WindowVerificationResult);
+        Assert.Contains(fixture.Events, item => item.EventType == "xsOverlayUnwantedDesktopWindowDetected");
+    }
+
+    [Fact]
+    public async Task UnavailableWindowState_DoesNotGuessFailure()
+    {
+        var fixture = new Fixture(running: true);
+        fixture.Platform.GracefulExit = true;
+        fixture.WindowObserver.Result = XsOverlayWindowVerificationResult.Unavailable;
+
+        var result = await fixture.Coordinator.RunAsync(true, CancellationToken.None);
+
+        Assert.True(result.RestartSucceeded);
+        Assert.Equal(XsOverlayWindowVerificationResult.Unavailable, result.WindowVerificationResult);
+    }
+
+    [Fact]
     public async Task RestartFailure_AttemptsOnlyOnceAndDoesNotLoop()
     {
         var fixture = new Fixture(running: true);
         fixture.Platform.GracefulExit = true;
-        fixture.Platform.StartProducesProcess = false;
+        fixture.Launcher.ProducesProcess = false;
 
         var result = await fixture.Coordinator.RunAsync(true, CancellationToken.None);
 
         Assert.Equal("restartFailed", result.Outcome);
-        Assert.Equal(1, fixture.Platform.StartCalls);
+        Assert.Equal(1, fixture.Launcher.RequestCalls);
         Assert.Contains(fixture.Events, item => item.EventType == "xsOverlayRestartFailed");
+    }
+
+    [Fact]
+    public async Task BrokeredRequestFailure_DoesNotRetryOrUseBareExecutable()
+    {
+        var fixture = new Fixture(running: true);
+        fixture.Platform.GracefulExit = true;
+        fixture.Launcher.RequestSucceeds = false;
+
+        var result = await fixture.Coordinator.RunAsync(true, CancellationToken.None);
+
+        Assert.Equal("restartFailed", result.Outcome);
+        Assert.Equal(1, fixture.Launcher.RequestCalls);
+        Assert.Contains(fixture.Events, item => item.EventType == "xsOverlayBrokeredRestartFailed");
     }
 
     [Fact]
@@ -203,7 +251,7 @@ public sealed class XsOverlaySafeMonitorTransitionTests
         var result = await fixture.Coordinator.RunAsync(true, CancellationToken.None);
 
         Assert.True(result.RestartSucceeded);
-        Assert.Equal(0, fixture.Platform.StartCalls);
+        Assert.Equal(0, fixture.Launcher.RequestCalls);
         Assert.Equal(Fixture.ReappearedPid, result.RestartedPid);
     }
 
@@ -218,7 +266,7 @@ public sealed class XsOverlaySafeMonitorTransitionTests
         Assert.False(result.XsOverlayWasRunning);
         Assert.Equal(0, fixture.Platform.GracefulCalls);
         Assert.Equal(0, fixture.Platform.ForceCalls);
-        Assert.Equal(0, fixture.Platform.StartCalls);
+        Assert.Equal(0, fixture.Launcher.RequestCalls);
     }
 
     [Theory]
@@ -243,7 +291,7 @@ public sealed class XsOverlaySafeMonitorTransitionTests
         Assert.Equal("cancelled", result.Outcome);
         Assert.Equal(0, fixture.MonitorCalls);
         Assert.True(result.RestartSucceeded);
-        Assert.Equal(1, fixture.Platform.StartCalls);
+        Assert.Equal(1, fixture.Launcher.RequestCalls);
     }
 
     private sealed class Fixture
@@ -255,6 +303,7 @@ public sealed class XsOverlaySafeMonitorTransitionTests
         public Fixture(bool running = false)
         {
             Platform = new FakePlatform();
+            Launcher = new FakeLauncher(Platform);
             if (running)
             {
                 Platform.Running.Add(Original());
@@ -264,6 +313,8 @@ public sealed class XsOverlaySafeMonitorTransitionTests
         }
 
         public FakePlatform Platform { get; }
+        public FakeLauncher Launcher { get; }
+        public FakeWindowObserver WindowObserver { get; } = new();
         public List<XsOverlayMonitorTransitionEvent> Events { get; } = [];
         public List<string> Order { get; } = [];
         public XsOverlaySafeMonitorTransitionCoordinator Coordinator { get; private set; } = null!;
@@ -277,6 +328,8 @@ public sealed class XsOverlaySafeMonitorTransitionTests
         {
             Coordinator = new(
                 Platform,
+                Launcher,
+                WindowObserver,
                 _ =>
                 {
                     MonitorCalls++;
@@ -314,13 +367,10 @@ public sealed class XsOverlaySafeMonitorTransitionTests
         public int FindCount { get; private set; }
         public int GracefulCalls { get; private set; }
         public int ForceCalls { get; private set; }
-        public int StartCalls { get; private set; }
-        public bool RestartInformationAvailable { get; set; } = true;
         public bool GracefulRequestAccepted { get; set; } = true;
         public bool GracefulExit { get; set; }
         public bool ExitOnGracefulRequestWithoutOwnership { get; set; }
         public bool ForceSucceeds { get; set; } = true;
-        public bool StartProducesProcess { get; set; } = true;
         public bool ReplaceOriginalAfterDetection { get; set; }
         public Action? AfterGracefulRequest { get; set; }
 
@@ -336,11 +386,6 @@ public sealed class XsOverlaySafeMonitorTransitionTests
 
             return Task.FromResult<IReadOnlyList<XsOverlayProcessSnapshot>>(snapshot);
         }
-
-        public XsOverlayRestartInformation? CaptureRestartInformation(XsOverlayProcessSnapshot process)
-            => RestartInformationAvailable
-                ? new(process.ExecutablePath!, @"C:\Steam\steamapps\common\XSOverlay", "capturedExecutablePath", null)
-                : null;
 
         public Task<bool> RequestGracefulCloseAsync(XsOverlayProcessSnapshot process, CancellationToken cancellationToken)
         {
@@ -370,21 +415,51 @@ public sealed class XsOverlaySafeMonitorTransitionTests
             return Task.FromResult(ForceSucceeds);
         }
 
-        public Task<int?> StartAsync(XsOverlayRestartInformation restartInformation, CancellationToken cancellationToken)
+    }
+
+    private sealed class FakeLauncher(FakePlatform platform) : IXsOverlayLauncher
+    {
+        public int RequestCalls { get; private set; }
+        public bool ProducesProcess { get; set; } = true;
+        public bool RequestSucceeds { get; set; } = true;
+        public XsOverlayLaunchTarget Target { get; set; } = new(
+            XsOverlayLaunchRoute.SteamApp,
+            "1173510",
+            "C:\\Steam\\steamapps\\appmanifest_1173510.acf",
+            @"C:\Steam\steamapps\common\XSOverlay\XSOverlay.exe",
+            true,
+            null,
+            true);
+
+        public XsOverlayLaunchTarget Discover(XsOverlayProcessSnapshot process) => Target;
+
+        public Task<XsOverlayLaunchRequestResult> RequestLaunchAsync(XsOverlayLaunchTarget target, CancellationToken cancellationToken)
         {
-            StartCalls++;
-            Order.Add("start");
-            if (StartProducesProcess)
+            RequestCalls++;
+            platform.Order.Add("start");
+            if (!RequestSucceeds)
             {
-                Running.Add(new(
+                return Task.FromResult(new XsOverlayLaunchRequestResult(false, "fakeSteamUri", "request failed"));
+            }
+
+            if (ProducesProcess)
+            {
+                platform.Running.Add(new(
                     Fixture.RestartedPid,
                     1,
                     "XSOverlay",
                     DateTime.UnixEpoch.AddSeconds(1),
-                    restartInformation.ExecutablePath));
+                    target.ExecutableIdentity));
             }
 
-            return Task.FromResult<int?>(Fixture.RestartedPid);
+            return Task.FromResult(new XsOverlayLaunchRequestResult(true, "fakeSteamUri"));
         }
+    }
+
+    private sealed class FakeWindowObserver : IXsOverlayWindowObserver
+    {
+        public XsOverlayWindowVerificationResult Result { get; set; } = XsOverlayWindowVerificationResult.NoUnwantedDesktopWindow;
+        public Task<XsOverlayWindowVerificationResult> ObserveAsync(XsOverlayProcessSnapshot process, CancellationToken cancellationToken)
+            => Task.FromResult(Result);
     }
 }

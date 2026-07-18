@@ -13,16 +13,15 @@ internal sealed record XsOverlayRestartInformation(
     string ExecutablePath,
     string WorkingDirectory,
     string RestartMechanism,
-    bool? AppearsSteamLaunched);
+    bool? AppearsSteamLaunched,
+    XsOverlayLaunchTarget LaunchTarget);
 
 internal interface IXsOverlayProcessPlatform
 {
     Task<IReadOnlyList<XsOverlayProcessSnapshot>> FindRunningAsync(CancellationToken cancellationToken);
-    XsOverlayRestartInformation? CaptureRestartInformation(XsOverlayProcessSnapshot process);
     Task<bool> RequestGracefulCloseAsync(XsOverlayProcessSnapshot process, CancellationToken cancellationToken);
     Task<bool> IsSameProcessRunningAsync(XsOverlayProcessSnapshot process, CancellationToken cancellationToken);
     Task<bool> ForceTerminateAsync(XsOverlayProcessSnapshot process, CancellationToken cancellationToken);
-    Task<int?> StartAsync(XsOverlayRestartInformation restartInformation, CancellationToken cancellationToken);
 }
 
 internal sealed record XsOverlayMonitorTransitionEvent
@@ -37,6 +36,10 @@ internal sealed record XsOverlayMonitorTransitionEvent
     public string? ExecutableIdentity { get; init; }
     public string? SafeExecutablePath { get; init; }
     public string? RestartMechanism { get; init; }
+    public string? LaunchRoute { get; init; }
+    public string? ValidatedAppId { get; init; }
+    public string? RegistrationSource { get; init; }
+    public string? WindowVerificationResult { get; init; }
     public string? StopMechanism { get; init; }
     public double? StopElapsedMilliseconds { get; init; }
     public string? MonitorResult { get; init; }
@@ -55,13 +58,17 @@ internal sealed record XsOverlayMonitorTransitionResult(
     bool RestartAttempted,
     bool RestartSucceeded,
     int? OriginalPid,
-    int? RestartedPid);
+    int? RestartedPid,
+    XsOverlayLaunchRoute? LaunchRoute,
+    XsOverlayWindowVerificationResult WindowVerificationResult);
 
 internal sealed class XsOverlaySafeMonitorTransitionCoordinator
 {
     internal const string OperationName = "xsOverlaySafeMonitorShutdown";
 
     private readonly IXsOverlayProcessPlatform _processes;
+    private readonly IXsOverlayLauncher _launcher;
+    private readonly IXsOverlayWindowObserver _windowObserver;
     private readonly Func<CancellationToken, Task> _disableSecondaryMonitorsAsync;
     private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
     private readonly Action<XsOverlayMonitorTransitionEvent> _diagnostics;
@@ -73,6 +80,8 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
 
     public XsOverlaySafeMonitorTransitionCoordinator(
         IXsOverlayProcessPlatform processes,
+        IXsOverlayLauncher launcher,
+        IXsOverlayWindowObserver windowObserver,
         Func<CancellationToken, Task> disableSecondaryMonitorsAsync,
         Action<XsOverlayMonitorTransitionEvent> diagnostics,
         Action<string> message,
@@ -83,6 +92,8 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
         TimeSpan? restartVerificationTimeout = null)
     {
         _processes = processes;
+        _launcher = launcher;
+        _windowObserver = windowObserver;
         _disableSecondaryMonitorsAsync = disableSecondaryMonitorsAsync;
         _diagnostics = diagnostics;
         _message = message;
@@ -139,19 +150,27 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
 
         var original = running[0];
         Write(operationId, "xsOverlayDetected", original, outcome: "detected");
-        var restart = _processes.CaptureRestartInformation(original);
-        if (restart is null)
+        Write(operationId, "xsOverlayLaunchTargetDiscoveryStarted", original, outcome: "started");
+        var launchTarget = _launcher.Discover(original);
+        var restart = new XsOverlayRestartInformation(
+            launchTarget.ExecutableIdentity ?? original.ExecutablePath ?? "",
+            Path.GetDirectoryName(launchTarget.ExecutableIdentity ?? original.ExecutablePath ?? "") ?? "",
+            launchTarget.RouteType.ToString(),
+            AppearsSteamLaunched: null,
+            launchTarget);
+        if (!launchTarget.SafeForAutomaticRestart)
         {
-            const string reason = "a reliable executable path and working directory could not be captured";
-            Write(operationId, "xsOverlayRestartInformationUnavailable", original, outcome: "skipped", skipReason: reason);
-            Write(operationId, "complete", original, outcome: "skipped", skipReason: reason);
-            _message("XSOverlay restart information is unavailable; secondary-monitor shutdown was skipped.");
+            var reason = launchTarget.FailureReason ?? "no safe registered XSOverlay launch route was found";
+            Write(operationId, "xsOverlayLaunchTargetUnavailable", original, restart, outcome: "skipped", skipReason: reason);
+            Write(operationId, "xsOverlayDirectRestartRefused", original, restart, outcome: "skipped", skipReason: reason);
+            Write(operationId, "complete", original, restart, outcome: "skipped", skipReason: reason);
+            _message("A safe registered XSOverlay launch route could not be found; XSOverlay was not restarted automatically.");
             return Result("restartInformationUnavailable", monitorAttempted: false, xsOverlayWasRunning: true, originalPid: original.ProcessId);
         }
 
         Write(
             operationId,
-            "xsOverlayRestartInformationCaptured",
+            "xsOverlayLaunchTargetDiscovered",
             original,
             restart,
             outcome: "captured");
@@ -254,6 +273,7 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
         var restartAttempted = false;
         var restartSucceeded = false;
         int? restartedPid = null;
+        var windowVerificationResult = XsOverlayWindowVerificationResult.Unavailable;
         var outcome = "completed";
         try
         {
@@ -314,11 +334,16 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
             if (stoppedBySupervisor)
             {
                 restartAttempted = true;
-                (restartSucceeded, restartedPid) = await RestartOnceAsync(operationId, original, restart, stopMechanism);
+                (restartSucceeded, restartedPid, windowVerificationResult) = await RestartOnceAsync(operationId, original, restart, stopMechanism);
                 if (!restartSucceeded)
                 {
                     outcome = "restartFailed";
                     _message("XSOverlay restart failed after the monitor transition; SteamVR and VRChat were left running.");
+                }
+                else if (windowVerificationResult == XsOverlayWindowVerificationResult.UnwantedDesktopWindowDetected)
+                {
+                    outcome = "completedWithDesktopWindowRegression";
+                    _message("XSOverlay restarted, but an unexpected desktop window was detected.");
                 }
             }
             else
@@ -346,7 +371,9 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
             restartAttempted,
             restartSucceeded,
             original.ProcessId,
-            restartedPid);
+            restartedPid,
+            restart.LaunchTarget.RouteType,
+            windowVerificationResult);
     }
 
     private async Task<XsOverlayMonitorTransitionResult> RunMonitorOnlyAsync(
@@ -396,7 +423,7 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
         return true;
     }
 
-    private async Task<(bool Succeeded, int? ProcessId)> RestartOnceAsync(
+    private async Task<(bool Succeeded, int? ProcessId, XsOverlayWindowVerificationResult WindowResult)> RestartOnceAsync(
         string operationId,
         XsOverlayProcessSnapshot original,
         XsOverlayRestartInformation restart,
@@ -409,17 +436,26 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
             {
                 Write(operationId, "xsOverlayRestartSkipped", original, restart, stopMechanism, restartResult: "alreadyRunning", restartedPid: running[0].ProcessId, outcome: "completed", skipReason: "an exact XSOverlay instance reappeared independently");
                 _message("XSOverlay is already running after the monitor transition; a duplicate launch was avoided.");
-                return (true, running[0].ProcessId);
+                return (true, running[0].ProcessId, XsOverlayWindowVerificationResult.Unavailable);
             }
 
             if (running.Count > 1)
             {
                 Write(operationId, "xsOverlayRestartFailed", original, restart, stopMechanism, restartResult: "multipleInstances", outcome: "failed", skipReason: "multiple exact XSOverlay instances appeared before restart");
-                return (false, null);
+                return (false, null, XsOverlayWindowVerificationResult.Unavailable);
             }
 
             Write(operationId, "xsOverlayRestartStarted", original, restart, stopMechanism, restartResult: "started", outcome: "started");
-            var launchedPid = await _processes.StartAsync(restart, CancellationToken.None);
+            Write(operationId, "xsOverlayBrokeredRestartStarted", original, restart, stopMechanism, restartResult: "started", outcome: "started");
+            _message("Restarting XSOverlay through its registered Steam launch route...");
+            var launchRequest = await _launcher.RequestLaunchAsync(restart.LaunchTarget, CancellationToken.None);
+            if (!launchRequest.Requested)
+            {
+                Write(operationId, "xsOverlayBrokeredRestartFailed", original, restart, stopMechanism, restartResult: "requestFailed", outcome: "failed", skipReason: launchRequest.FailureReason);
+                return (false, null, XsOverlayWindowVerificationResult.Unavailable);
+            }
+
+            Write(operationId, "xsOverlayBrokeredRestartRequested", original, restart, stopMechanism, restartResult: launchRequest.RequestMethod, outcome: "requested");
             var startedAt = Stopwatch.GetTimestamp();
             while (Stopwatch.GetElapsedTime(startedAt) < _restartVerificationTimeout)
             {
@@ -427,9 +463,29 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
                 if (running.Count == 1)
                 {
                     var pid = running[0].ProcessId;
+                    Write(operationId, "xsOverlayWindowVerificationStarted", original, restart, stopMechanism, restartedPid: pid, outcome: "started");
+                    var windowResult = await _windowObserver.ObserveAsync(running[0], CancellationToken.None);
+                    Write(
+                        operationId,
+                        "xsOverlayWindowVerificationCompleted",
+                        original,
+                        restart,
+                        stopMechanism,
+                        restartedPid: pid,
+                        restartResult: windowResult.ToString(),
+                        windowVerificationResult: windowResult,
+                        outcome: "completed");
+                    if (windowResult == XsOverlayWindowVerificationResult.UnwantedDesktopWindowDetected)
+                    {
+                        Write(operationId, "xsOverlayUnwantedDesktopWindowDetected", original, restart, stopMechanism, restartedPid: pid, outcome: "regression");
+                    }
+
+                    Write(operationId, "xsOverlayBrokeredRestartCompleted", original, restart, stopMechanism, restartResult: "oneInstanceVerified", restartedPid: pid, outcome: "completed");
                     Write(operationId, "xsOverlayRestartCompleted", original, restart, stopMechanism, restartResult: "oneInstanceVerified", restartedPid: pid, outcome: "completed");
-                    _message("XSOverlay restarted successfully after the monitor transition.");
-                    return (true, pid);
+                    _message(restart.LaunchTarget.RouteType == XsOverlayLaunchRoute.SteamApp
+                        ? "XSOverlay restarted successfully through Steam."
+                        : "XSOverlay restarted successfully through its registered launch route.");
+                    return (true, pid, windowResult);
                 }
 
                 if (running.Count > 1)
@@ -440,13 +496,14 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
                 await _delayAsync(_processPollInterval, CancellationToken.None);
             }
 
-            Write(operationId, "xsOverlayRestartFailed", original, restart, stopMechanism, restartResult: "verificationFailed", restartedPid: launchedPid, outcome: "failed", skipReason: "exactly one XSOverlay process was not verified");
-            return (false, launchedPid);
+            Write(operationId, "xsOverlayBrokeredRestartFailed", original, restart, stopMechanism, restartResult: "verificationFailed", outcome: "failed", skipReason: "exactly one XSOverlay process was not verified");
+            Write(operationId, "xsOverlayRestartFailed", original, restart, stopMechanism, restartResult: "verificationFailed", outcome: "failed", skipReason: "exactly one XSOverlay process was not verified");
+            return (false, null, XsOverlayWindowVerificationResult.Unavailable);
         }
         catch (Exception ex)
         {
             Write(operationId, "xsOverlayRestartFailed", original, restart, stopMechanism, restartResult: "launchFailed", outcome: "failed", skipReason: ex.Message);
-            return (false, null);
+            return (false, null, XsOverlayWindowVerificationResult.Unavailable);
         }
     }
 
@@ -461,6 +518,7 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
         double? topologySettleElapsedMilliseconds = null,
         string? restartResult = null,
         int? restartedPid = null,
+        XsOverlayWindowVerificationResult? windowVerificationResult = null,
         string? outcome = null,
         string? skipReason = null)
         => _diagnostics(new XsOverlayMonitorTransitionEvent
@@ -473,6 +531,10 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
             ExecutableIdentity = original?.ProcessName,
             SafeExecutablePath = restart is null ? null : SafePath(restart.ExecutablePath),
             RestartMechanism = restart?.RestartMechanism,
+            LaunchRoute = restart?.LaunchTarget.RouteType.ToString(),
+            ValidatedAppId = restart?.LaunchTarget.ValidatedAppId,
+            RegistrationSource = restart?.LaunchTarget.RegistrationSource is { Length: > 0 } source ? SafePath(source) : null,
+            WindowVerificationResult = windowVerificationResult?.ToString(),
             StopMechanism = stopMechanism,
             StopElapsedMilliseconds = stopElapsedMilliseconds,
             MonitorResult = monitorResult,
@@ -505,7 +567,9 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
             RestartAttempted: false,
             RestartSucceeded: false,
             originalPid,
-            RestartedPid: null);
+            RestartedPid: null,
+            LaunchRoute: null,
+            WindowVerificationResult: XsOverlayWindowVerificationResult.Unavailable);
 }
 
 internal sealed class WindowsXsOverlayProcessPlatform : IXsOverlayProcessPlatform
@@ -555,23 +619,6 @@ internal sealed class WindowsXsOverlayProcessPlatform : IXsOverlayProcessPlatfor
         return Task.FromResult<IReadOnlyList<XsOverlayProcessSnapshot>>(result);
     }
 
-    public XsOverlayRestartInformation? CaptureRestartInformation(XsOverlayProcessSnapshot process)
-    {
-        var path = process.ExecutablePath;
-        if (string.IsNullOrWhiteSpace(path)
-            || !Path.IsPathFullyQualified(path)
-            || !File.Exists(path)
-            || !string.Equals(Path.GetFileName(path), "XSOverlay.exe", StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        var workingDirectory = Path.GetDirectoryName(path);
-        return string.IsNullOrWhiteSpace(workingDirectory)
-            ? null
-            : new(path, workingDirectory, "capturedExecutablePath", AppearsSteamLaunched: null);
-    }
-
     public Task<bool> RequestGracefulCloseAsync(XsOverlayProcessSnapshot process, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -612,19 +659,6 @@ internal sealed class WindowsXsOverlayProcessPlatform : IXsOverlayProcessPlatfor
         }
 
         return Task.FromResult(true);
-    }
-
-    public Task<int?> StartAsync(XsOverlayRestartInformation restartInformation, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = restartInformation.ExecutablePath,
-            WorkingDirectory = restartInformation.WorkingDirectory,
-            UseShellExecute = true
-        };
-        using var process = Process.Start(startInfo);
-        return Task.FromResult<int?>(process?.Id);
     }
 
     private static bool TryOpenSameProcess(XsOverlayProcessSnapshot expected, out Process process)
