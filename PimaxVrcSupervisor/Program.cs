@@ -1787,6 +1787,7 @@ internal sealed class AppSupervisor
     private readonly bool _autoLaunchTaskBindingDeferredByUser;
     private readonly BaseStationGattClient _baseStationGattClient = new();
     private readonly BaseStationDiagnosticSink _baseStationDiagnostics;
+    private readonly XsOverlayDiagnosticSink _xsOverlayDiagnostics;
     private BluetoothResolutionRefresh _baseStationResolutionRefresh = null!;
     private string _baseStationWakeSequenceId = "";
     private readonly SteamVrTrackingReferenceReader _steamVrTrackingReferenceReader = new();
@@ -1872,6 +1873,7 @@ internal sealed class AppSupervisor
         _shutdown = shutdown;
         _steamVrLifecycle = new SteamVrLifecycleCoordinator(managedSteamVrSession, Environment.ProcessId);
         _baseStationDiagnostics = BaseStationDiagnosticSink.ForProcess("Supervisor", AppVersion.Current);
+        _xsOverlayDiagnostics = XsOverlayDiagnosticSink.ForProcess("Supervisor", AppVersion.Current);
         _xsOverlayMonitorTransition = new XsOverlaySafeMonitorTransitionCoordinator(
             new WindowsXsOverlayProcessPlatform(),
             new WindowsXsOverlayLauncher(),
@@ -1882,7 +1884,11 @@ internal sealed class AppSupervisor
                 _monitorLayout.KeepPrimaryMonitorOnly();
                 return Task.CompletedTask;
             },
-            diagnosticEvent => WriteDiagnosticEvent(JsonSerializer.Serialize(diagnosticEvent, CommandBridgeJsonOptions)),
+            diagnosticEvent => XsOverlayDiagnosticDispatch.Write(
+                diagnosticEvent,
+                _xsOverlayDiagnostics,
+                WriteDiagnosticEvent,
+                CommandBridgeJsonOptions),
             Console.WriteLine);
         ResetBaseStationResolutionRefresh();
         _pollInterval = TimeSpan.FromSeconds(Math.Max(1, config.PollIntervalSeconds));

@@ -28,6 +28,7 @@ internal sealed record XsOverlayMonitorTransitionEvent
 {
     public string OperationName { get; init; } = XsOverlaySafeMonitorTransitionCoordinator.OperationName;
     public string OperationId { get; init; } = "";
+    public string CorrelationId { get; init; } = "";
     public DateTimeOffset TimestampUtc { get; init; } = DateTimeOffset.UtcNow;
     public string EventType { get; init; } = "";
     public int? OriginalPid { get; init; }
@@ -77,6 +78,7 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
     private readonly TimeSpan _processPollInterval;
     private readonly TimeSpan _topologySettleDuration;
     private readonly TimeSpan _restartVerificationTimeout;
+    private readonly Func<string> _operationIdProvider;
 
     public XsOverlaySafeMonitorTransitionCoordinator(
         IXsOverlayProcessPlatform processes,
@@ -89,7 +91,8 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
         TimeSpan? gracefulStopTimeout = null,
         TimeSpan? processPollInterval = null,
         TimeSpan? topologySettleDuration = null,
-        TimeSpan? restartVerificationTimeout = null)
+        TimeSpan? restartVerificationTimeout = null,
+        Func<string>? operationIdProvider = null)
     {
         _processes = processes;
         _launcher = launcher;
@@ -102,6 +105,7 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
         _processPollInterval = processPollInterval ?? TimeSpan.FromMilliseconds(100);
         _topologySettleDuration = topologySettleDuration ?? TimeSpan.FromSeconds(2);
         _restartVerificationTimeout = restartVerificationTimeout ?? TimeSpan.FromSeconds(3);
+        _operationIdProvider = operationIdProvider ?? (() => $"xso-monitor-{Guid.NewGuid():N}");
     }
 
     public async Task<XsOverlayMonitorTransitionResult> RunAsync(
@@ -113,7 +117,7 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
             return Result("disabled", monitorAttempted: false);
         }
 
-        var operationId = $"xso-monitor-{Guid.NewGuid():N}";
+        var operationId = _operationIdProvider();
         Write(operationId, "xsOverlayDetectionStarted", outcome: "started");
         IReadOnlyList<XsOverlayProcessSnapshot> running;
         try
@@ -524,6 +528,7 @@ internal sealed class XsOverlaySafeMonitorTransitionCoordinator
         => _diagnostics(new XsOverlayMonitorTransitionEvent
         {
             OperationId = operationId,
+            CorrelationId = operationId,
             EventType = eventType,
             OriginalPid = original?.ProcessId,
             RestartedPid = restartedPid,

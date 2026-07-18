@@ -269,6 +269,27 @@ public sealed class XsOverlaySafeMonitorTransitionTests
         Assert.Equal(0, fixture.Launcher.RequestCalls);
     }
 
+    [Fact]
+    public async Task CorrelationIdProvider_IsStableWithinTransitionAndDifferentAcrossInvocations()
+    {
+        var ids = new Queue<string>(["xso-test-1", "xso-test-2"]);
+        var fixture = new Fixture { OperationIdProvider = () => ids.Dequeue() };
+        fixture.RebuildCoordinator();
+
+        await fixture.Coordinator.RunAsync(true, CancellationToken.None);
+        var first = fixture.Events.ToArray();
+        fixture.Events.Clear();
+
+        await fixture.Coordinator.RunAsync(true, CancellationToken.None);
+        var second = fixture.Events.ToArray();
+
+        Assert.NotEmpty(first);
+        Assert.NotEmpty(second);
+        Assert.All(first, item => Assert.Equal("xso-test-1", item.CorrelationId));
+        Assert.All(second, item => Assert.Equal("xso-test-2", item.CorrelationId));
+        Assert.NotEqual(first[0].CorrelationId, second[0].CorrelationId);
+    }
+
     [Theory]
     [InlineData("XSOverlay", true)]
     [InlineData("xsoverlay", true)]
@@ -323,6 +344,7 @@ public sealed class XsOverlaySafeMonitorTransitionTests
         public Action? OnMonitor { get; set; }
         public bool TopologyDelayObserved { get; set; }
         public Func<TimeSpan, CancellationToken, Task>? DelayOverride { get; set; }
+        public Func<string>? OperationIdProvider { get; set; }
 
         public void RebuildCoordinator()
         {
@@ -348,7 +370,8 @@ public sealed class XsOverlaySafeMonitorTransitionTests
                 gracefulStopTimeout: TimeSpan.FromMilliseconds(5),
                 processPollInterval: TimeSpan.FromMilliseconds(1),
                 topologySettleDuration: TimeSpan.FromMilliseconds(1),
-                restartVerificationTimeout: TimeSpan.FromMilliseconds(5));
+                restartVerificationTimeout: TimeSpan.FromMilliseconds(5),
+                operationIdProvider: OperationIdProvider);
             Platform.Order = Order;
         }
 

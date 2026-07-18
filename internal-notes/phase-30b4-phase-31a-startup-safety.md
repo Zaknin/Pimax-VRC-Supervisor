@@ -48,16 +48,19 @@ Live evidence established that XSOverlay remained stable until the Supervisor ap
 
 The coordinator does not add a persistent restart loop and does not auto-start XSOverlay when it was not running before the transition. If restart information is unavailable or the exact original process cannot be stopped, monitor shutdown is skipped. If monitor shutdown or topology settlement fails after the Supervisor stopped XSOverlay, one best-effort restart still occurs. The same best-effort restart applies when cancellation arrives after a Supervisor-owned stop. SteamVR, VRChat, `vrserver`, `vrmonitor`, `vrcompositor`, and unrelated overlays are never targeted.
 
-Structured Supervisor diagnostic messages use operation name `xsOverlaySafeMonitorShutdown` and the following events:
+Structured XSOverlay transition messages use operation name `xsOverlaySafeMonitorShutdown` and the following current events:
 
 - `xsOverlayDetectionStarted`, `xsOverlayDetected`, `xsOverlayNotRunning`
-- `xsOverlayRestartInformationCaptured`, `xsOverlayRestartInformationUnavailable`
+- `xsOverlayLaunchTargetDiscoveryStarted`, `xsOverlayLaunchTargetDiscovered`, `xsOverlayLaunchTargetUnavailable`, `xsOverlayRestartInformationUnavailable`, `xsOverlayDirectRestartRefused`
 - `xsOverlayStopStarted`, `xsOverlayGracefulStopCompleted`, `xsOverlayForcedStopStarted`, `xsOverlayStopCompleted`, `xsOverlayStopFailed`
 - `secondaryMonitorShutdownStarted`, `secondaryMonitorShutdownCompleted`, `secondaryMonitorShutdownFailed`
 - `displayTopologySettleStarted`, `displayTopologySettled`, `displayTopologySettleFailed`
-- `xsOverlayRestartStarted`, `xsOverlayRestartCompleted`, `xsOverlayRestartFailed`, `xsOverlayRestartSkipped`
+- `xsOverlayRestartStarted`, `xsOverlayBrokeredRestartStarted`, `xsOverlayBrokeredRestartRequested`, `xsOverlayBrokeredRestartCompleted`, `xsOverlayRestartCompleted`, `xsOverlayBrokeredRestartFailed`, `xsOverlayRestartFailed`, `xsOverlayRestartSkipped`
+- `xsOverlayWindowVerificationStarted`, `xsOverlayWindowVerificationCompleted`, `xsOverlayUnwantedDesktopWindowDetected`
 - `complete`
 
-Diagnostics record the original/restarted PID, session, exact executable identity, redacted path tail, restart and stop mechanisms, bounded timings, monitor/restart result, final outcome, and skip reason. They do not record command lines or environment blocks.
+Phase31C routed those structured messages only through optional Supervisor diagnostics, so default release settings did not create a durable XSOverlay record. Phase31D adds the always-on bounded operational journal `%LOCALAPPDATA%\PimaxVrcSupervisor\Diagnostics\XSOverlay\xs-overlay-supervisor.jsonl`, retaining `.1` and `.2` rotations at a 1 MiB active-file threshold. The journal records one JSON object per emitted transition event, with a transition-scoped correlation ID shared by all events from one invocation. It does not enable general Supervisor diagnostics, does not change `DiagnosticsLogSupervisor` or `DiagnosticsDebugSupervisor`, does not write into the BaseStations directory, and does not perform continuous polling or general tracing.
+
+Diagnostics record the original/restarted PID, session, exact executable identity, redacted path tail, restart and stop mechanisms, bounded timings, monitor/restart result, final outcome, and skip reason where available. They do not record command lines or environment blocks. XSOverlay journal write failures are best-effort and never alter stop, monitor, settle, restart, or shutdown behavior. A project-wide diagnostics redesign remains deferred.
 
 All process, cancellation, race, and monitor-transition behavior is validated through `IXsOverlayProcessPlatform` and fake monitor/delay callbacks. Tests do not enumerate, stop, start, or otherwise interact with live XSOverlay, SteamVR, VRChat, or Windows display topology.
