@@ -1736,18 +1736,71 @@ internal sealed record SupervisorActionJsonRequest(
 internal sealed record SupervisorLifecycleJsonRequest(
     string? RequestId,
     string? Action,
+    string? Mode,
     string? Source);
 
 internal sealed record SupervisorLifecycleResultData(
     bool Accepted,
     bool AlreadyInProgress,
-    string Status);
+    string Status,
+    string? Intent);
 
 internal sealed record SupervisorGracefulShutdownRequestResult(
     bool Accepted,
     bool AlreadyInProgress,
     string Status,
-    string Message);
+    string Message,
+    SupervisorShutdownIntent Intent);
+
+internal enum SupervisorShutdownIntent
+{
+    NormalCleanup,
+    PreserveBaseStations
+}
+
+internal static class SupervisorShutdownIntents
+{
+    public const string NormalCleanupMode = "normal-cleanup";
+    public const string PreserveBaseStationsMode = "preserve-base-stations";
+
+    public static bool TryParse(string? value, out SupervisorShutdownIntent intent)
+    {
+        intent = SupervisorShutdownIntent.NormalCleanup;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        return value.Trim().ToLowerInvariant() switch
+        {
+            NormalCleanupMode => Set(SupervisorShutdownIntent.NormalCleanup, out intent),
+            PreserveBaseStationsMode => Set(SupervisorShutdownIntent.PreserveBaseStations, out intent),
+            _ => false
+        };
+    }
+
+    public static string ToProtocolMode(SupervisorShutdownIntent intent)
+        => intent switch
+        {
+            SupervisorShutdownIntent.NormalCleanup => NormalCleanupMode,
+            SupervisorShutdownIntent.PreserveBaseStations => PreserveBaseStationsMode,
+            _ => NormalCleanupMode
+        };
+
+    public static bool AllowsBaseStationPowerDown(SupervisorShutdownIntent intent)
+        => intent == SupervisorShutdownIntent.NormalCleanup;
+
+    private static bool Set(SupervisorShutdownIntent value, out SupervisorShutdownIntent target)
+    {
+        target = value;
+        return true;
+    }
+}
+
+internal static class SupervisorProcessExitCodes
+{
+    public const int UserRequestedSupervisorExit = 32;
+}
 
 internal sealed record SupervisorLogLine(
     int Index,
@@ -1835,6 +1888,8 @@ internal sealed class AppSupervisor
     private bool? _steamVrTrackingReferenceStartupAvailable;
     private bool _steamVrTrackingReferenceStartupUnavailableLogged;
     private bool _cleanupStarted;
+    private bool _monitorLayoutDisabledBySupervisor;
+    private bool _monitorRestoreAttempted;
     private bool? _lastLovenseConnected;
     private bool _lovenseIntifaceStarted;
     private bool _lovenseWorkflowTriggered;
@@ -1853,6 +1908,8 @@ internal sealed class AppSupervisor
     private volatile bool _forcedManualReloadRequested;
     private SupervisorLifecyclePhase _lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChat;
     private int _gracefulShutdownRequested;
+    private int _desktopTuiCloseOnlyRequested;
+    private SupervisorShutdownIntent _acceptedShutdownIntent = SupervisorShutdownIntent.NormalCleanup;
     private string? _operatorWarning;
 
     public AppSupervisor(
@@ -2720,6 +2777,12 @@ internal sealed class AppSupervisor
                     return;
                 }
 
+                if (Volatile.Read(ref _desktopTuiCloseOnlyRequested) == 1)
+                {
+                    Console.WriteLine("Terminal UI closed by user request. Supervisor continues without relaunching Terminal UI in this session.");
+                    return;
+                }
+
                 lastFailure = $"Terminal UI exited immediately with code {process.ExitCode}.";
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
@@ -3514,7 +3577,13 @@ internal sealed class AppSupervisor
             return;
         }
 
-        await _xsOverlayMonitorTransition.RunAsync(turnOffSecondaryMonitors: true, cancellationToken);
+        _monitorRestoreAttempted = false;
+        var result = await _xsOverlayMonitorTransition.RunAsync(turnOffSecondaryMonitors: true, cancellationToken);
+        if (result.MonitorShutdownSucceeded)
+        {
+            _monitorLayoutDisabledBySupervisor = true;
+            WriteDiagnosticEvent("monitor; supervisor-owned secondary monitor shutdown applied");
+        }
     }
 
     private async Task StartBrokenEyeWithRetriesAsync(CancellationToken cancellationToken)
@@ -4257,6 +4326,7 @@ internal sealed class AppSupervisor
             request = new SupervisorLifecycleJsonRequest(
                 TryReadStringProperty(document.RootElement, "requestId"),
                 TryReadStringProperty(document.RootElement, "action"),
+                TryReadStringProperty(document.RootElement, "mode"),
                 TryReadStringProperty(document.RootElement, "source"));
         }
         catch (JsonException ex)
@@ -4283,10 +4353,42 @@ internal sealed class AppSupervisor
                 accepted: false,
                 alreadyInProgress: false,
                 status: "rejected",
-                error: "Missing action. Supported action: request-graceful-shutdown.");
+                error: "Missing action. Supported actions: close-desktop-tui, request-graceful-shutdown, request-supervisor-exit.");
         }
 
-        if (!string.Equals(canonicalAction, "request-graceful-shutdown", StringComparison.Ordinal))
+        if (string.Equals(canonicalAction, "close-desktop-tui", StringComparison.Ordinal))
+        {
+            var closeSource = NormalizeShutdownSource(request.Source);
+            var closeResult = RequestDesktopTuiCloseOnly(closeSource);
+            return LifecycleJsonResult(
+                request.RequestId,
+                canonicalAction,
+                success: true,
+                message: closeResult.Message,
+                accepted: closeResult.Accepted,
+                alreadyInProgress: closeResult.AlreadyInProgress,
+                status: closeResult.Status,
+                error: null,
+                intent: "close-tui-only");
+        }
+
+        if (string.Equals(canonicalAction, "request-graceful-shutdown", StringComparison.Ordinal))
+        {
+            var gracefulSource = NormalizeShutdownSource(request.Source);
+            var gracefulResult = await RequestGracefulShutdownAsync(gracefulSource, startInBackground: true);
+            return LifecycleJsonResult(
+                request.RequestId,
+                canonicalAction,
+                success: true,
+                message: gracefulResult.Message,
+                accepted: gracefulResult.Accepted,
+                alreadyInProgress: gracefulResult.AlreadyInProgress,
+                status: gracefulResult.Status,
+                error: null,
+                intent: SupervisorShutdownIntents.ToProtocolMode(gracefulResult.Intent));
+        }
+
+        if (!string.Equals(canonicalAction, "request-supervisor-exit", StringComparison.Ordinal))
         {
             return LifecycleJsonResult(
                 request.RequestId,
@@ -4296,20 +4398,34 @@ internal sealed class AppSupervisor
                 accepted: false,
                 alreadyInProgress: false,
                 status: "rejected",
-                error: "Supported action: request-graceful-shutdown.");
+                error: "Supported actions: close-desktop-tui, request-graceful-shutdown, request-supervisor-exit.");
         }
 
-        var source = NormalizeShutdownSource(request.Source);
-        var result = await RequestGracefulShutdownAsync(source, startInBackground: true);
+        if (!SupervisorShutdownIntents.TryParse(request.Mode, out var intent))
+        {
+            return LifecycleJsonResult(
+                request.RequestId,
+                canonicalAction,
+                success: false,
+                message: "request-supervisor-exit requires a valid mode.",
+                accepted: false,
+                alreadyInProgress: false,
+                status: "rejected",
+                error: "Supported modes: preserve-base-stations, normal-cleanup.");
+        }
+
+        var supervisorExitSource = NormalizeShutdownSource(request.Source);
+        var supervisorExitResult = await RequestSupervisorExitAsync(supervisorExitSource, intent, startInBackground: true);
         return LifecycleJsonResult(
             request.RequestId,
             canonicalAction,
             success: true,
-            message: result.Message,
-            accepted: result.Accepted,
-            alreadyInProgress: result.AlreadyInProgress,
-            status: result.Status,
-            error: null);
+            message: supervisorExitResult.Message,
+            accepted: supervisorExitResult.Accepted,
+            alreadyInProgress: supervisorExitResult.AlreadyInProgress,
+            status: supervisorExitResult.Status,
+            error: null,
+            intent: SupervisorShutdownIntents.ToProtocolMode(supervisorExitResult.Intent));
     }
 
     private static string NormalizeShutdownSource(string? source)
@@ -4434,7 +4550,8 @@ internal sealed class AppSupervisor
         bool accepted,
         bool alreadyInProgress,
         string status,
-        string? error)
+        string? error,
+        string? intent = null)
         => new(
             DateTimeOffset.UtcNow,
             requestId,
@@ -4442,7 +4559,7 @@ internal sealed class AppSupervisor
             success,
             message,
             "lifecycle",
-            new SupervisorLifecycleResultData(accepted, alreadyInProgress, status),
+            new SupervisorLifecycleResultData(accepted, alreadyInProgress, status, intent),
             error);
 
     private static string? TryReadStringProperty(JsonElement element, string propertyName)
@@ -5638,7 +5755,45 @@ internal sealed class AppSupervisor
         await TryEmergencyCloseCleanupAsync();
     }
 
-    internal async Task<SupervisorGracefulShutdownRequestResult> RequestGracefulShutdownAsync(string source, bool startInBackground)
+    internal SupervisorGracefulShutdownRequestResult RequestDesktopTuiCloseOnly(string source)
+    {
+        var alreadyInProgress = Interlocked.Exchange(ref _desktopTuiCloseOnlyRequested, 1) == 1;
+        if (!alreadyInProgress)
+        {
+            Console.WriteLine("Desktop TUI closed by user request. Supervisor continues running.");
+            WriteDiagnosticEvent("tui; close only requested; source=" + source);
+        }
+
+        return new SupervisorGracefulShutdownRequestResult(
+            Accepted: true,
+            AlreadyInProgress: alreadyInProgress,
+            Status: alreadyInProgress ? "already_in_progress" : "accepted",
+            Message: "Desktop TUI closed. Supervisor continues running.",
+            Intent: SupervisorShutdownIntent.NormalCleanup);
+    }
+
+    internal Task<SupervisorGracefulShutdownRequestResult> RequestGracefulShutdownAsync(string source, bool startInBackground)
+        => RequestSupervisorShutdownAsync(
+            source,
+            SupervisorShutdownIntent.NormalCleanup,
+            explicitSupervisorExit: false,
+            startInBackground);
+
+    internal Task<SupervisorGracefulShutdownRequestResult> RequestSupervisorExitAsync(
+        string source,
+        SupervisorShutdownIntent intent,
+        bool startInBackground)
+        => RequestSupervisorShutdownAsync(
+            source,
+            intent,
+            explicitSupervisorExit: true,
+            startInBackground);
+
+    private async Task<SupervisorGracefulShutdownRequestResult> RequestSupervisorShutdownAsync(
+        string source,
+        SupervisorShutdownIntent intent,
+        bool explicitSupervisorExit,
+        bool startInBackground)
     {
         if (_shutdown.IsCancellationRequested
             || Interlocked.Exchange(ref _gracefulShutdownRequested, 1) == 1)
@@ -5647,15 +5802,25 @@ internal sealed class AppSupervisor
                 Accepted: true,
                 AlreadyInProgress: true,
                 Status: "already_in_progress",
-                Message: "Graceful supervisor shutdown is already in progress.");
+                Message: "Graceful supervisor shutdown is already in progress.",
+                Intent: _acceptedShutdownIntent);
         }
 
-        var message = string.Equals(source, "Ctrl+C", StringComparison.OrdinalIgnoreCase)
-            ? "Ctrl+C requested. Restoring monitors and closing managed apps."
-            : $"{source} requested graceful shutdown. Running Ctrl+C-equivalent cleanup.";
+        _acceptedShutdownIntent = intent;
+        if (explicitSupervisorExit)
+        {
+            Environment.ExitCode = SupervisorProcessExitCodes.UserRequestedSupervisorExit;
+            AutoLaunchWatcher.RequestSkipCurrentSteamVrSessionForUserExit();
+        }
+
+        var message = ShutdownRequestConsoleMessage(source, intent, explicitSupervisorExit);
 
         Console.WriteLine(message);
-        WriteDiagnosticEvent("shutdown; graceful request; source=" + source);
+        WriteDiagnosticEvent(
+            "shutdown; graceful request"
+            + $"; source={source}"
+            + $"; intent={SupervisorShutdownIntents.ToProtocolMode(intent)}"
+            + $"; explicitSupervisorExit={explicitSupervisorExit}");
         MarkSteamVrShutdownIntent(source);
         _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
         _shutdownBlockedBySteamVrSince = null;
@@ -5663,25 +5828,57 @@ internal sealed class AppSupervisor
 
         if (startInBackground)
         {
-            _ = Task.Run(() => RunGracefulShutdownCleanupAndCancelAsync(source), CancellationToken.None);
+            _ = Task.Run(() => RunGracefulShutdownCleanupAndCancelAsync(source, intent), CancellationToken.None);
         }
         else
         {
-            await RunGracefulShutdownCleanupAndCancelAsync(source);
+            await RunGracefulShutdownCleanupAndCancelAsync(source, intent);
         }
 
         return new SupervisorGracefulShutdownRequestResult(
             Accepted: true,
             AlreadyInProgress: false,
             Status: "accepted",
-            Message: "Graceful supervisor shutdown accepted.");
+            Message: ShutdownRequestAcceptedMessage(intent, explicitSupervisorExit),
+            Intent: intent);
     }
 
-    private async Task RunGracefulShutdownCleanupAndCancelAsync(string source)
+    private static string ShutdownRequestConsoleMessage(
+        string source,
+        SupervisorShutdownIntent intent,
+        bool explicitSupervisorExit)
+    {
+        if (!explicitSupervisorExit)
+        {
+            return string.Equals(source, "Ctrl+C", StringComparison.OrdinalIgnoreCase)
+                ? "Ctrl+C requested. Restoring monitors and closing managed apps."
+                : $"{source} requested graceful shutdown. Running Ctrl+C-equivalent cleanup.";
+        }
+
+        return intent == SupervisorShutdownIntent.PreserveBaseStations
+            ? $"{source} requested Supervisor exit. Restoring Supervisor-owned monitors and leaving base stations powered on."
+            : $"{source} requested Supervisor exit. Restoring Supervisor-owned monitors and running normal base-station shutdown.";
+    }
+
+    private static string ShutdownRequestAcceptedMessage(
+        SupervisorShutdownIntent intent,
+        bool explicitSupervisorExit)
+    {
+        if (!explicitSupervisorExit)
+        {
+            return "Graceful supervisor shutdown accepted.";
+        }
+
+        return intent == SupervisorShutdownIntent.PreserveBaseStations
+            ? "Exiting Supervisor. Secondary monitors will be restored if Supervisor disabled them. Base stations will remain powered on."
+            : "Exiting Supervisor. Secondary monitors will be restored and normal base-station shutdown will run.";
+    }
+
+    private async Task RunGracefulShutdownCleanupAndCancelAsync(string source, SupervisorShutdownIntent intent)
     {
         try
         {
-            await RunEmergencyCloseCleanupAsync();
+            await TryEmergencyCloseCleanupAsync(intent);
         }
         catch (Exception ex)
         {
@@ -5696,9 +5893,18 @@ internal sealed class AppSupervisor
 
     private async Task TryEmergencyCloseCleanupAsync()
     {
+        await TryEmergencyCloseCleanupAsync(SupervisorShutdownIntent.NormalCleanup);
+    }
+
+    private async Task TryEmergencyCloseCleanupAsync(SupervisorShutdownIntent intent)
+    {
         try
         {
-            await RunCleanupOnceAsync(waitForSteamVrServerExit: false, emergencyClose: true, CancellationToken.None);
+            await RunCleanupOnceAsync(
+                waitForSteamVrServerExit: false,
+                emergencyClose: true,
+                intent,
+                CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -5706,7 +5912,11 @@ internal sealed class AppSupervisor
         }
     }
 
-    private async Task RunCleanupOnceAsync(bool waitForSteamVrServerExit, bool emergencyClose, CancellationToken cancellationToken)
+    private async Task RunCleanupOnceAsync(
+        bool waitForSteamVrServerExit,
+        bool emergencyClose,
+        SupervisorShutdownIntent intent,
+        CancellationToken cancellationToken)
     {
         if (!await _cleanupLock.WaitAsync(0, cancellationToken))
         {
@@ -5723,14 +5933,22 @@ internal sealed class AppSupervisor
             if (emergencyClose)
             {
                 Console.WriteLine("Emergency cleanup: restoring monitors before closing apps and base stations.");
-                RestoreMonitorLayout();
+                RestoreSupervisorOwnedMonitorLayout();
                 await TryStopManagedAppsForEmergencyCloseAsync();
-                await TryPowerDownBaseStationsWithTimeoutAsync(TimeSpan.FromSeconds(20));
+                if (SupervisorShutdownIntents.AllowsBaseStationPowerDown(intent))
+                {
+                    await TryPowerDownBaseStationsWithTimeoutAsync(TimeSpan.FromSeconds(20));
+                }
+                else
+                {
+                    SuppressBaseStationPowerDownForIntent(intent);
+                }
+
                 _cleanupStarted = true;
                 return;
             }
 
-            await RestoreMonitorsAndStopManagedAppsCoreAsync(waitForSteamVrServerExit, cancellationToken);
+            await RestoreMonitorsAndStopManagedAppsCoreAsync(waitForSteamVrServerExit, intent, cancellationToken);
             _cleanupStarted = true;
         }
         finally
@@ -6345,7 +6563,11 @@ internal sealed class AppSupervisor
             .ToArray();
 
     private async Task RestoreMonitorsAndStopManagedAppsAsync(bool waitForSteamVrServerExit, CancellationToken cancellationToken)
-        => await RunCleanupOnceAsync(waitForSteamVrServerExit, emergencyClose: false, cancellationToken);
+        => await RunCleanupOnceAsync(
+            waitForSteamVrServerExit,
+            emergencyClose: false,
+            SupervisorShutdownIntent.NormalCleanup,
+            cancellationToken);
 
     private async Task StopManagedAppsWhileWaitingForWatchedProcessRestartAsync(CancellationToken cancellationToken)
     {
@@ -6378,7 +6600,7 @@ internal sealed class AppSupervisor
                 return;
             }
 
-            RestoreMonitorLayout();
+            RestoreSupervisorOwnedMonitorLayout();
             await StopLovenseAppsAsync(cancellationToken);
             await StopManagedAppsAsync(ManagedAppStopReason.SessionEnding, cancellationToken);
             if (waitForSteamVrServerExitBeforeBaseStationPowerDown)
@@ -6396,6 +6618,15 @@ internal sealed class AppSupervisor
     }
 
     private async Task RestoreMonitorsAndStopManagedAppsCoreAsync(bool waitForSteamVrServerExit, CancellationToken cancellationToken)
+        => await RestoreMonitorsAndStopManagedAppsCoreAsync(
+            waitForSteamVrServerExit,
+            SupervisorShutdownIntent.NormalCleanup,
+            cancellationToken);
+
+    private async Task RestoreMonitorsAndStopManagedAppsCoreAsync(
+        bool waitForSteamVrServerExit,
+        SupervisorShutdownIntent intent,
+        CancellationToken cancellationToken)
     {
         if (waitForSteamVrServerExit)
         {
@@ -6403,8 +6634,16 @@ internal sealed class AppSupervisor
             await WaitForSteamVrServerExitAsync(cancellationToken);
         }
 
-        await TryPowerDownBaseStationsForSessionAsync(cancellationToken);
-        RestoreMonitorLayout();
+        if (SupervisorShutdownIntents.AllowsBaseStationPowerDown(intent))
+        {
+            await TryPowerDownBaseStationsForSessionAsync(cancellationToken);
+        }
+        else
+        {
+            SuppressBaseStationPowerDownForIntent(intent);
+        }
+
+        RestoreSupervisorOwnedMonitorLayout();
         await StopLovenseAppsAsync(cancellationToken);
         await StopManagedAppsAsync(ManagedAppStopReason.SessionEnding, cancellationToken);
     }
@@ -6511,7 +6750,11 @@ internal sealed class AppSupervisor
     {
         try
         {
-            await RunCleanupOnceAsync(waitForSteamVrServerExit, emergencyClose: false, cancellationToken);
+            await RunCleanupOnceAsync(
+                waitForSteamVrServerExit,
+                emergencyClose: false,
+                SupervisorShutdownIntent.NormalCleanup,
+                cancellationToken);
         }
         catch (Exception ex)
         {
@@ -6553,16 +6796,44 @@ internal sealed class AppSupervisor
         WriteDiagnosticEvent($"shutdown; steamvr exit observed; elapsedSeconds={(DateTimeOffset.UtcNow - startedAt).TotalSeconds:0.0}");
     }
 
-    private void RestoreMonitorLayout()
+    private void RestoreSupervisorOwnedMonitorLayout()
     {
+        if (!_monitorLayoutDisabledBySupervisor)
+        {
+            WriteDiagnosticEvent("monitor; restore skipped; reason=not-owned-by-supervisor");
+            return;
+        }
+
+        if (_monitorRestoreAttempted)
+        {
+            WriteDiagnosticEvent("monitor; restore skipped; reason=already-attempted");
+            return;
+        }
+
+        _monitorRestoreAttempted = true;
         try
         {
+            WriteDiagnosticEvent("monitor; restore requested; reason=supervisor-owned-secondary-monitor-shutdown");
             _monitorLayout.Restore();
+            _monitorLayoutDisabledBySupervisor = false;
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Could not restore previous monitor layout: {ex.Message}");
+            WriteDiagnosticEvent("monitor; restore failed; error=" + ex.Message);
         }
+    }
+
+    private void SuppressBaseStationPowerDownForIntent(SupervisorShutdownIntent intent)
+    {
+        if (SupervisorShutdownIntents.AllowsBaseStationPowerDown(intent))
+        {
+            return;
+        }
+
+        SetShutdownProgress("base-station power-down suppressed by preserve intent");
+        Console.WriteLine("Base-station power-down suppressed by explicit preserve-base-stations Supervisor exit.");
+        WriteDiagnosticEvent("base-station power-down suppressed; intent=" + SupervisorShutdownIntents.ToProtocolMode(intent));
     }
 
     private async Task RestartVrcFaceTrackingAsync(CancellationToken cancellationToken)
@@ -8780,11 +9051,25 @@ internal sealed class ConsoleCloseHandler : IDisposable
     }
 }
 
+internal sealed record SteamVrSessionIdentity(int Pid, DateTimeOffset? StartTime);
+
+internal sealed record WatcherLaunchDecision(
+    bool ShouldLaunchSupervisor,
+    SteamVrSessionIdentity? LaunchedForSteamVrSession,
+    bool SuppressedForCurrentSession);
+
+internal sealed record SkipCurrentSteamVrSessionMarker(
+    DateTimeOffset WrittenAt,
+    SteamVrSessionIdentity? Session,
+    string? Reason);
+
 internal static class AutoLaunchWatcher
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan SkipCurrentSteamVrSessionMarkerTtl = TimeSpan.FromHours(12);
     private const string WatcherMutexName = @"Local\PimaxVrcSupervisorAutoLaunchWatcher";
     private const string VrServerProcessName = "vrserver";
+    private const string UserSupervisorExitMarkerReason = "user-supervisor-exit";
     private static readonly string SkipCurrentSteamVrSessionMarkerPath =
         Path.Combine(Path.GetTempPath(), "PimaxVrcSupervisorSkipCurrentSteamVrSession.marker");
 
@@ -8803,8 +9088,16 @@ internal static class AutoLaunchWatcher
 
         var supervisorPath = ScheduledTaskInstaller.GetSupervisorExecutablePath();
         var supervisorProcessName = Path.GetFileNameWithoutExtension(supervisorPath);
-        var launchedForCurrentSteamVrSession = (skipCurrentSteamVrSession || TryConsumeSkipCurrentSteamVrSessionMarker())
-            && IsProcessRunning(VrServerProcessName);
+        var currentSteamVrSession = TryGetCurrentSteamVrSessionIdentity();
+        var skipMarkerReason = TryConsumeSkipCurrentSteamVrSessionMarker(currentSteamVrSession);
+        var launchedForCurrentSteamVrSession =
+            (skipCurrentSteamVrSession || skipMarkerReason is not null)
+                ? currentSteamVrSession
+                : null;
+        var userExitSuppressedSteamVrSession =
+            string.Equals(skipMarkerReason, UserSupervisorExitMarkerReason, StringComparison.Ordinal)
+                ? currentSteamVrSession
+                : null;
         var startupInitializer = new BluetoothStartupInitializer(
             new SharedBaseStationDiscoveryScanner(),
             BaseStationDiagnosticSink.ForProcess("Watcher", AppVersion.Current));
@@ -8818,6 +9111,7 @@ internal static class AutoLaunchWatcher
                 configPath,
                 useDesktopTuiDefaultInterface,
                 launchedForCurrentSteamVrSession,
+                userExitSuppressedSteamVrSession,
                 token),
             cancellationToken);
     }
@@ -8837,33 +9131,75 @@ internal static class AutoLaunchWatcher
         string supervisorProcessName,
         string? configPath,
         bool useDesktopTuiDefaultInterface,
-        bool launchedForCurrentSteamVrSession,
+        SteamVrSessionIdentity? launchedForCurrentSteamVrSession,
+        SteamVrSessionIdentity? userExitSuppressedSteamVrSession,
         CancellationToken cancellationToken)
     {
+        SteamVrSessionIdentity? relaunchSuppressionLoggedFor = null;
         while (!cancellationToken.IsCancellationRequested)
         {
-            var vrServerRunning = IsProcessRunning(VrServerProcessName);
-            var supervisorRunning = IsAnotherSupervisorRunning(supervisorProcessName);
-
-            if (!vrServerRunning)
+            var currentSteamVrSession = TryGetCurrentSteamVrSessionIdentity();
+            var skipMarkerReason = TryConsumeSkipCurrentSteamVrSessionMarker(currentSteamVrSession);
+            if (skipMarkerReason is not null && currentSteamVrSession is not null)
             {
-                launchedForCurrentSteamVrSession = false;
-            }
-            else if (!launchedForCurrentSteamVrSession)
-            {
-                if (!supervisorRunning)
+                launchedForCurrentSteamVrSession = currentSteamVrSession;
+                if (string.Equals(skipMarkerReason, UserSupervisorExitMarkerReason, StringComparison.Ordinal))
                 {
-                    Console.WriteLine(useDesktopTuiDefaultInterface
-                        ? "Watcher selected startup interface: Terminal UI."
-                        : "Watcher selected startup interface: Classic Console.");
-                    StartSupervisor(supervisorPath, configPath, useDesktopTuiDefaultInterface);
+                    userExitSuppressedSteamVrSession = currentSteamVrSession;
                 }
-
-                launchedForCurrentSteamVrSession = true;
             }
 
+            var supervisorRunning = IsAnotherSupervisorRunning(supervisorProcessName);
+            var decision = GetLaunchDecision(
+                currentSteamVrSession,
+                supervisorRunning,
+                launchedForCurrentSteamVrSession);
+
+            if (decision.SuppressedForCurrentSession
+                && currentSteamVrSession is not null
+                && userExitSuppressedSteamVrSession == currentSteamVrSession
+                && relaunchSuppressionLoggedFor != currentSteamVrSession)
+            {
+                Console.WriteLine("Supervisor exited by user request. Automatic relaunch is skipped for the current SteamVR session.");
+                relaunchSuppressionLoggedFor = currentSteamVrSession;
+            }
+
+            if (decision.ShouldLaunchSupervisor)
+            {
+                relaunchSuppressionLoggedFor = null;
+                userExitSuppressedSteamVrSession = null;
+                Console.WriteLine(useDesktopTuiDefaultInterface
+                    ? "Watcher selected startup interface: Terminal UI."
+                    : "Watcher selected startup interface: Classic Console.");
+                StartSupervisor(supervisorPath, configPath, useDesktopTuiDefaultInterface);
+            }
+
+            launchedForCurrentSteamVrSession = decision.LaunchedForSteamVrSession;
             await Task.Delay(PollInterval, cancellationToken);
         }
+    }
+
+    internal static WatcherLaunchDecision GetLaunchDecision(
+        SteamVrSessionIdentity? currentSteamVrSession,
+        bool supervisorRunning,
+        SteamVrSessionIdentity? launchedForSteamVrSession)
+    {
+        if (currentSteamVrSession is null)
+        {
+            return new WatcherLaunchDecision(false, null, false);
+        }
+
+        if (launchedForSteamVrSession == currentSteamVrSession)
+        {
+            return new WatcherLaunchDecision(false, launchedForSteamVrSession, !supervisorRunning);
+        }
+
+        if (supervisorRunning)
+        {
+            return new WatcherLaunchDecision(false, currentSteamVrSession, false);
+        }
+
+        return new WatcherLaunchDecision(true, currentSteamVrSession, false);
     }
 
     private static bool IsAnotherSupervisorRunning(string supervisorProcessName)
@@ -8901,6 +9237,54 @@ internal static class AutoLaunchWatcher
         return processes.Length > 0;
     }
 
+    private static SteamVrSessionIdentity? TryGetCurrentSteamVrSessionIdentity()
+    {
+        var processes = Process.GetProcessesByName(VrServerProcessName);
+        try
+        {
+            return processes
+                .Select(TryCreateSessionIdentity)
+                .Where(identity => identity is not null)
+                .Cast<SteamVrSessionIdentity>()
+                .OrderBy(identity => identity.StartTime ?? DateTimeOffset.MaxValue)
+                .ThenBy(identity => identity.Pid)
+                .FirstOrDefault();
+        }
+        finally
+        {
+            foreach (var process in processes)
+            {
+                process.Dispose();
+            }
+        }
+    }
+
+    private static SteamVrSessionIdentity? TryCreateSessionIdentity(Process process)
+    {
+        try
+        {
+            if (process.HasExited)
+            {
+                return null;
+            }
+
+            DateTimeOffset? startTime = null;
+            try
+            {
+                startTime = new DateTimeOffset(process.StartTime);
+            }
+            catch
+            {
+            }
+
+            return new SteamVrSessionIdentity(process.Id, startTime);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static void StartSupervisor(
         string supervisorPath,
         string? configPath,
@@ -8933,10 +9317,22 @@ internal static class AutoLaunchWatcher
     }
 
     public static void RequestSkipCurrentSteamVrSession()
+        => WriteSkipCurrentSteamVrSessionMarker(reason: null);
+
+    public static void RequestSkipCurrentSteamVrSessionForUserExit()
+        => WriteSkipCurrentSteamVrSessionMarker(UserSupervisorExitMarkerReason);
+
+    private static void WriteSkipCurrentSteamVrSessionMarker(string? reason)
     {
         try
         {
-            File.WriteAllText(SkipCurrentSteamVrSessionMarkerPath, DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture));
+            var marker = new SkipCurrentSteamVrSessionMarker(
+                DateTimeOffset.UtcNow,
+                TryGetCurrentSteamVrSessionIdentity(),
+                reason);
+            File.WriteAllText(
+                SkipCurrentSteamVrSessionMarkerPath,
+                JsonSerializer.Serialize(marker));
         }
         catch
         {
@@ -8944,21 +9340,39 @@ internal static class AutoLaunchWatcher
         }
     }
 
-    private static bool TryConsumeSkipCurrentSteamVrSessionMarker()
+    private static string? TryConsumeSkipCurrentSteamVrSessionMarker(SteamVrSessionIdentity? currentSteamVrSession)
     {
         try
         {
             if (!File.Exists(SkipCurrentSteamVrSessionMarkerPath))
             {
-                return false;
+                return null;
             }
 
+            var raw = File.ReadAllText(SkipCurrentSteamVrSessionMarkerPath);
             File.Delete(SkipCurrentSteamVrSessionMarkerPath);
-            return true;
+            if (string.IsNullOrWhiteSpace(raw) || !raw.TrimStart().StartsWith("{", StringComparison.Ordinal))
+            {
+                return "legacy";
+            }
+
+            var marker = JsonSerializer.Deserialize<SkipCurrentSteamVrSessionMarker>(raw);
+            if (marker is null || DateTimeOffset.UtcNow - marker.WrittenAt > SkipCurrentSteamVrSessionMarkerTtl)
+            {
+                return null;
+            }
+
+            var matchesCurrentSession = marker.Session is null
+                ? currentSteamVrSession is not null
+                : marker.Session == currentSteamVrSession;
+
+            return matchesCurrentSession
+                ? marker.Reason ?? "startup-suppression"
+                : null;
         }
         catch
         {
-            return false;
+            return null;
         }
     }
 }

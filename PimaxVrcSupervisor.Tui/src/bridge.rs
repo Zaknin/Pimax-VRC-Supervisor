@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::{
     diagnostics::DiagnosticsHandle,
-    models::{CommandResult, QueryResponse, TuiAction},
+    models::{CommandResult, ExitOption, QueryResponse, TuiAction},
 };
 
 pub const BACKEND_HOST: &str = "127.0.0.1";
@@ -85,6 +85,29 @@ impl SupervisorBridge {
         let request_json = serde_json::to_string(
             &json!({ "action": "request-graceful-shutdown", "source": "Desktop TUI" }),
         )?;
+        self.send_lifecycle_request(request_json)
+    }
+
+    pub fn request_desktop_tui_close(&self) -> Result<CommandResult> {
+        let request_json = serde_json::to_string(
+            &json!({ "action": "close-desktop-tui", "source": "Desktop TUI" }),
+        )?;
+        self.send_lifecycle_request(request_json)
+    }
+
+    pub fn request_supervisor_exit(&self, option: ExitOption) -> Result<CommandResult> {
+        let Some(mode) = option.lifecycle_mode() else {
+            return Err(eyre!(
+                "exit option does not map to a Supervisor shutdown mode"
+            ));
+        };
+        let request_json = serde_json::to_string(
+            &json!({ "action": "request-supervisor-exit", "mode": mode, "source": "Desktop TUI" }),
+        )?;
+        self.send_lifecycle_request(request_json)
+    }
+
+    fn send_lifecycle_request(&self, request_json: String) -> Result<CommandResult> {
         let response_line = self.send_line(
             &format!("lifecycle-json {request_json}"),
             ACTION_READ_WRITE_TIMEOUT,

@@ -13,8 +13,8 @@ use crate::{
     console_close,
     diagnostics::{DiagnosticsHandle, TuiDiagnostics},
     models::{
-        CommandResult, CommandSummary, LogLine, StatusSummary, TuiAction, commands_from_response,
-        logs_from_response, status_from_response,
+        CommandResult, CommandSummary, ExitOption, LogLine, StatusSummary, TuiAction,
+        commands_from_response, logs_from_response, status_from_response,
     },
 };
 
@@ -62,6 +62,7 @@ pub struct CompletedActionResult {
 #[derive(Debug, Clone)]
 pub struct ShutdownRequestResult {
     pub completed_at: Instant,
+    pub option: ExitOption,
     pub accepted: bool,
     pub message: String,
 }
@@ -96,13 +97,16 @@ pub struct App {
     pub log_scroll: usize,
     pub log_follow: bool,
     pub confirmation: Option<TuiAction>,
-    pub shutdown_confirmation: bool,
+    pub exit_dialog: bool,
+    pub selected_exit_option: ExitOption,
     pub shutdown_in_progress: bool,
     pub shutdown_accepted: bool,
+    pub shutdown_intent: Option<ExitOption>,
     pub shutdown_started_at: Option<Instant>,
     pub shutdown_exit_after: Option<Instant>,
     pub shutdown_message: Option<String>,
     pub shutdown_error: Option<String>,
+    pub close_tui_requested: bool,
     pub running_actions: Vec<RunningAction>,
     pub last_action_completed_at: Option<Instant>,
     pub last_action_command: Option<String>,
@@ -165,13 +169,16 @@ impl App {
             log_scroll: 0,
             log_follow: true,
             confirmation: None,
-            shutdown_confirmation: false,
+            exit_dialog: false,
+            selected_exit_option: ExitOption::CloseTuiOnly,
             shutdown_in_progress: false,
             shutdown_accepted: false,
+            shutdown_intent: None,
             shutdown_started_at: None,
             shutdown_exit_after: None,
             shutdown_message: None,
             shutdown_error: None,
+            close_tui_requested: false,
             running_actions: Vec::new(),
             last_action_completed_at: None,
             last_action_command: None,
@@ -285,19 +292,43 @@ impl App {
         };
 
         if result.accepted {
-            self.shutdown_accepted = true;
-            self.shutdown_in_progress = true;
-            self.shutdown_exit_after = None;
-            self.shutdown_message = Some(result.message);
-            self.shutdown_error = None;
+            match result.option {
+                ExitOption::CloseTuiOnly => {
+                    self.close_tui_requested = true;
+                    self.shutdown_in_progress = false;
+                    self.shutdown_accepted = false;
+                    self.shutdown_intent = None;
+                    self.shutdown_exit_after = None;
+                    self.shutdown_message = Some(result.message);
+                    self.shutdown_error = None;
+                }
+                ExitOption::ExitSupervisorPreserveBaseStations
+                | ExitOption::ExitSupervisorNormalCleanup => {
+                    self.shutdown_accepted = true;
+                    self.shutdown_in_progress = true;
+                    self.shutdown_intent = Some(result.option);
+                    self.shutdown_exit_after = None;
+                    self.shutdown_message = Some(result.message);
+                    self.shutdown_error = None;
+                }
+                ExitOption::Cancel => {
+                    self.shutdown_in_progress = false;
+                    self.shutdown_accepted = false;
+                    self.shutdown_intent = None;
+                    self.shutdown_exit_after = None;
+                    self.shutdown_message = None;
+                    self.shutdown_error = None;
+                }
+            }
         } else {
             self.shutdown_in_progress = false;
             self.shutdown_accepted = false;
+            self.shutdown_intent = None;
             self.shutdown_exit_after = None;
             self.shutdown_message = None;
             self.shutdown_error = Some(result.message.clone());
             self.record_action_error(
-                "request-graceful-shutdown",
+                result.option.display_name(),
                 ActionOutcome::Failed,
                 result.message,
                 result.completed_at,
@@ -513,46 +544,91 @@ impl App {
         self.mark_render_needed();
     }
 
-    pub fn request_shutdown_confirmation(&mut self, now: Instant) -> bool {
-        if self.connection != ConnectionState::Connected {
-            self.shutdown_message = Some("Supervisor is not running. Exiting TUI.".to_string());
-            self.last_action_completed_at = Some(now);
-            self.mark_render_needed();
-            return true;
-        }
-
+    pub fn request_exit_dialog(&mut self, _now: Instant) -> bool {
         if self.shutdown_in_progress {
             return false;
         }
 
         self.help_visible = false;
         self.confirmation = None;
-        self.shutdown_confirmation = true;
+        self.exit_dialog = true;
+        self.selected_exit_option = ExitOption::CloseTuiOnly;
         self.mark_render_needed();
         false
     }
 
-    pub fn cancel_shutdown_confirmation(&mut self) {
-        self.shutdown_confirmation = false;
+    pub fn cancel_exit_dialog(&mut self) {
+        self.exit_dialog = false;
         self.mark_render_needed();
     }
 
-    pub fn confirm_shutdown(&mut self, now: Instant) {
-        if self.shutdown_in_progress {
-            return;
+    pub fn move_exit_selection_up(&mut self) {
+        self.move_exit_selection(-1);
+    }
+
+    pub fn move_exit_selection_down(&mut self) {
+        self.move_exit_selection(1);
+    }
+
+    pub fn confirm_selected_exit_option(&mut self, now: Instant) -> bool {
+        self.confirm_exit_option(self.selected_exit_option, now)
+    }
+
+    pub fn confirm_exit_option(&mut self, option: ExitOption, now: Instant) -> bool {
+        if option == ExitOption::Cancel {
+            self.cancel_exit_dialog();
+            return false;
         }
 
-        self.shutdown_confirmation = false;
+        if self.shutdown_in_progress {
+            return false;
+        }
+
+        if self.connection != ConnectionState::Connected && option == ExitOption::CloseTuiOnly {
+            self.exit_dialog = false;
+            self.close_tui_requested = true;
+            self.shutdown_message =
+                Some("Desktop TUI closed. Supervisor continues running.".to_string());
+            self.last_action_completed_at = Some(now);
+            self.mark_render_needed();
+            return true;
+        }
+
+        if self.connection != ConnectionState::Connected {
+            self.shutdown_error =
+                Some("Supervisor is not running; only Close TUI only is available.".to_string());
+            self.mark_render_needed();
+            return false;
+        }
+
+        self.exit_dialog = false;
         self.confirmation = None;
         self.shutdown_in_progress = true;
         self.shutdown_accepted = false;
+        self.shutdown_intent = Some(option);
         self.shutdown_started_at = Some(now);
         self.shutdown_exit_after = None;
-        self.shutdown_message = Some("Shutdown requested. Closing managed apps...".to_string());
+        self.shutdown_message = Some(exit_option_start_message(option).to_string());
         self.shutdown_error = None;
         console_close::mark_shutdown_requested();
         self.diagnostics.record_lifecycle_request();
-        self.spawn_shutdown_worker();
+        self.spawn_shutdown_worker(option);
+        self.mark_render_needed();
+        false
+    }
+
+    pub fn should_close_tui(&self) -> bool {
+        self.close_tui_requested
+    }
+
+    fn move_exit_selection(&mut self, delta: isize) {
+        let current = ExitOption::ALL
+            .iter()
+            .position(|option| *option == self.selected_exit_option)
+            .unwrap_or(0);
+        let len = ExitOption::ALL.len() as isize;
+        let next = (current as isize + delta).rem_euclid(len) as usize;
+        self.selected_exit_option = ExitOption::ALL[next];
         self.mark_render_needed();
     }
 
@@ -812,28 +888,38 @@ impl App {
         });
     }
 
-    fn spawn_shutdown_worker(&self) {
+    fn spawn_shutdown_worker(&self, option: ExitOption) {
         let sender = self.shutdown_result_tx.clone();
         let diagnostics = self.diagnostics_handle();
         thread::spawn(move || {
             let result = catch_unwind(AssertUnwindSafe(|| {
                 let bridge = SupervisorBridge::with_diagnostics(diagnostics);
-                bridge.request_graceful_shutdown()
+                match option {
+                    ExitOption::CloseTuiOnly => bridge.request_desktop_tui_close(),
+                    ExitOption::ExitSupervisorPreserveBaseStations
+                    | ExitOption::ExitSupervisorNormalCleanup => {
+                        bridge.request_supervisor_exit(option)
+                    }
+                    ExitOption::Cancel => bridge.request_graceful_shutdown(),
+                }
             }));
 
             let completed = match result {
                 Ok(Ok(command_result)) => ShutdownRequestResult {
                     completed_at: Instant::now(),
+                    option,
                     accepted: true,
-                    message: format_action_result(&command_result),
+                    message: format_exit_result(option, &command_result),
                 },
                 Ok(Err(error)) => ShutdownRequestResult {
                     completed_at: Instant::now(),
+                    option,
                     accepted: false,
                     message: operator_error_message(&error.to_string()),
                 },
                 Err(_) => ShutdownRequestResult {
                     completed_at: Instant::now(),
+                    option,
                     accepted: false,
                     message: "Shutdown request could not complete.".to_string(),
                 },
@@ -922,6 +1008,28 @@ fn format_action_result(result: &CommandResult) -> String {
         .unwrap_or("Action completed.");
 
     format!("{display_name}: {message}")
+}
+
+fn format_exit_result(option: ExitOption, result: &CommandResult) -> String {
+    result
+        .message
+        .as_deref()
+        .or(result.error.as_deref())
+        .map(str::to_string)
+        .unwrap_or_else(|| exit_option_start_message(option).to_string())
+}
+
+fn exit_option_start_message(option: ExitOption) -> &'static str {
+    match option {
+        ExitOption::CloseTuiOnly => "Desktop TUI closed. Supervisor continues running.",
+        ExitOption::ExitSupervisorPreserveBaseStations => {
+            "Exiting Supervisor. Secondary monitors will be restored if Supervisor disabled them. Base stations will remain powered on."
+        }
+        ExitOption::ExitSupervisorNormalCleanup => {
+            "Exiting Supervisor. Secondary monitors will be restored and normal base-station shutdown will run."
+        }
+        ExitOption::Cancel => "Exit cancelled.",
+    }
 }
 
 pub fn display_name_for_command(command: &str) -> String {
@@ -1082,6 +1190,82 @@ mod tests {
         assert_eq!(app.confirmation, Some(action));
         assert!(app.running_actions.is_empty());
         assert!(app.last_action_result.is_none());
+    }
+
+    #[test]
+    fn exit_dialog_opens_without_starting_shutdown_and_defaults_to_close_only() {
+        let now = Instant::now();
+        let mut app = app(false);
+        app.connection = ConnectionState::Connected;
+
+        assert!(!app.request_exit_dialog(now));
+
+        assert!(app.exit_dialog);
+        assert_eq!(app.selected_exit_option, ExitOption::CloseTuiOnly);
+        assert!(!app.shutdown_in_progress);
+        assert!(!app.close_tui_requested);
+    }
+
+    #[test]
+    fn exit_dialog_cancel_returns_to_dashboard() {
+        let now = Instant::now();
+        let mut app = app(false);
+        app.connection = ConnectionState::Connected;
+        app.request_exit_dialog(now);
+
+        app.cancel_exit_dialog();
+
+        assert!(!app.exit_dialog);
+        assert!(!app.shutdown_in_progress);
+    }
+
+    #[test]
+    fn exit_dialog_selection_wraps_with_arrows() {
+        let mut app = app(false);
+        assert_eq!(app.selected_exit_option, ExitOption::CloseTuiOnly);
+
+        app.move_exit_selection_up();
+        assert_eq!(app.selected_exit_option, ExitOption::Cancel);
+
+        app.move_exit_selection_down();
+        assert_eq!(app.selected_exit_option, ExitOption::CloseTuiOnly);
+
+        app.move_exit_selection_down();
+        assert_eq!(
+            app.selected_exit_option,
+            ExitOption::ExitSupervisorPreserveBaseStations
+        );
+    }
+
+    #[test]
+    fn close_tui_only_when_disconnected_exits_without_supervisor_shutdown() {
+        let now = Instant::now();
+        let mut app = app(false);
+        app.connection = ConnectionState::Disconnected;
+        app.request_exit_dialog(now);
+
+        assert!(app.confirm_exit_option(ExitOption::CloseTuiOnly, now));
+
+        assert!(app.should_close_tui());
+        assert!(!app.shutdown_in_progress);
+        assert_eq!(app.shutdown_intent, None);
+    }
+
+    #[test]
+    fn disconnected_preserve_request_is_not_inferred_from_tui_disconnect() {
+        let now = Instant::now();
+        let mut app = app(false);
+        app.connection = ConnectionState::Disconnected;
+        app.request_exit_dialog(now);
+
+        assert!(!app.confirm_exit_option(ExitOption::ExitSupervisorPreserveBaseStations, now));
+
+        assert!(!app.should_close_tui());
+        assert!(!app.shutdown_in_progress);
+        assert_eq!(
+            app.shutdown_error.as_deref(),
+            Some("Supervisor is not running; only Close TUI only is available.")
+        );
     }
 
     #[test]

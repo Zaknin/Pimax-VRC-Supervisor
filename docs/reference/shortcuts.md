@@ -19,8 +19,8 @@
 | `F5` | Refresh |
 | `1`-`6` | Open action confirmation |
 | `Enter` / `Space` | Confirm modal |
-| `Esc` | Cancel / back |
-| `Q` | Shutdown flow when connected, exit only when disconnected |
+| `Esc` | Open exit options, or cancel an open modal |
+| `Q` | Open exit options |
 | `Up` / `PageUp` | Scroll logs older |
 | `Down` / `PageDown` | Scroll logs newer |
 | `End` / `F` | Follow latest logs |

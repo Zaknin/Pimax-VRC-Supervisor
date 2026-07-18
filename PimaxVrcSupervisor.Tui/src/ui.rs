@@ -16,7 +16,7 @@ use crate::{
         ActionOutcome, App, ClickAction, ConnectionState, REFRESH_INTERVAL,
         display_name_for_command, operator_error_message,
     },
-    models::{CommandSummary, TuiAction},
+    models::{CommandSummary, ExitOption, TuiAction},
     theme,
 };
 
@@ -52,8 +52,8 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App) {
         render_help(frame, area);
     }
 
-    if app.shutdown_confirmation {
-        render_shutdown_confirmation(frame, area, app);
+    if app.exit_dialog {
+        render_exit_options(frame, area, app);
     }
 
     if app.confirmation.is_some() {
@@ -163,7 +163,7 @@ fn render_tiny_fallback(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         Line::from(vec![
             Span::styled("0 Help", theme::success_style()),
             Span::raw("   "),
-            Span::styled("Q Shutdown", theme::warning_style()),
+            Span::styled("Esc Exit", theme::warning_style()),
         ]),
     ];
 
@@ -442,7 +442,7 @@ fn render_small_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(
         Paragraph::new(vec![
             line,
-            Line::from("0 Help  F5 Refresh  1-6 Actions  Q Shutdown"),
+            Line::from("0 Help  F5 Refresh  1-6 Actions  Esc Exit"),
         ])
         .block(theme::accent_panel_block("Dashboard"))
         .wrap(Wrap { trim: true }),
@@ -1008,7 +1008,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
             theme::warning_style(),
         )),
         Line::from("Mouse actions use the same allowed action list and conflict checks."),
-        Line::from("Q asks the Supervisor to close managed apps and exit after confirmation."),
+        Line::from("Esc or Q opens explicit TUI and Supervisor exit options."),
         Line::from("F1, ?, and Russian help aliases are not mapped."),
         Line::from("Forced stop is not available from this TUI."),
     ];
@@ -1022,26 +1022,45 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
     );
 }
 
-fn render_shutdown_confirmation(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
-    let popup = centered_rect(62, 38, area);
-    let lines = vec![
-        Line::from(Span::styled("Shut down Supervisor?", theme::title_style())),
+fn render_exit_options(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
+    let popup = centered_rect(74, 58, area);
+    let mut lines = vec![
+        Line::from(Span::styled("Exit options", theme::title_style())),
         Line::from(""),
-        Line::from("This will close managed apps and exit the Supervisor."),
-        Line::from("Monitor restore and base-station cleanup stay managed by the Supervisor."),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("ENTER / SPACE Confirm", theme::secondary_style()),
-            Span::raw("    "),
-            Span::styled("ESC Cancel", theme::secondary_style()),
-        ]),
     ];
+
+    for option in ExitOption::ALL {
+        let selected = option == app.selected_exit_option;
+        let marker = if selected { ">" } else { " " };
+        let label_style = if selected {
+            theme::warning_style()
+        } else {
+            theme::secondary_style()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(marker, label_style),
+            Span::raw(" ["),
+            Span::styled(option.digit().to_string(), label_style),
+            Span::raw("] "),
+            Span::styled(option.display_name(), label_style),
+        ]));
+        lines.push(Line::from(format!("    {}", option.detail())));
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(vec![
+        Span::styled("UP/DOWN Select", theme::secondary_style()),
+        Span::raw("    "),
+        Span::styled("ENTER Confirm", theme::secondary_style()),
+        Span::raw("    "),
+        Span::styled("ESC Cancel", theme::secondary_style()),
+    ]));
 
     frame.render_widget(Clear, popup);
     register_modal_clicks(app, popup);
     frame.render_widget(
         Paragraph::new(lines)
-            .block(theme::accent_panel_block("Graceful Shutdown"))
+            .block(theme::accent_panel_block("Exit Options"))
             .wrap(Wrap { trim: true }),
         popup,
     );
@@ -1423,11 +1442,11 @@ fn register_modal_clicks(app: &mut App, popup: Rect) {
 
 fn shortcut_line(width: u16) -> &'static str {
     if width >= 120 {
-        "0 Help  F5 Refresh  Wheel Logs  End/F Follow  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  Q Shutdown"
+        "0 Help  F5 Refresh  Wheel Logs  End/F Follow  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  Esc Exit"
     } else if width >= 100 {
-        "0 Help  F5 Refresh  1-6 Actions  End/F Logs  Q Shutdown"
+        "0 Help  F5 Refresh  1-6 Actions  End/F Logs  Esc Exit"
     } else {
-        "0 Help  F5 Refresh  1-6 Actions  Q Shutdown"
+        "0 Help  F5 Refresh  1-6 Actions  Esc Exit"
     }
 }
 

@@ -37,6 +37,72 @@ pub enum TuiAction {
     ReloadAutostartApps,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ExitOption {
+    CloseTuiOnly,
+    ExitSupervisorPreserveBaseStations,
+    ExitSupervisorNormalCleanup,
+    Cancel,
+}
+
+impl ExitOption {
+    pub const ALL: [Self; 4] = [
+        Self::CloseTuiOnly,
+        Self::ExitSupervisorPreserveBaseStations,
+        Self::ExitSupervisorNormalCleanup,
+        Self::Cancel,
+    ];
+
+    pub fn from_digit(value: char) -> Option<Self> {
+        match value {
+            '1' => Some(Self::CloseTuiOnly),
+            '2' => Some(Self::ExitSupervisorPreserveBaseStations),
+            '3' => Some(Self::ExitSupervisorNormalCleanup),
+            '4' => Some(Self::Cancel),
+            _ => None,
+        }
+    }
+
+    pub fn digit(self) -> char {
+        match self {
+            Self::CloseTuiOnly => '1',
+            Self::ExitSupervisorPreserveBaseStations => '2',
+            Self::ExitSupervisorNormalCleanup => '3',
+            Self::Cancel => '4',
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::CloseTuiOnly => "Close TUI only",
+            Self::ExitSupervisorPreserveBaseStations => "Exit Supervisor - Keep Base Stations On",
+            Self::ExitSupervisorNormalCleanup => "Exit Supervisor - Turn Base Stations Off",
+            Self::Cancel => "Cancel",
+        }
+    }
+
+    pub fn detail(self) -> &'static str {
+        match self {
+            Self::CloseTuiOnly => "Supervisor continues running.",
+            Self::ExitSupervisorPreserveBaseStations => {
+                "Monitors restored if Supervisor disabled them. Base stations remain powered on."
+            }
+            Self::ExitSupervisorNormalCleanup => {
+                "Monitors restored if Supervisor disabled them. Normal base-station shutdown runs."
+            }
+            Self::Cancel => "Return to the dashboard.",
+        }
+    }
+
+    pub fn lifecycle_mode(self) -> Option<&'static str> {
+        match self {
+            Self::ExitSupervisorPreserveBaseStations => Some("preserve-base-stations"),
+            Self::ExitSupervisorNormalCleanup => Some("normal-cleanup"),
+            Self::CloseTuiOnly | Self::Cancel => None,
+        }
+    }
+}
+
 impl TuiAction {
     pub const ALL: [Self; 6] = [
         Self::RestartCoreApps,
@@ -292,5 +358,21 @@ mod tests {
     #[test]
     fn digit_seven_does_not_map_to_an_action() {
         assert_eq!(TuiAction::from_digit('7'), None);
+    }
+
+    #[test]
+    fn exit_options_are_modal_and_digit_mapped() {
+        assert_eq!(ExitOption::ALL.len(), 4);
+        assert_eq!(ExitOption::from_digit('1'), Some(ExitOption::CloseTuiOnly));
+        assert_eq!(
+            ExitOption::from_digit('2'),
+            Some(ExitOption::ExitSupervisorPreserveBaseStations)
+        );
+        assert_eq!(
+            ExitOption::from_digit('3'),
+            Some(ExitOption::ExitSupervisorNormalCleanup)
+        );
+        assert_eq!(ExitOption::from_digit('4'), Some(ExitOption::Cancel));
+        assert_eq!(ExitOption::from_digit('7'), None);
     }
 }

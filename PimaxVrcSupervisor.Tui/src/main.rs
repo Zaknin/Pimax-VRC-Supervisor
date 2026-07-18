@@ -9,7 +9,7 @@ mod ui;
 
 use std::{ffi::OsStr, io, time::Instant};
 
-use crate::models::TuiAction;
+use crate::models::{ExitOption, TuiAction};
 use app::{App, ClickAction, LOG_PAGE_SIZE};
 use color_eyre::eyre::Result;
 use crossterm::{
@@ -164,6 +164,10 @@ fn run(
             break;
         }
 
+        if app.should_close_tui() {
+            break;
+        }
+
         if app.should_exit_after_supervisor_disconnect(now) {
             break;
         }
@@ -219,14 +223,27 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
         }
     }
 
-    if app.shutdown_confirmation {
+    if app.exit_dialog {
         match key.code {
             KeyCode::Enter | KeyCode::Char(' ') => {
-                app.confirm_shutdown(now);
-                return false;
+                return app.confirm_selected_exit_option(now);
             }
             KeyCode::Esc => {
-                app.cancel_shutdown_confirmation();
+                app.cancel_exit_dialog();
+                return false;
+            }
+            KeyCode::Up => {
+                app.move_exit_selection_up();
+                return false;
+            }
+            KeyCode::Down => {
+                app.move_exit_selection_down();
+                return false;
+            }
+            KeyCode::Char(value) => {
+                if let Some(option) = ExitOption::from_digit(value) {
+                    return app.confirm_exit_option(option, now);
+                }
                 return false;
             }
             _ => return false,
@@ -252,8 +269,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
         return false;
     } else {
         match shortcut {
-            Some(Shortcut::Quit) => app.request_shutdown_confirmation(now),
-            Some(Shortcut::Cancel) => false,
+            Some(Shortcut::Quit) | Some(Shortcut::Cancel) => app.request_exit_dialog(now),
             Some(Shortcut::Refresh) => {
                 app.refresh(now);
                 false
@@ -298,7 +314,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
         return false;
     }
 
-    if app.shutdown_confirmation {
+    if app.exit_dialog {
         if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
             return false;
         }
@@ -310,11 +326,10 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
 
         match action {
             ClickAction::ConfirmModal => {
-                app.confirm_shutdown(now);
-                return false;
+                return app.confirm_selected_exit_option(now);
             }
             ClickAction::CancelModal => {
-                app.cancel_shutdown_confirmation();
+                app.cancel_exit_dialog();
                 return false;
             }
             _ => return false,
@@ -382,7 +397,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
             app.refresh(now);
             false
         }
-        ClickAction::QuitTui => app.request_shutdown_confirmation(now),
+        ClickAction::QuitTui => app.request_exit_dialog(now),
         ClickAction::SelectAction(action) => {
             app.request_action_start(action, now);
             false

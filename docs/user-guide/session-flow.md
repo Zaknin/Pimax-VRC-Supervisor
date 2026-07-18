@@ -21,7 +21,9 @@ When VRChat and/or SteamVR exits according to your configured mode, Supervisor r
 
 - closes managed tools
 - powers down base stations if enabled
-- restores monitors if monitor management was used
+- restores monitors only if Supervisor successfully disabled secondary monitors during the current session
 - exits if the selected startup mode expects it to exit
 
 Terminal UI and SteamVR Overlay are control surfaces. The Supervisor performs the session work.
+
+Terminal UI has explicit exit choices. **Close TUI only** detaches the dashboard and does not enter Supervisor cleanup. **Exit Supervisor - Keep Base Stations On** runs Supervisor exit cleanup while suppressing base-station power-off. **Exit Supervisor - Turn Base Stations Off** runs the normal cleanup path. Explicit Supervisor exits suppress scheduled Watcher relaunch for the same SteamVR `vrserver` PID/start-time identity; a later SteamVR session can launch normally.
