@@ -1888,11 +1888,15 @@ internal sealed class AppSupervisor
     private readonly SteamVrRecoveryCoordinator _steamVrRecovery;
     private readonly SteamVrLifecycleEvidenceReader _steamVrLifecycleEvidence;
     private readonly ISteamVrGracefulShutdownAdapter _steamVrGracefulShutdown = new VrStartupGracefulShutdownAdapter();
+    private readonly PimaxUsbEnumerationSnapshotCollector _usbInventoryCollector = new();
+    private readonly PimaxRegistrationAssessmentCoordinator _pimaxRegistrationAssessment = new();
+    private readonly UsbDeviceRecoveryCoordinator _usbDeviceRecovery;
     private readonly Dictionary<int, Process> _watchedProcessHandles = new();
     private readonly SemaphoreSlim _oscGoesBrrrLaunchLock = new(1, 1);
     private readonly SemaphoreSlim _oscRouterLaunchLock = new(1, 1);
     private readonly SemaphoreSlim _cleanupLock = new(1, 1);
     private readonly SemaphoreSlim _coreAppRestartLock = new(1, 1);
+    private readonly SemaphoreSlim _deviceRecoveryLock = new(1, 1);
     private readonly SemaphoreSlim _autoLaunchAppsRoutineLock = new(1, 1);
     private readonly SemaphoreSlim _manualBaseStationActionLock = new(1, 1);
     private readonly SemaphoreSlim _vrSessionRestartLock = new(1, 1);
@@ -1942,9 +1946,10 @@ internal sealed class AppSupervisor
     private DateTimeOffset? _lastPimaxServiceLogEventSeenAt;
     private DateTimeOffset? _pendingPimaxServiceHidRemoveAt;
     private DateTimeOffset? _lastPimaxServiceReconnectAt;
-    private DateTimeOffset? _lastHandledPimaxReconnectSignalAt;
     private DateTimeOffset? _lastMouthTrackerPnPEventSeenAt;
     private bool _mouthTrackerPnPEventWarningShown;
+    private bool _usbInventoryUnavailableWarningShown;
+    private int _discardNextDeviceInventoryChanges;
     private volatile bool _forcedManualReloadRequested;
     private SupervisorLifecyclePhase _lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChat;
     private int _gracefulShutdownRequested;
@@ -1976,6 +1981,9 @@ internal sealed class AppSupervisor
         _steamVrLifecycle = new SteamVrLifecycleCoordinator(managedSteamVrSession, Environment.ProcessId);
         _steamVrRecovery = new SteamVrRecoveryCoordinator(managedSteamVrSession);
         _steamVrLifecycleEvidence = new SteamVrLifecycleEvidenceReader();
+        _usbDeviceRecovery = new UsbDeviceRecoveryCoordinator(
+            UsbDeviceAttributionRules.FromConfig(config),
+            TimeSpan.FromMinutes(5));
         _baseStationDiagnostics = BaseStationDiagnosticSink.ForProcess("Supervisor", AppVersion.Current);
         _xsOverlayDiagnostics = XsOverlayDiagnosticSink.ForProcess("Supervisor", AppVersion.Current);
         _xsOverlayMonitorTransition = new XsOverlaySafeMonitorTransitionCoordinator(
@@ -2120,6 +2128,7 @@ internal sealed class AppSupervisor
             WriteDiagnosticEvent("lifecycle; managed app startup complete");
             await InitializeOscGoesBrrrWorkflowAsync(cancellationToken);
             _lifecyclePhase = SupervisorLifecyclePhase.VrChatRunning;
+            ObserveUsbDeviceInventory(suppressRecovery: true);
             ShowOscRouterRetryPromptIfNeeded();
             if (restartedFromForcedManualReload)
             {
@@ -2140,6 +2149,23 @@ internal sealed class AppSupervisor
                 {
                     RefreshOscGoesBrrrWorkflowState();
                     await HandleConsoleHotkeysAsync(cancellationToken);
+                    var pimaxServiceTopologySignal = _config.UsePimaxServiceLogReconnectDetector
+                        ? DetectPimaxServiceLogReconnect()
+                        : null;
+                    var mouthTrackerPnpTopologySignal = _mouthTrackerUser
+                        && _config.UseMouthTrackerPnPReconnectDetector
+                        && await DetectMouthTrackerPnPReconnectAsync(cancellationToken);
+                    if (pimaxServiceTopologySignal is not null || mouthTrackerPnpTopologySignal)
+                    {
+                        WriteDebug(
+                            "raw device topology signal observed; scheduling structured inventory attribution rescan"
+                            + $"; piService={pimaxServiceTopologySignal is not null}"
+                            + $"; kernelPnp={mouthTrackerPnpTopologySignal}");
+                    }
+
+                    var suppressDeviceRecovery = ShouldSuppressDeviceRecovery()
+                        || Interlocked.Exchange(ref _discardNextDeviceInventoryChanges, 0) == 1;
+                    ObserveUsbDeviceInventory(suppressDeviceRecovery);
                     if (IsVrSessionRestartActive())
                     {
                         continue;
@@ -2273,118 +2299,19 @@ internal sealed class AppSupervisor
                             _lastLovenseConnected,
                             cancellationToken)
                         : _lastLovenseConnected;
-                    var faceTrackerReconnectAutomationEnabled = _config.FaceTrackerAutomationEnabled
-                        && _config.FaceTrackerRestartOnReconnectEnabled;
-                    var pimaxServiceReconnect = pimaxConnected && faceTrackerReconnectAutomationEnabled
-                        ? DetectPimaxServiceLogReconnect()
-                        : null;
-                    var pimaxRuntimeReconnected = pimaxServiceReconnect is not null;
-                    var pimaxReconnected = _lastPimaxConnected == false && pimaxConnected;
-                    var mouthTrackerReconnectAutomationEnabled = _config.FaceTrackerAutomationEnabled
-                        && _config.MouthTrackerRestartOnReconnectEnabled;
-                    var mouthTrackerReconnected = _mouthTrackerUser
-                        && _lastMouthTrackerConnected == false
-                        && mouthTrackerConnected == true;
-                    var mouthTrackerPnPReconnected = _mouthTrackerUser
-                        && mouthTrackerReconnectAutomationEnabled
-                        && mouthTrackerConnected == true
-                        && await DetectMouthTrackerPnPReconnectAsync(cancellationToken);
-
-                    if (pimaxReconnected || pimaxRuntimeReconnected)
-                    {
-                        var reconnectSignalAt = pimaxServiceReconnect?.AddAt ?? DateTimeOffset.Now;
-                        if (IsDuplicatePimaxReconnectSignal(reconnectSignalAt))
-                        {
-                            if (pimaxServiceReconnect is not null)
-                            {
-                                Console.WriteLine($"Ignoring PiService HID reconnect at {pimaxServiceReconnect.AddAt:HH:mm:ss.fff}; it matches a Pimax reconnect already handled.");
-                            }
-
-                            pimaxReconnected = false;
-                            pimaxRuntimeReconnected = false;
-                        }
-                        else
-                        {
-                            _lastHandledPimaxReconnectSignalAt = reconnectSignalAt;
-
-                            if (pimaxServiceReconnect is not null)
-                            {
-                                Console.WriteLine($"Pimax PiService HID remove/add sequence: {pimaxServiceReconnect.RemoveAt:HH:mm:ss.fff} -> {pimaxServiceReconnect.AddAt:HH:mm:ss.fff}");
-                            }
-
-                            if (pimaxRuntimeReconnected && !pimaxReconnected)
-                            {
-                                Console.WriteLine("Pimax runtime HID reconnect detected from PiService logs.");
-                            }
-
-                            if (!faceTrackerReconnectAutomationEnabled)
-                            {
-                                Console.WriteLine("Pimax Crystal reconnected. Face tracker reconnect restart automation is disabled; leaving managed apps unchanged.");
-                            }
-                            else
-                            {
-                                var reconnectDelay = TimeSpan.FromSeconds(_config.RestartDelayAfterReconnectSeconds);
-                                Console.WriteLine($"Pimax Crystal reconnected. Waiting {reconnectDelay.TotalSeconds:0} seconds for a stable connection before restarting managed apps.");
-                                var stableReconnect = await WaitForPimaxStableConnectedAsync(reconnectDelay, cancellationToken);
-                                if (!stableReconnect)
-                                {
-                                    Console.WriteLine("Pimax Crystal did not stay connected during the reconnect wait. Waiting for the next reconnect.");
-                                    _lastPimaxConnected = false;
-                                    continue;
-                                }
-
-                                if (_watchedProcessHasBeenSeen && !IsAnyProcessRunning(_config.WatchedShutdownProcessNames))
-                                {
-                                    Console.WriteLine(ShouldExitWithSteamVr()
-                                        ? "VRChat shut down during reconnect delay. Closing managed apps, then waiting for SteamVR shutdown before powering down base stations."
-                                        : "VRChat shut down during reconnect delay. Closing managed apps and exiting.");
-                                    await StopManagedAppsAfterWatchedProcessExitAsync(waitForSteamVrServerExitBeforeBaseStationPowerDown: ShouldExitWithSteamVr(), cancellationToken);
-                                    return;
-                                }
-
-                                await StopManagedAppsAsync(ManagedAppStopReason.PimaxReconnect, cancellationToken);
-                                await StartManagedAppsAsync(cancellationToken);
-                                pimaxConnected = await ReadDeviceConnectedOrPreviousAsync(
-                                    "Pimax Crystal",
-                                    IsPimaxConnectedAsync,
-                                    true,
-                                    cancellationToken);
-                                mouthTrackerConnected = _mouthTrackerUser
-                                    ? await ReadDeviceConnectedOrPreviousAsync(
-                                        "Vive Face Tracker",
-                                        IsMouthTrackerConnectedAsync,
-                                        _lastMouthTrackerConnected,
-                                        cancellationToken)
-                                    : (bool?)null;
-                                Console.WriteLine($"Pimax Crystal state after restart: {DescribeConnection(pimaxConnected)}");
-                            }
-                        }
-                    }
-                    else if (_lastPimaxConnected != pimaxConnected)
+                    if (_lastPimaxConnected != pimaxConnected)
                     {
                         Console.WriteLine($"Pimax Crystal state changed: {DescribeConnection(pimaxConnected)}");
                     }
 
-                    if (_mouthTrackerUser && (mouthTrackerReconnected || mouthTrackerPnPReconnected) && !pimaxReconnected && !pimaxRuntimeReconnected && pimaxConnected)
+                    if (_mouthTrackerUser && _lastMouthTrackerConnected != mouthTrackerConnected)
                     {
-                        if (!mouthTrackerReconnectAutomationEnabled)
-                        {
-                            Console.WriteLine(mouthTrackerPnPReconnected && !mouthTrackerReconnected
-                                ? "Vive Face Tracker device event detected while Pimax Crystal stayed connected. Face tracker restart automation is disabled; leaving VRCFaceTracking unchanged."
-                                : "Vive Face Tracker reconnected while Pimax Crystal stayed connected. Face tracker restart automation is disabled; leaving VRCFaceTracking unchanged.");
-                        }
-                        else
-                        {
-                            Console.WriteLine(mouthTrackerPnPReconnected && !mouthTrackerReconnected
-                                ? "Vive Face Tracker device event detected while Pimax Crystal stayed connected. Restarting VRCFaceTracking."
-                                : "Vive Face Tracker reconnected while Pimax Crystal stayed connected. Restarting VRCFaceTracking.");
-                            await RestartVrcFaceTrackingAsync(cancellationToken);
-                        }
+                        Console.WriteLine(mouthTrackerConnected == true
+                            ? "Vive Face Tracker state changed: connected. Structured device attribution will decide whether scoped recovery is relevant."
+                            : "Vive Face Tracker state changed: not connected.");
                     }
-                    else if (_mouthTrackerUser && _lastMouthTrackerConnected == true && mouthTrackerConnected == false)
-                    {
-                        Console.WriteLine("Vive Face Tracker is not connected.");
-                    }
+
+                    await RunReadyDeviceRecoveryPlansAsync(mouthTrackerConnected == true, cancellationToken);
 
                     if (_config.OscGoesBrrrEnabled
                         && !_config.OscGoesBrrrHotkeyEnabled
@@ -3249,17 +3176,199 @@ internal sealed class AppSupervisor
         }
     }
 
-    private bool IsDuplicatePimaxReconnectSignal(DateTimeOffset signalAt)
+    private bool ShouldSuppressDeviceRecovery()
+        => IsVrSessionRestartActive()
+            || _steamVrRecovery.IsRecoveryPending
+            || _lifecyclePhase != SupervisorLifecyclePhase.VrChatRunning
+            || !_managedAppsStarted
+            || _coreAppRestartLock.CurrentCount == 0;
+
+    private void ObserveUsbDeviceInventory(bool suppressRecovery)
     {
-        if (_lastHandledPimaxReconnectSignalAt is not { } lastHandledSignalAt)
+        PimaxUsbEnumerationSnapshot snapshot;
+        try
         {
-            return false;
+            snapshot = _usbInventoryCollector.Collect();
+        }
+        catch (Exception ex)
+        {
+            if (!_usbInventoryUnavailableWarningShown)
+            {
+                Console.WriteLine($"USB/PnP inventory attribution is unavailable; device-triggered recovery is disabled: {ex.Message}");
+                _usbInventoryUnavailableWarningShown = true;
+            }
+
+            return;
         }
 
-        var coalesceWindow = TimeSpan.FromSeconds(Math.Max(
-            30,
-            _config.RestartDelayAfterReconnectSeconds + _config.PollIntervalSeconds + 5));
-        return (signalAt - lastHandledSignalAt).Duration() <= coalesceWindow;
+        var observation = _usbDeviceRecovery.Observe(snapshot, DateTimeOffset.UtcNow, suppressRecovery);
+        if (observation.InventoryUnavailable)
+        {
+            if (!_usbInventoryUnavailableWarningShown)
+            {
+                Console.WriteLine("USB/PnP inventory attribution is unavailable; unknown topology changes will not restart applications.");
+                _usbInventoryUnavailableWarningShown = true;
+            }
+
+            WriteDebug("USB/PnP inventory attribution unavailable; errors=" + string.Join(" | ", snapshot.Errors));
+            return;
+        }
+
+        _usbInventoryUnavailableWarningShown = false;
+        if (observation.ExpiredPendingReconnects > 0)
+        {
+            WriteDebug($"expired {observation.ExpiredPendingReconnects} stale device reconnect candidate(s); no recovery scheduled");
+        }
+
+        foreach (var transition in observation.Transitions)
+        {
+            Console.WriteLine(UsbDeviceRecoveryLog.Decision(transition));
+            WriteDebug(
+                "USB physical-device transition"
+                + $"; kind={transition.Kind}"
+                + $"; classification={transition.Device.Classification}"
+                + $"; matchedDisconnect={transition.MatchedPendingDisconnect}"
+                + $"; recoverySuppressed={transition.RecoverySuppressed}"
+                + $"; {transition.Device.DebugIdentity}");
+        }
+    }
+
+    private async Task RunReadyDeviceRecoveryPlansAsync(
+        bool viveFaceTrackerReady,
+        CancellationToken cancellationToken)
+    {
+        var suppressRecovery = ShouldSuppressDeviceRecovery();
+        var pimaxReady = false;
+        if (!suppressRecovery && _usbDeviceRecovery.HasPimaxRecoveryAwaitingReadiness)
+        {
+            try
+            {
+                var assessment = await _pimaxRegistrationAssessment.CollectAsync(_config, cancellationToken);
+                pimaxReady = string.Equals(
+                        assessment.Assessment.State,
+                        PimaxRegistrationState.RegisteredReady,
+                        StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(
+                        assessment.Assessment.Confidence,
+                        PimaxRegistrationConfidence.Confirmed,
+                        StringComparison.OrdinalIgnoreCase);
+                WriteDebug(
+                    "Pimax reconnect readiness assessed"
+                    + $"; state={assessment.Assessment.State}"
+                    + $"; confidence={assessment.Assessment.Confidence}"
+                    + $"; ready={pimaxReady}"
+                    + $"; warnings={assessment.Warnings.Length}"
+                    + $"; errors={assessment.Errors.Length}");
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                WriteDebug($"Pimax reconnect readiness assessment failed; no recovery scheduled; error={ex.Message}");
+            }
+        }
+
+        var dependencies = CurrentDeviceRecoveryDependencies();
+        var plans = _usbDeviceRecovery.CreateReadyPlans(
+            new DeviceRecoveryReadiness(pimaxReady, viveFaceTrackerReady),
+            dependencies,
+            DateTimeOffset.UtcNow,
+            suppressRecovery);
+        foreach (var plan in plans)
+        {
+            Console.WriteLine(UsbDeviceRecoveryLog.Plan(plan));
+            WriteDiagnosticEvent(
+                "device recovery plan"
+                + $"; reason={plan.Reason}"
+                + $"; targets={string.Join(",", plan.Targets)}"
+                + $"; coalescedPhysicalDevices={plan.CoalescedPhysicalDeviceCount}"
+                + "; excluded=XSOverlay,SteamVR,monitors,baseStations,oscRouter,unrelatedApps");
+            await ExecuteScopedDeviceRecoveryPlanAsync(plan, cancellationToken);
+        }
+    }
+
+    private DeviceRecoveryDependencies CurrentDeviceRecoveryDependencies()
+    {
+        var pimaxRecoveryEnabled = _config.FaceTrackerAutomationEnabled
+            && _config.FaceTrackerRestartOnReconnectEnabled;
+        return new DeviceRecoveryDependencies(
+            VrcFaceTrackingDependsOnPimax: pimaxRecoveryEnabled,
+            BrokenEyeDependsOnPimax: pimaxRecoveryEnabled && _config.UseBrokenEye,
+            PimaxDependentAutoLaunchAppsConfigured: pimaxRecoveryEnabled
+                && GetPimaxDependentAutoLaunchApps().Length > 0,
+            VrcFaceTrackingDependsOnViveFaceTracker: _config.FaceTrackerAutomationEnabled
+                && _mouthTrackerUser
+                && _config.MouthTrackerRestartOnReconnectEnabled);
+    }
+
+    private async Task ExecuteScopedDeviceRecoveryPlanAsync(
+        DeviceRecoveryPlan plan,
+        CancellationToken cancellationToken)
+    {
+        if (plan.Targets.Length == 0)
+        {
+            Console.WriteLine("No configured application dependency requires automatic restart.");
+            return;
+        }
+
+        if (!await _deviceRecoveryLock.WaitAsync(0, cancellationToken))
+        {
+            Console.WriteLine("A scoped device recovery plan is already running; duplicate recovery was skipped.");
+            return;
+        }
+
+        try
+        {
+            if (ShouldSuppressDeviceRecovery())
+            {
+                Console.WriteLine("Scoped device recovery was discarded because another session lifecycle now owns application recovery.");
+                return;
+            }
+
+            var restartVrcFaceTracking = plan.Targets.Contains(DeviceRecoveryTarget.VrcFaceTracking);
+            var restartBrokenEye = plan.Targets.Contains(DeviceRecoveryTarget.BrokenEye);
+            var autoLaunchApps = plan.Targets.Contains(DeviceRecoveryTarget.PimaxDependentAutoLaunchApps)
+                ? GetPimaxDependentAutoLaunchApps()
+                : [];
+
+            foreach (var app in autoLaunchApps.Reverse())
+            {
+                await StopProcessesAsync(app.DisplayName, app.ProcessNames, cancellationToken);
+            }
+
+            if (restartVrcFaceTracking)
+            {
+                await StopProcessesAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
+            }
+
+            if (restartBrokenEye)
+            {
+                await StopProcessesAsync("Broken Eye", _config.BrokenEyeProcessNames, cancellationToken);
+                await StartBrokenEyeWithRetriesAsync(cancellationToken);
+            }
+
+            if (restartVrcFaceTracking)
+            {
+                if (restartBrokenEye)
+                {
+                    Console.WriteLine($"Waiting {_config.DelayBeforeVrcFaceTrackingSeconds} seconds before starting VRCFaceTracking...");
+                    await DelayWithCancellationAsync(
+                        TimeSpan.FromSeconds(_config.DelayBeforeVrcFaceTrackingSeconds),
+                        cancellationToken);
+                }
+
+                await StartVrcFaceTrackingAsync(cancellationToken);
+            }
+
+            foreach (var app in autoLaunchApps)
+            {
+                await StartAutoLaunchAppAsync(app, cancellationToken);
+            }
+
+            Console.WriteLine("Scoped device recovery complete.");
+        }
+        finally
+        {
+            _deviceRecoveryLock.Release();
+        }
     }
 
     private PimaxServiceReconnect? DetectPimaxServiceLogReconnect()
@@ -3633,16 +3742,7 @@ internal sealed class AppSupervisor
                 Console.WriteLine("Broken Eye is disabled. Starting VRCFaceTracking without Broken Eye.");
             }
 
-            Console.WriteLine("Starting VRCFaceTracking...");
-            var vrcFaceTrackingStarted = StartOrAttach(
-                _config.VrcFaceTrackingPath,
-                _config.VrcFaceTrackingProcessNames,
-                startMinimized: _config.VrcFaceTrackingStartMinimized);
-            await VerifyRunningAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
-            if (vrcFaceTrackingStarted && _config.VrcFaceTrackingStartMinimized)
-            {
-                await MinimizeProcessWindowsAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
-            }
+            await StartVrcFaceTrackingAsync(cancellationToken);
         }
         finally
         {
@@ -3766,6 +3866,7 @@ internal sealed class AppSupervisor
         {
             _diagnostics.RecordCoreAppRestart(Stopwatch.GetElapsedTime(startedAt));
             _coreAppRestartLock.Release();
+            Interlocked.Exchange(ref _discardNextDeviceInventoryChanges, 1);
         }
     }
 
@@ -7752,6 +7853,11 @@ internal sealed class AppSupervisor
     private async Task RestartVrcFaceTrackingAsync(CancellationToken cancellationToken)
     {
         await StopProcessesAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
+        await StartVrcFaceTrackingAsync(cancellationToken);
+    }
+
+    private async Task StartVrcFaceTrackingAsync(CancellationToken cancellationToken)
+    {
         Console.WriteLine("Starting VRCFaceTracking...");
         var vrcFaceTrackingStarted = StartOrAttach(
             _config.VrcFaceTrackingPath,
@@ -8555,6 +8661,22 @@ internal sealed class AppSupervisor
             .ToArray();
     }
 
+    private ManagedAutoLaunchApp[] GetPimaxDependentAutoLaunchApps()
+        => GetEnabledAutoLaunchApps(skipCoreAppDuplicates: true)
+            .Where(app => app.RestartOnPimaxReconnect)
+            .Where(app => !IsXsOverlayApplication(app))
+            .ToArray();
+
+    private static bool IsXsOverlayApplication(ManagedAutoLaunchApp app)
+    {
+        var executableName = Path.GetFileNameWithoutExtension(TrimExecutablePath(app.Path));
+        return string.Equals(executableName, "XSOverlay", StringComparison.OrdinalIgnoreCase)
+            || app.ProcessNames.Any(name => string.Equals(
+                Path.GetFileNameWithoutExtension(name),
+                "XSOverlay",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
     private bool ShouldSkipDuplicateCoreAutoLaunchApp(ManagedAutoLaunchApp app)
     {
         var appIdentity = CreateAutoLaunchExecutableIdentity(app.Path, app.DisplayName);
@@ -8622,7 +8744,7 @@ internal sealed class AppSupervisor
 
         var restartOnPimaxReconnect = app.RestartOnPimaxReconnect
             ?? app.CloseOnPimaxDisconnect
-            ?? true;
+            ?? false;
         return new ManagedAutoLaunchApp(displayName, path, processNames, restartOnPimaxReconnect, app.RunAsAdmin, app.StartMinimized);
     }
 

@@ -929,11 +929,22 @@ impl App {
         }
 
         if let Some(last) = self.status.last_action_result.clone() {
+            let same_command_is_current = self
+                .status
+                .current_action
+                .as_ref()
+                .is_some_and(|current| current.command.eq_ignore_ascii_case(&last.command));
+            let matching_action_was_running = self
+                .running_actions
+                .iter()
+                .any(|running| running.command.eq_ignore_ascii_case(&last.command));
             self.running_actions
                 .retain(|running| !running.command.eq_ignore_ascii_case(&last.command));
 
             if steamvr_control_command(&last.command)
+                && !same_command_is_current
                 && self.last_action_command.as_deref() != Some(last.command.as_str())
+                && (matching_action_was_running || self.last_action_command.is_none())
             {
                 let outcome = if last.status.eq_ignore_ascii_case("succeeded") {
                     ActionOutcome::Succeeded
@@ -1609,6 +1620,31 @@ mod tests {
         assert_eq!(
             app.last_action_result.as_deref(),
             Some("VR session restarted.")
+        );
+    }
+
+    #[test]
+    fn stale_backend_steamvr_result_does_not_replace_newer_local_action_result() {
+        let now = Instant::now();
+        let mut app = app(false);
+        app.last_action_command = Some(TuiAction::RestartCoreApps.command_name().to_string());
+        app.last_action_result = Some("Core apps restarted.".to_string());
+        app.status.last_action_result = Some(crate::models::OperationalActionSummary {
+            command: RESTART_VR_SESSION_COMMAND.to_string(),
+            status: "succeeded".to_string(),
+            result: "Older VR session result.".to_string(),
+            ..crate::models::OperationalActionSummary::default()
+        });
+
+        app.sync_operational_actions(now);
+
+        assert_eq!(
+            app.last_action_command.as_deref(),
+            Some(TuiAction::RestartCoreApps.command_name())
+        );
+        assert_eq!(
+            app.last_action_result.as_deref(),
+            Some("Core apps restarted.")
         );
     }
 

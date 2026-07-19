@@ -20,6 +20,8 @@ If `DisplayName` is empty, Configurator uses the filename. If multiple configs s
 | OscGoesBrrr | OscGoesBrrr, Intiface, and device detection |
 | Diagnostics | Optional troubleshooting logs |
 
+For an Autostart app, `RestartOnPimaxReconnect` is an explicit dependency declaration. Missing values default to `false`; set it to `true` only when that application actually depends on the Pimax eye/runtime path. XSOverlay remains excluded from USB reconnect recovery.
+
 ## Editing Safely
 
 Before hand-editing:

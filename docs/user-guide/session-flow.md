@@ -13,7 +13,7 @@ This page explains what usually happens during a VRChat session.
 
 ## During A Session
 
-Supervisor watches configured process names, headset reconnect signals, and helper state. If reconnect handling is enabled, it can restart face-tracking tools after a Pimax reconnect.
+Supervisor watches configured process names, physical-device inventory, headset readiness, and helper state. USB/PnP notifications are coalesced into inventory rescans. Only a positively attributed disconnect and return of the same relevant device, followed by readiness, can create a scoped recovery plan. Index-controller dongles, Vive Tracker dongles, arbitrary USB changes, and unknown devices cause no managed-application restart. XSOverlay is not part of device reconnect recovery.
 
 Action `7 SteamVR` is dynamic in the classic console and Terminal UI. When SteamVR is stopped, it sends the explicit `start-steamvr` command after confirmation and does not launch VRChat. When SteamVR is running, it sends the explicit `restart-vr-session` command after confirmation. Supervisor captures whether VRChat is running when the restart is accepted, asks Steam to restart SteamVR, waits for the runtime transition, and resumes VRChat through Steam only when VRChat was running at acceptance.
 

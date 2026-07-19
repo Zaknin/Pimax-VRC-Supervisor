@@ -1571,7 +1571,7 @@ internal sealed class ConfigEditorForm : Form
     private void OnAutoLaunchAppsGridDefaultValuesNeeded(object? sender, DataGridViewRowEventArgs e)
     {
         e.Row.Cells["Enabled"].Value = true;
-        e.Row.Cells["RestartOnPimaxReconnect"].Value = true;
+        e.Row.Cells["RestartOnPimaxReconnect"].Value = false;
         e.Row.Cells["RunAsAdmin"].Value = false;
         e.Row.Cells["StartMinimized"].Value = false;
     }
@@ -4494,7 +4494,7 @@ internal sealed class ConfigEditorForm : Form
             switch (item)
             {
                 case JsonValue value when value.TryGetValue<string>(out var path) && !string.IsNullOrWhiteSpace(path):
-                    apps.Add(new AutoLaunchAppEditorRow("", path.Trim(), Enabled: true, RestartOnPimaxReconnect: true, RunAsAdmin: false, StartMinimized: false));
+                    apps.Add(new AutoLaunchAppEditorRow("", path.Trim(), Enabled: true, RestartOnPimaxReconnect: false, RunAsAdmin: false, StartMinimized: false));
                     break;
                 case JsonObject obj:
                     var appPath = GetString(obj, "Path").Trim();
@@ -4509,7 +4509,7 @@ internal sealed class ConfigEditorForm : Form
                         GetBool(obj, "Enabled", defaultValue: true),
                         GetOptionalBool(obj, "RestartOnPimaxReconnect")
                             ?? GetOptionalBool(obj, "CloseOnPimaxDisconnect")
-                            ?? true,
+                            ?? false,
                         GetBool(obj, "RunAsAdmin", defaultValue: false),
                         GetBool(obj, "StartMinimized", defaultValue: false)));
                     break;
@@ -4653,7 +4653,7 @@ internal sealed class ConfigEditorForm : Form
                 GetGridString(row, "Name"),
                 path,
                 GetGridBool(row, "Enabled", defaultValue: true),
-                GetGridBool(row, "RestartOnPimaxReconnect", defaultValue: true),
+                GetGridBool(row, "RestartOnPimaxReconnect", defaultValue: false),
                 GetGridBool(row, "RunAsAdmin", defaultValue: false),
                 GetGridBool(row, "StartMinimized", defaultValue: false)));
         }
