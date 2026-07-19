@@ -16,9 +16,9 @@ The two modes are separate. Terminal UI does not replace SteamVR Overlay.
 
 ## Common Controls
 
-The overlay can expose session actions such as restarting face-tracking apps, base-station power controls, OSC Router restart, and `VR Restart`.
+The overlay can expose session actions such as restarting face-tracking apps, base-station power controls, OSC Router restart, and `Restart SteamVR`.
 
-`VR Restart` is shown as a full-width action row. Click it once to arm confirmation, then click it again within 10 seconds to start the Supervisor-owned restart. The action asks Steam to restart SteamVR. If VRChat was running at confirmation time, Supervisor resumes VRChat through Steam after the replacement SteamVR runtime is healthy; if VRChat was not running, Supervisor does not launch it.
+`Restart SteamVR` is shown as a full-width action row. Click it once to arm confirmation, then click it again within 10 seconds to start the Supervisor-owned restart. The action asks Steam to restart SteamVR. If VRChat was running at confirmation time, Supervisor resumes VRChat through Steam after the replacement SteamVR runtime is healthy; if VRChat was not running, Supervisor does not launch it. The overlay cannot show Start SteamVR because it only exists while SteamVR is already running.
 
 During the bounded restart window, Supervisor keeps base stations and Supervisor-owned monitor topology in the managed session state. The overlay can disappear while SteamVR restarts; reconnecting clients can read the current action and last result from Supervisor status.
 

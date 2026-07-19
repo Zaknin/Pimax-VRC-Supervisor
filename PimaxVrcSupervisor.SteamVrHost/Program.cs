@@ -707,7 +707,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
         new("Base stations on", "base-stations-on", new Rectangle(ButtonLeft, ButtonBottom, ButtonWidth, ButtonHeight)),
         new("Base stations off", "base-stations-off", new Rectangle(ButtonRight, ButtonBottom, ButtonWidth, ButtonHeight)),
         new("Restart Supervisor", "restart-supervisor", new Rectangle(ButtonThird, ButtonBottom, ButtonWidth, ButtonHeight)),
-        new("VR Restart", "restart-vr-session", new Rectangle(ButtonLeft, ButtonThirdRow, ContentWidth, ButtonHeight))
+        new("Restart SteamVR", "restart-vr-session", new Rectangle(ButtonLeft, ButtonThirdRow, ContentWidth, ButtonHeight))
     ];
     private OpenVrOverlaySession? _overlay;
     private GpuOverlayRenderer? _gpuRenderer;
@@ -2039,7 +2039,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
             "base-stations-on" => "Wake configured stations",
             "base-stations-off" => "Power down configured stations",
             "restart-supervisor" => "Hard restart supervisor",
-            "restart-vr-session" => "Restart SteamVR; resume VRChat",
+            "restart-vr-session" => "VRChat resumes only if it was running",
             _ => command
         };
 

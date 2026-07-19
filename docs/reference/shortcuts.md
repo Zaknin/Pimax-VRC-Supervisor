@@ -35,5 +35,5 @@
 | `4` | Turn off controlled base stations |
 | `5` | OSC Router launch/restart |
 | `6` | Reload Autostart apps |
-| `7` | Restart VR Session |
+| `7` | SteamVR control: Start when stopped, Restart when running |
 | `F1` | Show console shortcuts |

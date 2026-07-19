@@ -15,7 +15,9 @@ This page explains what usually happens during a VRChat session.
 
 Supervisor watches configured process names, headset reconnect signals, and helper state. If reconnect handling is enabled, it can restart face-tracking tools after a Pimax reconnect.
 
-The `Restart VR Session` action is available from the classic console, Terminal UI, and SteamVR Overlay. All three surfaces send the same Supervisor command, `restart-vr-session`; they do not run separate restart workflows. Supervisor captures the current SteamVR PID/start-time identity and whether VRChat is running when the action is accepted. It then asks Steam to restart SteamVR, waits for the old runtime to disappear, waits for a replacement runtime, and resumes VRChat through Steam only when VRChat was running at acceptance.
+Action `7 SteamVR` is dynamic in the classic console and Terminal UI. When SteamVR is stopped, it sends the explicit `start-steamvr` command after confirmation and does not launch VRChat. When SteamVR is running, it sends the explicit `restart-vr-session` command after confirmation. Supervisor captures whether VRChat is running when the restart is accepted, asks Steam to restart SteamVR, waits for the runtime transition, and resumes VRChat through Steam only when VRChat was running at acceptance.
+
+An accepted SteamVR action means the Supervisor owns the operation and progress is available in the action status. It is not a completed result. A terminal result appears only after start or restart completion, warning, failure, timeout, or Supervisor shutdown.
 
 If the restart does not complete inside the bounded restart window, Supervisor clears the busy action state and leaves controls available. It does not power off base stations or restore monitors solely because the explicit restart failed. A later explicit Supervisor exit or normal session cleanup still owns final cleanup.
 

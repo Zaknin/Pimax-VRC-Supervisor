@@ -38,6 +38,9 @@ pub enum TuiAction {
     RestartVrSession,
 }
 
+pub const START_STEAMVR_COMMAND: &str = "start-steamvr";
+pub const RESTART_VR_SESSION_COMMAND: &str = "restart-vr-session";
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ExitOption {
     CloseTuiOnly,
@@ -148,7 +151,7 @@ impl TuiAction {
             Self::BaseStationsOff => "BS Off",
             Self::RestartOscRouter => "OSC",
             Self::ReloadAutostartApps => "Autostart",
-            Self::RestartVrSession => "VR Restart",
+            Self::RestartVrSession => "SteamVR",
         }
     }
 
@@ -160,7 +163,7 @@ impl TuiAction {
             Self::BaseStationsOff => "base-stations-off",
             Self::RestartOscRouter => "restart-osc-router",
             Self::ReloadAutostartApps => "reload-autostart-apps",
-            Self::RestartVrSession => "restart-vr-session",
+            Self::RestartVrSession => RESTART_VR_SESSION_COMMAND,
         }
     }
 
@@ -172,26 +175,77 @@ impl TuiAction {
             Self::BaseStationsOff => "Base Stations Off",
             Self::RestartOscRouter => "Restart OSC Router",
             Self::ReloadAutostartApps => "Reload Autostart Apps",
-            Self::RestartVrSession => "VR Restart",
+            Self::RestartVrSession => "SteamVR",
         }
     }
 
     pub fn from_command_name(command: &str) -> Option<Self> {
+        if command.eq_ignore_ascii_case(START_STEAMVR_COMMAND) {
+            return Some(Self::RestartVrSession);
+        }
+
         Self::ALL
             .iter()
             .copied()
             .find(|action| action.command_name().eq_ignore_ascii_case(command))
     }
+}
 
-    pub fn expected_effect(self) -> &'static str {
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum SteamVrControlMode {
+    Start,
+    Restart,
+    Starting,
+    Restarting,
+    Disconnected,
+}
+
+impl SteamVrControlMode {
+    pub fn command_name(self) -> &'static str {
         match self {
-            Self::RestartCoreApps => "Restarts configured face-tracking applications.",
-            Self::StartOscGoesBrrr => "Launches or repairs the Intiface and OSCGoesBrrr workflow.",
-            Self::BaseStationsOn => "Runs the configured base-station power-on routine.",
-            Self::BaseStationsOff => "Runs the configured base-station power-off routine.",
-            Self::RestartOscRouter => "Restarts or manually starts OSC routing.",
-            Self::ReloadAutostartApps => "Reloads or starts configured Autostart apps.",
-            Self::RestartVrSession => "Restart SteamVR; resume VRChat.",
+            Self::Start | Self::Starting => START_STEAMVR_COMMAND,
+            Self::Restart | Self::Restarting => RESTART_VR_SESSION_COMMAND,
+            Self::Disconnected => RESTART_VR_SESSION_COMMAND,
+        }
+    }
+
+    pub fn badge(self) -> &'static str {
+        match self {
+            Self::Start => "START",
+            Self::Restart => "RESTART",
+            Self::Starting | Self::Restarting => "BUSY",
+            Self::Disconnected => "DISCONNECTED",
+        }
+    }
+
+    pub fn detail(self) -> &'static str {
+        match self {
+            Self::Start => "Start SteamVR",
+            Self::Restart => "Restart SteamVR",
+            Self::Starting => "Starting SteamVR",
+            Self::Restarting => "Restarting SteamVR",
+            Self::Disconnected => "Could not contact Supervisor",
+        }
+    }
+
+    pub fn confirmation_title(self) -> &'static str {
+        match self {
+            Self::Start | Self::Starting => "Start SteamVR?",
+            Self::Restart | Self::Restarting | Self::Disconnected => "Restart SteamVR?",
+        }
+    }
+
+    pub fn confirmation_body(self) -> &'static [&'static str] {
+        match self {
+            Self::Start | Self::Starting => &[
+                "SteamVR will be started.",
+                "VRChat will not be launched automatically.",
+            ],
+            Self::Restart | Self::Restarting | Self::Disconnected => &[
+                "SteamVR will restart.",
+                "If VRChat is running, it will close and launch again automatically.",
+                "Base stations will remain on and monitors will remain in VR mode.",
+            ],
         }
     }
 }
@@ -390,6 +444,8 @@ mod tests {
                 "restart-vr-session",
             ]
         );
+        assert_eq!(TuiAction::RestartVrSession.display_name(), "SteamVR");
+        assert_eq!(TuiAction::RestartVrSession.short_label(), "SteamVR");
     }
 
     #[test]
@@ -398,6 +454,22 @@ mod tests {
             TuiAction::from_digit('7'),
             Some(TuiAction::RestartVrSession)
         );
+        assert_eq!(
+            TuiAction::from_command_name("start-steamvr"),
+            Some(TuiAction::RestartVrSession)
+        );
+    }
+
+    #[test]
+    fn steamvr_control_modes_keep_explicit_commands() {
+        assert_eq!(SteamVrControlMode::Start.command_name(), "start-steamvr");
+        assert_eq!(
+            SteamVrControlMode::Restart.command_name(),
+            "restart-vr-session"
+        );
+        assert_eq!(SteamVrControlMode::Start.badge(), "START");
+        assert_eq!(SteamVrControlMode::Restart.badge(), "RESTART");
+        assert_eq!(SteamVrControlMode::Starting.badge(), "BUSY");
     }
 
     #[test]

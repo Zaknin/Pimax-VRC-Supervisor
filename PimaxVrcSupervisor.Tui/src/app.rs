@@ -13,7 +13,8 @@ use crate::{
     console_close,
     diagnostics::{DiagnosticsHandle, TuiDiagnostics},
     models::{
-        CommandResult, CommandSummary, ExitOption, LogLine, StatusSummary, TuiAction,
+        CommandResult, CommandSummary, ExitOption, LogLine, RESTART_VR_SESSION_COMMAND,
+        START_STEAMVR_COMMAND, StatusSummary, SteamVrControlMode, TuiAction,
         commands_from_response, logs_from_response, status_from_response,
     },
 };
@@ -39,7 +40,6 @@ pub enum ConnectionState {
 pub enum ActionOutcome {
     Succeeded,
     Failed,
-    Cancelled,
     Rejected,
     BackendOff,
 }
@@ -49,6 +49,14 @@ pub struct RunningAction {
     pub action: TuiAction,
     pub command: String,
     pub started_at: Instant,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ActionConfirmation {
+    pub action: TuiAction,
+    pub command: String,
+    pub title: String,
+    pub body: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -96,7 +104,7 @@ pub struct App {
     pub help_visible: bool,
     pub log_scroll: usize,
     pub log_follow: bool,
-    pub confirmation: Option<TuiAction>,
+    pub confirmation: Option<ActionConfirmation>,
     pub exit_dialog: bool,
     pub selected_exit_option: ExitOption,
     pub shutdown_in_progress: bool,
@@ -224,6 +232,7 @@ impl App {
                 self.status = status;
                 self.commands = commands;
                 self.logs = logs;
+                self.sync_operational_actions(now);
                 self.last_success = Some(now);
                 self.last_error = None;
                 self.last_error_at = None;
@@ -434,31 +443,93 @@ impl App {
             .map(|region| region.action)
     }
 
+    pub fn steamvr_control_mode(&self) -> SteamVrControlMode {
+        if self.connection == ConnectionState::Disconnected {
+            return SteamVrControlMode::Disconnected;
+        }
+
+        if let Some(current) = &self.status.current_action {
+            if current.command.eq_ignore_ascii_case(START_STEAMVR_COMMAND) {
+                return SteamVrControlMode::Starting;
+            }
+
+            if current
+                .command
+                .eq_ignore_ascii_case(RESTART_VR_SESSION_COMMAND)
+            {
+                return SteamVrControlMode::Restarting;
+            }
+        }
+
+        if self
+            .running_actions
+            .iter()
+            .any(|running| running.command.eq_ignore_ascii_case(START_STEAMVR_COMMAND))
+        {
+            return SteamVrControlMode::Starting;
+        }
+
+        if self.running_actions.iter().any(|running| {
+            running
+                .command
+                .eq_ignore_ascii_case(RESTART_VR_SESSION_COMMAND)
+        }) {
+            return SteamVrControlMode::Restarting;
+        }
+
+        if self
+            .status
+            .steam_vr
+            .to_ascii_lowercase()
+            .contains("running")
+        {
+            SteamVrControlMode::Restart
+        } else {
+            SteamVrControlMode::Start
+        }
+    }
+
     pub fn action_metadata(&self, action: TuiAction) -> Option<&CommandSummary> {
+        if action == TuiAction::RestartVrSession {
+            let command_name = self.steamvr_control_mode().command_name();
+            return self
+                .commands
+                .iter()
+                .find(|command| command.name.eq_ignore_ascii_case(command_name));
+        }
+
         self.commands
             .iter()
             .find(|command| command.name.eq_ignore_ascii_case(action.command_name()))
     }
 
-    pub fn action_executable(&self, action: TuiAction) -> bool {
-        self.connection == ConnectionState::Connected
-            && self.action_metadata(action).is_some_and(|command| {
-                command.action_supported
-                    && command.tui_executable
-                    && command.requires_confirmation
-                    && !command
-                        .action_safety_category
-                        .eq_ignore_ascii_case("Blocked")
-                    && !command
-                        .action_safety_category
-                        .eq_ignore_ascii_case("Dangerous")
-            })
+    pub fn action_command_name(&self, action: TuiAction) -> &'static str {
+        if action == TuiAction::RestartVrSession {
+            self.steamvr_control_mode().command_name()
+        } else {
+            action.command_name()
+        }
+    }
+
+    pub fn action_requires_confirmation(&self, action: TuiAction) -> bool {
+        action == TuiAction::RestartVrSession
+            && self
+                .action_metadata(action)
+                .is_some_and(|command| command.requires_confirmation)
+    }
+
+    pub fn activate_action(&mut self, action: TuiAction, now: Instant) {
+        if self.action_requires_confirmation(action) {
+            self.request_action_confirmation(action, now);
+        } else {
+            self.request_action_start(action, now);
+        }
     }
 
     pub fn request_action_confirmation(&mut self, action: TuiAction, now: Instant) {
         if self.shutdown_in_progress {
             self.record_action_error(
-                action.command_name(),
+                self.action_command_name(action),
                 ActionOutcome::Rejected,
                 "Supervisor shutdown is in progress; actions are disabled.".to_string(),
                 now,
@@ -473,7 +544,17 @@ impl App {
 
         if self.validate_action_start(action).is_ok() {
             self.help_visible = false;
-            self.confirmation = Some(action);
+            let mode = self.steamvr_control_mode();
+            self.confirmation = Some(ActionConfirmation {
+                action,
+                command: self.action_command_name(action).to_string(),
+                title: mode.confirmation_title().to_string(),
+                body: mode
+                    .confirmation_body()
+                    .iter()
+                    .map(|line| (*line).to_string())
+                    .collect(),
+            });
             self.mark_render_needed();
             return;
         }
@@ -481,18 +562,9 @@ impl App {
         self.record_action_rejection(action, now);
     }
 
-    pub fn cancel_confirmation(&mut self, now: Instant) {
-        let command = self
-            .confirmation
-            .map(TuiAction::command_name)
-            .unwrap_or("action");
+    pub fn cancel_confirmation(&mut self, _now: Instant) {
         self.confirmation = None;
-        self.record_action_result(
-            command,
-            ActionOutcome::Cancelled,
-            "Action cancelled.".to_string(),
-            now,
-        );
+        self.mark_render_needed();
     }
 
     pub fn acknowledge_action_result(&mut self) {
@@ -501,18 +573,28 @@ impl App {
     }
 
     pub fn confirm_action(&mut self, now: Instant) {
-        let Some(action) = self.confirmation else {
+        let Some(confirmation) = self.confirmation.clone() else {
             return;
         };
 
         self.confirmation = None;
-        self.request_action_start(action, now);
+        self.request_action_start_with_command(confirmation.action, confirmation.command, now);
     }
 
     pub fn request_action_start(&mut self, action: TuiAction, now: Instant) {
+        let command = self.action_command_name(action).to_string();
+        self.request_action_start_with_command(action, command, now);
+    }
+
+    fn request_action_start_with_command(
+        &mut self,
+        action: TuiAction,
+        command: String,
+        now: Instant,
+    ) {
         if self.shutdown_in_progress {
             self.record_action_error(
-                action.command_name(),
+                command.as_str(),
                 ActionOutcome::Rejected,
                 "Supervisor shutdown is in progress; actions are disabled.".to_string(),
                 now,
@@ -521,26 +603,26 @@ impl App {
         }
 
         if self.connection != ConnectionState::Connected {
-            self.record_backend_off(action, now);
+            self.record_backend_off_for_command(command.as_str(), now);
             return;
         }
 
-        if let Err(message) = self.validate_action_start(action) {
-            self.record_action_error(action.command_name(), ActionOutcome::Rejected, message, now);
+        if let Err(message) = self.validate_action_start_with_command(action, command.as_str()) {
+            self.record_action_error(command.as_str(), ActionOutcome::Rejected, message, now);
             return;
         }
 
-        self.last_action_command = Some(action.command_name().to_string());
+        self.last_action_command = Some(command.clone());
         self.last_action_outcome = None;
-        self.last_action_result = Some(format!("{} started.", action.display_name()));
+        self.last_action_result = Some(format!("{} started.", display_name_for_command(&command)));
         self.last_action_error = None;
         self.running_actions.push(RunningAction {
             action,
-            command: action.command_name().to_string(),
+            command: command.clone(),
             started_at: now,
         });
         self.diagnostics.record_action_started();
-        self.spawn_action_worker(action);
+        self.spawn_action_worker(action, command);
         self.mark_render_needed();
     }
 
@@ -781,8 +863,47 @@ impl App {
         }
     }
 
+    fn sync_operational_actions(&mut self, now: Instant) {
+        if let Some(current) = &self.status.current_action
+            && steamvr_control_command(&current.command)
+            && !self
+                .running_actions
+                .iter()
+                .any(|running| running.command.eq_ignore_ascii_case(&current.command))
+        {
+            self.running_actions.push(RunningAction {
+                action: TuiAction::RestartVrSession,
+                command: current.command.clone(),
+                started_at: now,
+            });
+        }
+
+        if let Some(last) = self.status.last_action_result.clone() {
+            self.running_actions
+                .retain(|running| !running.command.eq_ignore_ascii_case(&last.command));
+
+            if steamvr_control_command(&last.command)
+                && self.last_action_command.as_deref() != Some(last.command.as_str())
+            {
+                let outcome = if last.status.eq_ignore_ascii_case("succeeded") {
+                    ActionOutcome::Succeeded
+                } else {
+                    ActionOutcome::Failed
+                };
+                let message = last.result.trim().to_string();
+                self.record_action_result(last.command.as_str(), outcome, message, now);
+                self.action_result_dialog = Some(CompletedActionResult {
+                    command: last.command.clone(),
+                    completed_at: now,
+                    outcome,
+                    message: last.result.trim().to_string(),
+                });
+            }
+        }
+    }
+
     fn action_conflict_message(&self, candidate: TuiAction) -> Option<String> {
-        let candidate_command = candidate.command_name();
+        let candidate_command = self.action_command_name(candidate);
         if self
             .running_actions
             .iter()
@@ -798,9 +919,9 @@ impl App {
         if self
             .running_actions
             .iter()
-            .any(|running| running.action == TuiAction::RestartVrSession)
+            .any(|running| steamvr_control_command(&running.command))
         {
-            return Some("VR Restart is already running.".to_string());
+            return Some("A SteamVR operation is already running.".to_string());
         }
 
         let base_station_power_conflict = matches!(
@@ -821,6 +942,14 @@ impl App {
     }
 
     fn validate_action_start(&self, action: TuiAction) -> std::result::Result<(), String> {
+        self.validate_action_start_with_command(action, self.action_command_name(action))
+    }
+
+    fn validate_action_start_with_command(
+        &self,
+        action: TuiAction,
+        command: &str,
+    ) -> std::result::Result<(), String> {
         if self.shutdown_in_progress {
             return Err("Supervisor shutdown is in progress; actions are disabled.".to_string());
         }
@@ -836,7 +965,11 @@ impl App {
             return Err(message);
         }
 
-        if self.action_executable(action) {
+        let metadata = self
+            .commands
+            .iter()
+            .find(|metadata| metadata.name.eq_ignore_ascii_case(command));
+        if metadata.is_some_and(command_is_tui_executable) {
             Ok(())
         } else {
             Err(format!(
@@ -853,35 +986,50 @@ impl App {
                 action.display_name()
             )
         });
-        self.record_action_error(action.command_name(), ActionOutcome::Rejected, message, now);
+        self.record_action_error(
+            self.action_command_name(action),
+            ActionOutcome::Rejected,
+            message,
+            now,
+        );
     }
 
     fn record_backend_off(&mut self, action: TuiAction, now: Instant) {
+        self.record_backend_off_for_command(self.action_command_name(action), now);
+    }
+
+    fn record_backend_off_for_command(&mut self, command: &str, now: Instant) {
         self.record_action_error(
-            action.command_name(),
+            command,
             ActionOutcome::BackendOff,
             "Supervisor disconnected.".to_string(),
             now,
         );
     }
 
-    fn spawn_action_worker(&self, action: TuiAction) {
+    fn spawn_action_worker(&self, _action: TuiAction, command: String) {
         let sender = self.action_result_tx.clone();
         let diagnostics = self.diagnostics_handle();
         thread::spawn(move || {
-            let command = action.command_name().to_string();
             let result = catch_unwind(AssertUnwindSafe(|| {
                 let bridge = SupervisorBridge::with_diagnostics(diagnostics);
-                bridge.execute_tui_action(action)
+                bridge.execute_tui_action(command.as_str())
             }));
 
             let completed = match result {
-                Ok(Ok(command_result)) => CompletedActionResult {
-                    command,
-                    completed_at: Instant::now(),
-                    outcome: ActionOutcome::Succeeded,
-                    message: format_action_result(&command_result),
-                },
+                Ok(Ok(command_result)) if is_accepted_acknowledgment(&command_result) => return,
+                Ok(Ok(command_result)) => {
+                    let response_command = command_result
+                        .command
+                        .clone()
+                        .unwrap_or_else(|| command.clone());
+                    CompletedActionResult {
+                        command: response_command,
+                        completed_at: Instant::now(),
+                        outcome: ActionOutcome::Succeeded,
+                        message: format_action_result(&command_result),
+                    }
+                }
                 Ok(Err(error)) => CompletedActionResult {
                     command,
                     completed_at: Instant::now(),
@@ -1022,6 +1170,14 @@ fn format_action_result(result: &CommandResult) -> String {
     format!("{display_name}: {message}")
 }
 
+fn is_accepted_acknowledgment(result: &CommandResult) -> bool {
+    result.success
+        && result
+            .result_type
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("accepted"))
+}
+
 fn format_exit_result(option: ExitOption, result: &CommandResult) -> String {
     result
         .message
@@ -1045,10 +1201,34 @@ fn exit_option_start_message(option: ExitOption) -> &'static str {
 }
 
 pub fn display_name_for_command(command: &str) -> String {
+    if command.eq_ignore_ascii_case(START_STEAMVR_COMMAND) {
+        return "Start SteamVR".to_string();
+    }
+
+    if command.eq_ignore_ascii_case(RESTART_VR_SESSION_COMMAND) {
+        return "Restart SteamVR".to_string();
+    }
+
     TuiAction::from_command_name(command)
         .map(TuiAction::display_name)
         .unwrap_or(command)
         .to_string()
+}
+
+fn steamvr_control_command(command: &str) -> bool {
+    command.eq_ignore_ascii_case(START_STEAMVR_COMMAND)
+        || command.eq_ignore_ascii_case(RESTART_VR_SESSION_COMMAND)
+}
+
+fn command_is_tui_executable(command: &CommandSummary) -> bool {
+    command.action_supported
+        && command.tui_executable
+        && !command
+            .action_safety_category
+            .eq_ignore_ascii_case("Blocked")
+        && !command
+            .action_safety_category
+            .eq_ignore_ascii_case("Dangerous")
 }
 
 pub fn operator_error_message(error: &str) -> String {
@@ -1097,18 +1277,22 @@ mod tests {
         App::new(TuiDiagnostics::disabled(), exit_when_supervisor_exits)
     }
 
-    fn executable_retained_command(action: TuiAction) -> CommandSummary {
+    fn executable_command(name: &str, requires_confirmation: bool) -> CommandSummary {
         CommandSummary {
-            name: action.command_name().to_string(),
+            name: name.to_string(),
             category: "Actions".to_string(),
             output_kind: "Text".to_string(),
             dangerous: false,
-            requires_confirmation: true,
+            requires_confirmation,
             action_supported: true,
             action_safety_category: "Managed".to_string(),
             tui_executable: true,
             blocked_reason: String::new(),
         }
+    }
+
+    fn executable_retained_command(action: TuiAction) -> CommandSummary {
+        executable_command(action.command_name(), false)
     }
 
     #[test]
@@ -1190,18 +1374,92 @@ mod tests {
     }
 
     #[test]
-    fn retained_action_confirmation_does_not_auto_invoke() {
+    fn retained_actions_do_not_require_confirmation() {
+        let mut app = app(false);
+        app.connection = ConnectionState::Connected;
+        app.commands = TuiAction::ALL
+            .iter()
+            .copied()
+            .filter(|action| *action != TuiAction::RestartVrSession)
+            .map(executable_retained_command)
+            .collect();
+
+        for action in TuiAction::ALL
+            .iter()
+            .copied()
+            .filter(|action| *action != TuiAction::RestartVrSession)
+        {
+            assert!(!app.action_requires_confirmation(action));
+        }
+    }
+
+    #[test]
+    fn steamvr_control_requires_confirmation_for_start_and_restart_modes() {
         let now = Instant::now();
         let mut app = app(false);
         app.connection = ConnectionState::Connected;
-        let action = TuiAction::RestartCoreApps;
-        app.commands = vec![executable_retained_command(action)];
+        app.commands = vec![
+            executable_command(START_STEAMVR_COMMAND, true),
+            executable_command(RESTART_VR_SESSION_COMMAND, true),
+        ];
 
-        app.request_action_confirmation(action, now);
-
-        assert_eq!(app.confirmation, Some(action));
+        app.status.steam_vr = "stopped".to_string();
+        app.activate_action(TuiAction::RestartVrSession, now);
+        assert_eq!(
+            app.confirmation
+                .as_ref()
+                .map(|confirmation| confirmation.command.as_str()),
+            Some(START_STEAMVR_COMMAND)
+        );
         assert!(app.running_actions.is_empty());
-        assert!(app.last_action_result.is_none());
+
+        app.cancel_confirmation(now);
+        app.status.steam_vr = "running".to_string();
+        app.activate_action(TuiAction::RestartVrSession, now);
+        assert_eq!(
+            app.confirmation
+                .as_ref()
+                .map(|confirmation| confirmation.command.as_str()),
+            Some(RESTART_VR_SESSION_COMMAND)
+        );
+        assert!(app.running_actions.is_empty());
+    }
+
+    #[test]
+    fn cancellation_does_not_replace_previous_action_result() {
+        let now = Instant::now();
+        let mut app = app(false);
+        app.connection = ConnectionState::Connected;
+        app.commands = vec![executable_command(START_STEAMVR_COMMAND, true)];
+        app.status.steam_vr = "stopped".to_string();
+        app.last_action_command = Some("restart-core-apps".to_string());
+        app.last_action_result = Some("Core apps restarted.".to_string());
+
+        app.activate_action(TuiAction::RestartVrSession, now);
+        app.cancel_confirmation(now);
+
+        assert!(app.confirmation.is_none());
+        assert_eq!(
+            app.last_action_command.as_deref(),
+            Some("restart-core-apps")
+        );
+        assert_eq!(
+            app.last_action_result.as_deref(),
+            Some("Core apps restarted.")
+        );
+        assert!(app.running_actions.is_empty());
+    }
+
+    #[test]
+    fn accepted_acknowledgment_is_not_a_completed_result() {
+        let result = CommandResult {
+            success: true,
+            result_type: Some("accepted".to_string()),
+            message: Some("Starting SteamVR.".to_string()),
+            ..CommandResult::default()
+        };
+
+        assert!(is_accepted_acknowledgment(&result));
     }
 
     #[test]

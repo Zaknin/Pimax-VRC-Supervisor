@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::{
     diagnostics::DiagnosticsHandle,
-    models::{CommandResult, ExitOption, QueryResponse, TuiAction},
+    models::{CommandResult, ExitOption, QueryResponse},
 };
 
 pub const BACKEND_HOST: &str = "127.0.0.1";
@@ -58,9 +58,9 @@ impl SupervisorBridge {
         self.query(json!({ "resource": "log", "maxLines": max_lines }))
     }
 
-    pub fn execute_tui_action(&self, action: TuiAction) -> Result<CommandResult> {
+    pub fn execute_tui_action(&self, command: &str) -> Result<CommandResult> {
         let request_json = serde_json::to_string(
-            &json!({ "command": action.command_name(), "confirmed": true, "source": "Desktop TUI" }),
+            &json!({ "command": command, "confirmed": true, "source": "Desktop TUI" }),
         )?;
         let response_line = self.send_line(
             &format!("action-json {request_json}"),

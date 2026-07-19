@@ -1,7 +1,4 @@
-use std::{
-    borrow::Cow,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use ratatui::{
     Frame,
@@ -27,7 +24,6 @@ const COMPACT_MIN_HEIGHT: u16 = 26;
 const SMALL_MIN_WIDTH: u16 = 80;
 const SMALL_MIN_HEIGHT: u16 = 20;
 const COMPACT_ACTION_LABEL_WIDTH: usize = 11;
-const COMPACT_ACTION_BADGE_WIDTH: usize = 11;
 const SMALL_ACTION_CELL_GUTTER: u16 = 2;
 
 pub fn render(frame: &mut Frame<'_>, app: &mut App) {
@@ -675,15 +671,15 @@ fn render_action_card(
         );
 
     let inner_width = area.width.saturating_sub(2);
+    let description = action_description(app, action, &state);
     let mut lines = vec![
         action_card_line(app, action, now, inner_width),
-        Line::from(Span::styled(
-            action.display_name(),
-            foreground(theme::TEXT_PRIMARY),
-        )),
+        Line::from(Span::styled(description, foreground(theme::TEXT_PRIMARY))),
     ];
 
-    if let Some(detail) = state.detail {
+    if action != TuiAction::RestartVrSession
+        && let Some(detail) = state.detail
+    {
         lines.push(Line::from(Span::styled(
             detail,
             foreground(theme::TEXT_SECONDARY),
@@ -1039,7 +1035,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         help_line("4", "Base Stations Off"),
         help_line("5", "Restart OSC Router"),
         help_line("6", "Reload Autostart Apps"),
-        help_line("7", "VR Restart"),
+        help_line("7", "SteamVR"),
         Line::from(""),
         help_line("1-7", "Open confirmation from keyboard"),
         help_line("MOUSE", "Click action card to start immediately"),
@@ -1116,21 +1112,16 @@ fn render_exit_options(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
 }
 
 fn render_action_confirmation(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
-    let Some(action) = app.confirmation else {
+    let Some(action) = app.confirmation.as_ref() else {
         return;
     };
 
     let popup = centered_rect(62, 42, area);
     let mut lines = vec![
-        Line::from(Span::styled("Confirm Action", theme::title_style())),
-        Line::from(""),
-        Line::from(Span::styled(action.display_name(), theme::title_style())),
+        Line::from(Span::styled(action.title.clone(), theme::title_style())),
         Line::from(""),
     ];
-    lines.extend(action.expected_effect().lines().map(Line::from));
-    lines.push(Line::from(
-        "The Supervisor will run this action after confirmation.",
-    ));
+    lines.extend(action.body.iter().cloned().map(Line::from));
     lines.extend([
         Line::from(""),
         Line::from(vec![
@@ -1144,7 +1135,7 @@ fn render_action_confirmation(frame: &mut Frame<'_>, area: Rect, app: &mut App) 
     register_modal_clicks(app, popup);
     frame.render_widget(
         Paragraph::new(lines)
-            .block(theme::accent_panel_block(action.display_name()))
+            .block(theme::accent_panel_block("SteamVR Control"))
             .wrap(Wrap { trim: true }),
         popup,
     );
@@ -1199,39 +1190,26 @@ fn action_card_line(app: &App, action: TuiAction, now: Instant, width: u16) -> L
 
 fn compact_action_line(app: &App, action: TuiAction, now: Instant, width: u16) -> Line<'static> {
     let state = action_state(app, action, now);
-
     let label = format!("{} {}", action.digit(), compact_action_label(action));
-    let display_name = action.display_name();
-    let reserved_width = COMPACT_ACTION_LABEL_WIDTH + COMPACT_ACTION_BADGE_WIDTH + 1;
-    let display_width = (width as usize).saturating_sub(reserved_width);
-    let display_name = truncate(display_name, display_width);
-
-    Line::from(vec![
-        Span::styled(
-            format!("{label:<COMPACT_ACTION_LABEL_WIDTH$}"),
-            theme::title_style(),
-        ),
-        action_state_span(&state),
-        Span::raw(" ".repeat(
-            COMPACT_ACTION_BADGE_WIDTH.saturating_sub(action_state_text(&state).chars().count())
-                + 1,
-        )),
-        Span::styled(display_name, foreground(theme::TEXT_SECONDARY)),
-    ])
+    let description = action_description(app, action, &state);
+    let left = format!("{label:<COMPACT_ACTION_LABEL_WIDTH$} {description}");
+    aligned_line(
+        &left,
+        action_state_text(&state).as_ref(),
+        width as usize,
+        state.style,
+    )
 }
 
 fn small_action_cell_line(app: &App, action: TuiAction, now: Instant, width: u16) -> Line<'static> {
     let state = action_state(app, action, now);
     let left = format!("{} {:<4} ", action.digit(), small_action_label(action));
-    let state_text = action_state_text(&state);
-    let used_width = left.chars().count() + state_text.chars().count();
-    let padding = (width as usize).saturating_sub(used_width).max(1);
-
-    Line::from(vec![
-        Span::styled(left, theme::title_style()),
-        action_state_span(&state),
-        Span::raw(" ".repeat(padding)),
-    ])
+    aligned_line(
+        &left,
+        action_state_text(&state).as_ref(),
+        width as usize,
+        state.style,
+    )
 }
 
 fn small_action_label(action: TuiAction) -> &'static str {
@@ -1249,9 +1227,20 @@ fn small_action_label(action: TuiAction) -> &'static str {
 fn compact_action_label(action: TuiAction) -> &'static str {
     match action {
         TuiAction::ReloadAutostartApps => "Auto",
-        TuiAction::RestartVrSession => "VR Restart",
+        TuiAction::RestartVrSession => "SteamVR",
         _ => action.short_label(),
     }
+}
+
+fn action_description(app: &App, action: TuiAction, state: &ActionState) -> String {
+    if action == TuiAction::RestartVrSession {
+        return state
+            .detail
+            .clone()
+            .unwrap_or_else(|| app.steamvr_control_mode().detail().to_string());
+    }
+
+    action.display_name().to_string()
 }
 
 fn running_action_message(action: TuiAction, _elapsed: Duration) -> String {
@@ -1338,26 +1327,8 @@ struct ActionState {
     style: Style,
 }
 
-impl ActionState {
-    fn label_text(&self) -> Cow<'static, str> {
-        Cow::Borrowed(self.label)
-    }
-}
-
-fn action_state_text(state: &ActionState) -> Cow<'static, str> {
-    if state.label == "START" {
-        Cow::Owned(format!("[{}]", state.label))
-    } else {
-        state.label_text()
-    }
-}
-
-fn action_state_span(state: &ActionState) -> Span<'static> {
-    if state.label == "START" {
-        theme::action_button_badge(state.label, state.style)
-    } else {
-        Span::styled(state.label.to_string(), state.style)
-    }
+fn action_state_text(state: &ActionState) -> String {
+    format!("[{}]", state.label)
 }
 
 fn action_state(app: &App, action: TuiAction, now: Instant) -> ActionState {
@@ -1367,6 +1338,30 @@ fn action_state(app: &App, action: TuiAction, now: Instant) -> ActionState {
             detail: Some("shutdown in progress".to_string()),
             border_color: theme::WARNING_ORANGE,
             style: theme::badge_warning_style(),
+        };
+    }
+
+    if action == TuiAction::RestartVrSession {
+        let mode = app.steamvr_control_mode();
+        let style = match mode {
+            crate::models::SteamVrControlMode::Start
+            | crate::models::SteamVrControlMode::Restart => theme::badge_info_style(),
+            crate::models::SteamVrControlMode::Starting
+            | crate::models::SteamVrControlMode::Restarting => theme::badge_success_style(),
+            crate::models::SteamVrControlMode::Disconnected => theme::badge_error_style(),
+        };
+        let border_color = match mode {
+            crate::models::SteamVrControlMode::Disconnected => theme::BORDER_MUTED,
+            crate::models::SteamVrControlMode::Starting
+            | crate::models::SteamVrControlMode::Restarting => theme::ACCENT_GREEN,
+            crate::models::SteamVrControlMode::Start
+            | crate::models::SteamVrControlMode::Restart => theme::BORDER_STRONG,
+        };
+        return ActionState {
+            label: mode.badge(),
+            detail: Some(mode.detail().to_string()),
+            border_color,
+            style,
         };
     }
 
@@ -1493,7 +1488,7 @@ fn register_modal_clicks(app: &mut App, popup: Rect) {
 
 fn shortcut_line(width: u16) -> &'static str {
     if width >= 120 {
-        "0 Help  F5 Refresh  Wheel Logs  End/F Follow  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  7 VR  Esc Exit"
+        "0 Help  F5 Refresh  Wheel Logs  End/F Follow  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  7 SteamVR  Esc Exit"
     } else if width >= 100 {
         "0 Help  F5 Refresh  1-7 Actions  End/F Logs  Esc Exit"
     } else {
@@ -1657,7 +1652,6 @@ fn action_outcome_style(outcome: ActionOutcome) -> (&'static str, Style) {
     match outcome {
         ActionOutcome::Succeeded => ("OK", theme::badge_success_style()),
         ActionOutcome::Failed => ("ERROR", theme::badge_error_style()),
-        ActionOutcome::Cancelled => ("CANCELLED", theme::badge_warning_style()),
         ActionOutcome::Rejected => ("BLOCKED", theme::badge_warning_style()),
         ActionOutcome::BackendOff => ("DISCONNECTED", theme::badge_error_style()),
     }
@@ -1685,6 +1679,36 @@ fn format_duration(duration: std::time::Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        app::RunningAction,
+        diagnostics::TuiDiagnostics,
+        models::{CommandSummary, RESTART_VR_SESSION_COMMAND, START_STEAMVR_COMMAND},
+    };
+
+    fn app_with_steamvr_commands(steam_vr: &str) -> App {
+        let mut app = App::new(TuiDiagnostics::disabled(), false);
+        app.connection = ConnectionState::Connected;
+        app.status.steam_vr = steam_vr.to_string();
+        app.commands = vec![
+            command(START_STEAMVR_COMMAND, true),
+            command(RESTART_VR_SESSION_COMMAND, true),
+        ];
+        app
+    }
+
+    fn command(name: &str, requires_confirmation: bool) -> CommandSummary {
+        CommandSummary {
+            name: name.to_string(),
+            category: "Actions".to_string(),
+            output_kind: "Text".to_string(),
+            dangerous: false,
+            requires_confirmation,
+            action_supported: true,
+            action_safety_category: "Managed".to_string(),
+            tui_executable: true,
+            blocked_reason: String::new(),
+        }
+    }
 
     #[test]
     fn retained_action_progress_uses_generic_name_and_elapsed_time() {
@@ -1696,5 +1720,31 @@ mod tests {
             running_action_detail(TuiAction::RestartCoreApps, Duration::from_secs(12)),
             "RUNNING 12s"
         );
+    }
+
+    #[test]
+    fn steamvr_control_state_renders_start_restart_and_busy() {
+        let now = Instant::now();
+        let stopped = app_with_steamvr_commands("stopped");
+        let start = action_state(&stopped, TuiAction::RestartVrSession, now);
+        assert_eq!(start.label, "START");
+        assert_eq!(start.detail.as_deref(), Some("Start SteamVR"));
+        assert_eq!(action_state_text(&start), "[START]");
+
+        let running = app_with_steamvr_commands("running");
+        let restart = action_state(&running, TuiAction::RestartVrSession, now);
+        assert_eq!(restart.label, "RESTART");
+        assert_eq!(restart.detail.as_deref(), Some("Restart SteamVR"));
+        assert_eq!(action_state_text(&restart), "[RESTART]");
+
+        let mut busy = app_with_steamvr_commands("running");
+        busy.running_actions.push(RunningAction {
+            action: TuiAction::RestartVrSession,
+            command: RESTART_VR_SESSION_COMMAND.to_string(),
+            started_at: now,
+        });
+        let busy_state = action_state(&busy, TuiAction::RestartVrSession, now);
+        assert_eq!(busy_state.label, "BUSY");
+        assert_eq!(busy_state.detail.as_deref(), Some("Restarting SteamVR"));
     }
 }

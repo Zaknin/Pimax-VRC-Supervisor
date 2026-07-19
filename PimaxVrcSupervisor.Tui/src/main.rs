@@ -283,7 +283,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
                 false
             }
             Some(Shortcut::OpenAction(action)) => {
-                app.request_action_confirmation(action, now);
+                app.activate_action(action, now);
                 false
             }
             Some(Shortcut::Confirm) => false,
@@ -399,7 +399,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
         }
         ClickAction::QuitTui => app.request_exit_dialog(now),
         ClickAction::SelectAction(action) => {
-            app.request_action_start(action, now);
+            app.activate_action(action, now);
             false
         }
         ClickAction::ConfirmModal | ClickAction::CancelModal => false,

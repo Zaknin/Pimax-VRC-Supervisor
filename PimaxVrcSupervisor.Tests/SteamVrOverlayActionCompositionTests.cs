@@ -7,10 +7,11 @@ public sealed class SteamVrOverlayActionCompositionTests
     {
         var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "PimaxVrcSupervisor.SteamVrHost", "Program.cs"));
 
-        Assert.Contains("new(\"VR Restart\", \"restart-vr-session\", new Rectangle(ButtonLeft, ButtonThirdRow, ContentWidth, ButtonHeight))", source, StringComparison.Ordinal);
-        Assert.Contains("\"restart-vr-session\" => \"Restart SteamVR; resume VRChat\"", source, StringComparison.Ordinal);
+        Assert.Contains("new(\"Restart SteamVR\", \"restart-vr-session\", new Rectangle(ButtonLeft, ButtonThirdRow, ContentWidth, ButtonHeight))", source, StringComparison.Ordinal);
+        Assert.Contains("\"restart-vr-session\" => \"VRChat resumes only if it was running\"", source, StringComparison.Ordinal);
         Assert.Contains("RequiresButtonConfirmation(button.Command)", source, StringComparison.Ordinal);
         Assert.Contains("\"action-json {\\\"command\\\":\\\"restart-vr-session\\\",\\\"confirmed\\\":true,\\\"source\\\":\\\"SteamVR Overlay\\\"}\"", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("RequiresButtonConfirmation(\"restart-core-apps\")", source, StringComparison.Ordinal);
     }
 
     private static string RepositoryRoot()

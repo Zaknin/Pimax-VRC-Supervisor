@@ -22,4 +22,4 @@ When connected, `Q` opens Supervisor shutdown confirmation. When disconnected, `
 
 Actions are disabled while disconnected, while shutdown is in progress, or when another conflicting action is already running.
 
-`7 VR Restart` is also disabled if SteamVR is not running. If VRChat was not running when the action was confirmed, Supervisor restarts SteamVR but does not launch VRChat afterward.
+`7 SteamVR` changes mode from Supervisor state. If SteamVR is stopped, it starts SteamVR after confirmation and does not launch VRChat. If SteamVR is running, it restarts SteamVR after confirmation and resumes VRChat only when VRChat was running at confirmation time.

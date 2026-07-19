@@ -45,7 +45,9 @@ Manual Terminal UI launches stay open while disconnected until you exit.
 
 When SteamVR exits from the normal SteamVR UI, the Supervisor restores Supervisor-owned monitors, runs cleanup, and exits. A short SteamVR restart/failure recovery window keeps stations powered while the existing Supervisor waits for and adopts a replacement runtime; it does not restart SteamVR or depend on VRChat.
 
-`7 VR Restart` is an explicit session action. It asks Steam to restart SteamVR, keeps Supervisor-owned monitor and base-station policy in place during the bounded restart window, and resumes VRChat only if VRChat was already running when you confirmed the action. If VRChat was not running at confirmation time, the action restarts SteamVR and does not launch VRChat.
+`7 SteamVR` is dynamic. When SteamVR is stopped, it shows `Start SteamVR` and requires confirmation before sending `start-steamvr`; VRChat is not launched. When SteamVR is running, it shows `Restart SteamVR` and requires confirmation before sending `restart-vr-session`; VRChat is resumed only if it was already running when you confirmed the action. Actions `1` through `6` remain immediate.
+
+Accepted means the operation is running, not complete. Completion, warning, failure, or timeout appears later as the terminal action result.
 
 If Supervisor exits by an explicit Terminal UI Supervisor-exit choice while the scheduled Watcher is running, the Watcher skips automatic relaunch for the current SteamVR `vrserver` process identity. A later SteamVR session with a new PID/start-time identity can launch Supervisor normally.
 

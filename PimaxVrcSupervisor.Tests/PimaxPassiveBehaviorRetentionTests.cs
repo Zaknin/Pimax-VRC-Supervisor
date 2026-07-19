@@ -91,8 +91,11 @@ public sealed class PimaxPassiveBehaviorRetentionTests
             "private static SupervisorCommandResult ActionJsonResult");
 
         Assert.Contains("restart-vr-session", actionRouter, StringComparison.Ordinal);
+        Assert.Contains("start-steamvr", actionRouter, StringComparison.Ordinal);
         Assert.Contains("ExecuteConfirmedVrSessionRestartAction", actionRouter, StringComparison.Ordinal);
+        Assert.Contains("ExecuteConfirmedSteamVrStartAction", actionRouter, StringComparison.Ordinal);
         Assert.Contains("SteamVR is not running; cannot restart VR session", operation, StringComparison.Ordinal);
+        Assert.Contains("SteamVR is already running; refresh and use Restart SteamVR", source, StringComparison.Ordinal);
         Assert.Contains("resumeVrChat = IsAnyProcessRunning(_config.WatchedShutdownProcessNames)", operation, StringComparison.Ordinal);
         Assert.Contains("LaunchSteamUri(SteamVrSteamAppUri, \"SteamVR\")", operation, StringComparison.Ordinal);
         Assert.Contains("LaunchSteamUri(VrChatSteamAppUri, \"VRChat\")", operation, StringComparison.Ordinal);
@@ -102,6 +105,49 @@ public sealed class PimaxPassiveBehaviorRetentionTests
         Assert.DoesNotContain(".Kill(", operation, StringComparison.Ordinal);
         Assert.DoesNotContain("StopService(", operation, StringComparison.Ordinal);
         Assert.DoesNotContain("OpenVR", operation, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OnlySteamVrControlActionsAdvertiseConfirmation()
+    {
+        var source = ProgramSource();
+        var commands = Slice(
+            source,
+            "private SupervisorCommandCapabilitiesSnapshot BuildSupervisorCommandCapabilitiesSnapshot()",
+            "private static SupervisorCommandDefinition CommandDefinition");
+
+        foreach (var command in new[]
+        {
+            "restart-core-apps",
+            "start-osc-goes-brrr",
+            "base-stations-on",
+            "base-stations-off",
+            "restart-osc-router",
+            "reload-autostart-apps"
+        })
+        {
+            var definition = Slice(commands, $"\"{command}\"", "blockedReason: null),");
+            Assert.Contains("requiresConfirmation: false", definition, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("StartSteamVrCommandName", commands, StringComparison.Ordinal);
+        Assert.Contains("RestartVrSessionCommandName", commands, StringComparison.Ordinal);
+        Assert.Contains("requiresConfirmation: true", Slice(commands, "StartSteamVrCommandName", "RestartVrSessionCommandName"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AcceptedSteamVrOperationsAreNotTerminalActionResults()
+    {
+        var source = ProgramSource();
+        var operation = Slice(
+            source,
+            "private SupervisorCommandResult ExecuteConfirmedSteamVrStartAction",
+            "private string StartSteamVrLegacyCommand");
+
+        Assert.Contains("resultType: acceptance.Accepted ? \"accepted\" : \"action\"", operation, StringComparison.Ordinal);
+        Assert.DoesNotContain("oldSteamVr=", Slice(source, "return VrSessionRestartAcceptance.Accept", "catch (Exception ex)"), StringComparison.Ordinal);
+        Assert.Contains("SteamVR restarted.", source, StringComparison.Ordinal);
+        Assert.Contains("SteamVR restarted and VRChat resumed.", source, StringComparison.Ordinal);
     }
 
     [Fact]
