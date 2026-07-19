@@ -12,7 +12,7 @@ Normal Exit wrote `SteamVRSystemState_ShutdownRequested`, then terminated the fu
 
 The managed-session recovery coordinator uses explicit `Running`, `LossDetected`, `RecoveryPending`, `ReplacementAdopted`, `SessionEnding`, and `Completed` states. Runtime identity is `vrserver` PID plus start time; a replacement with a different identity is adopted by the original Supervisor process.
 
-On loss, Supervisor immediately restores only a monitor layout it previously changed. It does this once and before station shutdown. Monitors remain restored while SteamVR is restarted. A later normal VRChat/startup path may perform a fresh ownership-gated monitor transition.
+Monitor handling is an explicit, typed recovery policy rather than an implied side effect of every runtime loss. Supervisor restores only a monitor layout it previously changed, and every restore remains ownership-gated and idempotent. A restore request is not reported as a successful restore if the monitor operation fails.
 
 ## Classification and timing
 
@@ -20,11 +20,13 @@ Current-session log additions are read from bounded portions of `vrmonitor`/`vrs
 
 | Signal | Decision |
 |---|---|
-| Fresh `ShutdownRequested`, with no restart marker or replacement | prompt normal cleanup |
-| Fresh restart state/URL/startup-reason marker | preserve stations for a 3-second fast replacement window |
-| New `vrserver` identity | adopt it and retain the current managed Supervisor session |
-| No useful evidence | keep stations on for a 20-second user recovery window |
-| Adopted replacement disappears | use a 5-second chained-restart gap |
+| Fresh `ShutdownRequested`, with no restart marker or replacement | promptly restore an owned monitor layout and run normal cleanup |
+| Fresh restart state/URL/startup-reason marker | preserve the current monitor state and stations for the 3-second fast replacement window |
+| New `vrserver` identity before monitor restoration | adopt it; keep the current monitor state and retain the managed session |
+| No useful evidence for the first 3 seconds | preserve the current monitor state and stations while classification remains open |
+| Still ambiguous after 3 seconds | restore an owned monitor layout once, while keeping stations on for the remaining 17 seconds |
+| Replacement appears after that restoration | adopt it, keep stations on, and never disable monitors again automatically |
+| Adopted replacement disappears | use a 5-second chained-restart gap; preserve monitor state before restoration and leave it on after restoration |
 
 The coordinator clears consecutive recovery history after 30 seconds of stable replacement runtime. It bounds unstable recovery to three consecutive adoptions and about 60 seconds total; it never shuts stations down under an active valid runtime. It does not create a restart loop.
 
@@ -35,3 +37,7 @@ Final managed-app cleanup and station shutdown are deferred while recovery is pe
 The Watcher observes the original Supervisor as active during adoption and therefore neither launches another Supervisor nor claims the replacement identity. Once the original Supervisor completes cleanup, a genuinely later SteamVR identity can launch normally. Phase32A's explicit same-session suppression remains unchanged.
 
 Diagnostics use existing optional Supervisor events only. No persistent diagnostics journal or Phase31D XSOverlay/BaseStations schema change is added.
+
+## Phase32B.1 acceptance boundary
+
+The unaccepted `Phase32B-SteamVrRecovery-FD-7248525` deployment package is superseded for live testing. Phase32B.1 is source, unit-test, and documentation work only: it does not bind, launch, modify, or otherwise use either deployment package, and it does not add an automatic SteamVR launch path.

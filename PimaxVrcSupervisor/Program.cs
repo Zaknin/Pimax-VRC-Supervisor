@@ -6706,18 +6706,22 @@ internal sealed class AppSupervisor
         string cleanupMessage,
         CancellationToken cancellationToken)
     {
-        if (decision.RestoreMonitorsNow)
+        if (decision.MonitorDisposition == SteamVrMonitorDisposition.RestoreIfOwned)
         {
             RestoreSupervisorOwnedMonitorLayout();
-            WriteDiagnosticEvent("steamVrMonitorRestoreRequested; classification=" + decision.Classification);
+            WriteDiagnosticEvent("steamVrMonitorRestoreRequested; classification=" + decision.Classification + "; disposition=" + decision.MonitorDisposition);
         }
 
         if (decision.ReplacementAdopted)
         {
             _steamVrLifecycleEvidence.EstablishBaseline();
-            Console.WriteLine(decision.Classification == SteamVrRecoveryClassification.ChainedReplacement
-                ? "SteamVR restarted again before stabilizing. Continuing recovery."
-                : "Replacement SteamVR runtime detected. Continuing the current managed session.");
+            Console.WriteLine(decision.MonitorDisposition == SteamVrMonitorDisposition.RestoreAlreadyAttempted
+                              && _monitorRestoreAttempted
+                              && !_monitorLayoutDisabledBySupervisor
+                ? "SteamVR returned after the monitors were restored. Continuing the session with monitors left on."
+                : decision.Classification == SteamVrRecoveryClassification.ChainedReplacement
+                    ? "SteamVR restarted again before stabilizing. Continuing recovery."
+                    : "Replacement SteamVR runtime detected. Continuing the current managed session.");
             return false;
         }
 
@@ -6725,11 +6729,13 @@ internal sealed class AppSupervisor
         {
             if (decision.Classification == SteamVrRecoveryClassification.RestartEvidence)
             {
-                Console.WriteLine("SteamVR restart detected. Base stations will remain powered while the runtime restarts.");
+                Console.WriteLine("SteamVR restart detected. Secondary monitors and base stations will remain in their current managed state.");
             }
             else if (decision.Classification == SteamVrRecoveryClassification.AmbiguousLoss)
             {
-                Console.WriteLine("SteamVR stopped unexpectedly. Base stations will remain powered for up to 20 seconds while waiting for recovery.");
+                Console.WriteLine(decision.MonitorDisposition == SteamVrMonitorDisposition.RestoreIfOwned
+                    ? "SteamVR did not return immediately. Restoring owned secondary monitors while waiting briefly for recovery."
+                    : "SteamVR stopped unexpectedly. Monitor state and base stations will remain unchanged for the fast replacement window.");
             }
 
             return false;
@@ -6764,7 +6770,7 @@ internal sealed class AppSupervisor
             decision = decision.Classification.ToString(),
             decisionReason = decision.Reason,
             lossDetected = decision.LossDetected,
-            monitorRestoreRequested = decision.RestoreMonitorsNow,
+            monitorDisposition = decision.MonitorDisposition.ToString(),
             baseStationShutdownDeferred = decision.DeferBaseStationShutdown,
             normalCleanup = decision.RunNormalCleanup,
             replacementAdopted = decision.ReplacementAdopted,

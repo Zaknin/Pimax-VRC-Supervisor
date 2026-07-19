@@ -5,7 +5,7 @@ public sealed class SteamVrRecoveryCoordinatorTests
     private static readonly DateTimeOffset Start = DateTimeOffset.Parse("2026-07-19T19:00:00Z");
 
     [Fact]
-    public void Loss_IsDetectedOnce_AndRestoresMonitorsBeforeDeferredCleanup()
+    public void AmbiguousLoss_PreservesMonitorStateDuringFastReplacementWindow()
     {
         var coordinator = CreateRunningCoordinator();
 
@@ -13,11 +13,11 @@ public sealed class SteamVrRecoveryCoordinatorTests
         var duplicate = coordinator.Observe([], SteamVrLifecycleEvidence.None, Start.AddSeconds(2));
 
         Assert.Equal(SteamVrRecoveryClassification.AmbiguousLoss, first.Classification);
-        Assert.True(first.RestoreMonitorsNow);
+        Assert.Equal(SteamVrMonitorDisposition.PreserveCurrentState, first.MonitorDisposition);
         Assert.True(first.DeferBaseStationShutdown);
         Assert.False(first.RunNormalCleanup);
         Assert.Equal(SteamVrRecoveryClassification.None, duplicate.Classification);
-        Assert.False(duplicate.RestoreMonitorsNow);
+        Assert.Equal(SteamVrMonitorDisposition.PreserveCurrentState, duplicate.MonitorDisposition);
     }
 
     [Fact]
@@ -30,7 +30,7 @@ public sealed class SteamVrRecoveryCoordinatorTests
         Assert.Equal(SteamVrRecoveryClassification.NormalExit, decision.Classification);
         Assert.True(decision.RunNormalCleanup);
         Assert.False(decision.DeferBaseStationShutdown);
-        Assert.True(decision.RestoreMonitorsNow);
+        Assert.Equal(SteamVrMonitorDisposition.RestoreIfOwned, decision.MonitorDisposition);
     }
 
     [Fact]
@@ -41,6 +41,7 @@ public sealed class SteamVrRecoveryCoordinatorTests
         var decision = coordinator.Observe([], new SteamVrLifecycleEvidence(true, true, SteamVrLifecycleEvidenceReader.RestartStateMarker), Start.AddSeconds(1));
 
         Assert.Equal(SteamVrRecoveryClassification.RestartEvidence, decision.Classification);
+        Assert.Equal(SteamVrMonitorDisposition.PreserveCurrentState, decision.MonitorDisposition);
         Assert.True(decision.DeferBaseStationShutdown);
         Assert.False(decision.RunNormalCleanup);
     }
@@ -58,6 +59,7 @@ public sealed class SteamVrRecoveryCoordinatorTests
 
         Assert.Equal(SteamVrRecoveryClassification.RestartEvidence, decision.Classification);
         Assert.Equal(Start.AddSeconds(4), decision.RecoveryDeadline);
+        Assert.Equal(SteamVrMonitorDisposition.PreserveCurrentState, decision.MonitorDisposition);
     }
 
     [Fact]
@@ -125,10 +127,56 @@ public sealed class SteamVrRecoveryCoordinatorTests
         _ = coordinator.Observe([Runtime(100)], SteamVrLifecycleEvidence.None, Start);
         _ = coordinator.Observe([], SteamVrLifecycleEvidence.None, Start.AddSeconds(1));
 
+        var restore = coordinator.Observe([], SteamVrLifecycleEvidence.None, Start.AddSeconds(4));
+        var duplicateRestorePoll = coordinator.Observe([], SteamVrLifecycleEvidence.None, Start.AddSeconds(5));
+        var waiting = coordinator.Observe([], SteamVrLifecycleEvidence.None, Start.AddSeconds(20));
         var timeout = coordinator.Observe([], SteamVrLifecycleEvidence.None, Start.AddSeconds(21));
 
+        Assert.Equal(SteamVrMonitorDisposition.RestoreIfOwned, restore.MonitorDisposition);
+        Assert.Equal(SteamVrMonitorDisposition.PreserveCurrentState, duplicateRestorePoll.MonitorDisposition);
+        Assert.False(waiting.RunNormalCleanup);
+        Assert.Equal(SteamVrMonitorDisposition.PreserveCurrentState, waiting.MonitorDisposition);
         Assert.Equal(SteamVrRecoveryClassification.RecoveryTimedOut, timeout.Classification);
         Assert.True(timeout.RunNormalCleanup);
+        Assert.Equal(SteamVrMonitorDisposition.RestoreAlreadyAttempted, timeout.MonitorDisposition);
+    }
+
+    [Fact]
+    public void RapidReplacement_AdoptsWithoutRestoringOrChangingMonitorState()
+    {
+        var coordinator = CreateRunningCoordinator();
+        _ = coordinator.Observe([], SteamVrLifecycleEvidence.None, Start.AddSeconds(1));
+
+        var decision = coordinator.Observe([Runtime(200)], SteamVrLifecycleEvidence.None, Start.AddSeconds(3.9));
+
+        Assert.True(decision.ReplacementAdopted);
+        Assert.Equal(SteamVrMonitorDisposition.PreserveCurrentState, decision.MonitorDisposition);
+    }
+
+    [Fact]
+    public void LateReplacement_AfterAmbiguousRestore_DoesNotRequestAnotherMonitorChange()
+    {
+        var coordinator = CreateRunningCoordinator();
+        _ = coordinator.Observe([], SteamVrLifecycleEvidence.None, Start.AddSeconds(1));
+        _ = coordinator.Observe([], SteamVrLifecycleEvidence.None, Start.AddSeconds(4));
+
+        var decision = coordinator.Observe([Runtime(200)], SteamVrLifecycleEvidence.None, Start.AddSeconds(5));
+
+        Assert.True(decision.ReplacementAdopted);
+        Assert.Equal(SteamVrMonitorDisposition.RestoreAlreadyAttempted, decision.MonitorDisposition);
+    }
+
+    [Fact]
+    public void ChainedRestart_BeforeAmbiguousRestore_PreservesDisabledMonitorState()
+    {
+        var coordinator = CreateRunningCoordinator();
+        _ = coordinator.Observe([], SteamVrLifecycleEvidence.None, Start.AddSeconds(1));
+        _ = coordinator.Observe([Runtime(200)], SteamVrLifecycleEvidence.None, Start.AddSeconds(2));
+
+        var chainedLoss = coordinator.Observe([], SteamVrLifecycleEvidence.None, Start.AddSeconds(3));
+
+        Assert.Equal(SteamVrMonitorDisposition.PreserveCurrentState, chainedLoss.MonitorDisposition);
+        Assert.Equal(Start.AddSeconds(8), chainedLoss.RecoveryDeadline);
     }
 
     [Fact]

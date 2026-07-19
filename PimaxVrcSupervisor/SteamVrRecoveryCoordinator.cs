@@ -23,6 +23,19 @@ internal enum SteamVrRecoveryClassification
     RecoveryLimitReached
 }
 
+/// <summary>
+/// States the recovery coordinator's monitor policy without claiming that a
+/// requested restore succeeded. Program remains the sole owner of the actual
+/// monitor operation and records its result separately.
+/// </summary>
+internal enum SteamVrMonitorDisposition
+{
+    PreserveCurrentState,
+    RestoreIfOwned,
+    RestoreAlreadyAttempted,
+    NotOwned
+}
+
 internal sealed record SteamVrRecoveryTiming(
     TimeSpan FastReplacementWindow,
     TimeSpan AmbiguousRecoveryWindow,
@@ -70,8 +83,8 @@ internal sealed record SteamVrRecoveryDecision(
     SteamVrRecoveryState StateAfter,
     SteamVrRecoveryClassification Classification,
     string Reason,
+    SteamVrMonitorDisposition MonitorDisposition,
     bool LossDetected,
-    bool RestoreMonitorsNow,
     bool DeferBaseStationShutdown,
     bool RunNormalCleanup,
     bool ReplacementAdopted,
@@ -95,9 +108,11 @@ internal sealed class SteamVrRecoveryCoordinator
     private SteamVrRuntimeIdentity? _lostRuntime;
     private DateTimeOffset? _recoveryStartedAt;
     private DateTimeOffset? _recoveryDeadline;
+    private DateTimeOffset? _fastClassificationDeadline;
     private DateTimeOffset? _replacementAdoptedAt;
     private int _consecutiveReplacementAdoptions;
     private bool _supervisorExitRequested;
+    private bool _ambiguousMonitorRestoreSelected;
 
     public SteamVrRecoveryCoordinator(bool managedSession, SteamVrRecoveryTiming? timing = null)
     {
@@ -171,8 +186,8 @@ internal sealed class SteamVrRecoveryCoordinator
                 _state,
                 chained ? SteamVrRecoveryClassification.ChainedReplacement : SteamVrRecoveryClassification.ReplacementRuntime,
                 chained ? "SteamVR restarted again before stabilizing." : "Replacement SteamVR runtime detected.",
+                RecoveryMonitorDisposition(),
                 LossDetected: false,
-                RestoreMonitorsNow: false,
                 DeferBaseStationShutdown: true,
                 RunNormalCleanup: false,
                 ReplacementAdopted: true,
@@ -197,13 +212,16 @@ internal sealed class SteamVrRecoveryCoordinator
         {
             _consecutiveReplacementAdoptions = 0;
             _recoveryStartedAt = null;
+            _recoveryDeadline = null;
+            _fastClassificationDeadline = null;
+            _ambiguousMonitorRestoreSelected = false;
             _state = SteamVrRecoveryState.Running;
             return new SteamVrRecoveryDecision(
                 before,
                 _state,
                 SteamVrRecoveryClassification.None,
                 "Replacement SteamVR runtime is stable.",
-                false,
+                RecoveryMonitorDisposition(),
                 false,
                 true,
                 false,
@@ -248,17 +266,22 @@ internal sealed class SteamVrRecoveryCoordinator
             }
 
             var restartEvidence = evidence.RestartRequested;
-            var timeout = isChainedLoss ? _timing.ReplacementGapWindow : restartEvidence ? _timing.FastReplacementWindow : _timing.AmbiguousRecoveryWindow;
+            var timeout = isChainedLoss || restartEvidence
+                ? isChainedLoss ? _timing.ReplacementGapWindow : _timing.FastReplacementWindow
+                : _timing.AmbiguousRecoveryWindow;
             _recoveryStartedAt ??= now;
             _recoveryDeadline = now + timeout;
+            _fastClassificationDeadline = !isChainedLoss && !restartEvidence
+                ? now + _timing.FastReplacementWindow
+                : null;
             _state = SteamVrRecoveryState.RecoveryPending;
             return new SteamVrRecoveryDecision(
                 before,
                 _state,
                 restartEvidence ? SteamVrRecoveryClassification.RestartEvidence : SteamVrRecoveryClassification.AmbiguousLoss,
                 restartEvidence ? "SteamVR restart evidence was observed." : "SteamVR stopped without a reliable exit classification.",
+                RecoveryMonitorDisposition(),
                 LossDetected: true,
-                RestoreMonitorsNow: true,
                 DeferBaseStationShutdown: true,
                 RunNormalCleanup: false,
                 ReplacementAdopted: false,
@@ -269,17 +292,70 @@ internal sealed class SteamVrRecoveryCoordinator
                 evidence.Marker);
         }
 
-        if (_state == SteamVrRecoveryState.RecoveryPending && _recoveryDeadline is { } deadline && now >= deadline)
+        if (_state == SteamVrRecoveryState.RecoveryPending)
         {
-            var limitReached = _consecutiveReplacementAdoptions >= _timing.MaximumConsecutiveReplacementAdoptions
-                || (_recoveryStartedAt is { } startedAt && now - startedAt >= _timing.MaximumUnstableRecoveryPeriod);
-            _state = SteamVrRecoveryState.SessionEnding;
-            return CleanupDecision(
-                before,
-                limitReached ? SteamVrRecoveryClassification.RecoveryLimitReached : SteamVrRecoveryClassification.RecoveryTimedOut,
-                limitReached ? "SteamVR recovery remained unstable." : "SteamVR did not return within the recovery window.",
-                now,
-                null);
+            if (evidence.ShutdownRequested && !evidence.RestartRequested)
+            {
+                _state = SteamVrRecoveryState.SessionEnding;
+                return CleanupDecision(before, SteamVrRecoveryClassification.NormalExit, "SteamVR normal exit was confirmed by current-session evidence.", now, evidence.Marker);
+            }
+
+            if (evidence.RestartRequested && _fastClassificationDeadline is not null)
+            {
+                _fastClassificationDeadline = null;
+                _recoveryDeadline = now + _timing.FastReplacementWindow;
+                return new SteamVrRecoveryDecision(
+                    before,
+                    _state,
+                    SteamVrRecoveryClassification.RestartEvidence,
+                    "SteamVR restart evidence was observed during ambiguous recovery.",
+                    RecoveryMonitorDisposition(),
+                    LossDetected: false,
+                    DeferBaseStationShutdown: true,
+                    RunNormalCleanup: false,
+                    ReplacementAdopted: false,
+                    _lostRuntime,
+                    null,
+                    _recoveryDeadline,
+                    _consecutiveReplacementAdoptions,
+                    evidence.Marker);
+            }
+
+            if (!_ambiguousMonitorRestoreSelected
+                && _fastClassificationDeadline is { } fastDeadline
+                && now >= fastDeadline)
+            {
+                _ambiguousMonitorRestoreSelected = true;
+                _fastClassificationDeadline = null;
+                return new SteamVrRecoveryDecision(
+                    before,
+                    _state,
+                    SteamVrRecoveryClassification.AmbiguousLoss,
+                    "SteamVR remains ambiguous after the fast replacement window; restoring owned monitors while recovery continues.",
+                    SteamVrMonitorDisposition.RestoreIfOwned,
+                    LossDetected: false,
+                    DeferBaseStationShutdown: true,
+                    RunNormalCleanup: false,
+                    ReplacementAdopted: false,
+                    _lostRuntime,
+                    null,
+                    _recoveryDeadline,
+                    _consecutiveReplacementAdoptions,
+                    null);
+            }
+
+            if (_recoveryDeadline is { } deadline && now >= deadline)
+            {
+                var limitReached = _consecutiveReplacementAdoptions >= _timing.MaximumConsecutiveReplacementAdoptions
+                    || (_recoveryStartedAt is { } startedAt && now - startedAt >= _timing.MaximumUnstableRecoveryPeriod);
+                _state = SteamVrRecoveryState.SessionEnding;
+                return CleanupDecision(
+                    before,
+                    limitReached ? SteamVrRecoveryClassification.RecoveryLimitReached : SteamVrRecoveryClassification.RecoveryTimedOut,
+                    limitReached ? "SteamVR recovery remained unstable." : "SteamVR did not return within the recovery window.",
+                    now,
+                    null);
+            }
         }
 
         return NoDecision(before, "SteamVR recovery is still pending.", previous: _lostRuntime, deadline: _recoveryDeadline);
@@ -296,8 +372,10 @@ internal sealed class SteamVrRecoveryCoordinator
             _state,
             classification,
             reason,
+            _ambiguousMonitorRestoreSelected
+                ? SteamVrMonitorDisposition.RestoreAlreadyAttempted
+                : SteamVrMonitorDisposition.RestoreIfOwned,
             LossDetected: true,
-            RestoreMonitorsNow: true,
             DeferBaseStationShutdown: false,
             RunNormalCleanup: true,
             ReplacementAdopted: false,
@@ -318,8 +396,8 @@ internal sealed class SteamVrRecoveryCoordinator
             _state,
             SteamVrRecoveryClassification.None,
             reason,
+            SteamVrMonitorDisposition.PreserveCurrentState,
             LossDetected: false,
-            RestoreMonitorsNow: false,
             DeferBaseStationShutdown: IsRecoveryPending || _state is SteamVrRecoveryState.Running or SteamVrRecoveryState.ReplacementAdopted,
             RunNormalCleanup: false,
             ReplacementAdopted: false,
@@ -328,4 +406,9 @@ internal sealed class SteamVrRecoveryCoordinator
             deadline,
             _consecutiveReplacementAdoptions,
             null);
+
+    private SteamVrMonitorDisposition RecoveryMonitorDisposition()
+        => _ambiguousMonitorRestoreSelected
+            ? SteamVrMonitorDisposition.RestoreAlreadyAttempted
+            : SteamVrMonitorDisposition.PreserveCurrentState;
 }
