@@ -10,7 +10,7 @@ use ratatui::{
 
 use crate::{
     app::{
-        ActionOutcome, App, ClickAction, ConnectionState, REFRESH_INTERVAL,
+        ActionOutcome, App, ClickAction, ConnectionState, ModalButtonFocus, REFRESH_INTERVAL,
         display_name_for_command, operator_error_message,
     },
     models::{CommandSummary, ExitOption, TuiAction},
@@ -45,7 +45,7 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App) {
     }
 
     if app.help_visible {
-        render_help(frame, area);
+        render_help(frame, area, app);
     }
 
     if app.exit_dialog {
@@ -1020,7 +1020,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     );
 }
 
-fn render_help(frame: &mut Frame<'_>, area: Rect) {
+fn render_help(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let popup = centered_rect(62, 62, area);
     let lines = vec![
         Line::from(Span::styled("Controls", theme::title_style())),
@@ -1037,10 +1037,12 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         help_line("6", "Reload Autostart Apps"),
         help_line("7", "SteamVR"),
         Line::from(""),
-        help_line("1-7", "Open confirmation from keyboard"),
-        help_line("MOUSE", "Click action card to start immediately"),
-        help_line("ENTER", "Confirm modal action"),
-        help_line("SPACE", "Confirm modal action"),
+        help_line("1-6", "Run action immediately"),
+        help_line("7", "Open SteamVR confirmation"),
+        help_line("MOUSE", "Click action card or visible modal button"),
+        help_line("TAB/L/R", "Move modal button focus"),
+        help_line("ENTER", "Activate focused modal button"),
+        help_line("SPACE", "Activate focused modal button"),
         help_line("ESC", "Cancel modal"),
         help_line("Q", "Shut down Supervisor and exit TUI after confirmation"),
         help_line("UP/PGUP", "Scroll logs older, pauses live follow"),
@@ -1049,7 +1051,7 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         help_line("END/F", "Resume latest log follow"),
         Line::from(""),
         Line::from(Span::styled(
-            "While Help is open, any key or mouse click closes Help only.",
+            "Enter, Space, Esc, or the Close button closes Help only.",
             theme::warning_style(),
         )),
         Line::from("Mouse actions use the same allowed action list and conflict checks."),
@@ -1065,6 +1067,9 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
             .wrap(Wrap { trim: true }),
         popup,
     );
+    let close = modal_close_button_rect(popup);
+    render_modal_button(frame, close, "[ Close ]", true);
+    app.add_click_region(close, ClickAction::CloseModal);
 }
 
 fn render_exit_options(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
@@ -1093,52 +1098,57 @@ fn render_exit_options(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         lines.push(Line::from(""));
     }
 
-    lines.push(Line::from(vec![
-        Span::styled("UP/DOWN Select", theme::secondary_style()),
-        Span::raw("    "),
-        Span::styled("ENTER Confirm", theme::secondary_style()),
-        Span::raw("    "),
-        Span::styled("ESC Cancel", theme::secondary_style()),
-    ]));
+    lines.push(Line::from(Span::styled(
+        "UP/DOWN Select",
+        theme::secondary_style(),
+    )));
 
     frame.render_widget(Clear, popup);
-    register_modal_clicks(app, popup);
     frame.render_widget(
         Paragraph::new(lines)
             .block(theme::accent_panel_block("Exit Options"))
             .wrap(Wrap { trim: true }),
         popup,
     );
+    let (confirm, cancel) = modal_button_rects(popup);
+    render_modal_button(frame, confirm, "[ Select ]", true);
+    render_modal_button(frame, cancel, "[ Cancel ]", false);
+    register_modal_button_clicks(app, confirm, cancel);
 }
 
 fn render_action_confirmation(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
-    let Some(action) = app.confirmation.as_ref() else {
+    let Some(action) = app.confirmation.clone() else {
         return;
     };
 
-    let popup = centered_rect(62, 42, area);
+    let popup = centered_fixed_rect(76, 13, area);
     let mut lines = vec![
-        Line::from(Span::styled(action.title.clone(), theme::title_style())),
+        Line::from(Span::styled(action.title, theme::title_style())),
         Line::from(""),
     ];
-    lines.extend(action.body.iter().cloned().map(Line::from));
-    lines.extend([
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("ENTER / SPACE Confirm", theme::secondary_style()),
-            Span::raw("    "),
-            Span::styled("ESC Cancel", theme::secondary_style()),
-        ]),
-    ]);
+    lines.extend(action.body.into_iter().map(Line::from));
 
     frame.render_widget(Clear, popup);
-    register_modal_clicks(app, popup);
     frame.render_widget(
         Paragraph::new(lines)
             .block(theme::accent_panel_block("SteamVR Control"))
             .wrap(Wrap { trim: true }),
         popup,
     );
+    let (confirm, cancel) = modal_button_rects(popup);
+    render_modal_button(
+        frame,
+        confirm,
+        "[ Confirm ]",
+        app.confirmation_focus == ModalButtonFocus::Confirm,
+    );
+    render_modal_button(
+        frame,
+        cancel,
+        "[ Cancel ]",
+        app.confirmation_focus == ModalButtonFocus::Cancel,
+    );
+    register_modal_button_clicks(app, confirm, cancel);
 }
 
 fn render_action_result_dialog(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
@@ -1159,22 +1169,18 @@ fn render_action_result_dialog(frame: &mut Frame<'_>, area: Rect, app: &mut App)
         ]),
         Line::from(""),
         Line::from(result.message.clone()),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("ENTER / SPACE OK", theme::secondary_style()),
-            Span::raw("    "),
-            Span::styled("ESC Close", theme::secondary_style()),
-        ]),
     ];
 
     frame.render_widget(Clear, popup);
-    register_modal_clicks(app, popup);
     frame.render_widget(
         Paragraph::new(lines)
             .block(theme::accent_panel_block("Result"))
             .wrap(Wrap { trim: true }),
         popup,
     );
+    let close = modal_close_button_rect(popup);
+    render_modal_button(frame, close, "[ Close ]", true);
+    app.add_click_region(close, ClickAction::CloseModal);
 }
 
 fn action_card_line(app: &App, action: TuiAction, now: Instant, width: u16) -> Line<'static> {
@@ -1465,25 +1471,55 @@ fn register_footer_clicks(app: &mut App, area: Rect) {
     }
 }
 
-fn register_modal_clicks(app: &mut App, popup: Rect) {
-    let button_row = popup.y.saturating_add(popup.height.saturating_sub(4));
-    let confirm = Rect::new(
-        popup.x.saturating_add(2),
-        button_row,
-        popup.width.saturating_sub(4) / 2,
-        2,
-    );
-    let cancel = Rect::new(
-        popup.x.saturating_add(popup.width / 2),
-        button_row,
-        popup
-            .width
-            .saturating_sub(popup.width / 2)
-            .saturating_sub(2),
-        2,
-    );
+fn register_modal_button_clicks(app: &mut App, confirm: Rect, cancel: Rect) {
     app.add_click_region(confirm, ClickAction::ConfirmModal);
     app.add_click_region(cancel, ClickAction::CancelModal);
+}
+
+fn modal_button_rects(popup: Rect) -> (Rect, Rect) {
+    const CONFIRM_WIDTH: u16 = 11;
+    const CANCEL_WIDTH: u16 = 10;
+    const GAP: u16 = 4;
+    let total_width = CONFIRM_WIDTH + GAP + CANCEL_WIDTH;
+    let left = popup
+        .x
+        .saturating_add(popup.width.saturating_sub(total_width) / 2);
+    let row = popup.y.saturating_add(popup.height.saturating_sub(3));
+    (
+        Rect::new(left, row, CONFIRM_WIDTH, 1),
+        Rect::new(
+            left.saturating_add(CONFIRM_WIDTH + GAP),
+            row,
+            CANCEL_WIDTH,
+            1,
+        ),
+    )
+}
+
+fn modal_close_button_rect(popup: Rect) -> Rect {
+    const WIDTH: u16 = 9;
+    Rect::new(
+        popup
+            .x
+            .saturating_add(popup.width.saturating_sub(WIDTH) / 2),
+        popup.y.saturating_add(popup.height.saturating_sub(3)),
+        WIDTH,
+        1,
+    )
+}
+
+fn render_modal_button(frame: &mut Frame<'_>, area: Rect, label: &'static str, focused: bool) {
+    let style = if focused {
+        theme::badge_info_style()
+    } else {
+        theme::badge_muted_style()
+    };
+    frame.render_widget(
+        Paragraph::new(label)
+            .alignment(Alignment::Center)
+            .style(style),
+        area,
+    );
 }
 
 fn shortcut_line(width: u16) -> &'static str {
@@ -1514,6 +1550,18 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(vertical[1])[1]
+}
+
+fn centered_fixed_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let width = width.min(area.width.saturating_sub(2)).max(1);
+    let height = height.min(area.height.saturating_sub(2)).max(1);
+    Rect::new(
+        area.x.saturating_add(area.width.saturating_sub(width) / 2),
+        area.y
+            .saturating_add(area.height.saturating_sub(height) / 2),
+        width,
+        height,
+    )
 }
 
 fn simple_status_line<'a>(label: &'a str, value: &'a str) -> Line<'a> {
@@ -1684,6 +1732,7 @@ mod tests {
         diagnostics::TuiDiagnostics,
         models::{CommandSummary, RESTART_VR_SESSION_COMMAND, START_STEAMVR_COMMAND},
     };
+    use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
     fn app_with_steamvr_commands(steam_vr: &str) -> App {
         let mut app = App::new(TuiDiagnostics::disabled(), false);
@@ -1708,6 +1757,35 @@ mod tests {
             tui_executable: true,
             blocked_reason: String::new(),
         }
+    }
+
+    fn render_buffer(app: &mut App, width: u16, height: u16) -> Buffer {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| render(frame, app))
+            .expect("render succeeds");
+        terminal.backend().buffer().clone()
+    }
+
+    fn rendered_text(buffer: &Buffer) -> String {
+        buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    }
+
+    fn text_in_rect(buffer: &Buffer, area: Rect) -> String {
+        let mut text = String::new();
+        for y in area.y..area.y.saturating_add(area.height) {
+            for x in area.x..area.x.saturating_add(area.width) {
+                if let Some(cell) = buffer.cell((x, y)) {
+                    text.push_str(cell.symbol());
+                }
+            }
+        }
+        text
     }
 
     #[test]
@@ -1754,6 +1832,127 @@ mod tests {
         assert_eq!(
             status_badge("steamvr", "not running").content.as_ref(),
             "OFF"
+        );
+    }
+
+    #[test]
+    fn start_and_restart_confirmations_render_exact_clickable_buttons_in_all_layouts() {
+        for (width, height) in [(120, 32), (100, 26), (80, 20)] {
+            for steam_vr in ["stopped", "running"] {
+                let mut app = app_with_steamvr_commands(steam_vr);
+                app.request_action_confirmation(TuiAction::RestartVrSession, Instant::now());
+
+                let buffer = render_buffer(&mut app, width, height);
+                let text = rendered_text(&buffer);
+                let confirm = app
+                    .click_regions
+                    .iter()
+                    .find(|region| region.action == ClickAction::ConfirmModal)
+                    .expect("confirm region");
+                let cancel = app
+                    .click_regions
+                    .iter()
+                    .find(|region| region.action == ClickAction::CancelModal)
+                    .expect("cancel region");
+
+                assert!(text.contains("[ Confirm ]"), "{width}x{height}: {text}");
+                assert!(text.contains("[ Cancel ]"), "{width}x{height}: {text}");
+                assert_eq!(text_in_rect(&buffer, confirm.area), "[ Confirm ]");
+                assert_eq!(text_in_rect(&buffer, cancel.area), "[ Cancel ]");
+                assert!(confirm.area.right() <= width && confirm.area.bottom() <= height);
+                assert!(cancel.area.right() <= width && cancel.area.bottom() <= height);
+                assert_eq!(
+                    app.click_action_at(confirm.area.x, confirm.area.y),
+                    Some(ClickAction::ConfirmModal)
+                );
+                assert_eq!(
+                    app.click_action_at(cancel.area.x, cancel.area.y),
+                    Some(ClickAction::CancelModal)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn confirmation_focus_style_tracks_exactly_one_button() {
+        let mut app = app_with_steamvr_commands("running");
+        app.request_action_confirmation(TuiAction::RestartVrSession, Instant::now());
+
+        let cancel_focused = render_buffer(&mut app, 100, 26);
+        let confirm = app
+            .click_regions
+            .iter()
+            .find(|region| region.action == ClickAction::ConfirmModal)
+            .expect("confirm region")
+            .area;
+        let cancel = app
+            .click_regions
+            .iter()
+            .find(|region| region.action == ClickAction::CancelModal)
+            .expect("cancel region")
+            .area;
+        assert_ne!(
+            cancel_focused
+                .cell((confirm.x, confirm.y))
+                .expect("confirm cell")
+                .bg,
+            cancel_focused
+                .cell((cancel.x, cancel.y))
+                .expect("cancel cell")
+                .bg
+        );
+
+        app.focus_confirmation_button(ModalButtonFocus::Confirm);
+        let confirm_focused = render_buffer(&mut app, 100, 26);
+        assert_eq!(
+            confirm_focused
+                .cell((confirm.x, confirm.y))
+                .expect("confirm cell")
+                .bg,
+            theme::INFO_BLUE_DIM
+        );
+        assert_eq!(
+            confirm_focused
+                .cell((cancel.x, cancel.y))
+                .expect("cancel cell")
+                .bg,
+            theme::BORDER_MUTED
+        );
+    }
+
+    #[test]
+    fn resize_recomputes_modal_hitboxes_inside_the_new_frame() {
+        let mut app = app_with_steamvr_commands("running");
+        app.request_action_confirmation(TuiAction::RestartVrSession, Instant::now());
+
+        let _ = render_buffer(&mut app, 120, 32);
+        let wide_regions = app.click_regions.clone();
+        let _ = render_buffer(&mut app, 80, 20);
+
+        assert_ne!(wide_regions, app.click_regions);
+        assert!(
+            app.click_regions
+                .iter()
+                .all(|region| { region.area.right() <= 80 && region.area.bottom() <= 20 })
+        );
+    }
+
+    #[test]
+    fn help_modal_renders_a_clickable_close_button() {
+        let mut app = app_with_steamvr_commands("stopped");
+        app.help_visible = true;
+
+        let buffer = render_buffer(&mut app, 80, 20);
+        let close = app
+            .click_regions
+            .iter()
+            .find(|region| region.action == ClickAction::CloseModal)
+            .expect("close region");
+
+        assert_eq!(text_in_rect(&buffer, close.area), "[ Close ]");
+        assert_eq!(
+            app.click_action_at(close.area.x, close.area.y),
+            Some(ClickAction::CloseModal)
         );
     }
 }

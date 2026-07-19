@@ -41,3 +41,15 @@ Diagnostics use existing optional Supervisor events only. No persistent diagnost
 ## Phase32B.1 acceptance boundary
 
 The unaccepted `Phase32B-SteamVrRecovery-FD-7248525` deployment package is superseded for live testing. Phase32B.1 is source, unit-test, and documentation work only: it does not bind, launch, modify, or otherwise use either deployment package, and it does not add an automatic SteamVR launch path.
+
+## Phase32B2C explicit graceful restart
+
+The confirmed `restart-vr-session` action is Supervisor-owned and distinct from `start-steamvr`. It now captures the current `vrserver` PID/start-time identity and conditional VRChat resume intent before it changes the runtime.
+
+Restart uses the installed SteamVR runtime's own `bin\win64\vrstartup.exe -shutdown` command. That command is a SteamVR-owned background IPC client. The Supervisor bounds the request, waits for the captured old `vrserver` identity to disappear, and only then invokes the existing `steam://rungameid/250820` start path. `VR_Shutdown` is not used for this purpose because it only disconnects the calling OpenVR client.
+
+There is no `taskkill`, `Stop-Process`, `Process.Kill`, window-close simulation, or hidden force-kill fallback. If the graceful request fails or the old runtime refuses to exit, restart fails safely and the existing runtime is not reported as replaced. If the old runtime exits but a replacement does not appear, the Supervisor remains available in manual-recovery state with monitor and base-station state preserved.
+
+A replacement must have a different PID/start-time identity and remain stable through the readiness interval. VRChat is launched through its existing Steam VR-mode URI only when it was running at acceptance time and has not already returned. Existing managed-app recovery remains delegated to the established lifecycle routine.
+
+Progress and terminal results stay non-modal. Stage-entry diagnostics are written once; process identities stay in diagnostic logs rather than concise operator text.

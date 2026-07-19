@@ -89,6 +89,7 @@ public sealed class PimaxPassiveBehaviorRetentionTests
             source,
             "private VrSessionRestartAcceptance TryAcceptVrSessionRestart",
             "private static SupervisorCommandResult ActionJsonResult");
+        var coordinator = SourceFile("SteamVrRestartCoordinator.cs");
 
         Assert.Contains("restart-vr-session", actionRouter, StringComparison.Ordinal);
         Assert.Contains("start-steamvr", actionRouter, StringComparison.Ordinal);
@@ -99,9 +100,13 @@ public sealed class PimaxPassiveBehaviorRetentionTests
         Assert.Contains("resumeVrChat = IsAnyProcessRunning(_config.WatchedShutdownProcessNames)", operation, StringComparison.Ordinal);
         Assert.Contains("LaunchSteamUri(SteamVrSteamAppUri, \"SteamVR\")", operation, StringComparison.Ordinal);
         Assert.Contains("LaunchSteamUri(VrChatSteamAppUri, \"VRChat\")", operation, StringComparison.Ordinal);
-        Assert.Contains("WaitForReplacementSteamVrRuntimeAsync", operation, StringComparison.Ordinal);
+        Assert.Contains("WaitForReplacementSteamVrRuntimeAppearanceAsync", operation, StringComparison.Ordinal);
         Assert.Contains("StopManagedAppsWhileWaitingForWatchedProcessRestartAsync", operation, StringComparison.Ordinal);
         Assert.Contains("StartSessionAfterWatchedProcessRestartAsync", operation, StringComparison.Ordinal);
+        Assert.Contains("RequestGracefulShutdownAsync", coordinator, StringComparison.Ordinal);
+        Assert.True(
+            coordinator.IndexOf("RequestGracefulShutdownAsync", StringComparison.Ordinal)
+            < coordinator.IndexOf("_runtime.StartSteamVr()", StringComparison.Ordinal));
         Assert.DoesNotContain(".Kill(", operation, StringComparison.Ordinal);
         Assert.DoesNotContain("StopService(", operation, StringComparison.Ordinal);
         Assert.DoesNotContain("OpenVR", operation, StringComparison.Ordinal);
@@ -139,6 +144,7 @@ public sealed class PimaxPassiveBehaviorRetentionTests
     public void AcceptedSteamVrOperationsAreNotTerminalActionResults()
     {
         var source = ProgramSource();
+        var coordinator = SourceFile("SteamVrRestartCoordinator.cs");
         var operation = Slice(
             source,
             "private SupervisorCommandResult ExecuteConfirmedSteamVrStartAction",
@@ -146,8 +152,8 @@ public sealed class PimaxPassiveBehaviorRetentionTests
 
         Assert.Contains("resultType: acceptance.Accepted ? \"accepted\" : \"action\"", operation, StringComparison.Ordinal);
         Assert.DoesNotContain("oldSteamVr=", Slice(source, "return VrSessionRestartAcceptance.Accept", "catch (Exception ex)"), StringComparison.Ordinal);
-        Assert.Contains("SteamVR restarted.", source, StringComparison.Ordinal);
-        Assert.Contains("SteamVR restarted and VRChat resumed.", source, StringComparison.Ordinal);
+        Assert.Contains("SteamVR restarted.", coordinator, StringComparison.Ordinal);
+        Assert.Contains("SteamVR restarted and VRChat resumed.", coordinator, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -198,6 +204,9 @@ public sealed class PimaxPassiveBehaviorRetentionTests
 
     private static string ProgramSource()
         => File.ReadAllText(Path.Combine(RepositoryRoot(), "PimaxVrcSupervisor", "Program.cs"));
+
+    private static string SourceFile(string fileName)
+        => File.ReadAllText(Path.Combine(RepositoryRoot(), "PimaxVrcSupervisor", fileName));
 
     private static string Slice(string source, string startMarker, string endMarker)
     {

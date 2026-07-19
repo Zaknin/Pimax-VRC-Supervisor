@@ -1623,6 +1623,7 @@ internal enum SupervisorLifecyclePhase
     WaitingForVrChat,
     VrChatRunning,
     WaitingForVrChatRestartOrSteamVrExit,
+    WaitingForSteamVrManualRecovery,
     StartupRoutineRunning,
     ShutdownRoutineRunning
 }
@@ -1861,7 +1862,9 @@ internal sealed class AppSupervisor
     private static readonly TimeSpan LovenseBluetoothRegistryRecentWindow = TimeSpan.FromHours(1);
     private static readonly TimeSpan DashboardReadinessTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan TerminalUiImmediateExitObservation = TimeSpan.FromMilliseconds(750);
-    private static readonly TimeSpan VrSessionRestartReplacementTimeout = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan VrSessionRestartOldRuntimeExitTimeout = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan VrSessionRestartReplacementAppearanceTimeout = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan VrSessionRestartReplacementReadinessTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan VrSessionRestartProcessPollInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan VrSessionRestartHealthyStablePeriod = TimeSpan.FromSeconds(3);
 
@@ -1884,6 +1887,7 @@ internal sealed class AppSupervisor
     private readonly SteamVrLifecycleCoordinator _steamVrLifecycle;
     private readonly SteamVrRecoveryCoordinator _steamVrRecovery;
     private readonly SteamVrLifecycleEvidenceReader _steamVrLifecycleEvidence;
+    private readonly ISteamVrGracefulShutdownAdapter _steamVrGracefulShutdown = new VrStartupGracefulShutdownAdapter();
     private readonly Dictionary<int, Process> _watchedProcessHandles = new();
     private readonly SemaphoreSlim _oscGoesBrrrLaunchLock = new(1, 1);
     private readonly SemaphoreSlim _oscRouterLaunchLock = new(1, 1);
@@ -2137,6 +2141,19 @@ internal sealed class AppSupervisor
                     await HandleConsoleHotkeysAsync(cancellationToken);
                     if (IsVrSessionRestartActive())
                     {
+                        continue;
+                    }
+
+                    if (_lifecyclePhase == SupervisorLifecyclePhase.WaitingForSteamVrManualRecovery)
+                    {
+                        if (CaptureCurrentSteamVrRuntime() is not null
+                            && ObserveWatchedShutdownProcesses() == WatchedProcessState.Running)
+                        {
+                            Console.WriteLine("SteamVR and VRChat returned during manual recovery; running startup routine.");
+                            _steamVrLifecycleEvidence.EstablishBaseline();
+                            await StartSessionAfterWatchedProcessRestartAsync(cancellationToken);
+                        }
+
                         continue;
                     }
 
@@ -4832,6 +4849,11 @@ internal sealed class AppSupervisor
                 + $"; oldSteamVr={oldRuntime.Identity}"
                 + $"; resumeVrChat={resumeVrChat}"
                 + $"; requestInterface={source}");
+            WriteDiagnosticEvent(
+                "vrSessionRestart; captured restart inputs"
+                + $"; operationId={operationId}"
+                + $"; oldSteamVr={oldRuntime.Identity}"
+                + $"; resumeVrChat={resumeVrChat}");
 
             _ = Task.Run(async () =>
             {
@@ -4873,62 +4895,52 @@ internal sealed class AppSupervisor
         var terminalPublished = false;
         try
         {
-            UpdateCurrentOperationalAction(operationId, "running", "Requesting SteamVR restart through Steam.");
-            Console.WriteLine($"Restarting VR session through Steam. operationId={operationId}; oldSteamVr={oldRuntime.Identity}; resumeVrChat={resumeVrChat}");
-            LaunchSteamUri(SteamVrSteamAppUri, "SteamVR");
+            Console.WriteLine(
+                $"Graceful VR session restart accepted. operationId={operationId}; oldSteamVr={oldRuntime.Identity}; resumeVrChat={resumeVrChat}");
+            var runtime = new AppSupervisorSteamVrRestartRuntime(this, operationId);
+            var coordinator = new SteamVrRestartCoordinator(
+                runtime,
+                new SteamVrRestartTimeouts(
+                    VrSessionRestartOldRuntimeExitTimeout,
+                    VrSessionRestartReplacementAppearanceTimeout,
+                    VrSessionRestartReplacementReadinessTimeout,
+                    TimeSpan.FromSeconds(Math.Max(30, _config.StartupTimeoutSeconds))));
+            var outcome = await coordinator.RunAsync(oldRuntime, resumeVrChat, cancellationToken);
 
-            UpdateCurrentOperationalAction(operationId, "running", "Waiting for the old SteamVR runtime to disappear.");
-            if (!await WaitForSteamVrRuntimeToDisappearAsync(oldRuntime.Identity, VrSessionRestartReplacementTimeout, cancellationToken))
+            if ((outcome.OldRuntimeExited || !IsSteamVrRuntimeRunning(oldRuntime.Identity))
+                && outcome.ReplacementRuntime is null)
             {
-                throw new TimeoutException("Old SteamVR runtime did not disappear within the bounded restart window.");
+                _lifecyclePhase = SupervisorLifecyclePhase.WaitingForSteamVrManualRecovery;
             }
-
-            UpdateCurrentOperationalAction(operationId, "running", "Waiting for replacement SteamVR runtime.");
-            var replacement = await WaitForReplacementSteamVrRuntimeAsync(oldRuntime.Identity, VrSessionRestartReplacementTimeout, cancellationToken)
-                ?? throw new TimeoutException("Replacement SteamVR runtime did not become healthy within the bounded restart window.");
-            Console.WriteLine($"Replacement SteamVR runtime detected. operationId={operationId}; newSteamVr={replacement.Identity}");
-            UpdateCurrentOperationalAction(operationId, "running", $"Replacement SteamVR runtime detected: {replacement.Identity}.");
-
-            if (resumeVrChat)
+            else if (resumeVrChat && !outcome.Succeeded)
             {
                 _lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit;
-                await StopManagedAppsWhileWaitingForWatchedProcessRestartAsync(cancellationToken);
-                if (!IsAnyProcessRunning(_config.WatchedShutdownProcessNames))
-                {
-                    UpdateCurrentOperationalAction(operationId, "running", "Launching VRChat through Steam.");
-                    LaunchSteamUri(VrChatSteamAppUri, "VRChat");
-                }
-                else
-                {
-                    UpdateCurrentOperationalAction(operationId, "running", "VRChat is already running after SteamVR restart; attaching.");
-                }
-
-                if (!await WaitForProcessesRunningAsync(_config.WatchedShutdownProcessNames, TimeSpan.FromSeconds(Math.Max(30, _config.StartupTimeoutSeconds)), cancellationToken))
-                {
-                    var warning = "SteamVR restarted, but VRChat could not be resumed.";
-                    CompleteCurrentOperationalAction(operationId, "warning", false, warning, $"VRChat did not become running within {Math.Max(30, _config.StartupTimeoutSeconds)} seconds.");
-                    terminalPublished = true;
-                    WriteDiagnosticEvent($"vrSessionRestart; completed; operationId={operationId}; success=false; warning={warning}");
-                    Console.WriteLine(warning);
-                    return;
-                }
-
-                Console.WriteLine("VRChat is running after VR session restart. Running startup routine.");
-                await StartSessionAfterWatchedProcessRestartAsync(cancellationToken);
-                var result = "SteamVR restarted and VRChat resumed.";
-                CompleteCurrentOperationalAction(operationId, "succeeded", true, result, null);
-                terminalPublished = true;
-                WriteDiagnosticEvent($"vrSessionRestart; completed; operationId={operationId}; success=true; result={result}");
-                Console.WriteLine(result);
             }
-            else
+
+            var status = outcome.Succeeded
+                ? "succeeded"
+                : outcome.IsWarning
+                    ? "warning"
+                    : "failed";
+            CompleteCurrentOperationalAction(operationId, status, outcome.Succeeded, outcome.Result, outcome.Error);
+            terminalPublished = true;
+            if (!outcome.Succeeded)
             {
-                var result = "SteamVR restarted.";
-                CompleteCurrentOperationalAction(operationId, "succeeded", true, result, null);
-                terminalPublished = true;
-                WriteDiagnosticEvent($"vrSessionRestart; completed; operationId={operationId}; success=true; result={result}");
-                Console.WriteLine(result);
+                _operatorWarning = outcome.IsWarning
+                    ? outcome.Result
+                    : "VR session restart did not complete; Supervisor controls remain available.";
             }
+
+            WriteDiagnosticEvent(
+                "vrSessionRestart; completed"
+                + $"; operationId={operationId}"
+                + $"; outcome={outcome.Kind}"
+                + $"; success={outcome.Succeeded}"
+                + $"; oldRuntimeExited={outcome.OldRuntimeExited}"
+                + $"; replacement={outcome.ReplacementRuntime?.Identity.ToString() ?? "none"}"
+                + $"; result={outcome.Result}"
+                + $"; error={outcome.Error ?? "none"}");
+            Console.WriteLine(outcome.Error is null ? outcome.Result : $"{outcome.Result} {outcome.Error}");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -4940,9 +4952,9 @@ internal sealed class AppSupervisor
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
             _operatorWarning = "VR session restart did not complete; Supervisor controls remain available.";
-            if (resumeVrChat)
+            if (!IsSteamVrRuntimeRunning(oldRuntime.Identity))
             {
-                _lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit;
+                _lifecyclePhase = SupervisorLifecyclePhase.WaitingForSteamVrManualRecovery;
             }
 
             var result = "VR session restart did not complete.";
@@ -4960,6 +4972,75 @@ internal sealed class AppSupervisor
         }
     }
 
+    private sealed class AppSupervisorSteamVrRestartRuntime : ISteamVrRestartRuntime
+    {
+        private readonly AppSupervisor _owner;
+        private readonly string _operationId;
+
+        public AppSupervisorSteamVrRestartRuntime(AppSupervisor owner, string operationId)
+        {
+            _owner = owner;
+            _operationId = operationId;
+        }
+
+        public Task<SteamVrShutdownRequestResult> RequestGracefulShutdownAsync(CancellationToken cancellationToken)
+            => _owner._steamVrGracefulShutdown.RequestShutdownAsync(cancellationToken);
+
+        public Task<bool> WaitForOldRuntimeExitAsync(
+            SteamVrRuntimeIdentity oldRuntime,
+            TimeSpan timeout,
+            CancellationToken cancellationToken)
+            => _owner.WaitForSteamVrRuntimeToDisappearAsync(oldRuntime, timeout, cancellationToken);
+
+        public void StartSteamVr()
+            => LaunchSteamUri(SteamVrSteamAppUri, "SteamVR");
+
+        public Task<SteamVrRuntimeSnapshot?> WaitForReplacementRuntimeAsync(
+            SteamVrRuntimeIdentity oldRuntime,
+            TimeSpan timeout,
+            CancellationToken cancellationToken)
+            => _owner.WaitForReplacementSteamVrRuntimeAppearanceAsync(oldRuntime, timeout, cancellationToken);
+
+        public Task<bool> WaitForReplacementReadinessAsync(
+            SteamVrRuntimeIdentity replacementRuntime,
+            TimeSpan timeout,
+            CancellationToken cancellationToken)
+            => _owner.WaitForSteamVrRuntimeReadinessAsync(replacementRuntime, timeout, cancellationToken);
+
+        public void AdoptReplacementRuntime(SteamVrRuntimeSnapshot replacementRuntime)
+        {
+            _owner._steamVrRecovery.AdoptExplicitReplacement(replacementRuntime.Identity, DateTimeOffset.UtcNow);
+            _owner._steamVrLifecycleEvidence.EstablishBaseline();
+        }
+
+        public async Task PrepareForVrChatResumeAsync(CancellationToken cancellationToken)
+        {
+            _owner._lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit;
+            await _owner.StopManagedAppsWhileWaitingForWatchedProcessRestartAsync(cancellationToken);
+        }
+
+        public bool IsVrChatRunning()
+            => IsAnyProcessRunning(_owner._config.WatchedShutdownProcessNames);
+
+        public void StartVrChat()
+            => LaunchSteamUri(VrChatSteamAppUri, "VRChat");
+
+        public Task<bool> WaitForVrChatAsync(TimeSpan timeout, CancellationToken cancellationToken)
+            => WaitForProcessesRunningAsync(_owner._config.WatchedShutdownProcessNames, timeout, cancellationToken);
+
+        public Task RestoreManagedAppsAsync(CancellationToken cancellationToken)
+            => _owner.StartSessionAfterWatchedProcessRestartAsync(cancellationToken);
+
+        public void ReportProgress(string progress)
+        {
+            _owner.UpdateCurrentOperationalAction(_operationId, "running", progress);
+            Console.WriteLine(progress);
+        }
+
+        public void WriteDiagnostic(string message)
+            => _owner.WriteDiagnosticEvent($"vrSessionRestart; operationId={_operationId}; {message}");
+    }
+
     private async Task RunSteamVrStartOperationAsync(string operationId, CancellationToken cancellationToken)
     {
         var terminalPublished = false;
@@ -4970,7 +5051,7 @@ internal sealed class AppSupervisor
             LaunchSteamUri(SteamVrSteamAppUri, "SteamVR");
 
             UpdateCurrentOperationalAction(operationId, "running", "Waiting for SteamVR runtime.");
-            var runtime = await WaitForAnySteamVrRuntimeAsync(VrSessionRestartReplacementTimeout, cancellationToken)
+            var runtime = await WaitForAnySteamVrRuntimeAsync(VrSessionRestartReplacementAppearanceTimeout, cancellationToken)
                 ?? throw new TimeoutException("SteamVR runtime did not become healthy within the bounded start window.");
 
             var result = "SteamVR started.";
@@ -5108,7 +5189,6 @@ internal sealed class AppSupervisor
     private async Task<bool> WaitForSteamVrRuntimeToDisappearAsync(SteamVrRuntimeIdentity oldRuntime, TimeSpan timeout, CancellationToken cancellationToken)
     {
         var deadline = DateTimeOffset.UtcNow.Add(timeout);
-        var lastProgressAt = DateTimeOffset.MinValue;
         while (DateTimeOffset.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -5119,31 +5199,18 @@ internal sealed class AppSupervisor
                 return true;
             }
 
-            var current = CaptureCurrentSteamVrRuntime();
-            if (current is not null && current.Identity != oldRuntime)
-            {
-                Console.WriteLine($"Replacement SteamVR runtime appeared while waiting for old runtime to close. oldSteamVr={oldRuntime}; currentSteamVr={current.Identity}");
-                return true;
-            }
-
-            var now = DateTimeOffset.UtcNow;
-            if (now - lastProgressAt >= TimeSpan.FromSeconds(10))
-            {
-                lastProgressAt = now;
-                Console.WriteLine($"Waiting for old SteamVR runtime to close. oldSteamVr={oldRuntime}");
-            }
-
             await Task.Delay(VrSessionRestartProcessPollInterval, cancellationToken);
         }
 
         return false;
     }
 
-    private async Task<SteamVrRuntimeSnapshot?> WaitForReplacementSteamVrRuntimeAsync(SteamVrRuntimeIdentity oldRuntime, TimeSpan timeout, CancellationToken cancellationToken)
+    private async Task<SteamVrRuntimeSnapshot?> WaitForReplacementSteamVrRuntimeAppearanceAsync(
+        SteamVrRuntimeIdentity oldRuntime,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
         var deadline = DateTimeOffset.UtcNow.Add(timeout);
-        SteamVrRuntimeIdentity? candidateIdentity = null;
-        DateTimeOffset candidateStableSince = DateTimeOffset.MinValue;
         while (DateTimeOffset.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -5152,28 +5219,49 @@ internal sealed class AppSupervisor
             var current = CaptureCurrentSteamVrRuntime();
             if (current is not null && current.Identity != oldRuntime)
             {
-                var now = DateTimeOffset.UtcNow;
-                if (candidateIdentity != current.Identity)
-                {
-                    candidateIdentity = current.Identity;
-                    candidateStableSince = now;
-                }
-
-                if (now - candidateStableSince >= VrSessionRestartHealthyStablePeriod)
-                {
-                    return current;
-                }
-            }
-            else
-            {
-                candidateIdentity = null;
-                candidateStableSince = DateTimeOffset.MinValue;
+                return current;
             }
 
             await Task.Delay(VrSessionRestartProcessPollInterval, cancellationToken);
         }
 
         return null;
+    }
+
+    private async Task<bool> WaitForSteamVrRuntimeReadinessAsync(
+        SteamVrRuntimeIdentity replacementRuntime,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        DateTimeOffset? stableSince = null;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var decision = ObserveSteamVrLifecycle("vr-session-restart-wait-replacement-ready");
+            _ = await ApplySteamVrLifecycleDecisionAsync(
+                decision,
+                "SteamVR is restarting for an explicit VR session restart.",
+                cancellationToken);
+            var current = CaptureCurrentSteamVrRuntime();
+            if (current?.Identity == replacementRuntime)
+            {
+                var now = DateTimeOffset.UtcNow;
+                stableSince ??= now;
+                if (now - stableSince >= VrSessionRestartHealthyStablePeriod)
+                {
+                    return true;
+                }
+            }
+            else
+            {
+                stableSince = null;
+            }
+
+            await Task.Delay(VrSessionRestartProcessPollInterval, cancellationToken);
+        }
+
+        return false;
     }
 
     private async Task<SteamVrRuntimeSnapshot?> WaitForAnySteamVrRuntimeAsync(TimeSpan timeout, CancellationToken cancellationToken)
@@ -7412,7 +7500,7 @@ internal sealed class AppSupervisor
             && (decision.MonitorDisposition == SteamVrMonitorDisposition.RestoreIfOwned || decision.RunNormalCleanup))
         {
             var now = DateTimeOffset.UtcNow;
-            if (_lastVrSessionRestartSuppressionLogAt is null || now - _lastVrSessionRestartSuppressionLogAt >= TimeSpan.FromSeconds(10))
+            if (_lastVrSessionRestartSuppressionLogAt is null)
             {
                 _lastVrSessionRestartSuppressionLogAt = now;
                 Console.WriteLine("SteamVR restart is in progress; preserving monitor and base-station state during the bounded restart window.");

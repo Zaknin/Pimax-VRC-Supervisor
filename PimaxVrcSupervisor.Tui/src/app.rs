@@ -59,6 +59,21 @@ pub struct ActionConfirmation {
     pub body: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ModalButtonFocus {
+    Confirm,
+    Cancel,
+}
+
+impl ModalButtonFocus {
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Confirm => Self::Cancel,
+            Self::Cancel => Self::Confirm,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CompletedActionResult {
     pub command: String,
@@ -83,6 +98,7 @@ pub enum ClickAction {
     SelectAction(TuiAction),
     ConfirmModal,
     CancelModal,
+    CloseModal,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -105,6 +121,7 @@ pub struct App {
     pub log_scroll: usize,
     pub log_follow: bool,
     pub confirmation: Option<ActionConfirmation>,
+    pub confirmation_focus: ModalButtonFocus,
     pub exit_dialog: bool,
     pub selected_exit_option: ExitOption,
     pub shutdown_in_progress: bool,
@@ -177,6 +194,7 @@ impl App {
             log_scroll: 0,
             log_follow: true,
             confirmation: None,
+            confirmation_focus: ModalButtonFocus::Cancel,
             exit_dialog: false,
             selected_exit_option: ExitOption::CloseTuiOnly,
             shutdown_in_progress: false,
@@ -569,6 +587,7 @@ impl App {
                     .map(|line| (*line).to_string())
                     .collect(),
             });
+            self.confirmation_focus = ModalButtonFocus::Cancel;
             self.mark_render_needed();
             return;
         }
@@ -579,6 +598,23 @@ impl App {
     pub fn cancel_confirmation(&mut self, _now: Instant) {
         self.confirmation = None;
         self.mark_render_needed();
+    }
+
+    pub fn move_confirmation_focus(&mut self) {
+        self.confirmation_focus = self.confirmation_focus.toggled();
+        self.mark_render_needed();
+    }
+
+    pub fn focus_confirmation_button(&mut self, focus: ModalButtonFocus) {
+        self.confirmation_focus = focus;
+        self.mark_render_needed();
+    }
+
+    pub fn activate_focused_confirmation(&mut self, now: Instant) {
+        match self.confirmation_focus {
+            ModalButtonFocus::Confirm => self.confirm_action(now),
+            ModalButtonFocus::Cancel => self.cancel_confirmation(now),
+        }
     }
 
     pub fn acknowledge_action_result(&mut self) {

@@ -34,6 +34,27 @@ public sealed class SteamVrRecoveryCoordinatorTests
     }
 
     [Fact]
+    public void ExplicitReplacementRearmsLaterNormalExitAfterGracefulShutdownMarker()
+    {
+        var coordinator = CreateRunningCoordinator();
+        var firstExit = coordinator.Observe(
+            [],
+            new SteamVrLifecycleEvidence(true, false, SteamVrLifecycleEvidenceReader.ShutdownRequestedMarker),
+            Start.AddSeconds(1));
+        Assert.Equal(SteamVrRecoveryState.SessionEnding, firstExit.StateAfter);
+
+        coordinator.AdoptExplicitReplacement(Runtime(200).Identity, Start.AddSeconds(2));
+        var laterExit = coordinator.Observe(
+            [],
+            new SteamVrLifecycleEvidence(true, false, SteamVrLifecycleEvidenceReader.ShutdownRequestedMarker),
+            Start.AddMinutes(1));
+
+        Assert.Equal(SteamVrRecoveryClassification.NormalExit, laterExit.Classification);
+        Assert.True(laterExit.RunNormalCleanup);
+        Assert.Equal(SteamVrMonitorDisposition.RestoreIfOwned, laterExit.MonitorDisposition);
+    }
+
+    [Fact]
     public void ConflictingShutdownAndRestart_PreservesStations()
     {
         var coordinator = CreateRunningCoordinator();

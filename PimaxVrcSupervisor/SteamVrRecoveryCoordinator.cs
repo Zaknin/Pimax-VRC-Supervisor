@@ -142,6 +142,24 @@ internal sealed class SteamVrRecoveryCoordinator
         }
     }
 
+    public void AdoptExplicitReplacement(SteamVrRuntimeIdentity replacementRuntime, DateTimeOffset now)
+    {
+        if (!_managedSession || _supervisorExitRequested)
+        {
+            return;
+        }
+
+        _lostRuntime = _currentRuntime ?? _lostRuntime;
+        _currentRuntime = replacementRuntime;
+        _replacementAdoptedAt = now;
+        _consecutiveReplacementAdoptions = 0;
+        _recoveryStartedAt = null;
+        _recoveryDeadline = null;
+        _fastClassificationDeadline = null;
+        _ambiguousMonitorRestoreSelected = false;
+        _state = SteamVrRecoveryState.Running;
+    }
+
     public SteamVrRecoveryDecision Observe(
         IReadOnlyList<SteamVrRuntimeSnapshot> runtimes,
         SteamVrLifecycleEvidence evidence,
