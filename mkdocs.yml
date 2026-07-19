@@ -77,5 +77,6 @@ nav:
       - Pimax External-Hub Physical Port Mapping: development/pimax-external-hub-physical-port-mapping.md
       - Base Station Startup Diagnostics: development/base-station-startup-diagnostics.md
       - XSOverlay Brokered Restart: development/xs-overlay-brokered-restart.md
+      - SteamVR Restart Recovery: development/steamvr-restart-recovery.md
       - Shortcuts: reference/shortcuts.md
       - Release Packaging: reference/release-packaging.md

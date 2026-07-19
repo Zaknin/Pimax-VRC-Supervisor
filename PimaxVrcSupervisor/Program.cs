@@ -1850,6 +1850,8 @@ internal sealed class AppSupervisor
     private readonly SupervisorDiagnosticsSession _diagnostics;
     private readonly CancellationTokenSource _shutdown;
     private readonly SteamVrLifecycleCoordinator _steamVrLifecycle;
+    private readonly SteamVrRecoveryCoordinator _steamVrRecovery;
+    private readonly SteamVrLifecycleEvidenceReader _steamVrLifecycleEvidence;
     private readonly Dictionary<int, Process> _watchedProcessHandles = new();
     private readonly SemaphoreSlim _oscGoesBrrrLaunchLock = new(1, 1);
     private readonly SemaphoreSlim _oscRouterLaunchLock = new(1, 1);
@@ -1929,6 +1931,8 @@ internal sealed class AppSupervisor
         _diagnostics = diagnostics;
         _shutdown = shutdown;
         _steamVrLifecycle = new SteamVrLifecycleCoordinator(managedSteamVrSession, Environment.ProcessId);
+        _steamVrRecovery = new SteamVrRecoveryCoordinator(managedSteamVrSession);
+        _steamVrLifecycleEvidence = new SteamVrLifecycleEvidenceReader();
         _baseStationDiagnostics = BaseStationDiagnosticSink.ForProcess("Supervisor", AppVersion.Current);
         _xsOverlayDiagnostics = XsOverlayDiagnosticSink.ForProcess("Supervisor", AppVersion.Current);
         _xsOverlayMonitorTransition = new XsOverlaySafeMonitorTransitionCoordinator(
@@ -2012,6 +2016,11 @@ internal sealed class AppSupervisor
 
         try
         {
+            if (ShouldExitWithSteamVr())
+            {
+                _steamVrLifecycleEvidence.EstablishBaseline();
+            }
+
             if (ShouldExitWithSteamVr() && !IsAnyProcessRunning(_config.SteamVrServerProcessNames))
             {
                 Console.WriteLine($"SteamVR startup requested, but no SteamVR server process is running: {string.Join(", ", _config.SteamVrServerProcessNames)}");
@@ -2099,6 +2108,11 @@ internal sealed class AppSupervisor
                             return;
                         }
 
+                        if (_steamVrRecovery.IsRecoveryPending)
+                        {
+                            continue;
+                        }
+
                         if (ObserveWatchedShutdownProcesses() == WatchedProcessState.Running)
                         {
                             Console.WriteLine("VRChat restarted; running startup routine.");
@@ -2129,6 +2143,11 @@ internal sealed class AppSupervisor
                         cancellationToken))
                     {
                         return;
+                    }
+
+                    if (_steamVrRecovery.IsRecoveryPending)
+                    {
+                        continue;
                     }
 
                     var watchedProcessState = ObserveWatchedShutdownProcesses();
@@ -5215,7 +5234,7 @@ internal sealed class AppSupervisor
             }
 
             var steamVrDecision = ObserveSteamVrLifecycle("base-station-startup-delay");
-            if (steamVrDecision.Classification != SteamVrTerminationClassification.None)
+            if (steamVrDecision.Classification != SteamVrRecoveryClassification.None)
             {
                 return;
             }
@@ -6634,6 +6653,10 @@ internal sealed class AppSupervisor
             await WaitForSteamVrServerExitAsync(cancellationToken);
         }
 
+        // Restoring the Supervisor-owned layout is intentionally first. SteamVR loss must
+        // never keep the desktop unavailable while station cleanup or recovery proceeds.
+        RestoreSupervisorOwnedMonitorLayout();
+
         if (SupervisorShutdownIntents.AllowsBaseStationPowerDown(intent))
         {
             await TryPowerDownBaseStationsForSessionAsync(cancellationToken);
@@ -6643,7 +6666,6 @@ internal sealed class AppSupervisor
             SuppressBaseStationPowerDownForIntent(intent);
         }
 
-        RestoreSupervisorOwnedMonitorLayout();
         await StopLovenseAppsAsync(cancellationToken);
         await StopManagedAppsAsync(ManagedAppStopReason.SessionEnding, cancellationToken);
     }
@@ -6651,86 +6673,136 @@ internal sealed class AppSupervisor
     private bool ShouldExitWithSteamVr()
         => _managedSteamVrSession;
 
-    private SteamVrTerminationDecision ObserveSteamVrLifecycle(string caller)
+    private SteamVrRecoveryDecision ObserveSteamVrLifecycle(string caller)
     {
-        var decision = _steamVrLifecycle.Observe(GetProcesses(_config.SteamVrServerProcessNames), caller);
-        if (decision.Classification != SteamVrTerminationClassification.None)
+        var processes = GetProcesses(_config.SteamVrServerProcessNames);
+        try
         {
-            WriteSteamVrLifecycleDecision(decision);
-        }
+            var runtimes = processes
+                .Select(TryCreateSteamVrRuntimeSnapshot)
+                .Where(snapshot => snapshot is not null)
+                .Cast<SteamVrRuntimeSnapshot>()
+                .ToArray();
+            var evidence = _steamVrLifecycleEvidence.ReadCurrentSessionEvidence();
+            var decision = _steamVrRecovery.Observe(runtimes, evidence, DateTimeOffset.UtcNow);
+            if (decision.Classification != SteamVrRecoveryClassification.None)
+            {
+                WriteSteamVrLifecycleDecision(decision, caller);
+            }
 
-        return decision;
+            return decision;
+        }
+        finally
+        {
+            foreach (var process in processes)
+            {
+                process.Dispose();
+            }
+        }
     }
 
     private async Task<bool> ApplySteamVrLifecycleDecisionAsync(
-        SteamVrTerminationDecision decision,
+        SteamVrRecoveryDecision decision,
         string cleanupMessage,
         CancellationToken cancellationToken)
     {
-        if (decision.Classification == SteamVrTerminationClassification.None)
+        if (decision.RestoreMonitorsNow)
         {
+            RestoreSupervisorOwnedMonitorLayout();
+            WriteDiagnosticEvent("steamVrMonitorRestoreRequested; classification=" + decision.Classification);
+        }
+
+        if (decision.ReplacementAdopted)
+        {
+            _steamVrLifecycleEvidence.EstablishBaseline();
+            Console.WriteLine(decision.Classification == SteamVrRecoveryClassification.ChainedReplacement
+                ? "SteamVR restarted again before stabilizing. Continuing recovery."
+                : "Replacement SteamVR runtime detected. Continuing the current managed session.");
             return false;
         }
 
-        if (decision.ShowPersistentWarning)
+        if (!decision.RunNormalCleanup)
         {
-            _operatorWarning = decision.Reason;
-            Console.WriteLine(decision.Reason);
-            return false;
-        }
+            if (decision.Classification == SteamVrRecoveryClassification.RestartEvidence)
+            {
+                Console.WriteLine("SteamVR restart detected. Base stations will remain powered while the runtime restarts.");
+            }
+            else if (decision.Classification == SteamVrRecoveryClassification.AmbiguousLoss)
+            {
+                Console.WriteLine("SteamVR stopped unexpectedly. Base stations will remain powered for up to 20 seconds while waiting for recovery.");
+            }
 
-        if (decision.CleanupPolicy != SteamVrCleanupPolicy.NormalCleanup)
-        {
             return false;
         }
 
         _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
-        _steamVrLifecycle.MarkCleanupStarted();
+        if (decision.Classification == SteamVrRecoveryClassification.RecoveryLimitReached)
+        {
+            _operatorWarning = "SteamVR recovery remained unstable; normal cleanup is running.";
+        }
         _shutdownBlockedBySteamVrSince = null;
         SetShutdownProgress("running cleanup after SteamVR exit");
-        Console.WriteLine(cleanupMessage);
+        Console.WriteLine(decision.Classification == SteamVrRecoveryClassification.NormalExit
+            ? "SteamVR exited normally. Running normal session cleanup."
+            : decision.Classification is SteamVrRecoveryClassification.RecoveryTimedOut or SteamVrRecoveryClassification.RecoveryLimitReached
+                ? "SteamVR did not return within the recovery window. Running normal session cleanup."
+                : cleanupMessage);
         await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
-        _steamVrLifecycle.MarkCompleted();
+        _steamVrRecovery.MarkCompleted();
         return true;
     }
 
-    private void WriteSteamVrLifecycleDecision(SteamVrTerminationDecision decision)
+    private void WriteSteamVrLifecycleDecision(SteamVrRecoveryDecision decision, string caller)
     {
         var payload = new
         {
-            @event = "steamvr_lifecycle_decision",
+            @event = "steamVrLifecycleRecoveryDecision",
             timestamp = DateTimeOffset.UtcNow,
-            sessionId = decision.SessionId,
-            supervisorPid = decision.SupervisorPid,
-            runtimeSessionOwned = decision.RuntimeSessionOwned,
+            supervisorPid = Environment.ProcessId,
             stateBefore = decision.StateBefore.ToString(),
             stateAfter = decision.StateAfter.ToString(),
             decision = decision.Classification.ToString(),
             decisionReason = decision.Reason,
-            cleanupPolicy = decision.CleanupPolicy.ToString(),
-            persistentWarning = decision.ShowPersistentWarning,
-            shutdownIntent = decision.ShutdownIntentSource is not null,
-            shutdownIntentSource = decision.ShutdownIntentSource,
-            probeActive = decision.ProbeActive,
-            observedProcesses = decision.ObservedProcesses.Select(process => new
-            {
-                pid = process.Pid,
-                processName = process.ProcessName,
-                processStartTime = process.ProcessStartTime,
-                origin = process.Origin.ToString(),
-                firstObservedAt = process.FirstObservedAt,
-                lastObservedAt = process.LastObservedAt,
-                hasExited = process.HasExited,
-                exitCodeAvailable = process.ExitCodeAvailable,
-                exitCode = process.ExitCode,
-                exitCodeError = process.ExitCodeError
-            }).ToArray(),
+            lossDetected = decision.LossDetected,
+            monitorRestoreRequested = decision.RestoreMonitorsNow,
+            baseStationShutdownDeferred = decision.DeferBaseStationShutdown,
+            normalCleanup = decision.RunNormalCleanup,
+            replacementAdopted = decision.ReplacementAdopted,
+            oldRuntime = decision.PreviousRuntime?.ToString(),
+            currentRuntime = decision.CurrentRuntime?.ToString(),
+            recoveryDeadline = decision.RecoveryDeadline,
+            recoveryCount = decision.ConsecutiveReplacementAdoptions,
+            marker = decision.EvidenceMarker,
             companionProcesses = DescribeSteamVrCompanionProcesses(),
-            caller = decision.Caller,
-            classificationWindowStartedAt = decision.ClassificationWindowStartedAt,
-            classificationWindowCompletedAt = decision.ClassificationWindowCompletedAt
+            caller
         };
         WriteDiagnosticEvent(JsonSerializer.Serialize(payload, CommandBridgeJsonOptions));
+    }
+
+    private static SteamVrRuntimeSnapshot? TryCreateSteamVrRuntimeSnapshot(Process process)
+    {
+        try
+        {
+            if (process.HasExited)
+            {
+                return null;
+            }
+
+            DateTimeOffset? startTime = null;
+            try
+            {
+                startTime = new DateTimeOffset(process.StartTime);
+            }
+            catch
+            {
+            }
+
+            return new SteamVrRuntimeSnapshot(process.Id, startTime);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private Dictionary<string, string> DescribeSteamVrCompanionProcesses()
@@ -6744,7 +6816,11 @@ internal sealed class AppSupervisor
 
     private IDisposable BeginOpenVrProbe() => _steamVrLifecycle.BeginOpenVrProbe();
 
-    private void MarkSteamVrShutdownIntent(string source) => _steamVrLifecycle.MarkSupervisorShutdownRequested(source);
+    private void MarkSteamVrShutdownIntent(string source)
+    {
+        _steamVrLifecycle.MarkSupervisorShutdownRequested(source);
+        _steamVrRecovery.MarkSupervisorExitRequested();
+    }
 
     private async Task TryRestoreMonitorsAndStopManagedAppsAsync(bool waitForSteamVrServerExit, CancellationToken cancellationToken)
     {
@@ -9196,7 +9272,9 @@ internal static class AutoLaunchWatcher
 
         if (supervisorRunning)
         {
-            return new WatcherLaunchDecision(false, currentSteamVrSession, false);
+            // The original Supervisor owns recovery and replacement adoption. Do not claim
+            // the replacement identity while it remains active.
+            return new WatcherLaunchDecision(false, launchedForSteamVrSession, false);
         }
 
         return new WatcherLaunchDecision(true, currentSteamVrSession, false);

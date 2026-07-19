@@ -43,11 +43,11 @@ When Terminal Mode opens Terminal UI automatically, the Supervisor starts Termin
 
 Manual Terminal UI launches stay open while disconnected until you exit.
 
-When SteamVR exits from the normal SteamVR UI, the Supervisor treats the session as ending normally, runs cleanup, and exits. If SteamVR disappears in a way the Supervisor cannot reliably classify, the Supervisor uses the same safe cleanup path instead of showing a crash warning.
+When SteamVR exits from the normal SteamVR UI, the Supervisor restores Supervisor-owned monitors, runs cleanup, and exits. A short SteamVR restart/failure recovery window keeps stations powered while the existing Supervisor waits for and adopts a replacement runtime; it does not restart SteamVR or depend on VRChat.
 
 If Supervisor exits by an explicit Terminal UI Supervisor-exit choice while the scheduled Watcher is running, the Watcher skips automatic relaunch for the current SteamVR `vrserver` process identity. A later SteamVR session with a new PID/start-time identity can launch Supervisor normally.
 
-SteamVR restart and crash recovery are deferred to Phase32B. Phase32A does not add SteamVR process adoption, log parsing, restart grace periods, or a new persistent diagnostics journal.
+Restart recovery uses bounded current-session SteamVR log hints plus replacement-process observation. It restores monitors immediately, has no multi-minute grace period, and does not add a persistent diagnostics journal.
 
 ## Actions
 

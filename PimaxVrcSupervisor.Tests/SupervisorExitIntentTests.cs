@@ -108,6 +108,9 @@ public sealed class SupervisorExitIntentTests
 
         Assert.Contains("SupervisorShutdownIntents.AllowsBaseStationPowerDown(intent)", cleanup, StringComparison.Ordinal);
         Assert.Contains("SuppressBaseStationPowerDownForIntent(intent)", cleanup, StringComparison.Ordinal);
+        Assert.True(
+            cleanup.IndexOf("RestoreSupervisorOwnedMonitorLayout();", StringComparison.Ordinal)
+            < cleanup.IndexOf("TryPowerDownBaseStationsForSessionAsync", StringComparison.Ordinal));
     }
 
     [Fact]
