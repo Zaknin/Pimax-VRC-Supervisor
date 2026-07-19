@@ -1698,6 +1698,8 @@ internal sealed record SupervisorStatusSnapshot(
     string AppVersion,
     string Mode,
     string SteamVr,
+    bool SteamVrRunning,
+    string SteamVrControlMode,
     string Lifecycle,
     string CoreApps,
     string BaseStations,
@@ -3900,7 +3902,8 @@ internal sealed class AppSupervisor
     {
         var now = DateTimeOffset.UtcNow;
         var mode = _managedSteamVrSession ? "SteamVR" : "VRChat";
-        var steamVrRunning = IsAnyProcessRunning(_config.SteamVrServerProcessNames) ? "running" : "not running";
+        var steamVrProcessRunning = IsAnyProcessRunning(_config.SteamVrServerProcessNames);
+        var steamVrRunning = steamVrProcessRunning ? "running" : "not running";
         var coreApps = !_config.FaceTrackerAutomationEnabled
             ? "automation disabled"
             : IsFaceTrackingAppSetRunning()
@@ -3936,12 +3939,15 @@ internal sealed class AppSupervisor
             currentAction = _currentOperationalAction;
             lastAction = _lastOperationalActionResult;
         }
+        var steamVrControlMode = DetermineSteamVrControlMode(steamVrProcessRunning, currentAction);
 
         return new SupervisorStatusSnapshot(
             now,
             AppVersion.Current,
             mode,
             steamVrRunning,
+            steamVrProcessRunning,
+            steamVrControlMode,
             lifecycle,
             coreApps,
             baseStations,
@@ -3955,6 +3961,26 @@ internal sealed class AppSupervisor
             _operatorWarning,
             currentAction,
             lastAction);
+    }
+
+    private static string DetermineSteamVrControlMode(
+        bool steamVrRunning,
+        SupervisorOperationalActionSnapshot? currentAction)
+    {
+        if (currentAction is not null)
+        {
+            if (currentAction.Command.Equals(StartSteamVrCommandName, StringComparison.OrdinalIgnoreCase))
+            {
+                return "starting";
+            }
+
+            if (currentAction.Command.Equals(RestartVrSessionCommandName, StringComparison.OrdinalIgnoreCase))
+            {
+                return "restarting";
+            }
+        }
+
+        return steamVrRunning ? "restart" : "start";
     }
 
     private SupervisorCommandCapabilitiesSnapshot BuildSupervisorCommandCapabilitiesSnapshot()

@@ -264,6 +264,8 @@ pub struct StatusSummary {
     pub app_version: String,
     pub mode: String,
     pub steam_vr: String,
+    pub steam_vr_running: Option<bool>,
+    pub steam_vr_control_mode: String,
     pub lifecycle: String,
     pub core_apps: String,
     pub base_stations: String,
@@ -330,6 +332,8 @@ pub fn status_from_response(response: &QueryResponse) -> StatusSummary {
         app_version: string_value(data, "appVersion"),
         mode: string_value(data, "mode"),
         steam_vr: string_value(data, "steamVr"),
+        steam_vr_running: optional_bool_value(data, "steamVrRunning"),
+        steam_vr_control_mode: string_value(data, "steamVrControlMode"),
         lifecycle: string_value(data, "lifecycle"),
         core_apps: string_value(data, "coreApps"),
         base_stations: string_value(data, "baseStations"),
@@ -400,6 +404,10 @@ fn string_value(data: &Value, key: &str) -> String {
         .to_string()
 }
 
+fn optional_bool_value(data: &Value, key: &str) -> Option<bool> {
+    data.get(key).and_then(Value::as_bool)
+}
+
 fn default_action_safety_category() -> String {
     "-".to_string()
 }
@@ -428,6 +436,25 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_summary_reads_authoritative_steamvr_control_fields() {
+        let response = QueryResponse {
+            success: true,
+            data: Some(serde_json::json!({
+                "steamVr": "not running",
+                "steamVrRunning": false,
+                "steamVrControlMode": "start"
+            })),
+            ..QueryResponse::default()
+        };
+
+        let status = status_from_response(&response);
+
+        assert_eq!(status.steam_vr, "not running");
+        assert_eq!(status.steam_vr_running, Some(false));
+        assert_eq!(status.steam_vr_control_mode, "start");
+    }
 
     #[test]
     fn action_list_contains_the_retained_actions_and_vr_restart() {

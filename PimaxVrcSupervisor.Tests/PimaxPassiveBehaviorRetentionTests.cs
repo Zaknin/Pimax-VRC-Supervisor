@@ -163,6 +163,9 @@ public sealed class PimaxPassiveBehaviorRetentionTests
         Assert.Contains("lastAction", status, StringComparison.Ordinal);
         Assert.Contains("_currentOperationalAction", status, StringComparison.Ordinal);
         Assert.Contains("_lastOperationalActionResult", status, StringComparison.Ordinal);
+        Assert.Contains("steamVrProcessRunning", status, StringComparison.Ordinal);
+        Assert.Contains("DetermineSteamVrControlMode(steamVrProcessRunning, currentAction)", status, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Contains(\"running\"", status, StringComparison.Ordinal);
     }
 
     [Fact]

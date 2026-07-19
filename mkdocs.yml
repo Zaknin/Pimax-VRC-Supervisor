@@ -80,5 +80,6 @@ nav:
       - SteamVR Restart Recovery: development/steamvr-restart-recovery.md
       - Phase32B2 Manual Acceptance: development/phase32b2-manual-acceptance.md
       - Phase32B2A Manual Acceptance: development/phase32b2a-manual-acceptance.md
+      - Phase32B2B Manual Acceptance: development/phase32b2b-manual-acceptance.md
       - Shortcuts: reference/shortcuts.md
       - Release Packaging: reference/release-packaging.md

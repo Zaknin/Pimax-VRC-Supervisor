@@ -1601,7 +1601,7 @@ fn aligned_line(left: &str, right: &str, width: usize, right_style: Style) -> Li
 fn status_badge(kind: &str, value: &str) -> Span<'static> {
     let lower = value.to_lowercase();
     match kind {
-        "steamvr" if lower.contains("running") => fixed_badge("OK", theme::badge_success_style()),
+        "steamvr" if lower.trim() == "running" => fixed_badge("OK", theme::badge_success_style()),
         "steamvr" => fixed_badge("OFF", theme::badge_warning_style()),
         "core" if lower.contains("running") => fixed_badge("OK", theme::badge_success_style()),
         "core" if lower.contains("incomplete") => fixed_badge("WARN", theme::badge_warning_style()),
@@ -1746,5 +1746,14 @@ mod tests {
         let busy_state = action_state(&busy, TuiAction::RestartVrSession, now);
         assert_eq!(busy_state.label, "BUSY");
         assert_eq!(busy_state.detail.as_deref(), Some("Restarting SteamVR"));
+    }
+
+    #[test]
+    fn steamvr_status_badge_does_not_treat_not_running_as_ok() {
+        assert_eq!(status_badge("steamvr", "running").content.as_ref(), "OK");
+        assert_eq!(
+            status_badge("steamvr", "not running").content.as_ref(),
+            "OFF"
+        );
     }
 }

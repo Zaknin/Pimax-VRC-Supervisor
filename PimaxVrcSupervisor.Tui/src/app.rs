@@ -266,11 +266,9 @@ impl App {
         }
 
         let mut should_refresh = false;
-        let mut latest_dialog = None;
         for result in completed_results {
             self.running_actions
                 .retain(|running| !running.command.eq_ignore_ascii_case(&result.command));
-            latest_dialog = Some(result.clone());
             self.record_action_result(
                 result.command.as_str(),
                 result.outcome,
@@ -286,7 +284,6 @@ impl App {
             self.mark_render_needed();
         }
 
-        self.action_result_dialog = latest_dialog;
         self.mark_render_needed();
     }
 
@@ -477,15 +474,32 @@ impl App {
             return SteamVrControlMode::Restarting;
         }
 
-        if self
+        match self
             .status
-            .steam_vr
+            .steam_vr_control_mode
+            .trim()
             .to_ascii_lowercase()
-            .contains("running")
+            .as_str()
         {
-            SteamVrControlMode::Restart
-        } else {
-            SteamVrControlMode::Start
+            "start" | "stopped" => return SteamVrControlMode::Start,
+            "restart" | "running" => return SteamVrControlMode::Restart,
+            "starting" => return SteamVrControlMode::Starting,
+            "restarting" => return SteamVrControlMode::Restarting,
+            "disconnected" => return SteamVrControlMode::Disconnected,
+            _ => {}
+        }
+
+        if let Some(steam_vr_running) = self.status.steam_vr_running {
+            return if steam_vr_running {
+                SteamVrControlMode::Restart
+            } else {
+                SteamVrControlMode::Start
+            };
+        }
+
+        match self.status.steam_vr.trim().to_ascii_lowercase().as_str() {
+            "running" => SteamVrControlMode::Restart,
+            _ => SteamVrControlMode::Start,
         }
     }
 
@@ -892,12 +906,6 @@ impl App {
                 };
                 let message = last.result.trim().to_string();
                 self.record_action_result(last.command.as_str(), outcome, message, now);
-                self.action_result_dialog = Some(CompletedActionResult {
-                    command: last.command.clone(),
-                    completed_at: now,
-                    outcome,
-                    message: last.result.trim().to_string(),
-                });
             }
         }
     }
@@ -1394,6 +1402,49 @@ mod tests {
     }
 
     #[test]
+    fn steamvr_control_uses_authoritative_stopped_state_over_status_text() {
+        let mut app = app(false);
+        app.connection = ConnectionState::Connected;
+        app.status.mode = "SteamVR".to_string();
+        app.status.lifecycle = "vrchat-running".to_string();
+        app.status.steam_vr = "OK not running".to_string();
+        app.status.steam_vr_running = Some(false);
+        app.status.steam_vr_control_mode = "start".to_string();
+        app.last_action_command = Some(RESTART_VR_SESSION_COMMAND.to_string());
+        app.last_action_result = Some("VR session restart completed.".to_string());
+
+        assert_eq!(app.steamvr_control_mode(), SteamVrControlMode::Start);
+        assert_eq!(
+            app.action_command_name(TuiAction::RestartVrSession),
+            START_STEAMVR_COMMAND
+        );
+    }
+
+    #[test]
+    fn steamvr_control_uses_authoritative_running_state() {
+        let mut app = app(false);
+        app.connection = ConnectionState::Connected;
+        app.status.steam_vr = "not running".to_string();
+        app.status.steam_vr_running = Some(true);
+        app.status.steam_vr_control_mode = "restart".to_string();
+
+        assert_eq!(app.steamvr_control_mode(), SteamVrControlMode::Restart);
+        assert_eq!(
+            app.action_command_name(TuiAction::RestartVrSession),
+            RESTART_VR_SESSION_COMMAND
+        );
+    }
+
+    #[test]
+    fn steamvr_control_fallback_does_not_treat_not_running_as_running() {
+        let mut app = app(false);
+        app.connection = ConnectionState::Connected;
+        app.status.steam_vr = "not running".to_string();
+
+        assert_eq!(app.steamvr_control_mode(), SteamVrControlMode::Start);
+    }
+
+    #[test]
     fn steamvr_control_requires_confirmation_for_start_and_restart_modes() {
         let now = Instant::now();
         let mut app = app(false);
@@ -1404,6 +1455,8 @@ mod tests {
         ];
 
         app.status.steam_vr = "stopped".to_string();
+        app.status.steam_vr_running = Some(false);
+        app.status.steam_vr_control_mode = "start".to_string();
         app.activate_action(TuiAction::RestartVrSession, now);
         assert_eq!(
             app.confirmation
@@ -1415,6 +1468,8 @@ mod tests {
 
         app.cancel_confirmation(now);
         app.status.steam_vr = "running".to_string();
+        app.status.steam_vr_running = Some(true);
+        app.status.steam_vr_control_mode = "restart".to_string();
         app.activate_action(TuiAction::RestartVrSession, now);
         assert_eq!(
             app.confirmation
@@ -1432,6 +1487,8 @@ mod tests {
         app.connection = ConnectionState::Connected;
         app.commands = vec![executable_command(START_STEAMVR_COMMAND, true)];
         app.status.steam_vr = "stopped".to_string();
+        app.status.steam_vr_running = Some(false);
+        app.status.steam_vr_control_mode = "start".to_string();
         app.last_action_command = Some("restart-core-apps".to_string());
         app.last_action_result = Some("Core apps restarted.".to_string());
 
@@ -1460,6 +1517,63 @@ mod tests {
         };
 
         assert!(is_accepted_acknowledgment(&result));
+    }
+
+    #[test]
+    fn completed_action_results_update_last_result_without_opening_dialog() {
+        let now = Instant::now();
+        let mut app = app(false);
+        app.action_result_tx
+            .send(CompletedActionResult {
+                command: TuiAction::RestartCoreApps.command_name().to_string(),
+                completed_at: now,
+                outcome: ActionOutcome::Succeeded,
+                message: "Core apps restarted.".to_string(),
+            })
+            .unwrap();
+
+        app.drain_action_results();
+
+        assert!(app.action_result_dialog.is_none());
+        assert_eq!(
+            app.last_action_command.as_deref(),
+            Some(TuiAction::RestartCoreApps.command_name())
+        );
+        assert_eq!(
+            app.last_action_result.as_deref(),
+            Some("Core apps restarted.")
+        );
+    }
+
+    #[test]
+    fn backend_steamvr_terminal_result_does_not_open_dialog() {
+        let now = Instant::now();
+        let mut app = app(false);
+        app.connection = ConnectionState::Connected;
+        app.running_actions.push(RunningAction {
+            action: TuiAction::RestartVrSession,
+            command: RESTART_VR_SESSION_COMMAND.to_string(),
+            started_at: now - Duration::from_secs(1),
+        });
+        app.status.last_action_result = Some(crate::models::OperationalActionSummary {
+            command: RESTART_VR_SESSION_COMMAND.to_string(),
+            status: "succeeded".to_string(),
+            result: "VR session restarted.".to_string(),
+            ..crate::models::OperationalActionSummary::default()
+        });
+
+        app.sync_operational_actions(now);
+
+        assert!(app.action_result_dialog.is_none());
+        assert!(app.running_actions.is_empty());
+        assert_eq!(
+            app.last_action_command.as_deref(),
+            Some(RESTART_VR_SESSION_COMMAND)
+        );
+        assert_eq!(
+            app.last_action_result.as_deref(),
+            Some("VR session restarted.")
+        );
     }
 
     #[test]
