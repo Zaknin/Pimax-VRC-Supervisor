@@ -78,5 +78,6 @@ nav:
       - Base Station Startup Diagnostics: development/base-station-startup-diagnostics.md
       - XSOverlay Brokered Restart: development/xs-overlay-brokered-restart.md
       - SteamVR Restart Recovery: development/steamvr-restart-recovery.md
+      - Phase32B2 Manual Acceptance: development/phase32b2-manual-acceptance.md
       - Shortcuts: reference/shortcuts.md
       - Release Packaging: reference/release-packaging.md

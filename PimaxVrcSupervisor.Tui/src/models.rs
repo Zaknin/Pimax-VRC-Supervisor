@@ -35,6 +35,7 @@ pub enum TuiAction {
     BaseStationsOff,
     RestartOscRouter,
     ReloadAutostartApps,
+    RestartVrSession,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -104,13 +105,14 @@ impl ExitOption {
 }
 
 impl TuiAction {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::RestartCoreApps,
         Self::StartOscGoesBrrr,
         Self::BaseStationsOn,
         Self::BaseStationsOff,
         Self::RestartOscRouter,
         Self::ReloadAutostartApps,
+        Self::RestartVrSession,
     ];
 
     pub fn from_digit(value: char) -> Option<Self> {
@@ -121,6 +123,7 @@ impl TuiAction {
             '4' => Some(Self::BaseStationsOff),
             '5' => Some(Self::RestartOscRouter),
             '6' => Some(Self::ReloadAutostartApps),
+            '7' => Some(Self::RestartVrSession),
             _ => None,
         }
     }
@@ -133,6 +136,7 @@ impl TuiAction {
             Self::BaseStationsOff => '4',
             Self::RestartOscRouter => '5',
             Self::ReloadAutostartApps => '6',
+            Self::RestartVrSession => '7',
         }
     }
 
@@ -144,6 +148,7 @@ impl TuiAction {
             Self::BaseStationsOff => "BS Off",
             Self::RestartOscRouter => "OSC",
             Self::ReloadAutostartApps => "Autostart",
+            Self::RestartVrSession => "VR Restart",
         }
     }
 
@@ -155,6 +160,7 @@ impl TuiAction {
             Self::BaseStationsOff => "base-stations-off",
             Self::RestartOscRouter => "restart-osc-router",
             Self::ReloadAutostartApps => "reload-autostart-apps",
+            Self::RestartVrSession => "restart-vr-session",
         }
     }
 
@@ -166,6 +172,7 @@ impl TuiAction {
             Self::BaseStationsOff => "Base Stations Off",
             Self::RestartOscRouter => "Restart OSC Router",
             Self::ReloadAutostartApps => "Reload Autostart Apps",
+            Self::RestartVrSession => "VR Restart",
         }
     }
 
@@ -184,8 +191,18 @@ impl TuiAction {
             Self::BaseStationsOff => "Runs the configured base-station power-off routine.",
             Self::RestartOscRouter => "Restarts or manually starts OSC routing.",
             Self::ReloadAutostartApps => "Reloads or starts configured Autostart apps.",
+            Self::RestartVrSession => "Restart SteamVR; resume VRChat.",
         }
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OperationalActionSummary {
+    pub command: String,
+    pub status: String,
+    pub progress: String,
+    pub result: String,
+    pub error: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -199,6 +216,8 @@ pub struct StatusSummary {
     pub osc_router: String,
     pub osc_goes_brrr: String,
     pub operator_warning: String,
+    pub current_action: Option<OperationalActionSummary>,
+    pub last_action_result: Option<OperationalActionSummary>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -263,7 +282,24 @@ pub fn status_from_response(response: &QueryResponse) -> StatusSummary {
         osc_router: string_value(data, "oscRouter"),
         osc_goes_brrr: string_value(data, "oscGoesBrrr"),
         operator_warning: string_value(data, "operatorWarning"),
+        current_action: operational_action_value(data, "currentAction"),
+        last_action_result: operational_action_value(data, "lastActionResult"),
     }
+}
+
+fn operational_action_value(data: &Value, key: &str) -> Option<OperationalActionSummary> {
+    let value = data.get(key)?;
+    if value.is_null() {
+        return None;
+    }
+
+    Some(OperationalActionSummary {
+        command: string_value(value, "command"),
+        status: string_value(value, "status"),
+        progress: string_value(value, "progress"),
+        result: string_value(value, "result"),
+        error: string_value(value, "error"),
+    })
 }
 
 pub fn commands_from_response(response: &QueryResponse) -> Vec<CommandSummary> {
@@ -340,8 +376,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn action_list_contains_exactly_the_six_retained_actions() {
-        assert_eq!(TuiAction::ALL.len(), 6);
+    fn action_list_contains_the_retained_actions_and_vr_restart() {
+        assert_eq!(TuiAction::ALL.len(), 7);
         assert_eq!(
             TuiAction::ALL.map(TuiAction::command_name),
             [
@@ -351,13 +387,17 @@ mod tests {
                 "base-stations-off",
                 "restart-osc-router",
                 "reload-autostart-apps",
+                "restart-vr-session",
             ]
         );
     }
 
     #[test]
-    fn digit_seven_does_not_map_to_an_action() {
-        assert_eq!(TuiAction::from_digit('7'), None);
+    fn digit_seven_maps_to_vr_session_restart() {
+        assert_eq!(
+            TuiAction::from_digit('7'),
+            Some(TuiAction::RestartVrSession)
+        );
     }
 
     #[test]

@@ -692,7 +692,9 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private const int ButtonRight = ButtonLeft + ButtonWidth + ButtonColumnGap;
     private const int ButtonThird = ButtonRight + ButtonWidth + ButtonColumnGap;
     private const int ButtonBottom = ButtonTop + ButtonHeight + ButtonRowGap;
+    private const int ButtonThirdRow = ButtonBottom + ButtonHeight + ButtonRowGap;
     private const int ContentWidth = ButtonThird + ButtonWidth - ButtonLeft;
+    private static readonly TimeSpan ButtonConfirmationWindow = TimeSpan.FromSeconds(10);
     private readonly string _logPath = Path.Combine(Path.GetTempPath(), "PimaxVrcSupervisorSteamVrHost.log");
     private readonly object _renderLock = new();
     private readonly SemaphoreSlim _loopWakeSignal = new(0, 1);
@@ -704,7 +706,8 @@ internal sealed class SteamVrDashboardHost : IDisposable
         new("OSCGoesBrrr", "start-osc-goes-brrr", new Rectangle(ButtonThird, ButtonTop, ButtonWidth, ButtonHeight)),
         new("Base stations on", "base-stations-on", new Rectangle(ButtonLeft, ButtonBottom, ButtonWidth, ButtonHeight)),
         new("Base stations off", "base-stations-off", new Rectangle(ButtonRight, ButtonBottom, ButtonWidth, ButtonHeight)),
-        new("Restart Supervisor", "restart-supervisor", new Rectangle(ButtonThird, ButtonBottom, ButtonWidth, ButtonHeight))
+        new("Restart Supervisor", "restart-supervisor", new Rectangle(ButtonThird, ButtonBottom, ButtonWidth, ButtonHeight)),
+        new("VR Restart", "restart-vr-session", new Rectangle(ButtonLeft, ButtonThirdRow, ContentWidth, ButtonHeight))
     ];
     private OpenVrOverlaySession? _overlay;
     private GpuOverlayRenderer? _gpuRenderer;
@@ -717,6 +720,8 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private string? _hoveredCommand;
     private string? _pressedCommand;
     private string? _runningCommand;
+    private string? _confirmationCommand;
+    private DateTimeOffset _confirmationExpiresAt = DateTimeOffset.MinValue;
     private OverlayPointer? _debugPointer;
     private bool _debugPointerEnabled;
     private DateTimeOffset _lastCommandStartedAt = DateTimeOffset.MinValue;
@@ -1399,6 +1404,18 @@ internal sealed class SteamVrDashboardHost : IDisposable
             return;
         }
 
+        if (RequiresButtonConfirmation(button.Command) && !IsConfirmationActive(button.Command))
+        {
+            _confirmationCommand = button.Command;
+            _confirmationExpiresAt = DateTimeOffset.UtcNow.Add(ButtonConfirmationWindow);
+            Log("Command confirmation requested: " + button.Command);
+            WriteDebug("command confirmation requested; name=" + button.Command);
+            SetStatus("Confirm " + button.Label + ": click again within 10 seconds.", urgent: true);
+            MarkOverlayDirty(urgent: true, wakeLoop: true);
+            return;
+        }
+
+        _confirmationCommand = null;
         _commandInFlight = true;
         _runningCommand = button.Command;
         _lastCommandStartedAt = DateTimeOffset.UtcNow;
@@ -1419,6 +1436,10 @@ internal sealed class SteamVrDashboardHost : IDisposable
             SetStatus("Running " + button.Label + "...", urgent: true);
             var response = string.Equals(button.Command, "restart-supervisor", StringComparison.Ordinal)
                 ? await RestartSupervisorAsync()
+                : string.Equals(button.Command, "restart-vr-session", StringComparison.Ordinal)
+                    ? await SendCommandAsync(
+                        "action-json {\"command\":\"restart-vr-session\",\"confirmed\":true,\"source\":\"SteamVR Overlay\"}",
+                        TimeSpan.FromSeconds(45))
                 : await SendCommandAsync(button.Command, TimeSpan.FromSeconds(45));
             Log("Command response: " + response);
             WriteDebug("command response; name=" + button.Command + "; response=" + TruncateDebugValue(response));
@@ -1447,6 +1468,13 @@ internal sealed class SteamVrDashboardHost : IDisposable
             }
         }
     }
+
+    private bool IsConfirmationActive(string command)
+        => string.Equals(_confirmationCommand, command, StringComparison.Ordinal)
+            && DateTimeOffset.UtcNow <= _confirmationExpiresAt;
+
+    private static bool RequiresButtonConfirmation(string command)
+        => string.Equals(command, "restart-vr-session", StringComparison.Ordinal);
 
     private DashboardButton? HitTestLayout(PointF layoutPosition)
         => _buttons.FirstOrDefault(button => Contains(button.Bounds, layoutPosition));
@@ -1804,31 +1832,34 @@ internal sealed class SteamVrDashboardHost : IDisposable
         foreach (var button in _buttons)
         {
             var running = string.Equals(_runningCommand, button.Command, StringComparison.Ordinal);
-            var hovered = !running && string.Equals(_hoveredCommand, button.Command, StringComparison.Ordinal);
+            var confirming = !running && IsConfirmationActive(button.Command);
+            var hovered = !running && !confirming && string.Equals(_hoveredCommand, button.Command, StringComparison.Ordinal);
             var bounds = button.Bounds;
             var fill = running
                 ? Ver2Palette.RunningPanel
+                : confirming
+                    ? Ver2Palette.RunningPanel
                 : hovered
                     ? Ver2Palette.ButtonHover
                     : Ver2Palette.Button;
-            var border = running || hovered
+            var border = running || hovered || confirming
                 ? Ver2Palette.Accent
                 : Ver2Palette.BorderStrong;
-            var borderWidth = running || hovered ? 3 : 1;
+            var borderWidth = running || hovered || confirming ? 3 : 1;
             FillRoundedRectangle(graphics, bounds, ButtonCornerRadius, fill);
             DrawRoundedRectangle(graphics, bounds, ButtonCornerRadius, border, borderWidth);
 
             using var textBrush = new SolidBrush(Ver2Palette.Text);
             using var mutedBrush = new SolidBrush(Ver2Palette.Muted);
-            var title = running ? "Running..." : button.Label;
+            var title = running ? "Running..." : confirming ? "Click again to confirm" : button.Label;
             DrawText(graphics, title, buttonFont, textBrush, new Rectangle(bounds.Left + 28, bounds.Top + 27, bounds.Width - 56, 36), StringAlignment.Center, StringAlignment.Center);
-            DrawText(graphics, GetButtonHint(button.Command), subFont, mutedBrush, new Rectangle(bounds.Left + 28, bounds.Top + 76, bounds.Width - 56, 24), StringAlignment.Center, StringAlignment.Center);
+            DrawText(graphics, confirming ? button.Label : GetButtonHint(button.Command), subFont, mutedBrush, new Rectangle(bounds.Left + 28, bounds.Top + 76, bounds.Width - 56, 24), StringAlignment.Center, StringAlignment.Center);
         }
     }
 
     private void DrawVer2ConsolePanel(Graphics graphics, Font titleFont, Font consoleFont, Brush textBrush, Brush mutedBrush)
     {
-        var bounds = new Rectangle(ButtonLeft, 550, ContentWidth, 295);
+        var bounds = new Rectangle(ButtonLeft, 690, ContentWidth, 155);
         FillRoundedRectangle(graphics, bounds, 10, Ver2Palette.PanelDark);
         DrawRoundedRectangle(graphics, bounds, 10, Ver2Palette.Border, 1);
         graphics.DrawString("Supervisor output", titleFont, textBrush, bounds.Left + 18, bounds.Top + 14);
@@ -1906,7 +1937,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private static string[] BuildConsoleDisplayLines(string[] sourceLines)
     {
         const int maxChars = 142;
-        const int maxLines = 11;
+        const int maxLines = 5;
         var wrapped = new List<string>();
         foreach (var line in sourceLines)
         {
@@ -2008,6 +2039,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
             "base-stations-on" => "Wake configured stations",
             "base-stations-off" => "Power down configured stations",
             "restart-supervisor" => "Hard restart supervisor",
+            "restart-vr-session" => "Restart SteamVR; resume VRChat",
             _ => command
         };
 

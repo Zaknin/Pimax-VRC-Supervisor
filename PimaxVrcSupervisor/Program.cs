@@ -1668,10 +1668,30 @@ internal struct ConsoleHotkeys
     public bool BaseStationsOff { get; set; }
     public bool OscRouterLaunchOrRestart { get; set; }
     public bool AfterLaunchAppsRoutine { get; set; }
+    public bool RestartVrSession { get; set; }
     public bool ShowHelp { get; set; }
 }
 
 internal sealed record ManualBaseStationActionResult(bool Accepted, string Message);
+
+internal sealed record VrSessionRestartAcceptance(bool Accepted, string? OperationId, string Message)
+{
+    public static VrSessionRestartAcceptance Accept(string operationId, string message) => new(true, operationId, message);
+
+    public static VrSessionRestartAcceptance Reject(string message) => new(false, null, message);
+}
+
+internal sealed record SupervisorOperationalActionSnapshot(
+    string OperationId,
+    string Command,
+    string Source,
+    string Status,
+    string Progress,
+    DateTimeOffset StartedAt,
+    DateTimeOffset? CompletedAt,
+    bool? Success,
+    string? Result,
+    string? Error);
 
 internal sealed record SupervisorStatusSnapshot(
     DateTimeOffset Timestamp,
@@ -1688,7 +1708,9 @@ internal sealed record SupervisorStatusSnapshot(
     string? ShutdownBlockedBy,
     string? ShutdownBlockedElapsed,
     string? BlockingProcesses,
-    string? OperatorWarning);
+    string? OperatorWarning,
+    SupervisorOperationalActionSnapshot? CurrentAction,
+    SupervisorOperationalActionSnapshot? LastActionResult);
 
 internal sealed record SupervisorCommandDefinition(
     string Name,
@@ -1731,7 +1753,8 @@ internal sealed record SupervisorReadOnlyJsonRequest(
 internal sealed record SupervisorActionJsonRequest(
     string? RequestId,
     string? Command,
-    bool? Confirmed);
+    bool? Confirmed,
+    string? Source);
 
 internal sealed record SupervisorLifecycleJsonRequest(
     string? RequestId,
@@ -1822,6 +1845,9 @@ internal sealed class AppSupervisor
 {
     private const int BrokenEyeStartupMaxAttempts = 10;
     private const string ForcedManualReloadMarkerFileName = "PimaxVrcSupervisorForcedManualReload.marker";
+    private const string RestartVrSessionCommandName = "restart-vr-session";
+    private const string SteamVrSteamAppUri = "steam://rungameid/250820";
+    private const string VrChatSteamAppUri = "steam://rungameid/438100";
     private static readonly JsonSerializerOptions CommandBridgeJsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
@@ -1832,6 +1858,9 @@ internal sealed class AppSupervisor
     private static readonly TimeSpan LovenseBluetoothRegistryRecentWindow = TimeSpan.FromHours(1);
     private static readonly TimeSpan DashboardReadinessTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan TerminalUiImmediateExitObservation = TimeSpan.FromMilliseconds(750);
+    private static readonly TimeSpan VrSessionRestartReplacementTimeout = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan VrSessionRestartProcessPollInterval = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan VrSessionRestartHealthyStablePeriod = TimeSpan.FromSeconds(3);
 
     private readonly SupervisorConfig _config;
     private readonly bool _steamVrStart;
@@ -1859,6 +1888,8 @@ internal sealed class AppSupervisor
     private readonly SemaphoreSlim _coreAppRestartLock = new(1, 1);
     private readonly SemaphoreSlim _autoLaunchAppsRoutineLock = new(1, 1);
     private readonly SemaphoreSlim _manualBaseStationActionLock = new(1, 1);
+    private readonly SemaphoreSlim _vrSessionRestartLock = new(1, 1);
+    private readonly object _operationalActionStateLock = new();
     private readonly DateTimeOffset _startedAt = DateTimeOffset.Now;
     private bool? _lastPimaxConnected;
     private bool? _lastMouthTrackerConnected;
@@ -1913,6 +1944,10 @@ internal sealed class AppSupervisor
     private int _desktopTuiCloseOnlyRequested;
     private SupervisorShutdownIntent _acceptedShutdownIntent = SupervisorShutdownIntent.NormalCleanup;
     private string? _operatorWarning;
+    private SupervisorOperationalActionSnapshot? _currentOperationalAction;
+    private SupervisorOperationalActionSnapshot? _lastOperationalActionResult;
+    private DateTimeOffset? _lastVrSessionRestartSuppressionLogAt;
+    private int _vrSessionRestartActive;
 
     public AppSupervisor(
         SupervisorConfig config,
@@ -2097,6 +2132,11 @@ internal sealed class AppSupervisor
                 {
                     RefreshOscGoesBrrrWorkflowState();
                     await HandleConsoleHotkeysAsync(cancellationToken);
+                    if (IsVrSessionRestartActive())
+                    {
+                        continue;
+                    }
+
                     if (_lifecyclePhase == SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit)
                     {
                         var waitingSteamVrDecision = ObserveSteamVrLifecycle("waiting-for-vrchat-restart-or-steamvr-exit");
@@ -3765,6 +3805,7 @@ internal sealed class AppSupervisor
                 "base-stations-off" => await ManualPowerDownBaseStationsCommandAsync(cancellationToken),
                 "restart-osc-router" => await RestartOscRouterCommandAsync(cancellationToken),
                 "reload-autostart-apps" => await ReloadAutostartAppsCommandAsync(cancellationToken),
+                RestartVrSessionCommandName => RestartVrSessionLegacyCommand(),
                 "force-stop-supervisor" => ForceStopSupervisorAndReturn(),
                 _ => "Unknown command: " + commandName
             };
@@ -3845,7 +3886,13 @@ internal sealed class AppSupervisor
         var operatorWarning = string.IsNullOrWhiteSpace(snapshot.OperatorWarning)
             ? ""
             : $"; Warning={snapshot.OperatorWarning}";
-        return $"Mode={snapshot.Mode}; SteamVR={snapshot.SteamVr}; Lifecycle={snapshot.Lifecycle}; CoreApps={snapshot.CoreApps}; BaseStations={snapshot.BaseStations}; OscRouter={snapshot.OscRouter}; OscGoesBrrr={snapshot.OscGoesBrrr}{shutdownProgress}{blockedBySteamVr}{operatorWarning}";
+        var currentAction = snapshot.CurrentAction is null
+            ? ""
+            : $"; CurrentAction={snapshot.CurrentAction.Command}:{snapshot.CurrentAction.Status}({snapshot.CurrentAction.Progress})";
+        var lastAction = snapshot.LastActionResult is null
+            ? ""
+            : $"; LastAction={snapshot.LastActionResult.Command}:{snapshot.LastActionResult.Status}({snapshot.LastActionResult.Result ?? snapshot.LastActionResult.Error ?? snapshot.LastActionResult.Progress})";
+        return $"Mode={snapshot.Mode}; SteamVR={snapshot.SteamVr}; Lifecycle={snapshot.Lifecycle}; CoreApps={snapshot.CoreApps}; BaseStations={snapshot.BaseStations}; OscRouter={snapshot.OscRouter}; OscGoesBrrr={snapshot.OscGoesBrrr}{shutdownProgress}{blockedBySteamVr}{operatorWarning}{currentAction}{lastAction}";
     }
 
     private SupervisorStatusSnapshot BuildSupervisorStatusSnapshot()
@@ -3881,6 +3928,13 @@ internal sealed class AppSupervisor
         var blockingProcesses = _shutdownBlockedBySteamVrSince is null
             ? null
             : DescribeRunningProcesses(_config.SteamVrServerProcessNames);
+        SupervisorOperationalActionSnapshot? currentAction;
+        SupervisorOperationalActionSnapshot? lastAction;
+        lock (_operationalActionStateLock)
+        {
+            currentAction = _currentOperationalAction;
+            lastAction = _lastOperationalActionResult;
+        }
 
         return new SupervisorStatusSnapshot(
             now,
@@ -3897,7 +3951,9 @@ internal sealed class AppSupervisor
             _shutdownBlockedBySteamVrSince is null ? null : "SteamVR",
             shutdownBlockedElapsed,
             blockingProcesses,
-            _operatorWarning);
+            _operatorWarning,
+            currentAction,
+            lastAction);
     }
 
     private SupervisorCommandCapabilitiesSnapshot BuildSupervisorCommandCapabilitiesSnapshot()
@@ -4043,6 +4099,18 @@ internal sealed class AppSupervisor
                     "CoreApps",
                     "ActionResult",
                     "Disruptive: reloads or starts configured Autostart apps.",
+                    requiresConfirmation: true,
+                    actionSupported: true,
+                    actionSafetyCategory: "Disruptive",
+                    tuiExecutable: true,
+                    blockedReason: null),
+                CommandDefinition(
+                    RestartVrSessionCommandName,
+                    "Restart VR Session",
+                    "Restarts SteamVR through Steam and resumes VRChat only if it was running at acceptance.",
+                    "Session",
+                    "ActionResult",
+                    "Disruptive: restarts SteamVR through Steam while preserving Supervisor-owned base-station and monitor policy.",
                     requiresConfirmation: true,
                     actionSupported: true,
                     actionSafetyCategory: "Disruptive",
@@ -4238,7 +4306,8 @@ internal sealed class AppSupervisor
             request = new SupervisorActionJsonRequest(
                 TryReadStringProperty(document.RootElement, "requestId"),
                 TryReadStringProperty(document.RootElement, "command"),
-                TryReadBooleanProperty(document.RootElement, "confirmed"));
+                TryReadBooleanProperty(document.RootElement, "confirmed"),
+                TryReadStringProperty(document.RootElement, "source"));
         }
         catch (JsonException ex)
         {
@@ -4260,7 +4329,7 @@ internal sealed class AppSupervisor
                 success: false,
                 message: "action-json request requires a command.",
                 data: null,
-                error: "Missing command. Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps.");
+                error: "Missing command. Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps, restart-vr-session.");
         }
 
         if (string.Equals(canonicalCommand, "force-stop-supervisor", StringComparison.Ordinal))
@@ -4293,6 +4362,7 @@ internal sealed class AppSupervisor
             "base-stations-off" => await ExecuteConfirmedBaseStationActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ManualPowerDownBaseStationsAsync, cancellationToken),
             "restart-osc-router" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, RestartOscRouterCommandAsync, cancellationToken),
             "reload-autostart-apps" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ReloadAutostartAppsCommandAsync, cancellationToken),
+            RestartVrSessionCommandName => ExecuteConfirmedVrSessionRestartAction(request.RequestId, canonicalCommand, request.Confirmed, request.Source),
             "status" or "status-json" or "commands-json" or "log" or "log-json" or "query-json" or "pimax-connectivity-json" => ActionJsonResult(
                 request.RequestId,
                 canonicalCommand,
@@ -4306,7 +4376,7 @@ internal sealed class AppSupervisor
                 success: false,
                 message: $"Unsupported action-json command: {canonicalCommand}.",
                 data: null,
-                error: "Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps.")
+                error: "Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps, restart-vr-session.")
         };
     }
 
@@ -4541,6 +4611,387 @@ internal sealed class AppSupervisor
                 message: $"{canonicalCommand} action failed.",
                 data: null,
                 error: ex.Message);
+        }
+    }
+
+    private SupervisorCommandResult ExecuteConfirmedVrSessionRestartAction(
+        string? requestId,
+        string canonicalCommand,
+        bool? confirmed,
+        string? source)
+    {
+        if (confirmed != true)
+        {
+            return ActionJsonResult(
+                requestId,
+                canonicalCommand,
+                success: false,
+                message: $"{canonicalCommand} requires confirmed=true.",
+                data: null,
+                error: "Structured action requires JSON boolean confirmed=true.");
+        }
+
+        var acceptance = TryAcceptVrSessionRestart(NormalizeActionSource(source, "structured action"));
+        return ActionJsonResult(
+            requestId,
+            canonicalCommand,
+            success: acceptance.Accepted,
+            message: acceptance.Message,
+            data: new
+            {
+                operationId = acceptance.OperationId,
+                accepted = acceptance.Accepted,
+                status = acceptance.Accepted ? "accepted" : "rejected"
+            },
+            error: acceptance.Accepted ? null : acceptance.Message);
+    }
+
+    private string RestartVrSessionLegacyCommand()
+    {
+        var acceptance = TryAcceptVrSessionRestart("legacy command");
+        return acceptance.Message;
+    }
+
+    private VrSessionRestartAcceptance TryAcceptVrSessionRestart(string source)
+    {
+        if (Volatile.Read(ref _gracefulShutdownRequested) == 1)
+        {
+            return VrSessionRestartAcceptance.Reject("Supervisor shutdown is in progress; VR session restart is disabled.");
+        }
+
+        if (!_vrSessionRestartLock.Wait(0))
+        {
+            return VrSessionRestartAcceptance.Reject("VR session restart is already running.");
+        }
+
+        var operationStarted = false;
+        SteamVrRuntimeSnapshot? oldRuntime = null;
+        try
+        {
+            oldRuntime = CaptureCurrentSteamVrRuntime();
+            if (oldRuntime is null)
+            {
+                _vrSessionRestartLock.Release();
+                return VrSessionRestartAcceptance.Reject(
+                    $"SteamVR is not running; cannot restart VR session. Expected process: {string.Join(", ", _config.SteamVrServerProcessNames)}.");
+            }
+
+            var operationId = "vrrestart-" + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture);
+            var resumeVrChat = IsAnyProcessRunning(_config.WatchedShutdownProcessNames);
+            SetCurrentOperationalAction(
+                operationId,
+                RestartVrSessionCommandName,
+                source,
+                "accepted",
+                $"Accepted. oldSteamVr={oldRuntime.Identity}; resumeVrChat={resumeVrChat}.");
+            Volatile.Write(ref _vrSessionRestartActive, 1);
+            _steamVrLifecycleEvidence.EstablishBaseline();
+            WriteDiagnosticEvent(
+                "vrSessionRestart; accepted"
+                + $"; operationId={operationId}"
+                + $"; source={source}"
+                + $"; oldSteamVr={oldRuntime.Identity}"
+                + $"; resumeVrChat={resumeVrChat}"
+                + $"; requestInterface={source}");
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await RunVrSessionRestartOperationAsync(operationId, oldRuntime, resumeVrChat, _shutdown.Token);
+                }
+                finally
+                {
+                    Volatile.Write(ref _vrSessionRestartActive, 0);
+                    _vrSessionRestartLock.Release();
+                }
+            });
+            operationStarted = true;
+
+            return VrSessionRestartAcceptance.Accept(
+                operationId,
+                $"VR session restart accepted. operationId={operationId}; oldSteamVr={oldRuntime.Identity}; resumeVrChat={resumeVrChat}.");
+        }
+        catch (Exception ex)
+        {
+            if (!operationStarted)
+            {
+                Volatile.Write(ref _vrSessionRestartActive, 0);
+                _vrSessionRestartLock.Release();
+            }
+
+            return VrSessionRestartAcceptance.Reject("Could not accept VR session restart: " + ex.Message);
+        }
+    }
+
+    private async Task RunVrSessionRestartOperationAsync(
+        string operationId,
+        SteamVrRuntimeSnapshot oldRuntime,
+        bool resumeVrChat,
+        CancellationToken cancellationToken)
+    {
+        var success = false;
+        var result = "";
+        try
+        {
+            UpdateCurrentOperationalAction(operationId, "running", "Requesting SteamVR restart through Steam.");
+            Console.WriteLine($"Restarting VR session through Steam. operationId={operationId}; oldSteamVr={oldRuntime.Identity}; resumeVrChat={resumeVrChat}");
+            LaunchSteamUri(SteamVrSteamAppUri, "SteamVR");
+
+            UpdateCurrentOperationalAction(operationId, "running", "Waiting for the old SteamVR runtime to disappear.");
+            if (!await WaitForSteamVrRuntimeToDisappearAsync(oldRuntime.Identity, VrSessionRestartReplacementTimeout, cancellationToken))
+            {
+                throw new TimeoutException("Old SteamVR runtime did not disappear within the bounded restart window.");
+            }
+
+            UpdateCurrentOperationalAction(operationId, "running", "Waiting for replacement SteamVR runtime.");
+            var replacement = await WaitForReplacementSteamVrRuntimeAsync(oldRuntime.Identity, VrSessionRestartReplacementTimeout, cancellationToken)
+                ?? throw new TimeoutException("Replacement SteamVR runtime did not become healthy within the bounded restart window.");
+            Console.WriteLine($"Replacement SteamVR runtime detected. operationId={operationId}; newSteamVr={replacement.Identity}");
+            UpdateCurrentOperationalAction(operationId, "running", $"Replacement SteamVR runtime detected: {replacement.Identity}.");
+
+            if (resumeVrChat)
+            {
+                _lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit;
+                await StopManagedAppsWhileWaitingForWatchedProcessRestartAsync(cancellationToken);
+                if (!IsAnyProcessRunning(_config.WatchedShutdownProcessNames))
+                {
+                    UpdateCurrentOperationalAction(operationId, "running", "Launching VRChat through Steam.");
+                    LaunchSteamUri(VrChatSteamAppUri, "VRChat");
+                }
+                else
+                {
+                    UpdateCurrentOperationalAction(operationId, "running", "VRChat is already running after SteamVR restart; attaching.");
+                }
+
+                if (!await WaitForProcessesRunningAsync(_config.WatchedShutdownProcessNames, TimeSpan.FromSeconds(Math.Max(30, _config.StartupTimeoutSeconds)), cancellationToken))
+                {
+                    throw new TimeoutException($"VRChat did not become running within {Math.Max(30, _config.StartupTimeoutSeconds)} seconds.");
+                }
+
+                Console.WriteLine("VRChat is running after VR session restart. Running startup routine.");
+                await StartSessionAfterWatchedProcessRestartAsync(cancellationToken);
+                result = "VR session restart completed; SteamVR replaced and VRChat resumed.";
+            }
+            else
+            {
+                result = "VR session restart completed; SteamVR replaced and VRChat was not running at acceptance, so it was not launched.";
+            }
+
+            success = true;
+            CompleteCurrentOperationalAction(operationId, success, result, null);
+            WriteDiagnosticEvent($"vrSessionRestart; completed; operationId={operationId}; success=true; result={result}");
+            Console.WriteLine(result);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _operatorWarning = "VR session restart did not complete; Supervisor controls remain available.";
+            if (resumeVrChat)
+            {
+                _lifecyclePhase = SupervisorLifecyclePhase.WaitingForVrChatRestartOrSteamVrExit;
+            }
+
+            result = "VR session restart did not complete.";
+            CompleteCurrentOperationalAction(operationId, success: false, result, ex.Message);
+            WriteDiagnosticEvent($"vrSessionRestart; completed; operationId={operationId}; success=false; error={ex.Message}");
+            Console.WriteLine($"{result} {ex.Message}");
+        }
+    }
+
+    private void SetCurrentOperationalAction(string operationId, string command, string source, string status, string progress)
+    {
+        lock (_operationalActionStateLock)
+        {
+            _currentOperationalAction = new SupervisorOperationalActionSnapshot(
+                operationId,
+                command,
+                source,
+                status,
+                progress,
+                DateTimeOffset.UtcNow,
+                null,
+                null,
+                null,
+                null);
+        }
+    }
+
+    private void UpdateCurrentOperationalAction(string operationId, string status, string progress)
+    {
+        lock (_operationalActionStateLock)
+        {
+            if (_currentOperationalAction is not { } current || !string.Equals(current.OperationId, operationId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _currentOperationalAction = current with
+            {
+                Status = status,
+                Progress = progress
+            };
+        }
+    }
+
+    private void CompleteCurrentOperationalAction(string operationId, bool success, string result, string? error)
+    {
+        lock (_operationalActionStateLock)
+        {
+            if (_currentOperationalAction is not { } current || !string.Equals(current.OperationId, operationId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _lastOperationalActionResult = current with
+            {
+                Status = success ? "succeeded" : "failed",
+                Progress = result,
+                CompletedAt = DateTimeOffset.UtcNow,
+                Success = success,
+                Result = result,
+                Error = error
+            };
+            _currentOperationalAction = null;
+        }
+    }
+
+    private bool IsVrSessionRestartActive()
+        => Volatile.Read(ref _vrSessionRestartActive) == 1;
+
+    private static string NormalizeActionSource(string? source, string fallback)
+        => string.IsNullOrWhiteSpace(source) ? fallback : source.Trim();
+
+    private SteamVrRuntimeSnapshot? CaptureCurrentSteamVrRuntime()
+    {
+        var processes = GetProcesses(_config.SteamVrServerProcessNames);
+        try
+        {
+            return processes
+                .Select(TryCreateSteamVrRuntimeSnapshot)
+                .Where(snapshot => snapshot is not null)
+                .Cast<SteamVrRuntimeSnapshot>()
+                .OrderBy(candidate => candidate.StartTime ?? DateTimeOffset.MaxValue)
+                .ThenBy(candidate => candidate.Pid)
+                .FirstOrDefault();
+        }
+        finally
+        {
+            processes.ForEach(process => process.Dispose());
+        }
+    }
+
+    private bool IsSteamVrRuntimeRunning(SteamVrRuntimeIdentity identity)
+    {
+        var processes = GetProcesses(_config.SteamVrServerProcessNames);
+        try
+        {
+            return processes
+                .Select(TryCreateSteamVrRuntimeSnapshot)
+                .Where(snapshot => snapshot is not null)
+                .Cast<SteamVrRuntimeSnapshot>()
+                .Any(snapshot => snapshot.Identity == identity);
+        }
+        finally
+        {
+            processes.ForEach(process => process.Dispose());
+        }
+    }
+
+    private async Task<bool> WaitForSteamVrRuntimeToDisappearAsync(SteamVrRuntimeIdentity oldRuntime, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        var lastProgressAt = DateTimeOffset.MinValue;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var decision = ObserveSteamVrLifecycle("vr-session-restart-wait-old-runtime");
+            _ = await ApplySteamVrLifecycleDecisionAsync(decision, "SteamVR is restarting for an explicit VR session restart.", cancellationToken);
+            if (!IsSteamVrRuntimeRunning(oldRuntime))
+            {
+                return true;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            if (now - lastProgressAt >= TimeSpan.FromSeconds(10))
+            {
+                lastProgressAt = now;
+                Console.WriteLine($"Waiting for old SteamVR runtime to close. oldSteamVr={oldRuntime}");
+            }
+
+            await Task.Delay(VrSessionRestartProcessPollInterval, cancellationToken);
+        }
+
+        return false;
+    }
+
+    private async Task<SteamVrRuntimeSnapshot?> WaitForReplacementSteamVrRuntimeAsync(SteamVrRuntimeIdentity oldRuntime, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        SteamVrRuntimeIdentity? candidateIdentity = null;
+        DateTimeOffset candidateStableSince = DateTimeOffset.MinValue;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var decision = ObserveSteamVrLifecycle("vr-session-restart-wait-replacement-runtime");
+            _ = await ApplySteamVrLifecycleDecisionAsync(decision, "SteamVR is restarting for an explicit VR session restart.", cancellationToken);
+            var current = CaptureCurrentSteamVrRuntime();
+            if (current is not null && current.Identity != oldRuntime)
+            {
+                var now = DateTimeOffset.UtcNow;
+                if (candidateIdentity != current.Identity)
+                {
+                    candidateIdentity = current.Identity;
+                    candidateStableSince = now;
+                }
+
+                if (now - candidateStableSince >= VrSessionRestartHealthyStablePeriod)
+                {
+                    return current;
+                }
+            }
+            else
+            {
+                candidateIdentity = null;
+                candidateStableSince = DateTimeOffset.MinValue;
+            }
+
+            await Task.Delay(VrSessionRestartProcessPollInterval, cancellationToken);
+        }
+
+        return null;
+    }
+
+    private static async Task<bool> WaitForProcessesRunningAsync(string[] processNames, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (IsAnyProcessRunning(processNames))
+            {
+                return true;
+            }
+
+            await Task.Delay(VrSessionRestartProcessPollInterval, cancellationToken);
+        }
+
+        return false;
+    }
+
+    private static void LaunchSteamUri(string uri, string displayName)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = uri,
+                UseShellExecute = true,
+                ErrorDialog = false
+            });
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"{displayName} Steam URI launch failed: {ex.Message}", ex);
         }
     }
 
@@ -6706,6 +7157,19 @@ internal sealed class AppSupervisor
         string cleanupMessage,
         CancellationToken cancellationToken)
     {
+        if (IsVrSessionRestartActive()
+            && (decision.MonitorDisposition == SteamVrMonitorDisposition.RestoreIfOwned || decision.RunNormalCleanup))
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (_lastVrSessionRestartSuppressionLogAt is null || now - _lastVrSessionRestartSuppressionLogAt >= TimeSpan.FromSeconds(10))
+            {
+                _lastVrSessionRestartSuppressionLogAt = now;
+                Console.WriteLine("SteamVR restart is in progress; preserving monitor and base-station state during the bounded restart window.");
+            }
+
+            return false;
+        }
+
         if (decision.MonitorDisposition == SteamVrMonitorDisposition.RestoreIfOwned)
         {
             RestoreSupervisorOwnedMonitorLayout();
@@ -7255,6 +7719,12 @@ internal sealed class AppSupervisor
             routineInvoked = true;
         }
 
+        if (hotkeys.RestartVrSession)
+        {
+            Console.WriteLine(RestartVrSessionLegacyCommand());
+            routineInvoked = true;
+        }
+
         if (routineInvoked)
         {
             PrintConsoleShortcutHelp();
@@ -7335,8 +7805,9 @@ internal sealed class AppSupervisor
         Console.WriteLine("4 = Turn off all controlled base stations");
         Console.WriteLine("5 = OSC Router launch/restart");
         Console.WriteLine("6 = Reload Autostart apps");
+        Console.WriteLine("7 = Restart VR Session");
         Console.WriteLine("F1 = Show console shortcuts");
-        Console.WriteLine("Terminal UI primary shortcuts: 0 help, F5 refresh, 1-6 actions, Q quit Terminal UI, Enter confirm, Esc cancel.");
+        Console.WriteLine("Terminal UI primary shortcuts: 0 help, F5 refresh, 1-7 actions, Q quit Terminal UI, Enter confirm, Esc cancel.");
     }
 
     private void RefreshOscGoesBrrrWorkflowState()
@@ -7424,6 +7895,10 @@ internal sealed class AppSupervisor
                 else if (key.Key == ConsoleKey.D6)
                 {
                     hotkeys.AfterLaunchAppsRoutine = true;
+                }
+                else if (key.Key == ConsoleKey.D7)
+                {
+                    hotkeys.RestartVrSession = true;
                 }
                 else if (key.Key == ConsoleKey.F1)
                 {

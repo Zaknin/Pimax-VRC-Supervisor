@@ -15,7 +15,7 @@ Use it to:
 |---|---|
 | `0` | Help |
 | `F5` | Refresh |
-| `1`-`6` | Open action confirmation |
+| `1`-`7` | Open action confirmation |
 | `Enter` / `Space` | Confirm modal |
 | `Esc` | Open exit options, or cancel an open modal |
 | `Q` | Open exit options |
@@ -45,6 +45,8 @@ Manual Terminal UI launches stay open while disconnected until you exit.
 
 When SteamVR exits from the normal SteamVR UI, the Supervisor restores Supervisor-owned monitors, runs cleanup, and exits. A short SteamVR restart/failure recovery window keeps stations powered while the existing Supervisor waits for and adopts a replacement runtime; it does not restart SteamVR or depend on VRChat.
 
+`7 VR Restart` is an explicit session action. It asks Steam to restart SteamVR, keeps Supervisor-owned monitor and base-station policy in place during the bounded restart window, and resumes VRChat only if VRChat was already running when you confirmed the action. If VRChat was not running at confirmation time, the action restarts SteamVR and does not launch VRChat.
+
 If Supervisor exits by an explicit Terminal UI Supervisor-exit choice while the scheduled Watcher is running, the Watcher skips automatic relaunch for the current SteamVR `vrserver` process identity. A later SteamVR session with a new PID/start-time identity can launch Supervisor normally.
 
 Restart recovery uses bounded current-session SteamVR log hints plus replacement-process observation. It restores monitors immediately, has no multi-minute grace period, and does not add a persistent diagnostics journal.
@@ -59,5 +61,6 @@ Terminal UI can run the same normal session actions as the classic console:
 - turn base stations off
 - restart OSC Router
 - reload Autostart apps
+- restart the VR session
 
 Actions are validated and confirmed. Force-stop behavior is not exposed in Terminal UI.

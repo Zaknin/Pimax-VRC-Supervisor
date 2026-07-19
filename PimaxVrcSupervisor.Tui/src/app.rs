@@ -791,6 +791,18 @@ impl App {
             return Some(format!("{} is already running.", candidate.display_name()));
         }
 
+        if candidate == TuiAction::RestartVrSession && !self.running_actions.is_empty() {
+            return Some("Another action is already running.".to_string());
+        }
+
+        if self
+            .running_actions
+            .iter()
+            .any(|running| running.action == TuiAction::RestartVrSession)
+        {
+            return Some("VR Restart is already running.".to_string());
+        }
+
         let base_station_power_conflict = matches!(
             candidate,
             TuiAction::BaseStationsOn | TuiAction::BaseStationsOff

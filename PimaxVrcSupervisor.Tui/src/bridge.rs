@@ -59,8 +59,9 @@ impl SupervisorBridge {
     }
 
     pub fn execute_tui_action(&self, action: TuiAction) -> Result<CommandResult> {
-        let request_json =
-            serde_json::to_string(&json!({ "command": action.command_name(), "confirmed": true }))?;
+        let request_json = serde_json::to_string(
+            &json!({ "command": action.command_name(), "confirmed": true, "source": "Desktop TUI" }),
+        )?;
         let response_line = self.send_line(
             &format!("action-json {request_json}"),
             ACTION_READ_WRITE_TIMEOUT,

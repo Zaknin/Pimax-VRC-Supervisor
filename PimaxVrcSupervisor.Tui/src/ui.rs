@@ -210,13 +210,13 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         ));
     }
 
-    if app.connection == ConnectionState::Disconnected {
-        if let Some(error) = &app.last_error {
-            line.push(Span::styled(
-                format!("   {}", truncate(&operator_error_message(error), 52)),
-                theme::error_style(),
-            ));
-        }
+    if app.connection == ConnectionState::Disconnected
+        && let Some(error) = &app.last_error
+    {
+        line.push(Span::styled(
+            format!("   {}", truncate(&operator_error_message(error), 52)),
+            theme::error_style(),
+        ));
     }
 
     frame.render_widget(
@@ -442,7 +442,7 @@ fn render_small_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(
         Paragraph::new(vec![
             line,
-            Line::from("0 Help  F5 Refresh  1-6 Actions  Esc Exit"),
+            Line::from("0 Help  F5 Refresh  1-7 Actions  Esc Exit"),
         ])
         .block(theme::accent_panel_block("Dashboard"))
         .wrap(Wrap { trim: true }),
@@ -533,7 +533,20 @@ fn render_small_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: I
 
 fn render_small_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
     let mut lines = Vec::new();
-    if let Some(running) = app.running_actions.first() {
+    if let Some(current) = &app.status.current_action {
+        lines.push(Line::from(vec![
+            Span::styled("Running: ", theme::label_style()),
+            Span::styled(
+                display_name_for_command(&current.command),
+                foreground(theme::TEXT_PRIMARY),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                truncate(&current.progress, area.width.saturating_sub(16) as usize),
+                foreground(theme::TEXT_SECONDARY),
+            ),
+        ]));
+    } else if let Some(running) = app.running_actions.first() {
         lines.push(Line::from(vec![
             Span::styled("Running: ", theme::label_style()),
             Span::styled(
@@ -607,13 +620,21 @@ fn render_actions(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: Instant
         return;
     }
 
-    let row_count = TuiAction::ALL.len().div_ceil(3);
+    let row_count = 3;
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints(vec![Constraint::Ratio(1, row_count as u32); row_count])
         .split(inner);
 
     for row_index in 0..row_count {
+        if row_index == 2 {
+            if let Some(action) = TuiAction::ALL.get(6).copied() {
+                render_action_card(frame, rows[row_index], app, action, now);
+            }
+
+            continue;
+        }
+
         let columns = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -698,7 +719,17 @@ fn render_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Ins
         lines.push(Line::from(""));
     }
 
-    if app.running_actions.is_empty() {
+    if let Some(current) = &app.status.current_action {
+        lines.push(Line::from(vec![
+            Span::styled(
+                display_name_for_command(&current.command),
+                theme::primary_style(),
+            ),
+            Span::raw("  "),
+            Span::styled(current.status.to_ascii_uppercase(), theme::success_style()),
+        ]));
+        lines.push(Line::from(Span::raw(truncate(&current.progress, 92))));
+    } else if app.running_actions.is_empty() {
         lines.push(Line::from(Span::styled(
             "No running actions.",
             theme::secondary_style(),
@@ -730,7 +761,24 @@ fn render_action_activity(frame: &mut Frame<'_>, area: Rect, app: &App, now: Ins
         "Last result",
         theme::title_style(),
     )));
-    if let Some(outcome) = app.last_action_outcome {
+    if let Some(last) = &app.status.last_action_result {
+        let message = if !last.result.is_empty() && last.result != "-" {
+            &last.result
+        } else if !last.error.is_empty() && last.error != "-" {
+            &last.error
+        } else {
+            &last.progress
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                display_name_for_command(&last.command),
+                theme::primary_style(),
+            ),
+            Span::raw("  "),
+            Span::styled(last.status.to_ascii_uppercase(), theme::secondary_style()),
+        ]));
+        lines.push(Line::from(Span::raw(truncate(message, 92))));
+    } else if let Some(outcome) = app.last_action_outcome {
         let command = app.last_action_command.as_deref().unwrap_or("action");
         let display_name = display_name_for_command(command);
         let when = app
@@ -991,8 +1039,9 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         help_line("4", "Base Stations Off"),
         help_line("5", "Restart OSC Router"),
         help_line("6", "Reload Autostart Apps"),
+        help_line("7", "VR Restart"),
         Line::from(""),
-        help_line("1-6", "Open confirmation from keyboard"),
+        help_line("1-7", "Open confirmation from keyboard"),
         help_line("MOUSE", "Click action card to start immediately"),
         help_line("ENTER", "Confirm modal action"),
         help_line("SPACE", "Confirm modal action"),
@@ -1193,12 +1242,14 @@ fn small_action_label(action: TuiAction) -> &'static str {
         TuiAction::BaseStationsOff => "Off",
         TuiAction::RestartOscRouter => "OSC",
         TuiAction::ReloadAutostartApps => "Auto",
+        TuiAction::RestartVrSession => "VR",
     }
 }
 
 fn compact_action_label(action: TuiAction) -> &'static str {
     match action {
         TuiAction::ReloadAutostartApps => "Auto",
+        TuiAction::RestartVrSession => "VR Restart",
         _ => action.short_label(),
     }
 }
@@ -1442,11 +1493,11 @@ fn register_modal_clicks(app: &mut App, popup: Rect) {
 
 fn shortcut_line(width: u16) -> &'static str {
     if width >= 120 {
-        "0 Help  F5 Refresh  Wheel Logs  End/F Follow  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  Esc Exit"
+        "0 Help  F5 Refresh  Wheel Logs  End/F Follow  1 Core  2 OGB  3 On  4 Off  5 OSC  6 Auto  7 VR  Esc Exit"
     } else if width >= 100 {
-        "0 Help  F5 Refresh  1-6 Actions  End/F Logs  Esc Exit"
+        "0 Help  F5 Refresh  1-7 Actions  End/F Logs  Esc Exit"
     } else {
-        "0 Help  F5 Refresh  1-6 Actions  Esc Exit"
+        "0 Help  F5 Refresh  1-7 Actions  Esc Exit"
     }
 }
 

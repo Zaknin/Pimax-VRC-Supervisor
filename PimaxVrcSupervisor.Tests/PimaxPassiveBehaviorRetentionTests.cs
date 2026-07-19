@@ -78,6 +78,48 @@ public sealed class PimaxPassiveBehaviorRetentionTests
     }
 
     [Fact]
+    public void UnifiedVrSessionRestartIsSingleSupervisorOwnedAction()
+    {
+        var source = ProgramSource();
+        var actionRouter = Slice(
+            source,
+            "private async Task<SupervisorCommandResult> ExecuteActionJsonAsync",
+            "private async Task<SupervisorCommandResult> ExecuteLifecycleJsonAsync");
+        var operation = Slice(
+            source,
+            "private VrSessionRestartAcceptance TryAcceptVrSessionRestart",
+            "private static SupervisorCommandResult ActionJsonResult");
+
+        Assert.Contains("restart-vr-session", actionRouter, StringComparison.Ordinal);
+        Assert.Contains("ExecuteConfirmedVrSessionRestartAction", actionRouter, StringComparison.Ordinal);
+        Assert.Contains("SteamVR is not running; cannot restart VR session", operation, StringComparison.Ordinal);
+        Assert.Contains("resumeVrChat = IsAnyProcessRunning(_config.WatchedShutdownProcessNames)", operation, StringComparison.Ordinal);
+        Assert.Contains("LaunchSteamUri(SteamVrSteamAppUri, \"SteamVR\")", operation, StringComparison.Ordinal);
+        Assert.Contains("LaunchSteamUri(VrChatSteamAppUri, \"VRChat\")", operation, StringComparison.Ordinal);
+        Assert.Contains("WaitForReplacementSteamVrRuntimeAsync", operation, StringComparison.Ordinal);
+        Assert.Contains("StopManagedAppsWhileWaitingForWatchedProcessRestartAsync", operation, StringComparison.Ordinal);
+        Assert.Contains("StartSessionAfterWatchedProcessRestartAsync", operation, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Kill(", operation, StringComparison.Ordinal);
+        Assert.DoesNotContain("StopService(", operation, StringComparison.Ordinal);
+        Assert.DoesNotContain("OpenVR", operation, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void VrSessionRestartStateIsExposedThroughStatusSnapshot()
+    {
+        var source = ProgramSource();
+        var status = Slice(
+            source,
+            "private SupervisorStatusSnapshot BuildSupervisorStatusSnapshot()",
+            "private SupervisorCommandCapabilitiesSnapshot BuildSupervisorCommandCapabilitiesSnapshot()");
+
+        Assert.Contains("currentAction", status, StringComparison.Ordinal);
+        Assert.Contains("lastAction", status, StringComparison.Ordinal);
+        Assert.Contains("_currentOperationalAction", status, StringComparison.Ordinal);
+        Assert.Contains("_lastOperationalActionResult", status, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void UnsupportedExplicitCommandGuardIsNonzeroAndPrecedesConfigurationLoad()
     {
         var source = ProgramSource();
