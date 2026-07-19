@@ -94,6 +94,21 @@ internal sealed record SteamVrRecoveryDecision(
     int ConsecutiveReplacementAdoptions,
     string? EvidenceMarker);
 
+internal static class SteamVrRequestedRestartExitClassifier
+{
+    public static bool IsExpectedOldRuntimeExit(
+        bool restartActive,
+        SteamVrRuntimeIdentity? expectedOldRuntime,
+        SteamVrRecoveryDecision decision)
+        => restartActive
+           && expectedOldRuntime is not null
+           && decision.LossDetected
+           && !decision.ReplacementAdopted
+           && decision.Classification != SteamVrRecoveryClassification.SupervisorExit
+           && decision.PreviousRuntime == expectedOldRuntime
+           && decision.CurrentRuntime is null;
+}
+
 /// <summary>
 /// Owns the bounded decision-making around a managed SteamVR runtime disappearance.
 /// It never launches a process or changes hardware state; Program performs those actions

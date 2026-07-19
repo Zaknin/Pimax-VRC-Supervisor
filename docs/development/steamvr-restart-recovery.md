@@ -65,3 +65,13 @@ Disappearance of the captured PID/start-time identity is the authoritative shutd
 After the old identity disappears, Supervisor checks immediately for a different `vrserver` identity. A replacement already started by Steam or the user is adopted without a duplicate launch. Otherwise Supervisor automatically invokes the existing `steam://rungameid/250820` path, waits for a different identity, and requires the existing readiness interval before reporting success.
 
 If replacement launch or appearance fails after the old runtime has exited, Supervisor remains available in manual-recovery state and action `7` resolves to Start SteamVR. Base-station power and monitor topology remain preserved. VRChat resume remains conditional on the intent captured at acceptance, and a later normal SteamVR exit after successful adoption still uses the full existing cleanup path.
+
+## Phase32B2E expected requested shutdown
+
+An accepted restart records the exact old `vrserver` PID/start-time identity before it publishes active restart intent. If lifecycle monitoring observes that identity disappear while the bounded operation is active, Supervisor classifies the transition as an expected requested shutdown before applying generic recovery presentation.
+
+The shared console emits `Expected SteamVR shutdown detected for requested restart.` at most once. That informational line is consumed consistently by the classic console, Terminal UI, and SteamVR overlay status projection. It does not set an operator warning, trigger an automatic result modal, restore monitors, power down base stations, or run final session cleanup.
+
+The classification is identity-bound. A loss with no accepted restart, cleared intent, or a different runtime identity remains eligible for the existing unexpected-exit warning and bounded safety behavior. A deliberate final SteamVR UI exit after the restart remains separate: current-session shutdown evidence continues to select normal managed-app cleanup, configured base-station power-down, monitor restoration, and Supervisor/Terminal UI exit.
+
+The expected-transition message and the existing restart-suppression message share a once-only gate, preventing repeated or contradictory lifecycle lines while polling. The restart coordinator, shutdown command, Steam launch path, replacement identity/readiness checks, and conditional VRChat recovery are unchanged.

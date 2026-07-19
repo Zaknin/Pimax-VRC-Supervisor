@@ -1953,7 +1953,8 @@ internal sealed class AppSupervisor
     private string? _operatorWarning;
     private SupervisorOperationalActionSnapshot? _currentOperationalAction;
     private SupervisorOperationalActionSnapshot? _lastOperationalActionResult;
-    private DateTimeOffset? _lastVrSessionRestartSuppressionLogAt;
+    private SteamVrRuntimeIdentity? _vrSessionRestartExpectedOldRuntime;
+    private int _vrSessionRestartLifecycleMessageReported;
     private int _vrSessionRestartActive;
 
     public AppSupervisor(
@@ -4840,6 +4841,8 @@ internal sealed class AppSupervisor
                 source,
                 "accepted",
                 $"Accepted. oldSteamVr={oldRuntime.Identity}; resumeVrChat={resumeVrChat}.");
+            Volatile.Write(ref _vrSessionRestartExpectedOldRuntime, oldRuntime.Identity);
+            Volatile.Write(ref _vrSessionRestartLifecycleMessageReported, 0);
             Volatile.Write(ref _vrSessionRestartActive, 1);
             _steamVrLifecycleEvidence.EstablishBaseline();
             WriteDiagnosticEvent(
@@ -4864,7 +4867,8 @@ internal sealed class AppSupervisor
                 finally
                 {
                     Volatile.Write(ref _vrSessionRestartActive, 0);
-                    _lastVrSessionRestartSuppressionLogAt = null;
+                    Volatile.Write(ref _vrSessionRestartExpectedOldRuntime, null);
+                    Volatile.Write(ref _vrSessionRestartLifecycleMessageReported, 0);
                     _vrSessionRestartLock.Release();
                 }
             });
@@ -4879,6 +4883,8 @@ internal sealed class AppSupervisor
             if (!operationStarted)
             {
                 Volatile.Write(ref _vrSessionRestartActive, 0);
+                Volatile.Write(ref _vrSessionRestartExpectedOldRuntime, null);
+                Volatile.Write(ref _vrSessionRestartLifecycleMessageReported, 0);
                 _vrSessionRestartLock.Release();
             }
 
@@ -5148,12 +5154,25 @@ internal sealed class AppSupervisor
                 Error = error
             };
             _currentOperationalAction = null;
-            _lastVrSessionRestartSuppressionLogAt = null;
         }
     }
 
     private bool IsVrSessionRestartActive()
         => Volatile.Read(ref _vrSessionRestartActive) == 1;
+
+    private bool IsExpectedSteamVrShutdownForRequestedRestart(SteamVrRecoveryDecision decision)
+        => SteamVrRequestedRestartExitClassifier.IsExpectedOldRuntimeExit(
+            IsVrSessionRestartActive(),
+            Volatile.Read(ref _vrSessionRestartExpectedOldRuntime),
+            decision);
+
+    private void ReportVrSessionRestartLifecycleOnce(string message)
+    {
+        if (Interlocked.CompareExchange(ref _vrSessionRestartLifecycleMessageReported, 1, 0) == 0)
+        {
+            Console.WriteLine(message);
+        }
+    }
 
     private static string NormalizeActionSource(string? source, string fallback)
         => string.IsNullOrWhiteSpace(source) ? fallback : source.Trim();
@@ -7504,16 +7523,17 @@ internal sealed class AppSupervisor
         string cleanupMessage,
         CancellationToken cancellationToken)
     {
+        if (IsExpectedSteamVrShutdownForRequestedRestart(decision))
+        {
+            ReportVrSessionRestartLifecycleOnce("Expected SteamVR shutdown detected for requested restart.");
+            return false;
+        }
+
         if (IsVrSessionRestartActive()
             && (decision.MonitorDisposition == SteamVrMonitorDisposition.RestoreIfOwned || decision.RunNormalCleanup))
         {
-            var now = DateTimeOffset.UtcNow;
-            if (_lastVrSessionRestartSuppressionLogAt is null)
-            {
-                _lastVrSessionRestartSuppressionLogAt = now;
-                Console.WriteLine("SteamVR restart is in progress; preserving monitor and base-station state during the bounded restart window.");
-            }
-
+            ReportVrSessionRestartLifecycleOnce(
+                "SteamVR restart is in progress; preserving monitor and base-station state during the bounded restart window.");
             return false;
         }
 
