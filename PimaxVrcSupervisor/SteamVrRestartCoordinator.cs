@@ -35,6 +35,7 @@ internal interface ISteamVrRestartRuntime
         SteamVrRuntimeIdentity oldRuntime,
         TimeSpan timeout,
         CancellationToken cancellationToken);
+    SteamVrRuntimeSnapshot? CaptureReplacementRuntime(SteamVrRuntimeIdentity oldRuntime);
     void StartSteamVr();
     Task<SteamVrRuntimeSnapshot?> WaitForReplacementRuntimeAsync(
         SteamVrRuntimeIdentity oldRuntime,
@@ -72,18 +73,15 @@ internal sealed class SteamVrRestartCoordinator
     {
         _runtime.ReportProgress("Requesting SteamVR shutdown...");
         _runtime.WriteDiagnostic(
-            $"graceful shutdown request issued; oldSteamVr={oldRuntime.Identity}; resumeVrChat={resumeVrChat}");
+            $"captured old SteamVR runtime; oldSteamVr={oldRuntime.Identity}; resumeVrChat={resumeVrChat}");
         var shutdownResult = await _runtime.RequestGracefulShutdownAsync(cancellationToken);
-        _runtime.WriteDiagnostic(
-            "graceful shutdown request result"
-            + $"; success={shutdownResult.Succeeded}"
-            + $"; timedOut={shutdownResult.TimedOut}"
-            + $"; mechanism={shutdownResult.Mechanism}"
-            + $"; executable={shutdownResult.ExecutablePath ?? "unavailable"}"
-            + $"; exitCode={shutdownResult.ExitCode?.ToString() ?? "unavailable"}"
-            + $"; error={shutdownResult.Error ?? "none"}");
-        if (!shutdownResult.Succeeded)
+        if (!shutdownResult.RequestIssued)
         {
+            _runtime.WriteDiagnostic(
+                "SteamVR shutdown invocation failed"
+                + $"; mechanism={shutdownResult.Mechanism}"
+                + $"; executable={shutdownResult.ExecutablePath ?? "unavailable"}"
+                + $"; error={shutdownResult.Error ?? "unknown"}");
             return new SteamVrRestartOutcome(
                 SteamVrRestartOutcomeKind.ShutdownRequestFailed,
                 "SteamVR shutdown request failed.",
@@ -92,8 +90,13 @@ internal sealed class SteamVrRestartCoordinator
                 ReplacementRuntime: null);
         }
 
-        _runtime.ReportProgress("Waiting for the old SteamVR runtime to exit...");
-        _runtime.WriteDiagnostic($"waiting for old runtime; oldSteamVr={oldRuntime.Identity}");
+        _runtime.WriteDiagnostic(
+            "SteamVR shutdown request issued"
+            + $"; mechanism={shutdownResult.Mechanism}"
+            + $"; executable={shutdownResult.ExecutablePath ?? "unavailable"}");
+        ObserveHelperCompletion(shutdownResult.HelperCompletion);
+        _runtime.ReportProgress("Waiting for SteamVR to close...");
+        _runtime.WriteDiagnostic($"waiting for old SteamVR runtime to exit; oldSteamVr={oldRuntime.Identity}");
         if (!await _runtime.WaitForOldRuntimeExitAsync(
                 oldRuntime.Identity,
                 _timeouts.OldRuntimeExit,
@@ -107,33 +110,43 @@ internal sealed class SteamVrRestartCoordinator
                 ReplacementRuntime: null);
         }
 
-        _runtime.WriteDiagnostic($"old runtime exited; oldSteamVr={oldRuntime.Identity}");
-        _runtime.ReportProgress("Starting SteamVR...");
-        try
+        _runtime.WriteDiagnostic($"old SteamVR runtime exited; oldSteamVr={oldRuntime.Identity}");
+        var replacement = _runtime.CaptureReplacementRuntime(oldRuntime.Identity);
+        if (replacement is null)
         {
-            _runtime.StartSteamVr();
+            _runtime.ReportProgress("Starting SteamVR...");
+            _runtime.WriteDiagnostic("starting SteamVR through Steam");
+            try
+            {
+                _runtime.StartSteamVr();
+            }
+            catch (Exception ex)
+            {
+                return new SteamVrRestartOutcome(
+                    SteamVrRestartOutcomeKind.ReplacementStartFailed,
+                    "SteamVR shut down, but could not be started again.",
+                    ex.Message,
+                    OldRuntimeExited: true,
+                    ReplacementRuntime: null);
+            }
+
+            _runtime.ReportProgress("Waiting for SteamVR...");
+            replacement = await _runtime.WaitForReplacementRuntimeAsync(
+                oldRuntime.Identity,
+                _timeouts.ReplacementAppearance,
+                cancellationToken);
         }
-        catch (Exception ex)
+        else
         {
-            return new SteamVrRestartOutcome(
-                SteamVrRestartOutcomeKind.ReplacementStartFailed,
-                "SteamVR shut down, but the replacement runtime did not start.",
-                ex.Message,
-                OldRuntimeExited: true,
-                ReplacementRuntime: null);
+            _runtime.WriteDiagnostic(
+                $"replacement SteamVR runtime already present; launch skipped; replacement={replacement.Identity}");
         }
 
-        _runtime.WriteDiagnostic("replacement launch invoked");
-        _runtime.ReportProgress("Waiting for the replacement SteamVR runtime...");
-        var replacement = await _runtime.WaitForReplacementRuntimeAsync(
-            oldRuntime.Identity,
-            _timeouts.ReplacementAppearance,
-            cancellationToken);
         if (replacement is null || replacement.Identity == oldRuntime.Identity)
         {
             return new SteamVrRestartOutcome(
                 SteamVrRestartOutcomeKind.ReplacementStartFailed,
-                "SteamVR shut down, but the replacement runtime did not start.",
+                "SteamVR shut down, but could not be started again.",
                 replacement is null
                     ? "No new vrserver identity appeared within the replacement timeout."
                     : $"The old vrserver identity was returned as the replacement: {oldRuntime.Identity}.",
@@ -142,8 +155,7 @@ internal sealed class SteamVrRestartCoordinator
         }
 
         _runtime.WriteDiagnostic(
-            $"new runtime identity detected; oldSteamVr={oldRuntime.Identity}; newSteamVr={replacement.Identity}");
-        _runtime.ReportProgress("Waiting for the replacement SteamVR runtime to become ready...");
+            $"replacement SteamVR runtime detected; oldSteamVr={oldRuntime.Identity}; newSteamVr={replacement.Identity}");
         if (!await _runtime.WaitForReplacementReadinessAsync(
                 replacement.Identity,
                 _timeouts.ReplacementReadiness,
@@ -157,7 +169,7 @@ internal sealed class SteamVrRestartCoordinator
                 ReplacementRuntime: replacement);
         }
 
-        _runtime.WriteDiagnostic($"replacement ready; newSteamVr={replacement.Identity}");
+        _runtime.WriteDiagnostic($"SteamVR replacement runtime ready; newSteamVr={replacement.Identity}");
         _runtime.AdoptReplacementRuntime(replacement);
         if (!resumeVrChat)
         {
@@ -169,7 +181,7 @@ internal sealed class SteamVrRestartCoordinator
                 ReplacementRuntime: replacement);
         }
 
-        _runtime.ReportProgress("Restoring VRChat...");
+        _runtime.ReportProgress("Resuming VRChat...");
         _runtime.WriteDiagnostic("conditional VRChat resume initiated");
         try
         {
@@ -197,6 +209,36 @@ internal sealed class SteamVrRestartCoordinator
             null,
             OldRuntimeExited: true,
             ReplacementRuntime: replacement);
+    }
+
+    private void ObserveHelperCompletion(Task<SteamVrShutdownHelperDiagnostics>? completion)
+    {
+        if (completion is null)
+        {
+            return;
+        }
+
+        _ = RecordHelperCompletionAsync(completion);
+    }
+
+    private async Task RecordHelperCompletionAsync(Task<SteamVrShutdownHelperDiagnostics> completion)
+    {
+        try
+        {
+            var diagnostics = await completion;
+            _runtime.WriteDiagnostic(
+                "vrstartup shutdown helper completed"
+                + $"; exitCode={diagnostics.ExitCode?.ToString() ?? "unavailable"}"
+                + $"; error={diagnostics.Error ?? "none"}"
+                + "; authoritativeCompletion=old-runtime-observation");
+        }
+        catch (Exception ex)
+        {
+            _runtime.WriteDiagnostic(
+                "vrstartup shutdown helper diagnostics unavailable"
+                + $"; error={ex.Message}"
+                + "; authoritativeCompletion=old-runtime-observation");
+        }
     }
 
     private static SteamVrRestartOutcome VrChatResumeFailure(

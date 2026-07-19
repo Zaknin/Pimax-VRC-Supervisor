@@ -4992,6 +4992,14 @@ internal sealed class AppSupervisor
             CancellationToken cancellationToken)
             => _owner.WaitForSteamVrRuntimeToDisappearAsync(oldRuntime, timeout, cancellationToken);
 
+        public SteamVrRuntimeSnapshot? CaptureReplacementRuntime(SteamVrRuntimeIdentity oldRuntime)
+        {
+            var current = _owner.CaptureCurrentSteamVrRuntime();
+            return current is not null && current.Identity != oldRuntime
+                ? current
+                : null;
+        }
+
         public void StartSteamVr()
             => LaunchSteamUri(SteamVrSteamAppUri, "SteamVR");
 
@@ -5192,13 +5200,13 @@ internal sealed class AppSupervisor
         while (DateTimeOffset.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var decision = ObserveSteamVrLifecycle("vr-session-restart-wait-old-runtime");
-            _ = await ApplySteamVrLifecycleDecisionAsync(decision, "SteamVR is restarting for an explicit VR session restart.", cancellationToken);
             if (!IsSteamVrRuntimeRunning(oldRuntime))
             {
                 return true;
             }
 
+            var decision = ObserveSteamVrLifecycle("vr-session-restart-wait-old-runtime");
+            _ = await ApplySteamVrLifecycleDecisionAsync(decision, "SteamVR is restarting for an explicit VR session restart.", cancellationToken);
             await Task.Delay(VrSessionRestartProcessPollInterval, cancellationToken);
         }
 

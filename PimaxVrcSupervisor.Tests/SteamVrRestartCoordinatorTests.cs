@@ -22,13 +22,13 @@ public sealed class SteamVrRestartCoordinatorTests
             runtime.Events,
             "progress:Requesting SteamVR shutdown...",
             "shutdown",
-            "progress:Waiting for the old SteamVR runtime to exit...",
+            "progress:Waiting for SteamVR to close...",
             "wait-old",
+            "capture-replacement",
             "progress:Starting SteamVR...",
             "start-steamvr",
-            "progress:Waiting for the replacement SteamVR runtime...",
+            "progress:Waiting for SteamVR...",
             "wait-replacement",
-            "progress:Waiting for the replacement SteamVR runtime to become ready...",
             "wait-ready",
             "adopt-replacement");
     }
@@ -48,20 +48,39 @@ public sealed class SteamVrRestartCoordinatorTests
     }
 
     [Fact]
-    public async Task ShutdownTimeoutDoesNotStartSteamVr()
+    public async Task PendingHelperCompletionDoesNotBlockRuntimeDrivenRestart()
     {
+        var helperCompletion = new TaskCompletionSource<SteamVrShutdownHelperDiagnostics>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var runtime = new FakeRestartRuntime
         {
-            ShutdownResult = SteamVrShutdownRequestResult.Failure(
-                "vrstartup.exe",
-                "request timed out",
-                timedOut: true)
+            ShutdownResult = SteamVrShutdownRequestResult.Issued("vrstartup.exe", helperCompletion.Task)
         };
 
         var outcome = await CreateCoordinator(runtime).RunAsync(OldRuntime, false, CancellationToken.None);
 
-        Assert.Equal(SteamVrRestartOutcomeKind.ShutdownRequestFailed, outcome.Kind);
-        Assert.DoesNotContain("start-steamvr", runtime.Events);
+        Assert.Equal(SteamVrRestartOutcomeKind.Succeeded, outcome.Kind);
+        Assert.False(helperCompletion.Task.IsCompleted);
+        Assert.Contains("wait-old", runtime.Events);
+        Assert.Contains("start-steamvr", runtime.Events);
+    }
+
+    [Fact]
+    public async Task UndocumentedHelperExitDoesNotOverrideOldRuntimeObservation()
+    {
+        var helperCompletion = new TaskCompletionSource<SteamVrShutdownHelperDiagnostics>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var runtime = new FakeRestartRuntime
+        {
+            ShutdownResult = SteamVrShutdownRequestResult.Issued("vrstartup.exe", helperCompletion.Task)
+        };
+
+        var outcome = await CreateCoordinator(runtime).RunAsync(OldRuntime, false, CancellationToken.None);
+        helperCompletion.SetResult(new SteamVrShutdownHelperDiagnostics(-1, null));
+        await WaitForEventAsync(runtime, "exitCode=-1");
+
+        Assert.Equal(SteamVrRestartOutcomeKind.Succeeded, outcome.Kind);
+        Assert.Contains(runtime.Events, entry => entry.Contains("authoritativeCompletion=old-runtime-observation", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -74,6 +93,19 @@ public sealed class SteamVrRestartCoordinatorTests
         Assert.Equal(SteamVrRestartOutcomeKind.OldRuntimeExitTimedOut, outcome.Kind);
         Assert.Equal("SteamVR did not shut down within the restart timeout.", outcome.Result);
         Assert.DoesNotContain("start-steamvr", runtime.Events);
+    }
+
+    [Fact]
+    public async Task ExistingReplacementIsAdoptedWithoutDuplicateLaunch()
+    {
+        var runtime = new FakeRestartRuntime { ExistingReplacement = NewRuntime };
+
+        var outcome = await CreateCoordinator(runtime).RunAsync(OldRuntime, false, CancellationToken.None);
+
+        Assert.Equal(SteamVrRestartOutcomeKind.Succeeded, outcome.Kind);
+        Assert.DoesNotContain("start-steamvr", runtime.Events);
+        Assert.DoesNotContain("wait-replacement", runtime.Events);
+        Assert.Contains("adopt-replacement", runtime.Events);
     }
 
     [Fact]
@@ -97,7 +129,24 @@ public sealed class SteamVrRestartCoordinatorTests
 
         Assert.Equal(SteamVrRestartOutcomeKind.ReplacementStartFailed, outcome.Kind);
         Assert.True(outcome.OldRuntimeExited);
-        Assert.Equal("SteamVR shut down, but the replacement runtime did not start.", outcome.Result);
+        Assert.Equal("SteamVR shut down, but could not be started again.", outcome.Result);
+    }
+
+    [Fact]
+    public async Task ReplacementLaunchFailureLeavesOldRuntimeExitedAndPublishesRecoveryResult()
+    {
+        var runtime = new FakeRestartRuntime
+        {
+            StartException = new InvalidOperationException("Steam URI launch failed")
+        };
+
+        var outcome = await CreateCoordinator(runtime).RunAsync(OldRuntime, false, CancellationToken.None);
+
+        Assert.Equal(SteamVrRestartOutcomeKind.ReplacementStartFailed, outcome.Kind);
+        Assert.True(outcome.OldRuntimeExited);
+        Assert.Null(outcome.ReplacementRuntime);
+        Assert.Equal("SteamVR shut down, but could not be started again.", outcome.Result);
+        Assert.DoesNotContain("wait-replacement", runtime.Events);
     }
 
     [Fact]
@@ -109,6 +158,20 @@ public sealed class SteamVrRestartCoordinatorTests
 
         Assert.Equal(SteamVrRestartOutcomeKind.ReplacementReadinessTimedOut, outcome.Kind);
         Assert.Equal(NewRuntime, outcome.ReplacementRuntime);
+    }
+
+    [Fact]
+    public async Task SamePidWithDifferentStartTimeQualifiesAsReplacement()
+    {
+        var samePidNewStart = new SteamVrRuntimeSnapshot(
+            OldRuntime.Pid,
+            OldRuntime.StartTime!.Value.AddMinutes(1));
+        var runtime = new FakeRestartRuntime { Replacement = samePidNewStart };
+
+        var outcome = await CreateCoordinator(runtime).RunAsync(OldRuntime, false, CancellationToken.None);
+
+        Assert.Equal(SteamVrRestartOutcomeKind.Succeeded, outcome.Kind);
+        Assert.Equal(samePidNewStart, outcome.ReplacementRuntime);
     }
 
     [Fact]
@@ -188,6 +251,22 @@ public sealed class SteamVrRestartCoordinatorTests
     }
 
     [Fact]
+    public async Task CoordinatorEmitsEachWaitingDiagnosticOnlyOnce()
+    {
+        var runtime = new FakeRestartRuntime();
+
+        var outcome = await CreateCoordinator(runtime).RunAsync(OldRuntime, true, CancellationToken.None);
+
+        Assert.True(outcome.Succeeded);
+        Assert.Equal(
+            1,
+            runtime.Events.Count(entry => entry.Contains(
+                "waiting for old SteamVR runtime to exit",
+                StringComparison.Ordinal)));
+        Assert.Equal(1, runtime.Events.Count(entry => entry == "progress:Waiting for SteamVR..."));
+    }
+
+    [Fact]
     public void AppSupervisorCapturesInputsBeforeStartingRestartTaskAndClearsIntentInFinally()
     {
         var source = File.ReadAllText(SourcePath("PimaxVrcSupervisor", "Program.cs"));
@@ -213,9 +292,26 @@ public sealed class SteamVrRestartCoordinatorTests
             "private async Task<bool> WaitForSteamVrRuntimeToDisappearAsync",
             "private async Task<SteamVrRuntimeSnapshot?> WaitForReplacementSteamVrRuntimeAppearanceAsync");
 
-        Assert.Contains("if (!IsSteamVrRuntimeRunning(oldRuntime))", wait, StringComparison.Ordinal);
+        var immediateCheck = wait.IndexOf("if (!IsSteamVrRuntimeRunning(oldRuntime))", StringComparison.Ordinal);
+        var lifecycleObservation = wait.IndexOf("ObserveSteamVrLifecycle", StringComparison.Ordinal);
+        Assert.True(immediateCheck >= 0 && immediateCheck < lifecycleObservation);
         Assert.DoesNotContain("current.Identity != oldRuntime", wait, StringComparison.Ordinal);
         Assert.DoesNotContain("Waiting for old SteamVR runtime to close", wait, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RestartUsesSupervisorLifetimeRatherThanClientConnectionLifetime()
+    {
+        var source = File.ReadAllText(SourcePath("PimaxVrcSupervisor", "Program.cs"));
+        var acceptance = Slice(
+            source,
+            "private VrSessionRestartAcceptance TryAcceptVrSessionRestart",
+            "private async Task RunVrSessionRestartOperationAsync");
+
+        Assert.Contains(
+            "RunVrSessionRestartOperationAsync(operationId, oldRuntime, resumeVrChat, _shutdown.Token)",
+            acceptance,
+            StringComparison.Ordinal);
     }
 
     private static SteamVrRestartCoordinator CreateCoordinator(FakeRestartRuntime runtime)
@@ -238,6 +334,22 @@ public sealed class SteamVrRestartCoordinatorTests
         }
     }
 
+    private static async Task WaitForEventAsync(FakeRestartRuntime runtime, string fragment)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(2);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (runtime.Events.Any(entry => entry.Contains(fragment, StringComparison.Ordinal)))
+            {
+                return;
+            }
+
+            await Task.Yield();
+        }
+
+        Assert.Fail($"Expected an event containing '{fragment}'. Events: {string.Join(", ", runtime.Events)}");
+    }
+
     private static string Slice(string source, string start, string end)
     {
         var startIndex = source.IndexOf(start, StringComparison.Ordinal);
@@ -254,18 +366,35 @@ public sealed class SteamVrRestartCoordinatorTests
 
     private sealed class FakeRestartRuntime : ISteamVrRestartRuntime
     {
-        public List<string> Events { get; } = [];
+        private readonly object _eventsLock = new();
+        private readonly List<string> _events = [];
+
+        public IReadOnlyList<string> Events
+        {
+            get
+            {
+                lock (_eventsLock)
+                {
+                    return [.. _events];
+                }
+            }
+        }
+
         public SteamVrShutdownRequestResult ShutdownResult { get; set; } =
-            SteamVrShutdownRequestResult.Success("vrstartup.exe", 0);
+            SteamVrShutdownRequestResult.Issued(
+                "vrstartup.exe",
+                Task.FromResult(new SteamVrShutdownHelperDiagnostics(0, null)));
         public bool OldRuntimeExited { get; set; } = true;
+        public SteamVrRuntimeSnapshot? ExistingReplacement { get; set; }
         public SteamVrRuntimeSnapshot? Replacement { get; set; } = NewRuntime;
         public bool ReplacementReady { get; set; } = true;
         public bool VrChatRunning { get; set; }
         public bool VrChatResumed { get; set; } = true;
+        public Exception? StartException { get; set; }
 
         public Task<SteamVrShutdownRequestResult> RequestGracefulShutdownAsync(CancellationToken cancellationToken)
         {
-            Events.Add("shutdown");
+            AddEvent("shutdown");
             return Task.FromResult(ShutdownResult);
         }
 
@@ -274,18 +403,31 @@ public sealed class SteamVrRestartCoordinatorTests
             TimeSpan timeout,
             CancellationToken cancellationToken)
         {
-            Events.Add("wait-old");
+            AddEvent("wait-old");
             return Task.FromResult(OldRuntimeExited);
         }
 
-        public void StartSteamVr() => Events.Add("start-steamvr");
+        public SteamVrRuntimeSnapshot? CaptureReplacementRuntime(SteamVrRuntimeIdentity oldRuntime)
+        {
+            AddEvent("capture-replacement");
+            return ExistingReplacement;
+        }
+
+        public void StartSteamVr()
+        {
+            AddEvent("start-steamvr");
+            if (StartException is not null)
+            {
+                throw StartException;
+            }
+        }
 
         public Task<SteamVrRuntimeSnapshot?> WaitForReplacementRuntimeAsync(
             SteamVrRuntimeIdentity oldRuntime,
             TimeSpan timeout,
             CancellationToken cancellationToken)
         {
-            Events.Add("wait-replacement");
+            AddEvent("wait-replacement");
             return Task.FromResult(Replacement);
         }
 
@@ -294,41 +436,49 @@ public sealed class SteamVrRestartCoordinatorTests
             TimeSpan timeout,
             CancellationToken cancellationToken)
         {
-            Events.Add("wait-ready");
+            AddEvent("wait-ready");
             return Task.FromResult(ReplacementReady);
         }
 
         public void AdoptReplacementRuntime(SteamVrRuntimeSnapshot replacementRuntime)
-            => Events.Add("adopt-replacement");
+            => AddEvent("adopt-replacement");
 
         public Task PrepareForVrChatResumeAsync(CancellationToken cancellationToken)
         {
-            Events.Add("prepare-vrchat-resume");
+            AddEvent("prepare-vrchat-resume");
             return Task.CompletedTask;
         }
 
         public bool IsVrChatRunning()
         {
-            Events.Add("is-vrchat-running");
+            AddEvent("is-vrchat-running");
             return VrChatRunning;
         }
 
-        public void StartVrChat() => Events.Add("start-vrchat");
+        public void StartVrChat() => AddEvent("start-vrchat");
 
         public Task<bool> WaitForVrChatAsync(TimeSpan timeout, CancellationToken cancellationToken)
         {
-            Events.Add("wait-vrchat");
+            AddEvent("wait-vrchat");
             return Task.FromResult(VrChatResumed);
         }
 
         public Task RestoreManagedAppsAsync(CancellationToken cancellationToken)
         {
-            Events.Add("restore-managed-apps");
+            AddEvent("restore-managed-apps");
             return Task.CompletedTask;
         }
 
-        public void ReportProgress(string progress) => Events.Add("progress:" + progress);
+        public void ReportProgress(string progress) => AddEvent("progress:" + progress);
 
-        public void WriteDiagnostic(string message) => Events.Add("log:" + message);
+        public void WriteDiagnostic(string message) => AddEvent("log:" + message);
+
+        private void AddEvent(string value)
+        {
+            lock (_eventsLock)
+            {
+                _events.Add(value);
+            }
+        }
     }
 }

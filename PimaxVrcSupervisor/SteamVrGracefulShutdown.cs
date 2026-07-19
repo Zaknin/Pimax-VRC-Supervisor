@@ -5,22 +5,21 @@ using Microsoft.Win32;
 namespace PimaxVrcSupervisor;
 
 internal sealed record SteamVrShutdownRequestResult(
-    bool Succeeded,
-    bool TimedOut,
+    bool RequestIssued,
     string Mechanism,
     string? ExecutablePath,
-    int? ExitCode,
+    Task<SteamVrShutdownHelperDiagnostics>? HelperCompletion,
     string? Error)
 {
-    public static SteamVrShutdownRequestResult Success(string executablePath, int exitCode)
-        => new(true, false, "vrstartup.exe -shutdown", executablePath, exitCode, null);
+    public static SteamVrShutdownRequestResult Issued(
+        string executablePath,
+        Task<SteamVrShutdownHelperDiagnostics>? helperCompletion = null)
+        => new(true, "vrstartup.exe -shutdown", executablePath, helperCompletion, null);
 
     public static SteamVrShutdownRequestResult Failure(
         string? executablePath,
-        string error,
-        int? exitCode = null,
-        bool timedOut = false)
-        => new(false, timedOut, "vrstartup.exe -shutdown", executablePath, exitCode, error);
+        string error)
+        => new(false, "vrstartup.exe -shutdown", executablePath, null, error);
 }
 
 internal interface ISteamVrGracefulShutdownAdapter
@@ -28,36 +27,36 @@ internal interface ISteamVrGracefulShutdownAdapter
     Task<SteamVrShutdownRequestResult> RequestShutdownAsync(CancellationToken cancellationToken);
 }
 
-internal sealed record SteamVrShutdownProcessResult(bool TimedOut, int? ExitCode, string? Error);
+internal sealed record SteamVrShutdownHelperDiagnostics(int? ExitCode, string? Error);
+
+internal sealed record SteamVrShutdownProcessInvocation(
+    bool RequestIssued,
+    Task<SteamVrShutdownHelperDiagnostics>? Completion,
+    string? Error);
 
 internal sealed class VrStartupGracefulShutdownAdapter : ISteamVrGracefulShutdownAdapter
 {
-    internal static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(10);
-
     private readonly Func<string?> _resolveExecutable;
-    private readonly Func<string, TimeSpan, CancellationToken, Task<SteamVrShutdownProcessResult>> _runShutdown;
-    private readonly TimeSpan _requestTimeout;
+    private readonly Func<string, SteamVrShutdownProcessInvocation> _startShutdown;
 
     public VrStartupGracefulShutdownAdapter()
         : this(
             SteamVrRuntimePathResolver.FindVrStartupExecutable,
-            RunShutdownProcessAsync,
-            DefaultRequestTimeout)
+            StartShutdownProcess)
     {
     }
 
     internal VrStartupGracefulShutdownAdapter(
         Func<string?> resolveExecutable,
-        Func<string, TimeSpan, CancellationToken, Task<SteamVrShutdownProcessResult>> runShutdown,
-        TimeSpan requestTimeout)
+        Func<string, SteamVrShutdownProcessInvocation> startShutdown)
     {
         _resolveExecutable = resolveExecutable;
-        _runShutdown = runShutdown;
-        _requestTimeout = requestTimeout;
+        _startShutdown = startShutdown;
     }
 
-    public async Task<SteamVrShutdownRequestResult> RequestShutdownAsync(CancellationToken cancellationToken)
+    public Task<SteamVrShutdownRequestResult> RequestShutdownAsync(CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         string? executablePath;
         try
         {
@@ -65,64 +64,42 @@ internal sealed class VrStartupGracefulShutdownAdapter : ISteamVrGracefulShutdow
         }
         catch (Exception ex)
         {
-            return SteamVrShutdownRequestResult.Failure(null, ex.Message);
+            return Task.FromResult(SteamVrShutdownRequestResult.Failure(null, ex.Message));
         }
 
         if (string.IsNullOrWhiteSpace(executablePath) || !File.Exists(executablePath))
         {
-            return SteamVrShutdownRequestResult.Failure(
-                executablePath,
-                "The installed SteamVR runtime's bin\\win64\\vrstartup.exe could not be found.");
+            return Task.FromResult(
+                SteamVrShutdownRequestResult.Failure(
+                    executablePath,
+                    "The installed SteamVR runtime's bin\\win64\\vrstartup.exe could not be found."));
         }
 
-        SteamVrShutdownProcessResult processResult;
+        SteamVrShutdownProcessInvocation invocation;
         try
         {
-            processResult = await _runShutdown(executablePath, _requestTimeout, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
+            cancellationToken.ThrowIfCancellationRequested();
+            invocation = _startShutdown(executablePath);
         }
         catch (Exception ex)
         {
-            return SteamVrShutdownRequestResult.Failure(executablePath, ex.Message);
+            return Task.FromResult(SteamVrShutdownRequestResult.Failure(executablePath, ex.Message));
         }
 
-        if (processResult.TimedOut)
+        if (!invocation.RequestIssued)
         {
-            return SteamVrShutdownRequestResult.Failure(
-                executablePath,
-                $"SteamVR did not acknowledge the graceful shutdown request within {_requestTimeout.TotalSeconds:0} seconds.",
-                processResult.ExitCode,
-                timedOut: true);
+            return Task.FromResult(
+                SteamVrShutdownRequestResult.Failure(
+                    executablePath,
+                    invocation.Error ?? "vrstartup.exe did not start."));
         }
 
-        if (processResult.Error is not null)
-        {
-            return SteamVrShutdownRequestResult.Failure(
-                executablePath,
-                processResult.Error,
-                processResult.ExitCode);
-        }
-
-        if (processResult.ExitCode != 0)
-        {
-            return SteamVrShutdownRequestResult.Failure(
-                executablePath,
-                $"vrstartup.exe rejected the graceful shutdown request with exit code {processResult.ExitCode}.",
-                processResult.ExitCode);
-        }
-
-        return SteamVrShutdownRequestResult.Success(executablePath, processResult.ExitCode.Value);
+        return Task.FromResult(SteamVrShutdownRequestResult.Issued(executablePath, invocation.Completion));
     }
 
-    private static async Task<SteamVrShutdownProcessResult> RunShutdownProcessAsync(
-        string executablePath,
-        TimeSpan timeout,
-        CancellationToken cancellationToken)
+    private static SteamVrShutdownProcessInvocation StartShutdownProcess(string executablePath)
     {
-        using var process = new Process
+        var process = new Process
         {
             StartInfo = new ProcessStartInfo
             {
@@ -134,21 +111,42 @@ internal sealed class VrStartupGracefulShutdownAdapter : ISteamVrGracefulShutdow
         };
         process.StartInfo.ArgumentList.Add("-shutdown");
 
-        if (!process.Start())
-        {
-            return new SteamVrShutdownProcessResult(false, null, "vrstartup.exe did not start.");
-        }
-
-        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutSource.CancelAfter(timeout);
         try
         {
-            await process.WaitForExitAsync(timeoutSource.Token);
-            return new SteamVrShutdownProcessResult(false, process.ExitCode, null);
+            if (!process.Start())
+            {
+                process.Dispose();
+                return new SteamVrShutdownProcessInvocation(false, null, "vrstartup.exe did not start.");
+            }
+
+            return new SteamVrShutdownProcessInvocation(
+                true,
+                ObserveHelperCompletionAsync(process),
+                null);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch
         {
-            return new SteamVrShutdownProcessResult(true, process.HasExited ? process.ExitCode : null, null);
+            process.Dispose();
+            throw;
+        }
+    }
+
+    private static async Task<SteamVrShutdownHelperDiagnostics> ObserveHelperCompletionAsync(Process process)
+    {
+        try
+        {
+            await process.WaitForExitAsync(CancellationToken.None);
+            return new SteamVrShutdownHelperDiagnostics(process.ExitCode, null);
+        }
+        catch (Exception ex)
+        {
+            return new SteamVrShutdownHelperDiagnostics(
+                process.HasExited ? process.ExitCode : null,
+                ex.Message);
+        }
+        finally
+        {
+            process.Dispose();
         }
     }
 }

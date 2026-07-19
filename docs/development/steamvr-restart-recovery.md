@@ -46,10 +46,22 @@ The unaccepted `Phase32B-SteamVrRecovery-FD-7248525` deployment package is super
 
 The confirmed `restart-vr-session` action is Supervisor-owned and distinct from `start-steamvr`. It now captures the current `vrserver` PID/start-time identity and conditional VRChat resume intent before it changes the runtime.
 
-Restart uses the installed SteamVR runtime's own `bin\win64\vrstartup.exe -shutdown` command. That command is a SteamVR-owned background IPC client. The Supervisor bounds the request, waits for the captured old `vrserver` identity to disappear, and only then invokes the existing `steam://rungameid/250820` start path. `VR_Shutdown` is not used for this purpose because it only disconnects the calling OpenVR client.
+Restart uses the installed SteamVR runtime's own `bin\win64\vrstartup.exe -shutdown` command. That command is a SteamVR-owned background IPC client. The Supervisor issues the request, bounds observation of the captured old `vrserver` identity, and only after that identity disappears invokes the existing `steam://rungameid/250820` start path. `VR_Shutdown` is not used for this purpose because it only disconnects the calling OpenVR client.
 
 There is no `taskkill`, `Stop-Process`, `Process.Kill`, window-close simulation, or hidden force-kill fallback. If the graceful request fails or the old runtime refuses to exit, restart fails safely and the existing runtime is not reported as replaced. If the old runtime exits but a replacement does not appear, the Supervisor remains available in manual-recovery state with monitor and base-station state preserved.
 
 A replacement must have a different PID/start-time identity and remain stable through the readiness interval. VRChat is launched through its existing Steam VR-mode URI only when it was running at acceptance time and has not already returned. Existing managed-app recovery remains delegated to the established lifecycle routine.
 
 Progress and terminal results stay non-modal. Stage-entry diagnostics are written once; process identities stay in diagnostic logs rather than concise operator text.
+
+## Phase32B2D request-issued semantics
+
+Launching `vrstartup.exe -shutdown` and completing SteamVR shutdown are separate events. Successful process creation means the shutdown request was issued. Supervisor does not wait for the helper to exit, return an acknowledgment, or produce output before it begins observing the captured old `vrserver` identity.
+
+The helper may remain alive while SteamVR completes shutdown. If it later exits, its exit code or observation error is written once as diagnostic information. SteamVR 2.16.7 does not provide a verified exit-code contract for this use, so an undocumented nonzero helper exit does not override runtime observation. Missing `vrstartup.exe`, process-creation failure, access denial, or an exception before successful creation remains an invocation failure and prevents replacement launch.
+
+Disappearance of the captured PID/start-time identity is the authoritative shutdown-completion condition. The old-runtime wait is bounded. If the identity remains present through that deadline, Supervisor reports `SteamVR did not shut down within the restart timeout.`, does not start a second runtime, clears the operation state, and provides no force-kill fallback.
+
+After the old identity disappears, Supervisor checks immediately for a different `vrserver` identity. A replacement already started by Steam or the user is adopted without a duplicate launch. Otherwise Supervisor automatically invokes the existing `steam://rungameid/250820` path, waits for a different identity, and requires the existing readiness interval before reporting success.
+
+If replacement launch or appearance fails after the old runtime has exited, Supervisor remains available in manual-recovery state and action `7` resolves to Start SteamVR. Base-station power and monitor topology remain preserved. VRChat resume remains conditional on the intent captured at acceptance, and a later normal SteamVR exit after successful adoption still uses the full existing cleanup path.
