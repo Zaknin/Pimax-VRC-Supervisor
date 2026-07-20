@@ -50,6 +50,7 @@ pub struct RunningAction {
     pub action: TuiAction,
     pub command: String,
     pub started_at: Instant,
+    pub operation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -671,13 +672,16 @@ impl App {
         self.last_action_outcome = None;
         self.last_action_result = Some(format!("{} started.", display_name_for_command(&command)));
         self.last_action_error = None;
+        let request_id =
+            (action == TuiAction::RestartVrSession).then(|| Uuid::new_v4().simple().to_string());
         self.running_actions.push(RunningAction {
             action,
             command: command.clone(),
             started_at: now,
+            operation_id: request_id
+                .as_ref()
+                .map(|request_id| format!("vrrestart-{request_id}")),
         });
-        let request_id =
-            (action == TuiAction::RestartVrSession).then(|| Uuid::new_v4().simple().to_string());
         if let Some(request_id) = request_id.as_ref() {
             self.last_submitted_request_id = Some(request_id.clone());
         }
@@ -935,6 +939,8 @@ impl App {
                 action: TuiAction::RestartVrSession,
                 command: current.command.clone(),
                 started_at: now,
+                operation_id: (!current.operation_id.is_empty())
+                    .then(|| current.operation_id.clone()),
             });
         }
 
@@ -944,17 +950,41 @@ impl App {
                 .current_action
                 .as_ref()
                 .is_some_and(|current| current.command.eq_ignore_ascii_case(&last.command));
-            let matching_action_was_running = self
-                .running_actions
-                .iter()
-                .any(|running| running.command.eq_ignore_ascii_case(&last.command));
-            self.running_actions
-                .retain(|running| !running.command.eq_ignore_ascii_case(&last.command));
+            let matching_action_was_running = self.running_actions.iter().any(|running| {
+                running.command.eq_ignore_ascii_case(&last.command)
+                    && (running.operation_id.is_none()
+                        || last.operation_id.is_empty()
+                        || running.operation_id.as_ref().is_some_and(|operation_id| {
+                            operation_id.eq_ignore_ascii_case(&last.operation_id)
+                        }))
+            });
+
+            let terminal_matches_local_restart = self
+                .last_submitted_request_id
+                .as_ref()
+                .is_some_and(|request_id| {
+                    last.operation_id
+                        .eq_ignore_ascii_case(format!("vrrestart-{request_id}").as_str())
+                });
+
+            if matching_action_was_running {
+                self.running_actions.retain(|running| {
+                    !running.command.eq_ignore_ascii_case(&last.command)
+                        || (running.operation_id.is_some()
+                            && !last.operation_id.is_empty()
+                            && running.operation_id.as_ref().is_some_and(|operation_id| {
+                                !operation_id.eq_ignore_ascii_case(&last.operation_id)
+                            }))
+                });
+            }
 
             if steamvr_control_command(&last.command)
                 && !same_command_is_current
-                && self.last_action_command.as_deref() != Some(last.command.as_str())
-                && (matching_action_was_running || self.last_action_command.is_none())
+                && (self.last_action_command.as_deref() != Some(last.command.as_str())
+                    || terminal_matches_local_restart)
+                && (matching_action_was_running
+                    || self.last_action_command.is_none()
+                    || terminal_matches_local_restart)
             {
                 let outcome = if last.status.eq_ignore_ascii_case("succeeded") {
                     ActionOutcome::Succeeded
@@ -1635,6 +1665,7 @@ mod tests {
             action: TuiAction::RestartVrSession,
             command: RESTART_VR_SESSION_COMMAND.to_string(),
             started_at: now - Duration::from_secs(1),
+            operation_id: None,
         });
         app.status.last_action_result = Some(crate::models::OperationalActionSummary {
             command: RESTART_VR_SESSION_COMMAND.to_string(),
@@ -1655,6 +1686,55 @@ mod tests {
             app.last_action_result.as_deref(),
             Some("VR session restarted.")
         );
+    }
+
+    #[test]
+    fn own_restart_terminal_result_replaces_started_state_by_operation_identity() {
+        let now = Instant::now();
+        let mut app = restart_ready_app();
+        app.activate_action(TuiAction::RestartVrSession, now);
+        app.confirm_action(now);
+        let request_id = app.last_submitted_request_id.clone().unwrap();
+        app.status.last_action_result = Some(crate::models::OperationalActionSummary {
+            operation_id: format!("vrrestart-{request_id}"),
+            command: RESTART_VR_SESSION_COMMAND.to_string(),
+            status: "succeeded".to_string(),
+            result: "VR session restarted.".to_string(),
+            ..crate::models::OperationalActionSummary::default()
+        });
+
+        app.sync_operational_actions(now + Duration::from_secs(1));
+
+        assert!(app.running_actions.is_empty());
+        assert_eq!(app.last_action_outcome, Some(ActionOutcome::Succeeded));
+        assert_eq!(
+            app.last_action_result.as_deref(),
+            Some("VR session restarted.")
+        );
+    }
+
+    #[test]
+    fn stale_same_command_terminal_result_does_not_replace_new_local_restart() {
+        let now = Instant::now();
+        let mut app = restart_ready_app();
+        app.activate_action(TuiAction::RestartVrSession, now);
+        app.confirm_action(now);
+        app.status.last_action_result = Some(crate::models::OperationalActionSummary {
+            operation_id: format!("vrrestart-{}", Uuid::new_v4().simple()),
+            command: RESTART_VR_SESSION_COMMAND.to_string(),
+            status: "succeeded".to_string(),
+            result: "Older VR session result.".to_string(),
+            ..crate::models::OperationalActionSummary::default()
+        });
+
+        app.sync_operational_actions(now + Duration::from_secs(1));
+
+        assert_eq!(app.running_actions.len(), 1);
+        assert_eq!(
+            app.last_action_result.as_deref(),
+            Some("Restart SteamVR started.")
+        );
+        assert!(app.last_action_outcome.is_none());
     }
 
     #[test]
@@ -1784,6 +1864,7 @@ mod tests {
             action,
             command: action.command_name().to_string(),
             started_at: now,
+            operation_id: None,
         });
 
         let error = app.validate_action_start(action).unwrap_err();

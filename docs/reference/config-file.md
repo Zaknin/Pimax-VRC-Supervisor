@@ -33,4 +33,4 @@ Before hand-editing:
 
 Raw JSON in Configurator is safer than editing in an external editor because you can apply changes back to the normal tabs.
 
-`StartupLaunchMode` uses `None`, `ScheduledTask`, `SteamVrManifest`, or `ScheduledTaskAndSteamVrManifest`. Older `AutoLaunchScheduledTask` and `StopWithSteamVr` values migrate deterministically when the explicit field is absent. An invalid explicit value is shown as a warning and falls back to Off until you save a valid choice.
+`StartupLaunchMode` uses `None`, `ScheduledTask`, `SteamVrManifest`, or `ScheduledTaskAndSteamVrManifest`. `ScheduledTaskClassicConsole` is retained for an existing classic-console scheduled-task preference so configuration repair never silently changes that user's interface. Older `AutoLaunchScheduledTask` and `StopWithSteamVr` values migrate deterministically when the explicit field is absent. An invalid explicit value is shown as a warning and falls back to Off until you save a valid choice.

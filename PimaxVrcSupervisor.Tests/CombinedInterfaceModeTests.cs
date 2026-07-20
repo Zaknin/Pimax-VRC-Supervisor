@@ -10,6 +10,7 @@ public sealed class CombinedInterfaceModeTests
     [InlineData("ScheduledTask", (int)StartupLaunchMode.ScheduledTask)]
     [InlineData("SteamVrManifest", (int)StartupLaunchMode.SteamVrManifest)]
     [InlineData(StartupLaunchPlanning.CombinedModeName, (int)StartupLaunchMode.ScheduledTaskAndSteamVrManifest)]
+    [InlineData("ScheduledTaskClassicConsole", (int)StartupLaunchMode.ScheduledTaskClassicConsole)]
     public void ConfigurationParsesEveryInterfaceMode(string value, int expectedValue)
     {
         var config = JsonSerializer.Deserialize<SupervisorConfig>($$"""{"StartupLaunchMode":"{{value}}"}""");
@@ -65,15 +66,26 @@ public sealed class CombinedInterfaceModeTests
     }
 
     [Fact]
-    public void ConfiguratorExposesOneExplicitThreeModeControlAndPersistsCombinedValue()
+    public void ConfiguratorExposesExplicitInterfaceModesAndPersistsCombinedValue()
     {
         var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "PimaxVrcSupervisor.ConfigEditor", "Program.cs"));
 
         Assert.Contains("Terminal UI only", source, StringComparison.Ordinal);
         Assert.Contains("SteamVR Overlay only", source, StringComparison.Ordinal);
         Assert.Contains("Terminal UI + SteamVR Overlay", source, StringComparison.Ordinal);
+        Assert.Contains("Classic Console only (legacy)", source, StringComparison.Ordinal);
         Assert.Contains("AutostartModeCombined => StartupLaunchPlanning.CombinedModeName", source, StringComparison.Ordinal);
+        Assert.Contains("AutostartModeLegacyClassicConsole => \"ScheduledTaskClassicConsole\"", source, StringComparison.Ordinal);
         Assert.DoesNotContain("AddFullWidth(layout, _useDesktopTuiAsDefaultInterfaceCheckBox", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConfiguratorTaskRebindPreservesAnExplicitSelectedMode()
+    {
+        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "PimaxVrcSupervisor.ConfigEditor", "Program.cs"));
+
+        Assert.Contains("configuredMode != \"Unspecified\"", source, StringComparison.Ordinal);
+        Assert.Contains("return selectedMode", source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -86,6 +98,34 @@ public sealed class CombinedInterfaceModeTests
         Assert.False(plan.EnableSteamVrManifest);
         Assert.Equal(SupervisorOwnerLifetime.SteamVrSession, plan.OwnerLifetime);
         Assert.Equal(1, plan.AuthoritativeSupervisorOwnerCount);
+    }
+
+    [Fact]
+    public void LegacyClassicConsolePlanPreservesExistingNonTuiWatcherInterface()
+    {
+        var plan = StartupLaunchPlanning.Create(StartupLaunchMode.ScheduledTaskClassicConsole);
+
+        Assert.True(plan.InstallWatcherTask);
+        Assert.False(plan.WatcherUsesTerminalUi);
+        Assert.False(plan.EnableSteamVrManifest);
+        Assert.Equal(SupervisorOwnerLifetime.SteamVrSession, plan.OwnerLifetime);
+        Assert.Equal(1, plan.AuthoritativeSupervisorOwnerCount);
+    }
+
+    [Fact]
+    public void LegacyClassicConsoleRoundTripDoesNotChangeSelectedInterface()
+    {
+        using var temp = new TempDirectory();
+        var path = Path.Combine(temp.Path, "classic.config.json");
+        File.WriteAllText(path, "{\"StartupLaunchMode\":\"ScheduledTaskClassicConsole\",\"AutoLaunchScheduledTask\":true}");
+
+        var config = SupervisorConfig.Load(path);
+        config.SaveAutoLaunchScheduledTaskPreference();
+        var reloaded = SupervisorConfig.Load(path);
+
+        Assert.Equal(StartupLaunchMode.ScheduledTaskClassicConsole, reloaded.GetEffectiveStartupLaunchMode());
+        using var saved = JsonDocument.Parse(File.ReadAllText(path));
+        Assert.True(saved.RootElement.GetProperty("AutoLaunchScheduledTask").GetBoolean());
     }
 
     [Fact]

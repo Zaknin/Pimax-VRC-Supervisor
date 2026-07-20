@@ -24,6 +24,10 @@ Use this if you want controls inside SteamVR instead of a terminal dashboard.
 
 SteamVR Overlay only registers the SteamVR host. The host first tries to attach to an existing Supervisor command bridge and invokes its elevated fallback start task only when no bridge is available. It does not open Terminal UI.
 
+## Classic Console only (legacy)
+
+Existing scheduled-task users who explicitly selected the classic visible console keep that interface during configuration load, save, repair, and release-folder task migration. New users should normally choose Terminal UI only. The legacy option remains available so an upgrade never silently changes an existing user's selected interface.
+
 ## Terminal UI + SteamVR Overlay
 
 Combined mode installs the Terminal UI watcher and registers the SteamVR dashboard host, but they do not own separate Supervisors. There is exactly one authoritative `PimaxVrcSupervisor.exe`; both UI executables observe and control its shared state.
@@ -43,5 +47,6 @@ Select the new mode in Configurator and save once. Apply rewrites the two recogn
 | You want a clear desktop dashboard | Terminal UI only |
 | You want controls only inside SteamVR | SteamVR Overlay only |
 | You want both control surfaces | Terminal UI + SteamVR Overlay |
+| You need to preserve an existing classic-console setup | Classic Console only (legacy) |
 | You want to start everything manually | Off |
 | You are troubleshooting startup | Off first, then the intended interface mode |

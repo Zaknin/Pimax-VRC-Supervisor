@@ -252,6 +252,7 @@ impl SteamVrControlMode {
 
 #[derive(Debug, Clone, Default)]
 pub struct OperationalActionSummary {
+    pub operation_id: String,
     pub command: String,
     pub status: String,
     pub progress: String,
@@ -352,6 +353,7 @@ fn operational_action_value(data: &Value, key: &str) -> Option<OperationalAction
     }
 
     Some(OperationalActionSummary {
+        operation_id: string_value(value, "operationId"),
         command: string_value(value, "command"),
         status: string_value(value, "status"),
         progress: string_value(value, "progress"),

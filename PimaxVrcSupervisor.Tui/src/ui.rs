@@ -888,7 +888,7 @@ fn render_system(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
             separator.clone(),
             Span::styled(
                 if app.console_close_enabled {
-                    "close requests Supervisor shutdown"
+                    "window close exits Terminal UI only"
                 } else {
                     "close handling unavailable"
                 },
@@ -1820,6 +1820,7 @@ mod tests {
             action: TuiAction::RestartVrSession,
             command: RESTART_VR_SESSION_COMMAND.to_string(),
             started_at: now,
+            operation_id: None,
         });
         let busy_state = action_state(&busy, TuiAction::RestartVrSession, now);
         assert_eq!(busy_state.label, "BUSY");

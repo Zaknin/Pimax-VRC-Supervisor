@@ -9,7 +9,8 @@ internal enum StartupLaunchMode
     None,
     ScheduledTask,
     SteamVrManifest,
-    ScheduledTaskAndSteamVrManifest
+    ScheduledTaskAndSteamVrManifest,
+    ScheduledTaskClassicConsole
 }
 
 internal enum SupervisorOwnerLifetime
@@ -83,6 +84,14 @@ internal static class StartupLaunchPlanning
                 InstallWatcherTask: true,
                 EnableSteamVrManifest: false,
                 WatcherUsesTerminalUi: true,
+                OwnerLifetime: SupervisorOwnerLifetime.SteamVrSession,
+                SteamVrHelperOwnerMode: SteamVrHelperOwnerMode.None,
+                OverlayAttachesBeforeStartingOwner: false),
+            StartupLaunchMode.ScheduledTaskClassicConsole => new(
+                mode,
+                InstallWatcherTask: true,
+                EnableSteamVrManifest: false,
+                WatcherUsesTerminalUi: false,
                 OwnerLifetime: SupervisorOwnerLifetime.SteamVrSession,
                 SteamVrHelperOwnerMode: SteamVrHelperOwnerMode.None,
                 OverlayAttachesBeforeStartingOwner: false),

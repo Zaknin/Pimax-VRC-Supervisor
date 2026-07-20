@@ -43,6 +43,7 @@ internal sealed class ConfigEditorForm : Form
     private const string AutostartModeScheduledTask = "Terminal UI only";
     private const string AutostartModeSteamVrManifest = "SteamVR Overlay only";
     private const string AutostartModeCombined = "Terminal UI + SteamVR Overlay";
+    private const string AutostartModeLegacyClassicConsole = "Classic Console only (legacy)";
     private static readonly string DefaultIntifacePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "IntifaceCentral",
@@ -503,13 +504,14 @@ internal sealed class ConfigEditorForm : Form
         _autostartModeComboBox.Items.Add(AutostartModeScheduledTask);
         _autostartModeComboBox.Items.Add(AutostartModeSteamVrManifest);
         _autostartModeComboBox.Items.Add(AutostartModeCombined);
+        _autostartModeComboBox.Items.Add(AutostartModeLegacyClassicConsole);
         if (_autostartModeComboBox.SelectedIndex < 0)
         {
             _autostartModeComboBox.SelectedItem = AutostartModeOff;
         }
 
         AddSectionHeader(layout, "Autostart");
-        AddLabeledRow(layout, "Interface mode", _autostartModeComboBox, "Choose Terminal UI only, SteamVR Overlay only, or both. Combined mode keeps one Supervisor owner and lets both interfaces attach to it.");
+        AddLabeledRow(layout, "Interface mode", _autostartModeComboBox, "Choose Terminal UI only, SteamVR Overlay only, or both. Combined mode keeps one Supervisor owner and lets both interfaces attach to it. Classic Console remains available only for backward compatibility.");
 
         AddSectionHeader(layout, "Startup");
         AddFullWidth(layout, _turnOffMonitorsCheckBox, "Checked saves the current monitor layout and disables secondary monitors during the VR session. The layout is restored after VRChat and SteamVR close.");
@@ -3401,7 +3403,12 @@ internal sealed class ConfigEditorForm : Form
         _oscRouterReceivePortInput.Value = Math.Clamp(GetInt(node, "OscRouterReceivePort", 9001), (int)_oscRouterReceivePortInput.Minimum, (int)_oscRouterReceivePortInput.Maximum);
         _mouthTrackerCheckBox.Checked = GetBoolCheckState(node, "MouthTrackerUser") == CheckState.Checked;
         _turnOffMonitorsCheckBox.Checked = GetBoolCheckState(node, "TurnOffSecondaryMonitors") == CheckState.Checked;
-        SetStartupLaunchMode(GetStartupLaunchModeForEditor(node, out _startupModeLoadWarning));
+        var startupModeForEditor = GetStartupLaunchModeForEditor(node, out _startupModeLoadWarning);
+        if (startupModeForEditor == "ScheduledTask" && !_editorState.UseDesktopTuiAsDefaultInterface)
+        {
+            startupModeForEditor = "ScheduledTaskClassicConsole";
+        }
+        SetStartupLaunchMode(startupModeForEditor);
         _usePimaxLogCheckBox.Checked = GetBool(node, "UsePimaxServiceLogReconnectDetector", defaultValue: true);
         _useMouthTrackerPnPCheckBox.Checked = GetBool(node, "UseMouthTrackerPnPReconnectDetector", defaultValue: false);
         _mouthTrackerRestartOnReconnectCheckBox.Checked = GetBool(node, "MouthTrackerRestartOnReconnectEnabled", defaultValue: true);
@@ -3826,7 +3833,7 @@ internal sealed class ConfigEditorForm : Form
         switch (choice)
         {
             case StartupTaskMigrationChoice.Rebind:
-                SetStartupLaunchMode(SelectStartupLaunchModeForTasks(staleTasks));
+                SetStartupLaunchMode(SelectStartupLaunchModeForTasks(staleTasks, _loadedJson, GetSelectedStartupLaunchMode()));
                 SaveConfig(forceApplyStartupIntegration: true);
                 break;
             case StartupTaskMigrationChoice.TurnOffAutostart:
@@ -3848,8 +3855,17 @@ internal sealed class ConfigEditorForm : Form
             .ToArray();
     }
 
-    private static string SelectStartupLaunchModeForTasks(IReadOnlyList<ScheduledTaskExecutableValidationResult> tasks)
+    private static string SelectStartupLaunchModeForTasks(
+        IReadOnlyList<ScheduledTaskExecutableValidationResult> tasks,
+        string loadedJson,
+        string selectedMode)
     {
+        var configuredMode = GetEffectiveStartupLaunchMode(ParseJson(loadedJson));
+        if (configuredMode != "Unspecified")
+        {
+            return selectedMode;
+        }
+
         var hasSteamVrHelper = tasks.Any(task => string.Equals(task.TaskName, global::ScheduledTaskPathValidator.SteamVrStartTaskName, StringComparison.OrdinalIgnoreCase));
         var hasWatcher = tasks.Any(task => string.Equals(task.TaskName, global::ScheduledTaskPathValidator.AutoLaunchTaskName, StringComparison.OrdinalIgnoreCase));
         return hasSteamVrHelper && hasWatcher
@@ -3864,6 +3880,7 @@ internal sealed class ConfigEditorForm : Form
             "ScheduledTask" => AutostartModeScheduledTask,
             "SteamVrManifest" => AutostartModeSteamVrManifest,
             StartupLaunchPlanning.CombinedModeName => AutostartModeCombined,
+            "ScheduledTaskClassicConsole" => AutostartModeLegacyClassicConsole,
             _ => AutostartModeOff
         };
     }
@@ -4244,7 +4261,7 @@ internal sealed class ConfigEditorForm : Form
             "AutoLaunchScheduledTask",
             startupLaunchMode == "Unspecified"
                 ? SerializeFirstRunPreferenceBool(baseNode, "AutoLaunchScheduledTask", currentValue: false, _startupIntegrationPreferenceTouched)
-                : startupLaunchMode is "ScheduledTask" or StartupLaunchPlanning.CombinedModeName ? "true" : "false");
+                : startupLaunchMode is "ScheduledTask" or "ScheduledTaskClassicConsole" or StartupLaunchPlanning.CombinedModeName ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "PimaxDetectors", Serialize(ParseStringMatrix(_pimaxDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "MouthTrackerDetectors", Serialize(ParseStringMatrix(_mouthTrackerDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "LovenseDetectors", Serialize(ParseStringMatrix(_lovenseDetectorsTextBox.Text)));
@@ -4368,6 +4385,7 @@ internal sealed class ConfigEditorForm : Form
             AutostartModeScheduledTask => "ScheduledTask",
             AutostartModeSteamVrManifest => "SteamVrManifest",
             AutostartModeCombined => StartupLaunchPlanning.CombinedModeName,
+            AutostartModeLegacyClassicConsole => "ScheduledTaskClassicConsole",
             _ => "None"
         };
 

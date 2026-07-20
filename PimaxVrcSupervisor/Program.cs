@@ -470,10 +470,14 @@ internal static class DirectLaunchMigration
         IReadOnlyCollection<ScheduledTaskPathValidationIssue> issues,
         CancellationToken cancellationToken)
     {
-        if (config.GetEffectiveStartupLaunchMode() == StartupLaunchMode.ScheduledTaskAndSteamVrManifest)
+        var configuredMode = config.GetEffectiveStartupLaunchMode();
+        if (configuredMode is StartupLaunchMode.ScheduledTaskAndSteamVrManifest
+            or StartupLaunchMode.SteamVrManifest
+            or StartupLaunchMode.ScheduledTaskClassicConsole
+            or StartupLaunchMode.None)
         {
             await StartupIntegration.ApplyAsync(config, cancellationToken);
-            Console.WriteLine("task_migration; outcome=Rebound; mode=TerminalUiAndSteamVrOverlay");
+            Console.WriteLine($"task_migration; outcome=Rebound; mode={configuredMode}");
             return;
         }
 
@@ -493,6 +497,8 @@ internal static class DirectLaunchMigration
             return;
         }
 
+        // ScheduledTask predates an explicit persisted interface choice. Preserve the existing
+        // watcher argument here so a classic-console user is not silently migrated to Terminal UI.
         config.SetAutoLaunchScheduledTask(true);
         config.SaveAutoLaunchScheduledTaskPreference();
         await SteamVrStartupInstaller.DisableAsync(cancellationToken);
@@ -2578,7 +2584,7 @@ internal sealed class AppSupervisor
     private async Task EnsureStartupIntegrationPreferenceAsync(bool allowInitialSetupQuestion, CancellationToken cancellationToken)
     {
         var startupMode = _config.GetEffectiveStartupLaunchMode();
-        if (startupMode == StartupLaunchMode.ScheduledTask)
+        if (startupMode is StartupLaunchMode.ScheduledTask or StartupLaunchMode.ScheduledTaskClassicConsole)
         {
             await EnsureAutoLaunchScheduledTaskInstalledAsync(cancellationToken);
             await SteamVrStartupInstaller.DisableAsync(cancellationToken);
@@ -11778,6 +11784,7 @@ internal static class StartupIntegration
         switch (plan.Mode)
         {
             case StartupLaunchMode.ScheduledTask:
+            case StartupLaunchMode.ScheduledTaskClassicConsole:
                 LogStep("Creating or updating VRChat auto-launch scheduled task...");
                 var taskResult = await ScheduledTaskInstaller.CreateOrUpdateAsync(
                     startWatcherImmediately: true,
