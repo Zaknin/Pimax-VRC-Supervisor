@@ -1,6 +1,6 @@
 # Phase 32F SteamVR Tracked-Device Power Policy Discovery
 
-Status: discovery, read-only live inventory, and native-shutdown observation complete. Phase 32F implementation is blocked pending a documented supported API or driver capability that can provide the requested controller and tracker power-off behavior. Phase 32F2 must not be implemented from the currently available evidence.
+Status: discovery, read-only live inventory, and native-shutdown observation complete. Phase 32F2 is blocked because discovery found no documented supported per-device power-off API, the available capability property is unknown, and the native shutdown setting was ineffective for the installed runtime and drivers. Phase 32F2 must not be implemented from the currently available evidence.
 
 Baseline: `phase/32e-pimax-reconnect-scoped-recovery` at `7797e090f7309d3a7549f7cf236501924884d390`.
 
@@ -164,3 +164,5 @@ Phase 32F must remain downstream of the accepted lifecycle boundaries:
 6. Verify the prior SteamVR setting is restored after the final exit and after simulated interrupted-transaction recovery.
 
 Phase 32F2 must not be implemented. Phase 32F remains blocked until a documented supported API or driver capability can satisfy the requested controller and tracker power-off behavior without weakening the final-exit-only lifecycle gate, device exclusions, Phase 32D/32E preservation, or safety conclusions documented above.
+
+The user may research alternative mechanisms separately at a later time. That research is outside Phase 32F2 and does not authorize private IPC, debug commands, Lighthouse console commands, USB manipulation, or any implementation change unless a documented supported capability is identified and reviewed first.
