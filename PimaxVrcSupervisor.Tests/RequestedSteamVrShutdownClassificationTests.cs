@@ -123,6 +123,40 @@ public sealed class RequestedSteamVrShutdownClassificationTests
     }
 
     [Fact]
+    public void RequestedReplacementIsPreservedButLaterNormalExitRunsFinalCleanup()
+    {
+        var coordinator = CreateCoordinator();
+        _ = coordinator.Observe([OldRuntime], SteamVrLifecycleEvidence.None, Start);
+        var requestedLoss = coordinator.Observe([], SteamVrLifecycleEvidence.None, Start.AddSeconds(1));
+
+        Assert.True(SteamVrRequestedRestartExitClassifier.IsExpectedOldRuntimeExit(
+            restartActive: true,
+            OldRuntime.Identity,
+            requestedLoss));
+        Assert.False(requestedLoss.RunNormalCleanup);
+        Assert.True(requestedLoss.DeferBaseStationShutdown);
+        Assert.Equal(SteamVrMonitorDisposition.PreserveCurrentState, requestedLoss.MonitorDisposition);
+
+        coordinator.AdoptExplicitReplacement(ReplacementRuntime.Identity, Start.AddSeconds(5));
+        var finalExit = coordinator.Observe(
+            [],
+            new SteamVrLifecycleEvidence(
+                ShutdownRequested: true,
+                RestartRequested: false,
+                SteamVrLifecycleEvidenceReader.ShutdownRequestedMarker),
+            Start.AddMinutes(1));
+
+        Assert.False(SteamVrRequestedRestartExitClassifier.IsExpectedOldRuntimeExit(
+            restartActive: false,
+            OldRuntime.Identity,
+            finalExit));
+        Assert.Equal(SteamVrRecoveryClassification.NormalExit, finalExit.Classification);
+        Assert.True(finalExit.RunNormalCleanup);
+        Assert.False(finalExit.DeferBaseStationShutdown);
+        Assert.Equal(SteamVrMonitorDisposition.RestoreIfOwned, finalExit.MonitorDisposition);
+    }
+
+    [Fact]
     public void ExplicitSupervisorShutdownTakesPrecedenceOverRequestedRestartClassification()
     {
         var decision = new SteamVrRecoveryDecision(

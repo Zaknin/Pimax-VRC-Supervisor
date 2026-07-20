@@ -53,6 +53,7 @@ internal sealed record StartupLaunchPlan(
             case SteamVrHelperOwnerMode.PersistentTerminalUi:
                 arguments.Add("--desktop-tui-start");
                 arguments.Add("--launch-desktop-tui-after-ready");
+                arguments.Add("--managed-steamvr-session");
                 arguments.Add("--persistent-supervisor-owner");
                 break;
         }

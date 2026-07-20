@@ -155,17 +155,17 @@ public sealed class CombinedInterfaceModeTests
     }
 
     [Fact]
-    public void CombinedHelperStartsSamePersistentOwnerShapeWithoutSteamVrOwnership()
+    public void CombinedHelperStartsRestartPersistentOwnerWithFinalExitOwnership()
     {
         var plan = StartupLaunchPlanning.Create(StartupLaunchMode.ScheduledTaskAndSteamVrManifest);
         var arguments = plan.BuildSteamVrHelperArguments(@"D:\config path\supervisor.json");
 
         Assert.Contains("--desktop-tui-start", arguments, StringComparison.Ordinal);
         Assert.Contains("--launch-desktop-tui-after-ready", arguments, StringComparison.Ordinal);
+        Assert.Contains("--managed-steamvr-session", arguments, StringComparison.Ordinal);
         Assert.Contains("--persistent-supervisor-owner", arguments, StringComparison.Ordinal);
         Assert.Contains("--config \"D:\\config path\\supervisor.json\"", arguments, StringComparison.Ordinal);
         Assert.DoesNotContain("--steamvr-start", arguments, StringComparison.Ordinal);
-        Assert.DoesNotContain("--managed-steamvr-session", arguments, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -185,7 +185,7 @@ public sealed class CombinedInterfaceModeTests
     }
 
     [Fact]
-    public void SteamVrStopAndClientDisconnectsDoNotOwnCombinedSupervisor()
+    public void ClientDisconnectsDoNotOwnCombinedSupervisor()
     {
         var plan = StartupLaunchPlanning.Create(StartupLaunchMode.ScheduledTaskAndSteamVrManifest);
 

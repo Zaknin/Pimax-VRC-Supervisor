@@ -10743,11 +10743,8 @@ internal static class AutoLaunchWatcher
             startInfo.ArgumentList.Add(configPath);
         }
 
-        if (!persistentSupervisorOwner)
-        {
-            startInfo.ArgumentList.Add("--managed-steamvr-session");
-        }
-        else
+        startInfo.ArgumentList.Add("--managed-steamvr-session");
+        if (persistentSupervisorOwner)
         {
             startInfo.ArgumentList.Add("--persistent-supervisor-owner");
         }

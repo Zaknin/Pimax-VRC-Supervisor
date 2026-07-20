@@ -88,12 +88,12 @@ public sealed class StartupExecutionContextTests
     }
 
     [Fact]
-    public void PersistentCombinedOwnerDoesNotImplicitlyOwnSteamVrLifecycle()
+    public void PersistentCombinedOwnerOwnsSteamVrLifecycleForFinalExit()
     {
         var context = StartupExecutionContext.Parse(["--persistent-supervisor-owner"]);
 
         Assert.True(context.PersistentSupervisorOwner);
-        Assert.False(context.ManagedSteamVrSession);
+        Assert.True(context.ManagedSteamVrSession);
         Assert.False(context.IsInteractiveSupervisorLaunch);
     }
 

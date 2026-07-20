@@ -32,9 +32,9 @@ Existing scheduled-task users who explicitly selected the classic visible consol
 
 Combined mode installs the Terminal UI watcher and registers the SteamVR dashboard host, but they do not own separate Supervisors. There is exactly one authoritative `PimaxVrcSupervisor.exe`; both UI executables observe and control its shared state.
 
-The combined owner is persistent rather than SteamVR-owned. If Supervisor starts first, Terminal UI opens and the later SteamVR host attaches without starting another owner. When SteamVR exits, its overlay host exits while Supervisor and Terminal UI remain available. A later SteamVR session starts one overlay host, which reconnects to the same Supervisor.
+The combined owner is restart-persistent: an accepted action-7 SteamVR restart keeps the Supervisor, Terminal UI, base stations, and monitor state while the old overlay host exits and one replacement host returns. The owner still manages the SteamVR session lifecycle. A later normal SteamVR exit runs final cleanup once, powers down configured base stations, restores Supervisor-owned monitor state, and exits the Supervisor and Terminal UI.
 
-Closing Terminal UI or losing the overlay host closes only that client. It does not stop Supervisor, SteamVR, the other client, or managed applications. During a Supervisor replacement, the persistent Terminal UI reconnects and SteamVR supplies a replacement overlay host. A real Supervisor shutdown disconnects the clients according to their normal lifecycle.
+Closing Terminal UI with its window close button remains client-only while SteamVR is running. Losing the overlay host during a requested restart also does not stop the restart-persistent owner. A normal final SteamVR exit is different: the Supervisor owns the standard cleanup and all UI clients exit with it.
 
 ## Switching Safely
 

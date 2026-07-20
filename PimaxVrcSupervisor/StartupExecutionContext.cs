@@ -61,7 +61,10 @@ internal sealed record StartupExecutionContext(
         var desktopTuiStart = HasFlag(commandLineArgs, "--desktop-tui-start");
         var launchDesktopTuiAfterReady = HasFlag(commandLineArgs, "--launch-desktop-tui-after-ready");
         var steamVrStart = HasFlag(commandLineArgs, "--steamvr-start");
-        var managedSteamVrSession = steamVrStart || HasFlag(commandLineArgs, "--managed-steamvr-session");
+        var persistentSupervisorOwner = HasFlag(commandLineArgs, "--persistent-supervisor-owner");
+        var managedSteamVrSession = steamVrStart
+            || persistentSupervisorOwner
+            || HasFlag(commandLineArgs, "--managed-steamvr-session");
         var applyStartupIntegration = HasFlag(commandLineArgs, "--apply-startup-integration");
         var showStartupIntegrationResult = HasFlag(commandLineArgs, "--show-result");
         var hideStartupIntegrationHelperWindow = HasFlag(commandLineArgs, "--hide-startup-helper");
@@ -84,7 +87,7 @@ internal sealed record StartupExecutionContext(
             showStartupIntegrationResult,
             hideStartupIntegrationHelperWindow,
             HasFlag(commandLineArgs, "--desktop-tui-default-interface"),
-            HasFlag(commandLineArgs, "--persistent-supervisor-owner"),
+            persistentSupervisorOwner,
             HasFlag(commandLineArgs, "--install-auto-launch-task"),
             emergencyBaseStationCleanup,
             explicitConfigOptionPresent,
