@@ -716,6 +716,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private Process? _steamVrProcess;
     private string _status = "Starting supervisor...";
     private DashboardStatus _dashboardStatus = DashboardStatus.Pending;
+    private readonly OverlayUpdateStatusCache _updateStatus = new();
     private string[] _consoleLines = [];
     private string[] _consoleDisplayLines = [];
     private string? _hoveredCommand;
@@ -1172,6 +1173,20 @@ internal sealed class SteamVrDashboardHost : IDisposable
         try
         {
             SetStatus(await SendCommandAsync("status", TimeSpan.FromSeconds(2)), markDirty: IsOverlayCurrentlyViewed(), wakeLoop: true);
+            try
+            {
+                var updateResponse = await SendTcpCommandAsync(
+                    "query-json {\"resource\":\"update-status\"}",
+                    TimeSpan.FromSeconds(1));
+                if (_updateStatus.TryApplyBridgeResponse(updateResponse) && IsOverlayCurrentlyViewed())
+                {
+                    MarkOverlayDirty(wakeLoop: true);
+                }
+            }
+            catch
+            {
+                // Cached bridge projection is optional. Keep the last valid status quietly.
+            }
             success = true;
         }
         catch (Exception ex)
@@ -1832,6 +1847,29 @@ internal sealed class SteamVrDashboardHost : IDisposable
         DrawOverlayIcon(graphics, new Rectangle(78, 38, 72, 72));
         graphics.DrawString("Pimax VRC Supervisor", titleFont, textBrush, 166, 43);
         graphics.DrawString("SteamVR dashboard control surface", subtitleFont, mutedBrush, 170, 92);
+        DrawVer2UpdateIndicator(graphics, subtitleFont);
+    }
+
+    private void DrawVer2UpdateIndicator(Graphics graphics, Font font)
+    {
+        var text = _updateStatus.IndicatorText;
+        if (text is null)
+        {
+            return;
+        }
+
+        var bounds = new Rectangle(1030, 72, 390, 38);
+        FillRoundedRectangle(graphics, bounds, 7, Ver2Palette.Panel);
+        DrawRoundedRectangle(graphics, bounds, 7, Ver2Palette.Accent, 1);
+        using var brush = new SolidBrush(Ver2Palette.Text);
+        using var format = new StringFormat
+        {
+            Alignment = StringAlignment.Center,
+            LineAlignment = StringAlignment.Center,
+            Trimming = StringTrimming.EllipsisCharacter,
+            FormatFlags = StringFormatFlags.NoWrap
+        };
+        graphics.DrawString(text, font, brush, bounds, format);
     }
 
     private void DrawVer2StatusStrip(Graphics graphics, DashboardStatus status, Font labelFont, Font valueFont)

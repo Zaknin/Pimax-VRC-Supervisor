@@ -340,17 +340,18 @@ State is a cache, not authority. `updateAvailable` may be shown only when the cu
 - Add low-risk non-lifecycle `action-json` operations `check-for-updates`, `dismiss-update`, and `clear-update-dismissal`. Manual checks use a dedicated asynchronous operation ID and terminal result, survive a requesting-client disconnect, and reject concurrent manual requests instead of queueing them.
 - Preserve `line-oriented-tcp-v1` and all existing fields. Older clients ignore the additive field; newer clients tolerate an older Supervisor with no update object.
 
-### Terminal UI (later Phase 33A slice)
+### Terminal UI
 
-- Render a non-modal banner only for a verified, non-dismissed version newer than the running version.
-- Show `Update vX.Y.Z available - open Configurator or the GitHub release page`; do not auto-open a browser and do not add a download/install action.
-- A failed or offline check belongs in the System/details view, not the operator-warning channel used for session failures.
+- Read only the cached `query-json {"resource":"update-status"}` projection during the existing bridge refresh. Unsupported or malformed schema versions retain the last valid projection quietly.
+- Render `Update available: vX.Y.Z` only when the validated v1 response says verification is configured, an update is available, and the candidate is not dismissed. Availability is never recomputed from version strings in the client.
+- Show current/latest versions, Stable channel, last successful check, dismissal, verification-unavailable state, and a bounded cached failure in the existing status/details area. Failures never enter the operator-warning or modal action channels.
+- Add no check, URL, browser, download, install, or execution action. A temporary bridge loss keeps the last valid cached status until refresh succeeds again.
 
-### SteamVR overlay (later Phase 33A slice)
+### SteamVR overlay
 
-- Render one compact informational line from Supervisor's verified bridge projection.
-- Never perform network or signature work in the overlay host.
-- Do not add an overlay button that downloads, installs, launches a browser, or changes update policy. Overlay disappearance/reconnect simply re-reads cached status.
+- Read the same cached bridge resource as part of the existing dashboard status poll and render one non-clickable `Verified update available: vX.Y.Z` header badge only for a verified, available, non-dismissed candidate.
+- Invalid, unsupported, verification-unavailable, dismissed, and cached-failure states remain quiet. Repeated identical responses do not dirty the overlay or add another element.
+- Never perform network, remote metadata, state-file, or signature work in the overlay host. Add no overlay button that downloads, installs, launches a browser, checks for updates, or changes policy.
 
 ### Diagnostics
 

@@ -50,6 +50,10 @@ impl SupervisorBridge {
         self.query(json!({ "resource": "status" }))
     }
 
+    pub fn query_update_status(&self) -> Result<QueryResponse> {
+        self.query(json!({ "resource": "update-status" }))
+    }
+
     pub fn query_commands(&self) -> Result<QueryResponse> {
         self.query(json!({ "resource": "commands" }))
     }
@@ -233,6 +237,17 @@ mod tests {
         assert_eq!(value["confirmed"], true);
         assert_eq!(value["sourceClientType"], "desktop-tui");
         assert_eq!(value["sourceClientInstanceId"], "client-y");
+    }
+
+    #[test]
+    fn update_status_uses_only_the_cached_supervisor_resource() {
+        let request =
+            serde_json::to_string(&json!({ "resource": "update-status" })).expect("request json");
+
+        assert_eq!(request, r#"{"resource":"update-status"}"#);
+        let dependencies = include_str!("../Cargo.toml");
+        assert!(!dependencies.contains("reqwest"));
+        assert!(!dependencies.contains("hyper"));
     }
 
     #[test]

@@ -13,7 +13,7 @@ use crate::{
         ActionOutcome, App, ClickAction, ConnectionState, ModalButtonFocus, REFRESH_INTERVAL,
         display_name_for_command, operator_error_message,
     },
-    models::{CommandSummary, ExitOption, TuiAction},
+    models::{CommandSummary, ExitOption, TuiAction, UpdateStatusSummary},
     theme,
 };
 
@@ -66,7 +66,7 @@ fn render_full_dashboard(frame: &mut Frame<'_>, area: Rect, app: &mut App, now: 
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Length(12),
+            Constraint::Length(14),
             Constraint::Length(6),
             Constraint::Min(8),
             Constraint::Length(1),
@@ -99,9 +99,9 @@ fn render_compact_dashboard(frame: &mut Frame<'_>, area: Rect, app: &mut App, no
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Length(11),
+            Constraint::Length(12),
             Constraint::Length(4),
-            Constraint::Min(7),
+            Constraint::Min(6),
             Constraint::Length(1),
         ])
         .split(area);
@@ -189,6 +189,20 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
         Span::styled("Pimax VRC Supervisor TUI", theme::title_style()),
         Span::raw("   Supervisor "),
         theme::badge(supervisor_label, supervisor_style),
+    ];
+
+    if let Some(version) = app
+        .update_status
+        .as_ref()
+        .and_then(UpdateStatusSummary::indicator_version)
+    {
+        line.push(Span::styled(
+            format!("   Update available: v{version}"),
+            theme::success_style(),
+        ));
+    }
+
+    line.extend([
         Span::styled(
             format!("   Last OK {}", app.last_success_label(now)),
             theme::secondary_style(),
@@ -197,7 +211,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
             format!("   Refresh {}s", REFRESH_INTERVAL.as_secs()),
             theme::secondary_style(),
         ),
-    ];
+    ]);
 
     if !app.running_actions.is_empty() {
         line.push(Span::styled(
@@ -228,7 +242,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, now: Instant) {
 
 fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let status = &app.status;
-    let lines = vec![
+    let mut lines = vec![
         simple_status_line("Version", status.app_version.as_str()),
         simple_status_line("Mode", status.mode.as_str()),
         status_line(
@@ -258,18 +272,17 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
             status_badge("base", &status.base_stations),
         ),
     ];
+    lines.extend(update_detail_lines(app.update_status.as_ref()));
 
     frame.render_widget(
-        Paragraph::new(lines)
-            .block(theme::panel_block("Supervisor"))
-            .wrap(Wrap { trim: true }),
+        Paragraph::new(lines).block(theme::panel_block("Supervisor")),
         area,
     );
 }
 
 fn render_compact_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let status = &app.status;
-    let lines = vec![
+    let mut lines = vec![
         simple_status_line("Mode", status.mode.as_str()),
         status_line(
             "Lifecycle",
@@ -293,11 +306,10 @@ fn render_compact_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
             status_badge("base", &status.base_stations),
         ),
     ];
+    lines.extend(update_detail_lines(app.update_status.as_ref()));
 
     frame.render_widget(
-        Paragraph::new(lines)
-            .block(theme::panel_block("Status"))
-            .wrap(Wrap { trim: true }),
+        Paragraph::new(lines).block(theme::panel_block("Status")),
         area,
     );
 }
@@ -429,11 +441,22 @@ fn render_small_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
         ConnectionState::Disconnected => ("DISCONNECTED", theme::badge_error_style()),
     };
 
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::styled("Pimax VRC Supervisor TUI", theme::title_style()),
         Span::raw("   Supervisor "),
         theme::badge(supervisor_label, supervisor_style),
-    ]);
+    ];
+    if let Some(version) = app
+        .update_status
+        .as_ref()
+        .and_then(UpdateStatusSummary::indicator_version)
+    {
+        spans.push(Span::styled(
+            format!("   Update available: v{version}"),
+            theme::success_style(),
+        ));
+    }
+    let line = Line::from(spans);
 
     frame.render_widget(
         Paragraph::new(vec![
@@ -1572,6 +1595,74 @@ fn simple_status_line<'a>(label: &'a str, value: &'a str) -> Line<'a> {
     ])
 }
 
+fn update_detail_lines(status: Option<&UpdateStatusSummary>) -> Vec<Line<'static>> {
+    let Some(status) = status else {
+        return Vec::new();
+    };
+
+    let latest = status
+        .latest_verified_version
+        .as_deref()
+        .map(|version| format!("v{version}"))
+        .unwrap_or_else(|| "none".to_string());
+    let dismissed = if status.dismissed {
+        "yes".to_string()
+    } else if let Some(previous) = status.dismissed_version.as_deref() {
+        format!("no (previous v{previous})")
+    } else {
+        "no".to_string()
+    };
+    let checked = status
+        .last_successful_check_at
+        .as_deref()
+        .map(format_update_time)
+        .unwrap_or_else(|| "never".to_string());
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(format!("{:<14}", "Update"), theme::label_style()),
+            Span::raw(format!("v{} -> {latest}", status.current_version)),
+        ]),
+        Line::from(vec![
+            Span::styled(format!("{:<14}", "Channel"), theme::label_style()),
+            Span::raw(format!("{}  dismissed {dismissed}", status.channel)),
+        ]),
+        Line::from(vec![
+            Span::styled(format!("{:<14}", "Checked"), theme::label_style()),
+            Span::raw(checked),
+        ]),
+    ];
+
+    if !status.verification_configured {
+        lines.push(Line::from(Span::styled(
+            "Update verification not configured.",
+            theme::secondary_style(),
+        )));
+    } else if status.last_error_code.is_some() || status.last_error_summary.is_some() {
+        let code = status.last_error_code.as_deref().unwrap_or("check_failed");
+        let summary = status
+            .last_error_summary
+            .as_deref()
+            .unwrap_or("The cached update check did not complete successfully.");
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<14}", "Update error"), theme::label_style()),
+            Span::styled(
+                truncate(&format!("{code}: {summary}"), 92),
+                theme::secondary_style(),
+            ),
+        ]));
+    }
+
+    lines
+}
+
+fn format_update_time(value: &str) -> String {
+    if value.is_ascii() && value.len() >= 16 && value.as_bytes().get(10) == Some(&b'T') {
+        format!("{} {} UTC", &value[..10], &value[11..16])
+    } else {
+        truncate(value, 28)
+    }
+}
+
 fn status_line<'a>(label: &'a str, value: &'a str, badge: Span<'static>) -> Line<'a> {
     Line::from(vec![
         Span::styled(format!("{label:<14}"), theme::label_style()),
@@ -1730,7 +1821,9 @@ mod tests {
     use crate::{
         app::RunningAction,
         diagnostics::TuiDiagnostics,
-        models::{CommandSummary, RESTART_VR_SESSION_COMMAND, START_STEAMVR_COMMAND},
+        models::{
+            CommandSummary, RESTART_VR_SESSION_COMMAND, START_STEAMVR_COMMAND, UpdateStatusSummary,
+        },
     };
     use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
@@ -1756,6 +1849,21 @@ mod tests {
             action_safety_category: "Managed".to_string(),
             tui_executable: true,
             blocked_reason: String::new(),
+        }
+    }
+
+    fn verified_update() -> UpdateStatusSummary {
+        UpdateStatusSummary {
+            current_version: "1.3.1".to_string(),
+            latest_verified_version: Some("1.4.0".to_string()),
+            channel: "Stable".to_string(),
+            update_available: true,
+            dismissed: false,
+            dismissed_version: None,
+            last_successful_check_at: Some("2026-07-21T12:00:00+00:00".to_string()),
+            last_error_code: None,
+            last_error_summary: None,
+            verification_configured: true,
         }
     }
 
@@ -1834,6 +1942,75 @@ mod tests {
             status_badge("steamvr", "not running").content.as_ref(),
             "OFF"
         );
+    }
+
+    #[test]
+    fn verified_update_indicator_is_compact_at_every_supported_minimum() {
+        for (width, height) in [(120, 32), (100, 26), (80, 20)] {
+            let mut app = app_with_steamvr_commands("running");
+            app.update_status = Some(verified_update());
+
+            let text = rendered_text(&render_buffer(&mut app, width, height));
+
+            assert!(
+                text.contains("Update available: v1.4.0"),
+                "{width}x{height}: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn update_details_are_passive_and_bounded() {
+        let mut app = app_with_steamvr_commands("running");
+        let mut status = verified_update();
+        status.update_available = false;
+        status.latest_verified_version = None;
+        status.verification_configured = false;
+        status.last_error_code = Some("verification_unavailable".to_string());
+        status.last_error_summary = Some("cached failure".to_string());
+        app.update_status = Some(status);
+
+        for (width, height) in [(120, 32), (100, 26)] {
+            let text = rendered_text(&render_buffer(&mut app, width, height));
+            assert!(text.contains("v1.3.1 -> none"));
+            assert!(text.contains("Stable  dismissed no"));
+            assert!(text.contains("2026-07-21 12:00 UTC"));
+            assert!(
+                text.contains("Update verification not configured."),
+                "{width}x{height}: {text}"
+            );
+            assert!(!text.contains("Update available:"));
+        }
+    }
+
+    #[test]
+    fn dismissed_update_has_details_without_prominent_indicator() {
+        let mut app = app_with_steamvr_commands("running");
+        let mut status = verified_update();
+        status.dismissed = true;
+        status.dismissed_version = Some("1.4.0".to_string());
+        app.update_status = Some(status);
+
+        let text = rendered_text(&render_buffer(&mut app, 120, 32));
+
+        assert!(text.contains("dismissed yes"));
+        assert!(!text.contains("Update available:"));
+    }
+
+    #[test]
+    fn cached_update_failure_appears_only_in_details() {
+        let mut app = app_with_steamvr_commands("running");
+        let mut status = verified_update();
+        status.update_available = false;
+        status.latest_verified_version = None;
+        status.last_error_code = Some("timeout".to_string());
+        status.last_error_summary = Some("The cached check timed out.".to_string());
+        app.update_status = Some(status);
+
+        let text = rendered_text(&render_buffer(&mut app, 120, 32));
+
+        assert!(text.contains("timeout: The cached"));
+        assert!(!text.contains("Update available:"));
     }
 
     #[test]

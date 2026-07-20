@@ -277,6 +277,32 @@ pub struct StatusSummary {
     pub last_action_result: Option<OperationalActionSummary>,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct UpdateStatusSummary {
+    pub current_version: String,
+    pub latest_verified_version: Option<String>,
+    pub channel: String,
+    pub update_available: bool,
+    pub dismissed: bool,
+    pub dismissed_version: Option<String>,
+    pub last_successful_check_at: Option<String>,
+    pub last_error_code: Option<String>,
+    pub last_error_summary: Option<String>,
+    pub verification_configured: bool,
+}
+
+impl UpdateStatusSummary {
+    pub fn indicator_version(&self) -> Option<&str> {
+        (self.verification_configured && self.update_available && !self.dismissed)
+            .then(|| {
+                self.latest_verified_version
+                    .as_deref()
+                    .filter(|version| is_valid_stable_semver(version))
+            })
+            .flatten()
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct CommandSummary {
@@ -344,6 +370,136 @@ pub fn status_from_response(response: &QueryResponse) -> StatusSummary {
         current_action: operational_action_value(data, "currentAction"),
         last_action_result: operational_action_value(data, "lastActionResult"),
     }
+}
+
+pub fn update_status_from_response(response: &QueryResponse) -> Option<UpdateStatusSummary> {
+    if !response.success {
+        return None;
+    }
+
+    let data = response.data.as_ref()?.as_object()?;
+    if required_u64(data, "schemaVersion")? != 1
+        || required_string(data, "policy", 32)
+            .is_none_or(|value| !matches!(value.as_str(), "Disabled" | "Notify"))
+        || required_string(data, "channel", 32).as_deref() != Some("Stable")
+    {
+        return None;
+    }
+
+    let current_version = required_string(data, "currentVersion", 128)?;
+    if !is_valid_stable_semver(&current_version) {
+        return None;
+    }
+
+    let latest_verified_version = optional_string(data, "latestVerifiedVersion", 128)?;
+    if latest_verified_version
+        .as_deref()
+        .is_some_and(|value| !is_valid_stable_semver(value))
+    {
+        return None;
+    }
+
+    let dismissed_version = optional_string(data, "dismissedVersion", 128)?;
+    if dismissed_version
+        .as_deref()
+        .is_some_and(|value| !is_valid_stable_semver(value))
+    {
+        return None;
+    }
+
+    let update_available = required_bool(data, "updateAvailable")?;
+    if update_available && latest_verified_version.is_none() {
+        return None;
+    }
+
+    // Validate the full v1 bridge shape before trusting the presentation booleans.
+    optional_string(data, "lastAttemptAt", 64)?;
+    required_bool(data, "automaticCheckDue")?;
+    required_bool(data, "checkInProgress")?;
+    required_nullable_object(data, "operation")?;
+
+    Some(UpdateStatusSummary {
+        current_version,
+        latest_verified_version,
+        channel: "Stable".to_string(),
+        update_available,
+        dismissed: required_bool(data, "dismissed")?,
+        dismissed_version,
+        last_successful_check_at: optional_string(data, "lastSuccessfulCheckAt", 64)?,
+        last_error_code: optional_string(data, "lastErrorCode", 128)?,
+        last_error_summary: optional_string(data, "lastErrorSummary", 512)?,
+        verification_configured: required_bool(data, "verificationConfigured")?,
+    })
+}
+
+fn required_u64(data: &serde_json::Map<String, Value>, key: &str) -> Option<u64> {
+    data.get(key)?.as_u64()
+}
+
+fn required_bool(data: &serde_json::Map<String, Value>, key: &str) -> Option<bool> {
+    data.get(key)?.as_bool()
+}
+
+fn required_string(
+    data: &serde_json::Map<String, Value>,
+    key: &str,
+    max_len: usize,
+) -> Option<String> {
+    let value = data.get(key)?.as_str()?;
+    bounded_safe_string(value, max_len).map(str::to_string)
+}
+
+fn optional_string(
+    data: &serde_json::Map<String, Value>,
+    key: &str,
+    max_len: usize,
+) -> Option<Option<String>> {
+    match data.get(key)? {
+        Value::Null => Some(None),
+        Value::String(value) => bounded_safe_string(value, max_len)
+            .map(str::to_string)
+            .map(Some),
+        _ => None,
+    }
+}
+
+fn required_nullable_object(data: &serde_json::Map<String, Value>, key: &str) -> Option<()> {
+    match data.get(key)? {
+        Value::Null | Value::Object(_) => Some(()),
+        _ => None,
+    }
+}
+
+fn bounded_safe_string(value: &str, max_len: usize) -> Option<&str> {
+    (!value.is_empty() && value.len() <= max_len && !value.chars().any(char::is_control))
+        .then_some(value)
+}
+
+fn is_valid_stable_semver(value: &str) -> bool {
+    let (version, build) = value
+        .split_once('+')
+        .map_or((value, None), |(version, build)| (version, Some(build)));
+    if version.contains('-') || build.is_some_and(|build| !valid_semver_identifiers(build)) {
+        return false;
+    }
+
+    let parts = version.split('.').collect::<Vec<_>>();
+    parts.len() == 3 && parts.iter().all(|part| valid_numeric_identifier(part))
+}
+
+fn valid_numeric_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && (value == "0" || !value.starts_with('0'))
+}
+
+fn valid_semver_identifiers(value: &str) -> bool {
+    value.split('.').all(|identifier| {
+        !identifier.is_empty()
+            && identifier
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    })
 }
 
 fn operational_action_value(data: &Value, key: &str) -> Option<OperationalActionSummary> {
@@ -456,6 +612,81 @@ mod tests {
         assert_eq!(status.steam_vr, "not running");
         assert_eq!(status.steam_vr_running, Some(false));
         assert_eq!(status.steam_vr_control_mode, "start");
+    }
+
+    fn update_response(overrides: Value) -> QueryResponse {
+        let mut data = serde_json::json!({
+            "schemaVersion": 1,
+            "policy": "Notify",
+            "channel": "Stable",
+            "currentVersion": "1.3.1",
+            "latestVerifiedVersion": "1.4.0",
+            "updateAvailable": true,
+            "dismissed": false,
+            "dismissedVersion": null,
+            "lastAttemptAt": "2026-07-21T12:00:00+00:00",
+            "lastSuccessfulCheckAt": "2026-07-21T12:00:00+00:00",
+            "lastErrorCode": null,
+            "lastErrorSummary": null,
+            "verificationConfigured": true,
+            "automaticCheckDue": false,
+            "checkInProgress": false,
+            "operation": null
+        });
+        for (key, value) in overrides.as_object().expect("overrides") {
+            data[key] = value.clone();
+        }
+        QueryResponse {
+            success: true,
+            data: Some(data),
+            ..QueryResponse::default()
+        }
+    }
+
+    #[test]
+    fn verified_update_indicator_trusts_validated_supervisor_booleans() {
+        let available = update_status_from_response(&update_response(serde_json::json!({})))
+            .expect("valid update status");
+        assert_eq!(available.indicator_version(), Some("1.4.0"));
+
+        for overrides in [
+            serde_json::json!({ "latestVerifiedVersion": null, "updateAvailable": false }),
+            serde_json::json!({ "latestVerifiedVersion": "1.3.1", "updateAvailable": false }),
+            serde_json::json!({ "latestVerifiedVersion": "1.2.0", "updateAvailable": false }),
+            serde_json::json!({ "dismissed": true, "dismissedVersion": "1.4.0" }),
+            serde_json::json!({ "verificationConfigured": false }),
+        ] {
+            let status = update_status_from_response(&update_response(overrides))
+                .expect("valid quiet status");
+            assert_eq!(status.indicator_version(), None);
+        }
+    }
+
+    #[test]
+    fn older_dismissal_does_not_hide_new_supervisor_candidate() {
+        let status = update_status_from_response(&update_response(serde_json::json!({
+            "latestVerifiedVersion": "1.5.0",
+            "dismissed": false,
+            "dismissedVersion": "1.4.0"
+        })))
+        .expect("valid newer status");
+
+        assert_eq!(status.indicator_version(), Some("1.5.0"));
+        assert_eq!(status.dismissed_version.as_deref(), Some("1.4.0"));
+    }
+
+    #[test]
+    fn malformed_and_unsupported_update_status_fail_quietly() {
+        for overrides in [
+            serde_json::json!({ "schemaVersion": 2 }),
+            serde_json::json!({ "channel": "Beta" }),
+            serde_json::json!({ "latestVerifiedVersion": "v1.4.0" }),
+            serde_json::json!({ "updateAvailable": "true" }),
+            serde_json::json!({ "updateAvailable": true, "latestVerifiedVersion": null }),
+            serde_json::json!({ "lastErrorSummary": "bad\nvalue" }),
+        ] {
+            assert!(update_status_from_response(&update_response(overrides)).is_none());
+        }
     }
 
     #[test]

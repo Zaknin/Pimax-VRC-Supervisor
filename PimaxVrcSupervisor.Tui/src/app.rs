@@ -15,8 +15,9 @@ use crate::{
     diagnostics::{DiagnosticsHandle, TuiDiagnostics},
     models::{
         CommandResult, CommandSummary, ExitOption, LogLine, RESTART_VR_SESSION_COMMAND,
-        START_STEAMVR_COMMAND, StatusSummary, SteamVrControlMode, TuiAction,
+        START_STEAMVR_COMMAND, StatusSummary, SteamVrControlMode, TuiAction, UpdateStatusSummary,
         commands_from_response, logs_from_response, status_from_response,
+        update_status_from_response,
     },
 };
 
@@ -109,9 +110,17 @@ pub struct ClickRegion {
     pub action: ClickAction,
 }
 
+struct LoadedDashboard {
+    status: StatusSummary,
+    commands: Vec<CommandSummary>,
+    logs: Vec<LogLine>,
+    update_status: Option<UpdateStatusSummary>,
+}
+
 pub struct App {
     pub connection: ConnectionState,
     pub status: StatusSummary,
+    pub update_status: Option<UpdateStatusSummary>,
     pub commands: Vec<CommandSummary>,
     pub logs: Vec<LogLine>,
     pub last_success: Option<Instant>,
@@ -194,6 +203,7 @@ impl App {
         Self {
             connection: ConnectionState::Disconnected,
             status: StatusSummary::default(),
+            update_status: None,
             commands: Vec::new(),
             logs: Vec::new(),
             last_success: None,
@@ -259,11 +269,14 @@ impl App {
         let previous_connection = self.connection;
 
         match Self::load(&bridge) {
-            Ok((status, commands, logs)) => {
+            Ok(loaded) => {
                 self.connection = ConnectionState::Connected;
-                self.status = status;
-                self.commands = commands;
-                self.logs = logs;
+                self.status = loaded.status;
+                self.commands = loaded.commands;
+                self.logs = loaded.logs;
+                if let Some(update_status) = loaded.update_status {
+                    self.update_status = Some(update_status);
+                }
                 self.sync_operational_actions(now);
                 self.apply_supervisor_owner_shutdown_signal();
                 self.last_success = Some(now);
@@ -888,18 +901,28 @@ impl App {
             .map(|at| format!("{} ago", format_duration(now.duration_since(at))))
     }
 
-    fn load(
-        bridge: &SupervisorBridge,
-    ) -> Result<(StatusSummary, Vec<CommandSummary>, Vec<LogLine>)> {
+    fn load(bridge: &SupervisorBridge) -> Result<LoadedDashboard> {
         let status_response = bridge.query_status()?;
         let commands_response = bridge.query_commands()?;
         let log_response = bridge.query_log(MAX_LOG_LINES)?;
+        let update_status = bridge
+            .query_update_status()
+            .ok()
+            .and_then(|response| update_status_from_response(&response));
 
-        Ok((
-            status_from_response(&status_response),
-            commands_from_response(&commands_response),
-            logs_from_response(&log_response),
-        ))
+        Ok(LoadedDashboard {
+            status: status_from_response(&status_response),
+            commands: commands_from_response(&commands_response),
+            logs: logs_from_response(&log_response),
+            update_status,
+        })
+    }
+
+    #[cfg(test)]
+    fn apply_update_status_response(&mut self, response: &crate::models::QueryResponse) {
+        if let Some(update_status) = update_status_from_response(response) {
+            self.update_status = Some(update_status);
+        }
     }
 
     fn update_supervisor_disconnect_auto_exit(&mut self, now: Instant) {
@@ -1405,6 +1428,31 @@ fn format_duration(duration: Duration) -> String {
 mod tests {
     use super::*;
 
+    fn update_response(schema_version: u64, latest: &str) -> crate::models::QueryResponse {
+        crate::models::QueryResponse {
+            success: true,
+            data: Some(serde_json::json!({
+                "schemaVersion": schema_version,
+                "policy": "Notify",
+                "channel": "Stable",
+                "currentVersion": "1.3.1",
+                "latestVerifiedVersion": latest,
+                "updateAvailable": true,
+                "dismissed": false,
+                "dismissedVersion": null,
+                "lastAttemptAt": "2026-07-21T12:00:00+00:00",
+                "lastSuccessfulCheckAt": "2026-07-21T12:00:00+00:00",
+                "lastErrorCode": null,
+                "lastErrorSummary": null,
+                "verificationConfigured": true,
+                "automaticCheckDue": false,
+                "checkInProgress": false,
+                "operation": null
+            })),
+            ..crate::models::QueryResponse::default()
+        }
+    }
+
     fn app(exit_when_supervisor_exits: bool) -> App {
         App::new(
             TuiDiagnostics::disabled(),
@@ -1499,6 +1547,36 @@ mod tests {
         assert!(!app.should_exit_after_supervisor_disconnect(
             now + Duration::from_secs(2) + SUPERVISOR_DISCONNECT_AUTO_EXIT_DELAY
         ));
+    }
+
+    #[test]
+    fn cached_update_survives_invalid_bridge_data_and_recovers_on_reconnect() {
+        let mut app = app(false);
+        app.apply_update_status_response(&update_response(1, "1.4.0"));
+        assert_eq!(
+            app.update_status
+                .as_ref()
+                .and_then(UpdateStatusSummary::indicator_version),
+            Some("1.4.0")
+        );
+
+        app.connection = ConnectionState::Disconnected;
+        app.apply_update_status_response(&update_response(2, "1.5.0"));
+        assert_eq!(
+            app.update_status
+                .as_ref()
+                .and_then(UpdateStatusSummary::indicator_version),
+            Some("1.4.0")
+        );
+
+        app.connection = ConnectionState::Connected;
+        app.apply_update_status_response(&update_response(1, "1.5.0"));
+        assert_eq!(
+            app.update_status
+                .as_ref()
+                .and_then(UpdateStatusSummary::indicator_version),
+            Some("1.5.0")
+        );
     }
 
     #[test]
