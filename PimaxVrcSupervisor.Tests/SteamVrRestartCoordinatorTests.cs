@@ -272,7 +272,7 @@ public sealed class SteamVrRestartCoordinatorTests
         var source = File.ReadAllText(SourcePath("PimaxVrcSupervisor", "Program.cs"));
         var acceptance = Slice(
             source,
-            "private VrSessionRestartAcceptance TryAcceptVrSessionRestart",
+            "private SteamVrRestartRequestDecision TryAcceptVrSessionRestart",
             "private async Task RunVrSessionRestartOperationAsync");
 
         Assert.True(acceptance.IndexOf("oldRuntime = CaptureCurrentSteamVrRuntime()", StringComparison.Ordinal)
@@ -305,11 +305,11 @@ public sealed class SteamVrRestartCoordinatorTests
         var source = File.ReadAllText(SourcePath("PimaxVrcSupervisor", "Program.cs"));
         var acceptance = Slice(
             source,
-            "private VrSessionRestartAcceptance TryAcceptVrSessionRestart",
+            "private SteamVrRestartRequestDecision TryAcceptVrSessionRestart",
             "private async Task RunVrSessionRestartOperationAsync");
 
         Assert.Contains(
-            "RunVrSessionRestartOperationAsync(operationId, oldRuntime, resumeVrChat, _shutdown.Token)",
+            "RunVrSessionRestartOperationAsync(operationId, capturedRuntime, resumeVrChat, _shutdown.Token)",
             acceptance,
             StringComparison.Ordinal);
     }

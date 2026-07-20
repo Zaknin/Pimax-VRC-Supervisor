@@ -58,10 +58,14 @@ impl SupervisorBridge {
         self.query(json!({ "resource": "log", "maxLines": max_lines }))
     }
 
-    pub fn execute_tui_action(&self, command: &str) -> Result<CommandResult> {
-        let request_json = serde_json::to_string(
-            &json!({ "command": command, "confirmed": true, "source": "Desktop TUI" }),
-        )?;
+    #[cfg_attr(test, allow(dead_code))]
+    pub fn execute_tui_action(
+        &self,
+        command: &str,
+        request_id: Option<&str>,
+        client_instance_id: &str,
+    ) -> Result<CommandResult> {
+        let request_json = build_action_request_json(command, request_id, client_instance_id)?;
         let response_line = self.send_line(
             &format!("action-json {request_json}"),
             ACTION_READ_WRITE_TIMEOUT,
@@ -192,4 +196,51 @@ impl SupervisorBridge {
 fn is_timeout_error(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     message.contains("timed out") || message.contains("timeout") || message.contains("would block")
+}
+
+fn build_action_request_json(
+    command: &str,
+    request_id: Option<&str>,
+    client_instance_id: &str,
+) -> Result<String> {
+    let mut request = json!({
+        "command": command,
+        "confirmed": true,
+        "source": "Desktop TUI",
+        "sourceClientType": "desktop-tui",
+        "sourceClientInstanceId": client_instance_id
+    });
+    if let Some(request_id) = request_id {
+        request["requestId"] = json!(request_id);
+    }
+
+    Ok(serde_json::to_string(&request)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn action_payload_retains_request_and_client_identity() {
+        let payload =
+            build_action_request_json("restart-vr-session", Some("request-x"), "client-y")
+                .expect("payload");
+        let value: Value = serde_json::from_str(&payload).expect("json");
+
+        assert_eq!(value["requestId"], "request-x");
+        assert_eq!(value["command"], "restart-vr-session");
+        assert_eq!(value["confirmed"], true);
+        assert_eq!(value["sourceClientType"], "desktop-tui");
+        assert_eq!(value["sourceClientInstanceId"], "client-y");
+    }
+
+    #[test]
+    fn retained_action_payload_does_not_create_restart_request_identity() {
+        let payload =
+            build_action_request_json("restart-core-apps", None, "client-y").expect("payload");
+        let value: Value = serde_json::from_str(&payload).expect("json");
+
+        assert!(value.get("requestId").is_none());
+    }
 }

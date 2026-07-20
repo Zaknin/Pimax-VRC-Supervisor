@@ -178,11 +178,11 @@ public sealed class RequestedSteamVrShutdownClassificationTests
         var source = File.ReadAllText(SourcePath("PimaxVrcSupervisor", "Program.cs"));
         var acceptance = Slice(
             source,
-            "private VrSessionRestartAcceptance TryAcceptVrSessionRestart",
+            "private SteamVrRestartRequestDecision TryAcceptVrSessionRestart",
             "private async Task RunVrSessionRestartOperationAsync");
 
         var captureIdentity = acceptance.IndexOf(
-            "Volatile.Write(ref _vrSessionRestartExpectedOldRuntime, oldRuntime.Identity)",
+            "Volatile.Write(ref _vrSessionRestartExpectedOldRuntime, capturedRuntime.Identity)",
             StringComparison.Ordinal);
         var publishActive = acceptance.IndexOf(
             "Volatile.Write(ref _vrSessionRestartActive, 1)",
@@ -207,7 +207,7 @@ public sealed class RequestedSteamVrShutdownClassificationTests
         var reporter = Slice(
             source,
             "private void ReportVrSessionRestartLifecycleOnce",
-            "private static string NormalizeActionSource");
+            "private async Task<SteamVrShutdownRequestResult> RequestSteamVrShutdownOnceAsync");
 
         Assert.Contains("Interlocked.CompareExchange", reporter, StringComparison.Ordinal);
         Assert.DoesNotContain("_operatorWarning", reporter, StringComparison.Ordinal);

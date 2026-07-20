@@ -87,7 +87,7 @@ public sealed class PimaxPassiveBehaviorRetentionTests
             "private async Task<SupervisorCommandResult> ExecuteLifecycleJsonAsync");
         var operation = Slice(
             source,
-            "private VrSessionRestartAcceptance TryAcceptVrSessionRestart",
+            "private SteamVrRestartRequestDecision TryAcceptVrSessionRestart",
             "private static SupervisorCommandResult ActionJsonResult");
         var coordinator = SourceFile("SteamVrRestartCoordinator.cs");
 

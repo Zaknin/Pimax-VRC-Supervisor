@@ -699,6 +699,7 @@ internal sealed class SteamVrDashboardHost : IDisposable
     private readonly object _renderLock = new();
     private readonly SemaphoreSlim _loopWakeSignal = new(0, 1);
     private readonly HostDiagnosticsSession _diagnostics;
+    private readonly string _clientInstanceId = Guid.NewGuid().ToString("N");
     private readonly DashboardButton[] _buttons =
     [
         new("Restart VRC face tracking", "restart-core-apps", new Rectangle(ButtonLeft, ButtonTop, ButtonWidth, ButtonHeight)),
@@ -1416,16 +1417,22 @@ internal sealed class SteamVrDashboardHost : IDisposable
         }
 
         _confirmationCommand = null;
+        var requestId = string.Equals(button.Command, "restart-vr-session", StringComparison.Ordinal)
+            ? Guid.NewGuid().ToString("N")
+            : null;
         _commandInFlight = true;
         _runningCommand = button.Command;
         _lastCommandStartedAt = DateTimeOffset.UtcNow;
         Log("Command queued: " + button.Command);
         WriteDebug("command queued; name=" + button.Command);
         SetStatus("Clicked: " + button.Label, urgent: true);
-        _ = ExecuteButtonAsync(button, cancellationToken);
+        _ = ExecuteButtonAsync(button, requestId, cancellationToken);
     }
 
-    private async Task ExecuteButtonAsync(DashboardButton button, CancellationToken cancellationToken)
+    private async Task ExecuteButtonAsync(
+        DashboardButton button,
+        string? requestId,
+        CancellationToken cancellationToken)
     {
         var startedAt = Stopwatch.GetTimestamp();
         var success = false;
@@ -1438,7 +1445,10 @@ internal sealed class SteamVrDashboardHost : IDisposable
                 ? await RestartSupervisorAsync()
                 : string.Equals(button.Command, "restart-vr-session", StringComparison.Ordinal)
                     ? await SendCommandAsync(
-                        "action-json {\"command\":\"restart-vr-session\",\"confirmed\":true,\"source\":\"SteamVR Overlay\"}",
+                        BuildRestartActionCommand(
+                            requestId
+                                ?? throw new InvalidOperationException("Confirmed restart did not retain request identity."),
+                            _clientInstanceId),
                         TimeSpan.FromSeconds(45))
                 : await SendCommandAsync(button.Command, TimeSpan.FromSeconds(45));
             Log("Command response: " + response);
@@ -1475,6 +1485,17 @@ internal sealed class SteamVrDashboardHost : IDisposable
 
     private static bool RequiresButtonConfirmation(string command)
         => string.Equals(command, "restart-vr-session", StringComparison.Ordinal);
+
+    internal static string BuildRestartActionCommand(string requestId, string clientInstanceId)
+        => "action-json " + JsonSerializer.Serialize(new
+        {
+            requestId,
+            command = "restart-vr-session",
+            confirmed = true,
+            source = "SteamVR Overlay",
+            sourceClientType = "steamvr-overlay",
+            sourceClientInstanceId = clientInstanceId
+        });
 
     private DashboardButton? HitTestLayout(PointF layoutPosition)
         => _buttons.FirstOrDefault(button => Contains(button.Bounds, layoutPosition));

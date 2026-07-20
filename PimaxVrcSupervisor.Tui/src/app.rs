@@ -7,6 +7,7 @@ use std::{
 
 use color_eyre::eyre::Result;
 use ratatui::layout::Rect;
+use uuid::Uuid;
 
 use crate::{
     bridge::SupervisorBridge,
@@ -156,6 +157,8 @@ pub struct App {
     action_result_rx: Receiver<CompletedActionResult>,
     shutdown_result_tx: Sender<ShutdownRequestResult>,
     shutdown_result_rx: Receiver<ShutdownRequestResult>,
+    client_instance_id: String,
+    last_submitted_request_id: Option<String>,
 }
 
 impl App {
@@ -229,6 +232,8 @@ impl App {
             action_result_rx,
             shutdown_result_tx,
             shutdown_result_rx,
+            client_instance_id: Uuid::new_v4().simple().to_string(),
+            last_submitted_request_id: None,
         }
     }
 
@@ -671,8 +676,13 @@ impl App {
             command: command.clone(),
             started_at: now,
         });
+        let request_id =
+            (action == TuiAction::RestartVrSession).then(|| Uuid::new_v4().simple().to_string());
+        if let Some(request_id) = request_id.as_ref() {
+            self.last_submitted_request_id = Some(request_id.clone());
+        }
         self.diagnostics.record_action_started();
-        self.spawn_action_worker(action, command);
+        self.spawn_action_worker(action, command, request_id);
         self.mark_render_needed();
     }
 
@@ -1062,13 +1072,19 @@ impl App {
         );
     }
 
-    fn spawn_action_worker(&self, _action: TuiAction, command: String) {
+    #[cfg(not(test))]
+    fn spawn_action_worker(&self, _action: TuiAction, command: String, request_id: Option<String>) {
         let sender = self.action_result_tx.clone();
         let diagnostics = self.diagnostics_handle();
+        let client_instance_id = self.client_instance_id.clone();
         thread::spawn(move || {
             let result = catch_unwind(AssertUnwindSafe(|| {
                 let bridge = SupervisorBridge::with_diagnostics(diagnostics);
-                bridge.execute_tui_action(command.as_str())
+                bridge.execute_tui_action(
+                    command.as_str(),
+                    request_id.as_deref(),
+                    client_instance_id.as_str(),
+                )
             }));
 
             let completed = match result {
@@ -1101,6 +1117,16 @@ impl App {
 
             let _ = sender.send(completed);
         });
+    }
+
+    #[cfg(test)]
+    fn spawn_action_worker(
+        &self,
+        _action: TuiAction,
+        _command: String,
+        _request_id: Option<String>,
+    ) {
+        // Unit tests exercise request creation and latching without contacting a live Supervisor.
     }
 
     fn spawn_shutdown_worker(&self, option: ExitOption) {
@@ -1348,6 +1374,14 @@ mod tests {
 
     fn executable_retained_command(action: TuiAction) -> CommandSummary {
         executable_command(action.command_name(), false)
+    }
+
+    fn restart_ready_app() -> App {
+        let mut app = app(false);
+        app.connection = ConnectionState::Connected;
+        app.status.steam_vr_control_mode = "restart".to_string();
+        app.commands = vec![executable_command(RESTART_VR_SESSION_COMMAND, true)];
+        app
     }
 
     #[test]
@@ -1778,5 +1812,72 @@ mod tests {
             display_name_for_command(TuiAction::RestartCoreApps.command_name()),
             "Restart Core Apps"
         );
+    }
+
+    #[test]
+    fn opening_or_cancelling_restart_confirmation_creates_no_request_identity() {
+        let now = Instant::now();
+        let mut app = restart_ready_app();
+
+        app.activate_action(TuiAction::RestartVrSession, now);
+        assert!(app.confirmation.is_some());
+        assert!(app.last_submitted_request_id.is_none());
+
+        app.cancel_confirmation(now);
+        assert!(app.last_submitted_request_id.is_none());
+        assert!(app.running_actions.is_empty());
+    }
+
+    #[test]
+    fn confirming_restart_creates_one_guid_request_identity() {
+        let now = Instant::now();
+        let mut app = restart_ready_app();
+        app.activate_action(TuiAction::RestartVrSession, now);
+
+        app.confirm_action(now);
+
+        let request_id = app.last_submitted_request_id.as_deref().unwrap();
+        assert!(Uuid::parse_str(request_id).is_ok());
+        assert_eq!(app.running_actions.len(), 1);
+    }
+
+    #[test]
+    fn repeated_confirm_callback_does_not_create_a_second_request() {
+        let now = Instant::now();
+        let mut app = restart_ready_app();
+        app.activate_action(TuiAction::RestartVrSession, now);
+        app.confirm_action(now);
+        let first_request = app.last_submitted_request_id.clone();
+
+        app.confirm_action(now);
+
+        assert_eq!(app.last_submitted_request_id, first_request);
+        assert_eq!(app.running_actions.len(), 1);
+    }
+
+    #[test]
+    fn separate_confirmation_after_completion_creates_new_request_identity() {
+        let now = Instant::now();
+        let mut app = restart_ready_app();
+        app.activate_action(TuiAction::RestartVrSession, now);
+        app.confirm_action(now);
+        let first_request = app.last_submitted_request_id.clone();
+        app.running_actions.clear();
+
+        app.activate_action(TuiAction::RestartVrSession, now + Duration::from_secs(1));
+        app.confirm_action(now + Duration::from_secs(1));
+
+        assert_ne!(app.last_submitted_request_id, first_request);
+        assert_eq!(app.running_actions.len(), 1);
+    }
+
+    #[test]
+    fn fresh_client_instance_does_not_restore_a_previous_request() {
+        let first = restart_ready_app();
+        let second = restart_ready_app();
+
+        assert!(first.last_submitted_request_id.is_none());
+        assert!(second.last_submitted_request_id.is_none());
+        assert_ne!(first.client_instance_id, second.client_instance_id);
     }
 }

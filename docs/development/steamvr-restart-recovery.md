@@ -75,3 +75,15 @@ The shared console emits `Expected SteamVR shutdown detected for requested resta
 The classification is identity-bound. A loss with no accepted restart, cleared intent, or a different runtime identity remains eligible for the existing unexpected-exit warning and bounded safety behavior. A deliberate final SteamVR UI exit after the restart remains separate: current-session shutdown evidence continues to select normal managed-app cleanup, configured base-station power-down, monitor restoration, and Supervisor/Terminal UI exit.
 
 The expected-transition message and the existing restart-suppression message share a once-only gate, preventing repeated or contradictory lifecycle lines while polling. The restart coordinator, shutdown command, Steam launch path, replacement identity/readiness checks, and conditional VRChat recovery are unchanged.
+
+## Phase32D exactly-once request ownership
+
+Action `7` confirmation creates a new GUID request identity at the initiating client. Opening, focusing, cancelling, or restoring a confirmation does not create a request. The Desktop TUI and SteamVR overlay also attach a per-process client-session identity. Reconnecting creates observation state only; it does not regenerate or resubmit the last confirmation.
+
+The line-oriented TCP bridge is an at-least-once transport. Supervisor is the authoritative idempotency boundary: it atomically accepts the first delivery of a request identity, attaches duplicates to the same active or terminal operation, and retains rejected identities so a Busy request cannot run later. A different request received while a SteamVR operation is active is rejected and is never queued. The unstructured legacy TCP `restart-vr-session` command fails closed; the classic console creates an identity only after its existing confirmation succeeds.
+
+Accepted, running, and terminal request states are monotonic. Terminal request records are held in a bounded in-memory set of at most 256 entries for up to 24 hours, which covers normal TUI/overlay disconnect and reconnect. The current TCP transport has no persisted command file or durable action queue, so there is no command payload that can survive Supervisor restart and become actionable.
+
+Immediately before `vrstartup.exe -shutdown`, the operation must atomically claim its shutdown issuance. The guard requires an active accepted operation, the captured old runtime identity, the old runtime still being present, no Supervisor final shutdown, and no prior issuance attempt. The attempt is latched before process creation. Successful creation records an issue count of one. Creation failure, helper lifetime or exit-code anomalies, old-runtime timeout, replacement timeout, result polling, client disconnect, and duplicate delivery never reopen the latch or retry shutdown. A second internal attempt is blocked and diagnosed as an invariant violation.
+
+Request and result state remain separate. Status/result publication is observation only and cannot create a command. Phase32C USB attribution and scoped application recovery use no action-7 request path and cannot issue SteamVR shutdown.
