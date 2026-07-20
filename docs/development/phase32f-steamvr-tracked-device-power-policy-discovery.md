@@ -1,6 +1,6 @@
 # Phase 32F SteamVR Tracked-Device Power Policy Discovery
 
-Status: discovery only; no controller, tracker, HMD, base-station, USB, SteamVR-setting, or process state was changed. Implementation and destructive live acceptance are blocked pending review of this design and completion of the read-only live inventory.
+Status: discovery and read-only live inventory complete; no controller, tracker, HMD, base-station, USB, SteamVR-setting, Supervisor-config, or SteamVR process state was changed. Implementation and destructive live acceptance remain blocked pending review of the final-exit ownership contract and the unavailable per-device capability property described below.
 
 Baseline: `phase/32e-pimax-reconnect-scoped-recovery` at `7797e090f7309d3a7549f7cf236501924884d390`.
 
@@ -16,7 +16,7 @@ Discovery on 2026-07-20 found SteamVR app `250820`, build ID `23791826`. The ins
 }
 ```
 
-The active `steamvr.vrsettings` overrides `turnOffControllersTimeout` to `1800` seconds and does not contain `powerOffOnExit`. Its current effective value is therefore the installed default, `true`. The SteamVR settings schema exposes `/settings/power/powerOffOnExit` as the controller-off-on-exit toggle.
+The active `steamvr.vrsettings` overrides `turnOffControllersTimeout` to `1800` seconds and does not contain `powerOffOnExit`. Two live `IVRSettings_003.GetBool("power", "powerOffOnExit")` reads returned `true` with `VRSettingsError_None`. The value source is the installed `default.vrsettings`, whose value is `true`; there is no user override. The SteamVR settings schema exposes `/settings/power/powerOffOnExit` as the controller-off-on-exit toggle.
 
 The user setting and installed default must be read through `IVRSettings` when available. Direct JSON editing is not recommended because SteamVR owns the file and may rewrite it. A missing user value is not equivalent to an explicit `false`; effective-value and value-source evidence must be kept separate.
 
@@ -38,31 +38,33 @@ Primary references:
 - [Valve OpenVR header](https://github.com/ValveSoftware/openvr/blob/master/headers/openvr.h)
 - [Valve OpenVR driver API documentation](https://github.com/ValveSoftware/openvr/blob/master/docs/Driver_API_Documentation.md#itrackeddeviceserverdriver)
 
-## Device evidence captured so far
+## Live tracked-device inventory
 
-SteamVR was not running at the read-only capture point. A background OpenVR inventory therefore could not attach, and discovery intentionally did not start SteamVR. The two most recent `vrserver` sessions exposed the Pimax HMD and two Lighthouse tracking references, but no powered Index controllers or Vive Trackers. Log evidence cannot supply the requested tracked-device indices or property-error-aware `Prop_DeviceCanPowerOff_Bool` values.
+On 2026-07-20, a temporary external `VRApplication_Background` probe attached to the already-running SteamVR runtime through `FnTable:IVRSystem_026` and `FnTable:IVRSettings_003`. It enumerated every non-invalid slot twice. Both captures returned the same eight devices, indices, connection states, serials, models, property values, and property errors.
 
-| Evidence source | Index | Class | Serial | Model | `Prop_DeviceCanPowerOff_Bool` |
-| --- | ---: | --- | --- | --- | --- |
-| Most recent vrserver log | not available | HMD by activation evidence | `P30100P201382100320` | Pimax Crystal | not queried |
-| Most recent vrserver log | not available | tracking reference by serial convention and aapvr activation | `LHB-22CEE79A` | not reported | not queried |
-| Most recent vrserver log | not available | tracking reference by serial convention and aapvr activation | `LHB-2BB29CAB` | not reported | not queried |
+| Index | Class | Connected | Serial | Serial/model reads | Model | `Prop_DeviceCanPowerOff_Bool` | Capability property read |
+| ---: | --- | --- | --- | --- | --- | --- | --- |
+| 0 | HMD | `true` | `P30100P201382100320` | `TrackedProp_Success` | Pimax Crystal | returned `false` | `TrackedProp_UnknownProperty` (4) |
+| 1 | TrackingReference | `true` | `LHB-22CEE79A` | `TrackedProp_Success` | Valve SR Imp | returned `false` | `TrackedProp_UnknownProperty` (4) |
+| 2 | Controller | `true` | `LHR-9A72154F` | `TrackedProp_Success` | Knuckles Right | returned `false` | `TrackedProp_UnknownProperty` (4) |
+| 3 | Controller | `true` | `LHR-2991749B` | `TrackedProp_Success` | Knuckles Left | returned `false` | `TrackedProp_UnknownProperty` (4) |
+| 4 | GenericTracker | `true` | `LHR-4595ED95` | `TrackedProp_Success` | VIVE Tracker 3.0 MV | returned `false` | `TrackedProp_UnknownProperty` (4) |
+| 5 | GenericTracker | `true` | `LHR-C9C81BCA` | `TrackedProp_Success` | VIVE Tracker 3.0 MV | returned `false` | `TrackedProp_UnknownProperty` (4) |
+| 6 | GenericTracker | `true` | `LHR-F550BEC7` | `TrackedProp_Success` | VIVE Tracker 3.0 MV | returned `false` | `TrackedProp_UnknownProperty` (4) |
+| 7 | TrackingReference | `true` | `LHB-2BB29CAB` | `TrackedProp_Success` | Valve SR Imp | returned `false` | `TrackedProp_UnknownProperty` (4) |
 
-Saved SteamVR state records three tracker-role assignments. Lighthouse configuration records their model as `VIVE Tracker 3.0 MV`:
+The capability result is not a successful `false`. OpenVR returned the default boolean value together with `TrackedProp_UnknownProperty` for every device, including both Index controllers and all three Vive Trackers. The installed driver/runtime combination therefore exposes no usable public `Prop_DeviceCanPowerOff_Bool` capability signal for these devices. Phase 32F must preserve the error and must not coerce it to either capable or incapable.
 
-| Saved role only; not proof of current connection | Serial | Model |
-| --- | --- | --- |
-| Left foot | `LHR-4595ED95` | VIVE Tracker 3.0 MV |
-| Right foot | `LHR-C9C81BCA` | VIVE Tracker 3.0 MV |
-| Waist | `LHR-F550BEC7` | VIVE Tracker 3.0 MV |
+### Completed read-only inventory gate
 
-Lighthouse configuration also retains multiple historical Knuckles controller records. They must not be called connected or selected for power-off without a live OpenVR index, connected state, class, serial, model, and capability result from the same observation.
+Raw and summarized evidence is stored outside the repository in `Phase32F-read-only-inventory-20260720-225725`. The two authoritative raw captures have SHA-256 values:
 
-### Pending read-only inventory gate
+- capture 1: `39725d82e3037329d433b7cf4b2f7c1b1045fc9a9fb98231ef4488993b550cde`;
+- capture 2: `42604ceab5cdbe86c4f06a9a46e043798a229c350dfd06bf4edf3419fcb3411a`.
 
-Before implementation review can close, run SteamVR with the intended Index controllers and Vive Trackers powered on, then attach a `VRApplication_Background` probe and record all non-invalid slots. The report must include disconnected-but-known slots separately from connected devices and must preserve `ETrackedPropertyError`; a returned `false` with `TrackedProp_Success` is different from a missing or wrong-type property.
+The differing hashes reflect capture timestamps. Parsed device arrays and power-setting objects are identical. Each capture proves that `vrserver`, `vrmonitor`, `vrcompositor`, and `vrdashboard` retained the same PIDs and start times before and after the read. SHA-256, length, and last-write metadata also remained identical for the user SteamVR settings, installed default settings, and Supervisor configuration.
 
-Inventory collection must not call a debug request, mutate `IVRSettings`, request standby, issue `vrstartup.exe -shutdown`, start SteamVR, touch USB devices, or write to the repository or SteamVR configuration.
+The probe did not expose or call a debug request, settings setter, standby/power operation, `vrstartup.exe`, process launcher, or USB API. An initial non-authoritative probe attempt failed locally because its temporary `IVRSystem_026` table projection omitted the documented `ComputeDistortionSet` slot. It produced no inventory; the failure and containment check are retained in the external evidence bundle. The corrected table was verified against Valve's header before the two authoritative captures.
 
 ## Policy recommendation
 
@@ -80,6 +82,8 @@ The two deterministic policies cannot be guaranteed for a SteamVR exit that was 
 2. Supervisor gains a reviewed final-exit flow that requests SteamVR shutdown, while the existing reactive UI-exit path remains observational.
 
 No public supported mechanism was found that can deterministically power off capable controllers and trackers while leaving SteamVR running. Phase 32F must not substitute a private or vendor-specific command to fill that gap.
+
+The live result narrows the recommendation further: `Prop_DeviceCanPowerOff_Bool` can be recorded diagnostically, but it cannot be an execution allow-list on this system because every intended controller and tracker returns `TrackedProp_UnknownProperty`. Phase 32F2 must either rely exclusively on SteamVR's native `powerOffOnExit` behavior during a Supervisor-owned final normal SteamVR shutdown, or remain blocked. It must not add per-device fallback commands.
 
 ## Eligibility and exclusions
 
@@ -106,7 +110,7 @@ The setting transaction and any future eligible-device diagnostics must never ru
 - Index controller or Vive Tracker dongle removal/reinsertion, or any other USB topology observation;
 - emergency cleanup, crash cleanup, process force-kill, watchdog activity, or Supervisor startup probes.
 
-Device-class exclusions are defense in depth. Diagnostic inventory may record every class, but any power-policy eligibility view must include only connected `Controller` and `GenericTracker` devices with a successful `Prop_DeviceCanPowerOff_Bool == true`. It must always exclude `HMD`, `TrackingReference`, `DisplayRedirect`, invalid/unknown classes, and every Windows USB/PnP object. Base-station power remains exclusively owned by the accepted Bluetooth base-station lifecycle.
+Device-class exclusions are defense in depth. Diagnostic inventory may record every class, but a capability view may label a device capable only when a connected `Controller` or `GenericTracker` returns `TrackedProp_Success` and `Prop_DeviceCanPowerOff_Bool == true`. The current capture labels no device capable because the property is unknown. This diagnostic result does not authorize per-device commands and does not override SteamVR's native shutdown handling. `HMD`, `TrackingReference`, `DisplayRedirect`, invalid/unknown classes, and every Windows USB/PnP object remain excluded. Base-station power remains exclusively owned by the accepted Bluetooth base-station lifecycle.
 
 ## Preservation of Phase 32D and Phase 32E
 
@@ -129,17 +133,17 @@ Phase 32F must remain downstream of the accepted lifecycle boundaries:
 4. Deterministic modes make one bounded setting transaction only for a Supervisor-owned final normal shutdown, and make zero writes for action 7 and all recovery paths.
 5. Setting reads distinguish explicit user values, installed defaults, missing values, and API errors. Any read/write/journal failure fails closed before shutdown-policy ownership is claimed.
 6. Transaction tests cover prior `true`, prior `false`, absent user override, runtime disappearance, cancellation, process crash between write and restore, idempotent recovery, and no duplicate restore.
-7. Inventory tests preserve indices and property errors, include all connected classes in evidence, and mark only capable connected controllers/generic trackers as eligible.
+7. Inventory tests preserve indices and property errors, include all connected classes in evidence, mark only successful `true` controller/tracker properties as capable, and retain `TrackedProp_UnknownProperty` without coercion.
 8. HMDs, tracking references/base stations, display redirects, invalid classes, and USB/PnP identities are never eligible.
 9. Existing Phase 32D/32E tests remain unchanged and required, especially shutdown issue count, expected-shutdown classification, replacement adoption, Pimax scoped dispatch, client redelivery, and Valve `28DE:2101` dongle exclusion.
 10. Source guards reject `lighthouse_console`, device debug requests, SetupAPI/USB mutation, direct SteamVR JSON editing, and a second `vrstartup.exe -shutdown` call site.
 
 ### Read-only live tests before review
 
-1. With SteamVR already running and devices powered, capture the complete OpenVR inventory twice and confirm stable index/serial/class/model/capability results.
-2. Run the same background probe with SteamVR stopped and confirm it returns no-server without launching SteamVR.
-3. Compare the effective power setting reported by `IVRSettings` with the user file/default resolution without writing either source.
-4. Confirm no process identity, device power state, base-station state, monitor state, USB topology, or config timestamp changes during discovery.
+1. Complete: with SteamVR already running and devices powered, two captures returned stable index/serial/class/model/capability results.
+2. Deferred: do not stop SteamVR for this discovery pass. A later already-stopped observation may confirm background init returns no-server without launching SteamVR.
+3. Complete: `IVRSettings` returned effective `true`; the user file has no override and the installed default is `true`.
+4. Complete: process identities and guarded file hashes/timestamps were unchanged. No device, base-station, monitor, USB, or configuration mutation was requested.
 
 ### Destructive live acceptance after explicit review only
 
@@ -150,4 +154,4 @@ Phase 32F must remain downstream of the accepted lifecycle boundaries:
 5. Exercise Pimax scoped recovery, client reconnect, and separate Index/Vive dongle remove/reinsert tests and prove zero policy execution and zero delayed action.
 6. Verify the prior SteamVR setting is restored after the final exit and after simulated interrupted-transaction recovery.
 
-No implementation or destructive live acceptance should begin until the pending inventory is attached and the final-exit ownership contract is reviewed.
+No Phase 32F2 implementation or destructive live acceptance should begin until the final-exit ownership contract and the `TrackedProp_UnknownProperty` implication are reviewed.
