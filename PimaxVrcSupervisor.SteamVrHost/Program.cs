@@ -947,6 +947,13 @@ internal sealed class SteamVrDashboardHost : IDisposable
     {
         try
         {
+            if (!resetTaskState && await WaitForSupervisorCommandBridgeAsync(TimeSpan.FromMilliseconds(750)))
+            {
+                Log("Attached to the existing Supervisor command bridge; start helper was not invoked.");
+                WriteDebug("attached to existing supervisor command bridge; helperSkipped=True");
+                return true;
+            }
+
             if (resetTaskState)
             {
                 await TryEndHelperTaskAsync();

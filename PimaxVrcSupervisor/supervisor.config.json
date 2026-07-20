@@ -173,6 +173,7 @@
   // ScheduledTask creates an elevated Windows Scheduled Task that starts the supervisor when vrserver.exe is running.
   // The supervisor then waits for VRChat before starting managed apps.
   // SteamVrManifest registers a SteamVR dashboard host manifest and starts the supervisor when SteamVR starts.
+  // ScheduledTaskAndSteamVrManifest starts one persistent Supervisor + Terminal UI owner and lets the SteamVR overlay attach to it.
   "StartupLaunchMode": "Unspecified",
 
   // Compatibility field. SteamVR shutdown behavior is controlled by StartupLaunchMode=SteamVrManifest.

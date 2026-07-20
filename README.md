@@ -76,7 +76,7 @@ Useful starting points:
 7. Click **Save**.
 8. Click **Launch Supervisor**.
 
-For most users, start with **Terminal Mode** and keep **Use Terminal UI as default interface** enabled.
+For most users, start with **Terminal UI only**. Choose **Terminal UI + SteamVR Overlay** when you want the same session controls on the desktop and inside SteamVR.
 
 ## Included Apps
 
@@ -87,14 +87,14 @@ For most users, start with **Terminal Mode** and keep **Use Terminal UI as defau
 | `PimaxVrcSupervisorTui.exe` | Terminal UI dashboard and controls. |
 | `PimaxVrcSupervisorSteamVrHost.exe` | SteamVR Overlay host. |
 | `PimaxVrcSupervisorStartupHelper.exe` | Startup integration helper. |
-| `PimaxVrcSupervisorWatcher.exe` | Terminal Mode watcher. |
+| `PimaxVrcSupervisorWatcher.exe` | Terminal UI and combined-mode owner watcher. |
 
 ## Safety Notes
 
 - Base-station controls affect real hardware. Test with one station first if you are unsure.
 - Monitor management can change active displays during headset sessions.
-- Terminal UI actions are confirmation-gated because they can restart apps or change session state.
-- Connected Terminal UI shutdown runs Supervisor cleanup and may close managed apps.
+- Terminal UI actions 1-6 run immediately; SteamVR action 7 requires confirmation in the client that initiates it.
+- Closing only Terminal UI does not stop Supervisor or the SteamVR overlay. Explicit Supervisor exit choices run the documented cleanup.
 - Use Diagnostics when troubleshooting; leave extra diagnostics off during normal use unless needed.
 - If Pimax Client stops detecting a connected headset, collect diagnostics before restarting Pimax Client or reconnecting USB so the failed layer can be compared later.
 

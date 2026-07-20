@@ -41,11 +41,13 @@ When Terminal UI is disconnected, **Close TUI only** exits only Terminal UI. The
 
 ## Autostart Behavior
 
-When Terminal Mode opens Terminal UI automatically, the Supervisor starts Terminal UI after the dashboard is ready. Terminal UI follows that paired Supervisor process and closes when it exits.
+In **Terminal UI only**, the Supervisor starts Terminal UI after the dashboard is ready. Terminal UI follows that paired Supervisor process and closes when it exits.
+
+In **Terminal UI + SteamVR Overlay**, Terminal UI is a persistent client. Closing it—including the Windows close button—does not request Supervisor shutdown. It remains open across a Supervisor replacement when possible, reconnects to the replacement command bridge, and is not duplicated when the replacement owner starts. Use an explicit Supervisor exit choice when you intend to stop the session owner.
 
 Manual Terminal UI launches stay open while disconnected until you exit.
 
-When SteamVR exits from the normal SteamVR UI, the Supervisor restores Supervisor-owned monitors, runs cleanup, and exits. A short SteamVR restart/failure recovery window keeps stations powered while the existing Supervisor waits for and adopts a replacement runtime; it does not restart SteamVR or depend on VRChat.
+In SteamVR-scoped modes, a normal SteamVR exit runs the existing cleanup and exit behavior. In combined mode, SteamVR and its overlay host may exit while the persistent Supervisor and Terminal UI stay available for the next session.
 
 `7 SteamVR` is dynamic and uses Supervisor-reported SteamVR control state. When SteamVR is stopped, it shows `Start SteamVR` and requires confirmation before sending `start-steamvr`; VRChat is not launched. When SteamVR is running, it shows `Restart SteamVR` and requires confirmation before sending `restart-vr-session`; VRChat is resumed only if it was already running when you confirmed the action. Both dialogs show clickable **Confirm** and **Cancel** buttons, default keyboard focus to **Cancel**, and support Tab, Left, Right, Enter, Space, Esc, and mouse clicks. Actions `1` through `6` remain immediate.
 

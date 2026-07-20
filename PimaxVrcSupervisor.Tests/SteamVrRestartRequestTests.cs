@@ -157,6 +157,23 @@ public sealed class SteamVrRestartRequestTests
         Assert.Equal(first.Request?.OperationId, second.Request?.OperationId);
     }
 
+    [Fact]
+    public void SimultaneousDifferentRequestsFromTuiAndOverlayRejectSecondWithoutQueueing()
+    {
+        var registry = CreateRegistry();
+        var tui = registry.Accept(Request(sourceClientType: "desktop-tui", sourceClientInstanceId: "tui-a"), AcceptContext);
+        var overlayRequest = Request(sourceClientType: "steamvr-overlay", sourceClientInstanceId: "overlay-b");
+
+        var overlay = registry.Accept(overlayRequest, AcceptContext);
+        registry.Complete(tui.Request!.OperationId, SteamVrRestartRequestState.Succeeded, "done", null);
+        var overlayRetry = registry.Accept(overlayRequest, AcceptContext);
+
+        Assert.True(tui.Accepted);
+        Assert.Equal(SteamVrRestartRequestDisposition.RejectedBusy, overlay.Disposition);
+        Assert.Equal(SteamVrRestartRequestDisposition.DuplicateTerminal, overlayRetry.Disposition);
+        Assert.Equal(SteamVrRestartRequestState.Rejected, overlayRetry.Request?.State);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("not-a-guid")]

@@ -68,7 +68,7 @@ fn main() -> Result<()> {
         Err(error) => (
             None,
             Some(format!(
-                "Window-close shutdown handler disabled; keyboard shutdown still works: {error}"
+                "Window-close handler disabled; use Close TUI only from the exit menu: {error}"
             )),
         ),
     };

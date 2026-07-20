@@ -2,17 +2,17 @@
 
 SteamVR Overlay mode gives you a dashboard inside SteamVR.
 
-Use it if you prefer in-headset controls or want a SteamVR-native control surface instead of Terminal UI.
+Use **SteamVR Overlay only** for an in-headset control surface without Terminal UI, or **Terminal UI + SteamVR Overlay** to use both clients against one Supervisor.
 
-## How It Differs From Terminal Mode
+## How The Single-Interface Modes Differ
 
-| Terminal Mode | SteamVR Overlay |
+| Terminal UI only | SteamVR Overlay only |
 |---|---|
 | Opens Terminal UI on the desktop | Opens a SteamVR dashboard overlay |
 | Good for keyboard and mouse | Good inside SteamVR |
 | Can auto-close Terminal UI with the session | Follows SteamVR overlay startup flow |
 
-The two modes are separate. Terminal UI does not replace SteamVR Overlay.
+Combined mode makes both surfaces available without merging their executables or duplicating Supervisor ownership. Overlay availability still requires SteamVR. Closing or losing the overlay host does not stop Supervisor, Terminal UI, SteamVR, or managed applications.
 
 ## Common Controls
 
@@ -26,7 +26,7 @@ During the bounded restart window, Supervisor keeps base stations and Supervisor
 
 ## If The Overlay Does Not Appear
 
-1. Confirm **Autostart mode** is **SteamVR Overlay**.
+1. Confirm **Interface mode** is **SteamVR Overlay only** or **Terminal UI + SteamVR Overlay**.
 2. Save from Configurator so startup integration is applied.
 3. Restart SteamVR.
 4. Check that `PimaxVrcSupervisorSteamVrHost.exe` exists in the release folder.

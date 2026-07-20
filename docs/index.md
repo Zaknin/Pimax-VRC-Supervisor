@@ -6,7 +6,7 @@ The app is built around three user-facing tools:
 
 - **Configurator** for setup and validation.
 - **Supervisor** for watching the VR session and running the configured automation.
-- **Terminal UI** or **SteamVR Overlay** for session controls.
+- **Terminal UI**, **SteamVR Overlay**, or both for session controls against one Supervisor.
 
 ## Where To Start
 
@@ -29,4 +29,4 @@ If this is your first time using the app:
 
 ## Recommended Setup
 
-For most users, use **Terminal Mode** with **Use Terminal UI as default interface** enabled. This gives you a clear dashboard, confirmed session actions, and automatic Terminal UI close when the paired Supervisor exits.
+For most users, use **Terminal UI only**. Choose **Terminal UI + SteamVR Overlay** when you want desktop and in-headset controls at the same time; both attach to one Supervisor owner.

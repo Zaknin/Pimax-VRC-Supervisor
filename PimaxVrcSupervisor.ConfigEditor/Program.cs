@@ -40,8 +40,9 @@ internal sealed class ConfigEditorForm : Form
     private const string DefaultVrcFaceTrackingDirectory = @"C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking";
     private const int MaxDisplayNameLength = 64;
     private const string AutostartModeOff = "Off";
-    private const string AutostartModeScheduledTask = "Terminal Mode";
-    private const string AutostartModeSteamVrManifest = "SteamVR Overlay";
+    private const string AutostartModeScheduledTask = "Terminal UI only";
+    private const string AutostartModeSteamVrManifest = "SteamVR Overlay only";
+    private const string AutostartModeCombined = "Terminal UI + SteamVR Overlay";
     private static readonly string DefaultIntifacePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "IntifaceCentral",
@@ -209,6 +210,7 @@ internal sealed class ConfigEditorForm : Form
     private bool _mouthTrackerPreferenceTouched;
     private bool _turnOffMonitorsPreferenceTouched;
     private bool _startupIntegrationPreferenceTouched;
+    private string? _startupModeLoadWarning;
 
     public ConfigEditorForm(string? requestedConfigPath)
     {
@@ -500,21 +502,16 @@ internal sealed class ConfigEditorForm : Form
         _autostartModeComboBox.Items.Add(AutostartModeOff);
         _autostartModeComboBox.Items.Add(AutostartModeScheduledTask);
         _autostartModeComboBox.Items.Add(AutostartModeSteamVrManifest);
+        _autostartModeComboBox.Items.Add(AutostartModeCombined);
         if (_autostartModeComboBox.SelectedIndex < 0)
         {
             _autostartModeComboBox.SelectedItem = AutostartModeOff;
         }
 
         AddSectionHeader(layout, "Autostart");
-        AddLabeledRow(layout, "Autostart mode", _autostartModeComboBox, "Choose what the Supervisor should do automatically when SteamVR is running. Terminal Mode starts a watcher when SteamVR is running; depending on the Terminal UI default-interface option, it can launch hidden Supervisor + Terminal UI or preserve classic visible CLI behavior.");
+        AddLabeledRow(layout, "Interface mode", _autostartModeComboBox, "Choose Terminal UI only, SteamVR Overlay only, or both. Combined mode keeps one Supervisor owner and lets both interfaces attach to it.");
 
         AddSectionHeader(layout, "Startup");
-        _useDesktopTuiAsDefaultInterfaceCheckBox.CheckedChanged += (_, _) =>
-        {
-            _editorState.UseDesktopTuiAsDefaultInterface = _useDesktopTuiAsDefaultInterfaceCheckBox.Checked;
-            SaveEditorState();
-        };
-        AddFullWidth(layout, _useDesktopTuiAsDefaultInterfaceCheckBox, "When enabled, Launch Supervisor starts the Supervisor hidden and opens the Terminal UI.");
         AddFullWidth(layout, _turnOffMonitorsCheckBox, "Checked saves the current monitor layout and disables secondary monitors during the VR session. The layout is restored after VRChat and SteamVR close.");
         AddSectionHeader(layout, "Diagnostics");
         AddFullWidth(layout, _diagnosticsEnabledCheckBox, "Checked enables diagnostic and debug settings in this editor. Unchecked saves all diagnostic and debug options as disabled.");
@@ -686,6 +683,9 @@ internal sealed class ConfigEditorForm : Form
 
         _autostartModeComboBox.SelectedIndexChanged += (_, _) =>
         {
+            _useDesktopTuiAsDefaultInterfaceCheckBox.Checked = GetSelectedStartupLaunchMode()
+                is "ScheduledTask" or StartupLaunchPlanning.CombinedModeName;
+            _editorState.UseDesktopTuiAsDefaultInterface = _useDesktopTuiAsDefaultInterfaceCheckBox.Checked;
             if (!_suppressDirtyTracking)
             {
                 _startupIntegrationPreferenceTouched = true;
@@ -3060,7 +3060,7 @@ internal sealed class ConfigEditorForm : Form
 
     private void LaunchSupervisor()
     {
-        if (_useDesktopTuiAsDefaultInterfaceCheckBox.Checked)
+        if (GetSelectedStartupLaunchMode() is "ScheduledTask" or StartupLaunchPlanning.CombinedModeName)
         {
             LaunchSupervisorWithDesktopTui();
             return;
@@ -3197,6 +3197,10 @@ internal sealed class ConfigEditorForm : Form
             if (launchDesktopTuiAfterReady)
             {
                 startInfo.ArgumentList.Add("--launch-desktop-tui-after-ready");
+            }
+            if (GetSelectedStartupLaunchMode() == StartupLaunchPlanning.CombinedModeName)
+            {
+                startInfo.ArgumentList.Add("--persistent-supervisor-owner");
             }
 
             if (!IsAdministrator())
@@ -3343,7 +3347,7 @@ internal sealed class ConfigEditorForm : Form
                 _rawJsonTextBox.Text = _loadedJson;
                 _rawJsonHasUnappliedChanges = false;
                 _editorState.LastConfigPath = Path.GetFullPath(path);
-                SetCleanStatus("Config file does not exist yet. Fill values, then Save.");
+                SetCleanStatus(_startupModeLoadWarning ?? "Config file does not exist yet. Fill values, then Save.");
                 return;
             }
 
@@ -3357,7 +3361,7 @@ internal sealed class ConfigEditorForm : Form
             _rawJsonHasUnappliedChanges = false;
             _editorState.LastConfigPath = Path.GetFullPath(path);
             SaveActiveConfigSelection(path);
-            SetCleanStatus("Loaded " + path);
+            SetCleanStatus(_startupModeLoadWarning ?? "Loaded " + path);
         }
         catch (Exception ex)
         {
@@ -3376,6 +3380,7 @@ internal sealed class ConfigEditorForm : Form
 
     private void PopulateControls(JsonNode? node)
     {
+        _startupModeLoadWarning = null;
         _displayNameTextBox.Text = NormalizeDisplayNameForDisplay(
             GetStringOrDefault(node, "DisplayName", GetFallbackDisplayName(_configPathTextBox.Text)));
         _brokenEyePathTextBox.Text = GetString(node, "BrokenEyePath");
@@ -3396,7 +3401,7 @@ internal sealed class ConfigEditorForm : Form
         _oscRouterReceivePortInput.Value = Math.Clamp(GetInt(node, "OscRouterReceivePort", 9001), (int)_oscRouterReceivePortInput.Minimum, (int)_oscRouterReceivePortInput.Maximum);
         _mouthTrackerCheckBox.Checked = GetBoolCheckState(node, "MouthTrackerUser") == CheckState.Checked;
         _turnOffMonitorsCheckBox.Checked = GetBoolCheckState(node, "TurnOffSecondaryMonitors") == CheckState.Checked;
-        SetStartupLaunchMode(GetStartupLaunchModeForEditor(node));
+        SetStartupLaunchMode(GetStartupLaunchModeForEditor(node, out _startupModeLoadWarning));
         _usePimaxLogCheckBox.Checked = GetBool(node, "UsePimaxServiceLogReconnectDetector", defaultValue: true);
         _useMouthTrackerPnPCheckBox.Checked = GetBool(node, "UseMouthTrackerPnPReconnectDetector", defaultValue: false);
         _mouthTrackerRestartOnReconnectCheckBox.Checked = GetBool(node, "MouthTrackerRestartOnReconnectEnabled", defaultValue: true);
@@ -3566,7 +3571,7 @@ internal sealed class ConfigEditorForm : Form
                 return true;
             }
 
-            return currentMode == "SteamVrManifest"
+            return currentMode is "SteamVrManifest" or StartupLaunchPlanning.CombinedModeName
                 && !File.Exists(Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.vrmanifest"));
         }
         catch
@@ -3577,19 +3582,15 @@ internal sealed class ConfigEditorForm : Form
 
     private static string GetEffectiveStartupLaunchMode(JsonNode? node)
     {
-        var startupLaunchMode = GetStartupLaunchMode(node);
-        if (!string.IsNullOrWhiteSpace(startupLaunchMode))
-        {
-            return startupLaunchMode;
-        }
-
         var autoLaunchTask = GetBoolCheckState(node, "AutoLaunchScheduledTask");
-        return autoLaunchTask switch
-        {
-            CheckState.Checked => "ScheduledTask",
-            CheckState.Unchecked => "None",
-            _ => "Unspecified"
-        };
+        bool? legacyAutoLaunch = autoLaunchTask == CheckState.Indeterminate
+            ? null
+            : autoLaunchTask == CheckState.Checked;
+        return StartupLaunchPlanning.Resolve(
+            GetStartupLaunchMode(node),
+            legacyAutoLaunch,
+            GetBoolCheckState(node, "StopWithSteamVr") == CheckState.Checked,
+            out _).ToString();
     }
 
     private void ApplyStartupIntegration(string configPath)
@@ -3630,7 +3631,7 @@ internal sealed class ConfigEditorForm : Form
             startInfo.ArgumentList.Add("--hide-startup-helper");
             startInfo.ArgumentList.Add("--config");
             startInfo.ArgumentList.Add(Path.GetFullPath(configPath));
-            if (_useDesktopTuiAsDefaultInterfaceCheckBox.Checked)
+            if (startupLaunchMode is "ScheduledTask" or StartupLaunchPlanning.CombinedModeName)
             {
                 startInfo.ArgumentList.Add("--desktop-tui-default-interface");
             }
@@ -3849,9 +3850,11 @@ internal sealed class ConfigEditorForm : Form
 
     private static string SelectStartupLaunchModeForTasks(IReadOnlyList<ScheduledTaskExecutableValidationResult> tasks)
     {
-        return tasks.Any(task => string.Equals(task.TaskName, global::ScheduledTaskPathValidator.SteamVrStartTaskName, StringComparison.OrdinalIgnoreCase))
-            ? "SteamVrManifest"
-            : "ScheduledTask";
+        var hasSteamVrHelper = tasks.Any(task => string.Equals(task.TaskName, global::ScheduledTaskPathValidator.SteamVrStartTaskName, StringComparison.OrdinalIgnoreCase));
+        var hasWatcher = tasks.Any(task => string.Equals(task.TaskName, global::ScheduledTaskPathValidator.AutoLaunchTaskName, StringComparison.OrdinalIgnoreCase));
+        return hasSteamVrHelper && hasWatcher
+            ? StartupLaunchPlanning.CombinedModeName
+            : hasSteamVrHelper ? "SteamVrManifest" : "ScheduledTask";
     }
 
     private void SetStartupLaunchMode(string startupLaunchMode)
@@ -3860,6 +3863,7 @@ internal sealed class ConfigEditorForm : Form
         {
             "ScheduledTask" => AutostartModeScheduledTask,
             "SteamVrManifest" => AutostartModeSteamVrManifest,
+            StartupLaunchPlanning.CombinedModeName => AutostartModeCombined,
             _ => AutostartModeOff
         };
     }
@@ -4240,7 +4244,7 @@ internal sealed class ConfigEditorForm : Form
             "AutoLaunchScheduledTask",
             startupLaunchMode == "Unspecified"
                 ? SerializeFirstRunPreferenceBool(baseNode, "AutoLaunchScheduledTask", currentValue: false, _startupIntegrationPreferenceTouched)
-                : startupLaunchMode == "ScheduledTask" ? "true" : "false");
+                : startupLaunchMode is "ScheduledTask" or StartupLaunchPlanning.CombinedModeName ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "PimaxDetectors", Serialize(ParseStringMatrix(_pimaxDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "MouthTrackerDetectors", Serialize(ParseStringMatrix(_mouthTrackerDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "LovenseDetectors", Serialize(ParseStringMatrix(_lovenseDetectorsTextBox.Text)));
@@ -4334,26 +4338,28 @@ internal sealed class ConfigEditorForm : Form
 
     private static string GetStartupLaunchMode(JsonNode? node)
     {
-        var value = GetString(node, "StartupLaunchMode");
-        return value is "None" or "ScheduledTask" or "SteamVrManifest" ? value : "";
+        if (node?["StartupLaunchMode"] is null)
+        {
+            return "";
+        }
+
+        return node["StartupLaunchMode"] is JsonValue value && value.TryGetValue<string>(out var text)
+            ? text
+            : "<non-string value>";
     }
 
-    private static string GetStartupLaunchModeForEditor(JsonNode? node)
+    private static string GetStartupLaunchModeForEditor(JsonNode? node, out string? warning)
     {
-        var startupLaunchMode = GetStartupLaunchMode(node);
-        if (!string.IsNullOrWhiteSpace(startupLaunchMode))
-        {
-            return startupLaunchMode;
-        }
-
-        if (GetBoolCheckState(node, "StopWithSteamVr") == CheckState.Checked)
-        {
-            return "SteamVrManifest";
-        }
-
-        return GetBoolCheckState(node, "AutoLaunchScheduledTask") == CheckState.Checked
-            ? "ScheduledTask"
-            : "None";
+        var legacyAutoLaunchState = GetBoolCheckState(node, "AutoLaunchScheduledTask");
+        bool? legacyAutoLaunch = legacyAutoLaunchState == CheckState.Indeterminate
+            ? null
+            : legacyAutoLaunchState == CheckState.Checked;
+        var mode = StartupLaunchPlanning.Resolve(
+            GetStartupLaunchMode(node),
+            legacyAutoLaunch,
+            GetBoolCheckState(node, "StopWithSteamVr") == CheckState.Checked,
+            out warning);
+        return mode.ToString();
     }
 
     private string GetSelectedStartupLaunchMode()
@@ -4361,6 +4367,7 @@ internal sealed class ConfigEditorForm : Form
         {
             AutostartModeScheduledTask => "ScheduledTask",
             AutostartModeSteamVrManifest => "SteamVrManifest",
+            AutostartModeCombined => StartupLaunchPlanning.CombinedModeName,
             _ => "None"
         };
 
@@ -4374,7 +4381,7 @@ internal sealed class ConfigEditorForm : Form
     }
 
     private static bool StartupIntegrationConfigured(JsonNode? node)
-        => !string.IsNullOrWhiteSpace(GetStartupLaunchMode(node))
+        => node?["StartupLaunchMode"] is not null
             || GetBoolCheckState(node, "AutoLaunchScheduledTask") != CheckState.Indeterminate;
 
     private void ResetFirstRunPreferenceTouchTracking()

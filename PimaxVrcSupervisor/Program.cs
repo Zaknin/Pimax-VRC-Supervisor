@@ -33,6 +33,7 @@ var watchVrchatAutoLaunch = startupContext.WatchVrchatAutoLaunch;
 var applyStartupIntegration = startupContext.ApplyStartupIntegration;
 var showStartupIntegrationResult = startupContext.ShowStartupIntegrationResult;
 var desktopTuiDefaultInterface = startupContext.DesktopTuiDefaultInterface;
+var persistentSupervisorOwner = startupContext.PersistentSupervisorOwner;
 var explicitConfigSupplied = startupContext.ExplicitConfigSupplied;
 var configPath = startupContext.ExplicitConfigPath;
 if (startupContext.UnsupportedExplicitCommand is { } unsupportedExplicitCommand)
@@ -116,7 +117,7 @@ if (applyStartupIntegration)
         Console.WriteLine("This helper window closes automatically when the startup update finishes.");
         Console.WriteLine();
         Console.Out.Flush();
-        await StartupIntegration.ApplyAsync(config, desktopTuiDefaultInterface, shutdown.Token);
+        await StartupIntegration.ApplyAsync(config, shutdown.Token);
         Console.WriteLine();
         Console.WriteLine("Startup integration update finished.");
         Console.Out.Flush();
@@ -152,7 +153,7 @@ if (applyStartupIntegration)
 if (watchVrchatAutoLaunch)
 {
     var skipCurrentSteamVrSession = commandLineArgs.Any(arg => string.Equals(arg, "--skip-current-vrserver-session", StringComparison.OrdinalIgnoreCase));
-    await AutoLaunchWatcher.RunAsync(skipCurrentSteamVrSession, desktopTuiDefaultInterface, config, configPath, shutdown.Token);
+    await AutoLaunchWatcher.RunAsync(skipCurrentSteamVrSession, desktopTuiDefaultInterface, persistentSupervisorOwner, config, configPath, shutdown.Token);
     return;
 }
 
@@ -187,6 +188,7 @@ var supervisor = new AppSupervisor(
     steamVrStart,
     managedSteamVrSession,
     launchDesktopTuiAfterReady,
+    persistentSupervisorOwner,
     migrationResultForStartup?.AutoLaunchTaskBindingDeferredByUser ?? false,
     diagnostics,
     shutdown);
@@ -237,6 +239,7 @@ static async Task InstallAutoLaunchScheduledTaskFromCommandLineAsync(SupervisorC
         startWatcherImmediately: true,
         skipCurrentSteamVrSession: true,
         useDesktopTuiDefaultInterface: null,
+        persistentSupervisorOwner: false,
         config.LoadedFromPath,
         cancellationToken);
     config.SetAutoLaunchScheduledTask(true);
@@ -467,6 +470,13 @@ internal static class DirectLaunchMigration
         IReadOnlyCollection<ScheduledTaskPathValidationIssue> issues,
         CancellationToken cancellationToken)
     {
+        if (config.GetEffectiveStartupLaunchMode() == StartupLaunchMode.ScheduledTaskAndSteamVrManifest)
+        {
+            await StartupIntegration.ApplyAsync(config, cancellationToken);
+            Console.WriteLine("task_migration; outcome=Rebound; mode=TerminalUiAndSteamVrOverlay");
+            return;
+        }
+
         if (issues.Any(issue => string.Equals(issue.TaskName, ScheduledTaskPathValidator.SteamVrStartTaskName, StringComparison.OrdinalIgnoreCase))
             && !issues.Any(issue => string.Equals(issue.TaskName, ScheduledTaskPathValidator.AutoLaunchTaskName, StringComparison.OrdinalIgnoreCase)))
         {
@@ -475,7 +485,10 @@ internal static class DirectLaunchMigration
             config.StopWithSteamVr = true;
             config.SaveAutoLaunchScheduledTaskPreference();
             await ScheduledTaskInstaller.DeleteAutoLaunchTaskAsync(cancellationToken);
-            var details = await SteamVrStartupInstaller.CreateOrUpdateAsync(cancellationToken);
+            var details = await SteamVrStartupInstaller.CreateOrUpdateAsync(
+                StartupLaunchPlanning.Create(config.GetEffectiveStartupLaunchMode()),
+                config.LoadedFromPath,
+                cancellationToken);
             Console.WriteLine($"task_migration; outcome=Rebound; task={details.AppKey}; manifest={details.ManifestPath}");
             return;
         }
@@ -488,6 +501,7 @@ internal static class DirectLaunchMigration
             startWatcherImmediately: false,
             skipCurrentSteamVrSession: true,
             useDesktopTuiDefaultInterface: null,
+            persistentSupervisorOwner: false,
             config.LoadedFromPath,
             cancellationToken);
         Console.WriteLine("task_migration; outcome=" + result.Outcome + $"; task={result.TaskName}; message={result.OperatorMessage}");
@@ -1604,14 +1618,6 @@ internal enum ManagedAppStopReason
     PimaxReconnect
 }
 
-internal enum StartupLaunchMode
-{
-    Unspecified,
-    None,
-    ScheduledTask,
-    SteamVrManifest
-}
-
 internal enum WatchedProcessState
 {
     NotSeenYet,
@@ -1878,6 +1884,7 @@ internal sealed class AppSupervisor
     private readonly bool _steamVrStart;
     private readonly bool _managedSteamVrSession;
     private readonly bool _launchDesktopTuiAfterReady;
+    private readonly bool _persistentSupervisorOwner;
     private readonly bool _autoLaunchTaskBindingDeferredByUser;
     private readonly BaseStationGattClient _baseStationGattClient = new();
     private readonly BaseStationDiagnosticSink _baseStationDiagnostics;
@@ -1977,6 +1984,7 @@ internal sealed class AppSupervisor
         bool steamVrStart,
         bool managedSteamVrSession,
         bool launchDesktopTuiAfterReady,
+        bool persistentSupervisorOwner,
         bool autoLaunchTaskBindingDeferredByUser,
         SupervisorDiagnosticsSession diagnostics,
         CancellationTokenSource shutdown)
@@ -1985,6 +1993,7 @@ internal sealed class AppSupervisor
         _steamVrStart = steamVrStart;
         _managedSteamVrSession = managedSteamVrSession;
         _launchDesktopTuiAfterReady = launchDesktopTuiAfterReady;
+        _persistentSupervisorOwner = persistentSupervisorOwner;
         _autoLaunchTaskBindingDeferredByUser = autoLaunchTaskBindingDeferredByUser;
         _diagnostics = diagnostics;
         _shutdown = shutdown;
@@ -2149,9 +2158,11 @@ internal sealed class AppSupervisor
             }
 
             Console.WriteLine($"Pimax Crystal initial state: {DescribeConnection(_lastPimaxConnected.Value)}");
-            Console.WriteLine(ShouldExitWithSteamVr()
-                ? "Waiting for Pimax reconnects, VRChat shutdown, or SteamVR shutdown. Press Ctrl+C to stop."
-                : "Waiting for Pimax reconnects or VRChat shutdown. Press Ctrl+C to stop.");
+            Console.WriteLine(_persistentSupervisorOwner
+                ? "Persistent combined mode is active. Waiting for Pimax reconnects and VRChat session changes. Press Ctrl+C to stop."
+                : ShouldExitWithSteamVr()
+                    ? "Waiting for Pimax reconnects, VRChat shutdown, or SteamVR shutdown. Press Ctrl+C to stop."
+                    : "Waiting for Pimax reconnects or VRChat shutdown. Press Ctrl+C to stop.");
             Console.WriteLine("Press F1 for shortcuts.");
 
             while (!cancellationToken.IsCancellationRequested)
@@ -2229,9 +2240,11 @@ internal sealed class AppSupervisor
                             Console.WriteLine("VRChat restarted; running startup routine.");
                             _shutdownBlockedBySteamVrSince = null;
                             await StartSessionAfterWatchedProcessRestartAsync(cancellationToken);
-                            Console.WriteLine(ShouldExitWithSteamVr()
-                                ? "Waiting for Pimax reconnects, VRChat shutdown, or SteamVR shutdown. Press Ctrl+C to stop."
-                                : "Waiting for Pimax reconnects or VRChat shutdown. Press Ctrl+C to stop.");
+                            Console.WriteLine(_persistentSupervisorOwner
+                                ? "Persistent combined mode is active. Waiting for Pimax reconnects and VRChat session changes. Press Ctrl+C to stop."
+                                : ShouldExitWithSteamVr()
+                                    ? "Waiting for Pimax reconnects, VRChat shutdown, or SteamVR shutdown. Press Ctrl+C to stop."
+                                    : "Waiting for Pimax reconnects or VRChat shutdown. Press Ctrl+C to stop.");
                         }
 
                         continue;
@@ -2264,9 +2277,11 @@ internal sealed class AppSupervisor
                     var watchedProcessState = ObserveWatchedShutdownProcesses();
                     if (watchedProcessState == WatchedProcessState.NormalExit)
                     {
-                        if (ShouldExitWithSteamVr() && IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+                        if (_persistentSupervisorOwner || (ShouldExitWithSteamVr() && IsAnyProcessRunning(_config.SteamVrServerProcessNames)))
                         {
-                            Console.WriteLine("VRChat closed; SteamVR still running. Waiting for VRChat restart or SteamVR exit.");
+                            Console.WriteLine(_persistentSupervisorOwner
+                                ? "VRChat closed; persistent combined-mode Supervisor and Terminal UI remain available for the next session."
+                                : "VRChat closed; SteamVR still running. Waiting for VRChat restart or SteamVR exit.");
                             _shutdownBlockedBySteamVrSince = DateTimeOffset.UtcNow;
                             WriteDiagnosticEvent("shutdown; vrchat closed; waiting for steamvr exit; processes=" + DescribeRunningProcesses(_config.SteamVrServerProcessNames));
                             await StopManagedAppsWhileWaitingForWatchedProcessRestartAsync(cancellationToken);
@@ -2283,9 +2298,11 @@ internal sealed class AppSupervisor
                     }
                     if (watchedProcessState == WatchedProcessState.CrashGraceExpired)
                     {
-                        if (ShouldExitWithSteamVr() && IsAnyProcessRunning(_config.SteamVrServerProcessNames))
+                        if (_persistentSupervisorOwner || (ShouldExitWithSteamVr() && IsAnyProcessRunning(_config.SteamVrServerProcessNames)))
                         {
-                            Console.WriteLine("VRChat did not relaunch after a likely crash. SteamVR still running. Waiting for VRChat restart or SteamVR exit.");
+                            Console.WriteLine(_persistentSupervisorOwner
+                                ? "VRChat did not relaunch after a likely crash; persistent combined-mode clients remain available."
+                                : "VRChat did not relaunch after a likely crash. SteamVR still running. Waiting for VRChat restart or SteamVR exit.");
                             _shutdownBlockedBySteamVrSince = DateTimeOffset.UtcNow;
                             WriteDiagnosticEvent("shutdown; vrchat crash grace expired; waiting for steamvr exit; processes=" + DescribeRunningProcesses(_config.SteamVrServerProcessNames));
                             await StopManagedAppsWhileWaitingForWatchedProcessRestartAsync(cancellationToken);
@@ -2576,6 +2593,13 @@ internal sealed class AppSupervisor
             return;
         }
 
+        if (startupMode == StartupLaunchMode.ScheduledTaskAndSteamVrManifest)
+        {
+            await EnsureAutoLaunchScheduledTaskInstalledAsync(cancellationToken);
+            await EnsureSteamVrStartupInstalledAsync(cancellationToken);
+            return;
+        }
+
         if (startupMode == StartupLaunchMode.None)
         {
             return;
@@ -2611,6 +2635,17 @@ internal sealed class AppSupervisor
             return;
         }
 
+        if (selectedStartupMode == StartupLaunchMode.ScheduledTaskAndSteamVrManifest)
+        {
+            _config.AutoLaunchScheduledTask = JsonSerializer.SerializeToElement(true);
+            _config.StartupLaunchMode = StartupLaunchMode.ScheduledTaskAndSteamVrManifest;
+            _config.StopWithSteamVr = false;
+            _config.SaveAutoLaunchScheduledTaskPreference();
+            await StartupIntegration.ApplyAsync(_config, cancellationToken);
+            Console.WriteLine("Supervisor will use Terminal UI + SteamVR Overlay with one persistent owner.");
+            return;
+        }
+
         if (selectedStartupMode == StartupLaunchMode.ScheduledTask)
         {
             try
@@ -2618,7 +2653,8 @@ internal sealed class AppSupervisor
                 var taskResult = await ScheduledTaskInstaller.CreateOrUpdateAsync(
                     startWatcherImmediately: true,
                     skipCurrentSteamVrSession: true,
-                    useDesktopTuiDefaultInterface: null,
+                    useDesktopTuiDefaultInterface: true,
+                    persistentSupervisorOwner: false,
                     _config.LoadedFromPath,
                     cancellationToken);
                 _config.SetAutoLaunchScheduledTask(true);
@@ -2629,7 +2665,7 @@ internal sealed class AppSupervisor
                 Console.WriteLine(taskResult.OperatorMessage);
                 Console.WriteLine($"Task: {taskResult.TaskName}");
                 Console.WriteLine($"Trigger: {taskResult.TriggerDescription}");
-                Console.WriteLine("Supervisor will start with the console workflow.");
+                Console.WriteLine("Supervisor will start with the Terminal UI.");
             }
             catch (Exception ex)
             {
@@ -2740,7 +2776,10 @@ internal sealed class AppSupervisor
         Console.WriteLine("Ensuring SteamVR manifest startup is installed.");
         try
         {
-            var details = await SteamVrStartupInstaller.CreateOrUpdateAsync(cancellationToken);
+            var details = await SteamVrStartupInstaller.CreateOrUpdateAsync(
+                StartupLaunchPlanning.Create(_config.GetEffectiveStartupLaunchMode()),
+                _config.LoadedFromPath,
+                cancellationToken);
             Console.WriteLine($"Installed SteamVR startup manifest: {details.ManifestPath}");
             Console.WriteLine($"App key: {details.AppKey}");
         }
@@ -2761,6 +2800,11 @@ internal sealed class AppSupervisor
         }
 
         Console.WriteLine("Terminal UI startup requested.");
+        if (_persistentSupervisorOwner && IsAnyProcessRunning(["PimaxVrcSupervisorTui"]))
+        {
+            Console.WriteLine("Existing persistent Terminal UI detected; it will attach to this Supervisor bridge.");
+            return;
+        }
         Console.WriteLine("Waiting for dashboard bridge readiness.");
         var startedAt = Stopwatch.GetTimestamp();
         try
@@ -2829,10 +2873,12 @@ internal sealed class AppSupervisor
     private Process StartTerminalUiProcess()
     {
         var supervisorPath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
-        var launchSpec = TerminalUiLaunchArguments.BuildSupervisorOwned(
-            supervisorPath ?? "",
-            _config.LoadedFromPath,
-            Environment.ProcessId);
+        var launchSpec = _persistentSupervisorOwner
+            ? TerminalUiLaunchArguments.BuildPersistentClient(supervisorPath ?? "", _config.LoadedFromPath)
+            : TerminalUiLaunchArguments.BuildSupervisorOwned(
+                supervisorPath ?? "",
+                _config.LoadedFromPath,
+                Environment.ProcessId);
         if (!File.Exists(launchSpec.ExecutablePath))
         {
             throw new FileNotFoundException("Terminal UI executable was not found.", launchSpec.ExecutablePath);
@@ -2861,6 +2907,7 @@ internal sealed class AppSupervisor
         {
             var valid = await ScheduledTaskInstaller.ValidateAutoLaunchTaskAsync(
                 useDesktopTuiDefaultInterface: null,
+                persistentSupervisorOwner: _config.GetEffectiveStartupLaunchMode() == StartupLaunchMode.ScheduledTaskAndSteamVrManifest,
                 _config.LoadedFromPath,
                 cancellationToken);
             if (!valid)
@@ -2906,11 +2953,12 @@ internal sealed class AppSupervisor
     private static Task<StartupLaunchMode> AskStartupIntegrationPreferenceAsync(CancellationToken cancellationToken)
         => AskPromptAsync(
             () => ThemedPrompt.Show(
-                "How should Pimax VRC Supervisor start automatically?\r\n\r\nTerminal Mode creates an elevated Windows Scheduled Task that starts the supervisor when SteamVR is running. The supervisor waits for VRChat before starting managed apps.\r\n\r\nSteamVR Overlay starts through SteamVR with the dashboard overlay.",
+                "How should Pimax VRC Supervisor start automatically?\r\n\r\nTerminal UI only starts the Supervisor and Terminal UI for a SteamVR session.\r\n\r\nSteamVR Overlay only starts the dashboard overlay and its Supervisor owner through SteamVR.\r\n\r\nTerminal UI + SteamVR Overlay keeps one persistent Supervisor owner and attaches both interfaces.",
                 "Pimax VRC Supervisor",
                 [
-                    new("Terminal Mode", DialogResult.Yes),
-                    new("SteamVR Overlay", DialogResult.OK),
+                    new("Terminal UI only", DialogResult.Yes),
+                    new("SteamVR Overlay only", DialogResult.OK),
+                    new("Terminal UI + SteamVR Overlay", DialogResult.Retry),
                     new("No", DialogResult.No)
                 ],
                 MessageBoxIcon.Question,
@@ -2919,6 +2967,7 @@ internal sealed class AppSupervisor
             {
                 DialogResult.Yes => StartupLaunchMode.ScheduledTask,
                 DialogResult.OK => StartupLaunchMode.SteamVrManifest,
+                DialogResult.Retry => StartupLaunchMode.ScheduledTaskAndSteamVrManifest,
                 _ => StartupLaunchMode.None
             },
             "Could not open scheduled task question dialog.",
@@ -10453,6 +10502,7 @@ internal static class AutoLaunchWatcher
     public static async Task RunAsync(
         bool skipCurrentSteamVrSession,
         bool useDesktopTuiDefaultInterface,
+        bool persistentSupervisorOwner,
         SupervisorConfig config,
         string? configPath,
         CancellationToken cancellationToken)
@@ -10487,6 +10537,7 @@ internal static class AutoLaunchWatcher
                 supervisorProcessName,
                 configPath,
                 useDesktopTuiDefaultInterface,
+                persistentSupervisorOwner,
                 launchedForCurrentSteamVrSession,
                 userExitSuppressedSteamVrSession,
                 token),
@@ -10508,6 +10559,7 @@ internal static class AutoLaunchWatcher
         string supervisorProcessName,
         string? configPath,
         bool useDesktopTuiDefaultInterface,
+        bool persistentSupervisorOwner,
         SteamVrSessionIdentity? launchedForCurrentSteamVrSession,
         SteamVrSessionIdentity? userExitSuppressedSteamVrSession,
         CancellationToken cancellationToken)
@@ -10548,7 +10600,7 @@ internal static class AutoLaunchWatcher
                 Console.WriteLine(useDesktopTuiDefaultInterface
                     ? "Watcher selected startup interface: Terminal UI."
                     : "Watcher selected startup interface: Classic Console.");
-                StartSupervisor(supervisorPath, configPath, useDesktopTuiDefaultInterface);
+                StartSupervisor(supervisorPath, configPath, useDesktopTuiDefaultInterface, persistentSupervisorOwner);
             }
 
             launchedForCurrentSteamVrSession = decision.LaunchedForSteamVrSession;
@@ -10667,7 +10719,8 @@ internal static class AutoLaunchWatcher
     private static void StartSupervisor(
         string supervisorPath,
         string? configPath,
-        bool useDesktopTuiDefaultInterface)
+        bool useDesktopTuiDefaultInterface,
+        bool persistentSupervisorOwner)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -10684,7 +10737,14 @@ internal static class AutoLaunchWatcher
             startInfo.ArgumentList.Add(configPath);
         }
 
-        startInfo.ArgumentList.Add("--managed-steamvr-session");
+        if (!persistentSupervisorOwner)
+        {
+            startInfo.ArgumentList.Add("--managed-steamvr-session");
+        }
+        else
+        {
+            startInfo.ArgumentList.Add("--persistent-supervisor-owner");
+        }
         if (useDesktopTuiDefaultInterface)
         {
             Console.WriteLine("Starting Supervisor with Terminal UI startup intent.");
@@ -10811,7 +10871,6 @@ internal static class ScheduledTaskInstaller
     private const string SupervisorExecutableName = "PimaxVrcSupervisor.exe";
     private const string WatcherExecutableName = "PimaxVrcSupervisorWatcher.exe";
     private const string WatcherArgument = "--watch-vrchat-auto-launch";
-    private const string SteamVrStartArgument = "--steamvr-start";
     private static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(10);
 
     public static async Task<bool> ExistsAsync(CancellationToken cancellationToken)
@@ -10838,6 +10897,7 @@ internal static class ScheduledTaskInstaller
         bool startWatcherImmediately,
         bool skipCurrentSteamVrSession,
         bool? useDesktopTuiDefaultInterface,
+        bool persistentSupervisorOwner,
         string? configPath,
         CancellationToken cancellationToken)
     {
@@ -10868,6 +10928,7 @@ internal static class ScheduledTaskInstaller
         var desiredArguments = BuildWatcherArguments(
             skipCurrentSteamVrSession,
             selectedInterface,
+            persistentSupervisorOwner,
             configPath,
             preservedUnknownArguments);
         var desiredParsedArguments = ParseWatcherArguments(desiredArguments);
@@ -10995,6 +11056,7 @@ internal static class ScheduledTaskInstaller
 
     public static async Task<bool> ValidateAutoLaunchTaskAsync(
         bool? useDesktopTuiDefaultInterface,
+        bool persistentSupervisorOwner,
         string? configPath,
         CancellationToken cancellationToken)
     {
@@ -11019,6 +11081,7 @@ internal static class ScheduledTaskInstaller
         var desiredArguments = BuildWatcherArguments(
             skipCurrentSteamVrSession: true,
             selectedInterface,
+            persistentSupervisorOwner,
             configPath,
             preservedUnknownArguments);
         var desiredParsedArguments = ParseWatcherArguments(desiredArguments);
@@ -11051,11 +11114,13 @@ internal static class ScheduledTaskInstaller
     private static string BuildWatcherArguments(
         bool skipCurrentSteamVrSession,
         bool useDesktopTuiDefaultInterface,
+        bool persistentSupervisorOwner,
         string? configPath,
         IReadOnlyList<string>? preservedUnknownArguments = null)
         => ScheduledTaskSemantics.BuildWatcherArguments(
             skipCurrentSteamVrSession,
             useDesktopTuiDefaultInterface,
+            persistentSupervisorOwner,
             configPath,
             preservedUnknownArguments);
 
@@ -11325,8 +11390,16 @@ internal static class ScheduledTaskInstaller
             ? "\"\""
             : "\"" + argument.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
 
-    public static async Task<ScheduledTaskDetails> CreateOrUpdateSteamVrStartHelperAsync(CancellationToken cancellationToken)
+    public static async Task<ScheduledTaskDetails> CreateOrUpdateSteamVrStartHelperAsync(
+        StartupLaunchPlan plan,
+        string? configPath,
+        CancellationToken cancellationToken)
     {
+        if (plan.SteamVrHelperOwnerMode == SteamVrHelperOwnerMode.None)
+        {
+            throw new InvalidOperationException($"Startup mode {plan.Mode} does not use the SteamVR start helper.");
+        }
+
         var supervisorPath = GetSupervisorExecutablePath();
         var supervisorWorkingDirectory = Path.GetDirectoryName(supervisorPath) ?? AppContext.BaseDirectory;
         ScheduledTaskPathValidator.ThrowIfInvalidScheduledTaskExecutablePath(
@@ -11336,8 +11409,8 @@ internal static class ScheduledTaskInstaller
         var taskXml = BuildDirectTaskXml(
             supervisorPath,
             supervisorWorkingDirectory,
-            "Starts Pimax VRC Supervisor elevated when the SteamVR manifest host requests SteamVR startup mode.",
-            SteamVrStartArgument);
+            "Starts the single Pimax VRC Supervisor owner when the SteamVR host cannot attach to an existing command bridge.",
+            plan.BuildSteamVrHelperArguments(configPath));
         var taskXmlPath = Path.Combine(Path.GetTempPath(), $"PimaxVrcSupervisorSteamVrStart-{Guid.NewGuid():N}.xml");
 
         try
@@ -11699,17 +11772,18 @@ internal static class StartupIntegration
 {
     public static async Task ApplyAsync(
         SupervisorConfig config,
-        bool useDesktopTuiDefaultInterface,
         CancellationToken cancellationToken)
     {
-        switch (config.GetEffectiveStartupLaunchMode())
+        var plan = StartupLaunchPlanning.Create(config.GetEffectiveStartupLaunchMode());
+        switch (plan.Mode)
         {
             case StartupLaunchMode.ScheduledTask:
                 LogStep("Creating or updating VRChat auto-launch scheduled task...");
                 var taskResult = await ScheduledTaskInstaller.CreateOrUpdateAsync(
                     startWatcherImmediately: true,
                     skipCurrentSteamVrSession: true,
-                    useDesktopTuiDefaultInterface,
+                    useDesktopTuiDefaultInterface: plan.WatcherUsesTerminalUi,
+                    persistentSupervisorOwner: plan.OwnerLifetime == SupervisorOwnerLifetime.Persistent,
                     config.LoadedFromPath,
                     cancellationToken);
                 LogStep(taskResult.OperatorMessage);
@@ -11722,8 +11796,22 @@ internal static class StartupIntegration
                 LogStep("Deleting VRChat auto-launch scheduled task if present...");
                 await ScheduledTaskInstaller.DeleteAutoLaunchTaskAsync(cancellationToken);
                 LogStep("Creating or updating SteamVR startup manifest...");
-                await SteamVrStartupInstaller.CreateOrUpdateAsync(cancellationToken);
+                await SteamVrStartupInstaller.CreateOrUpdateAsync(plan, config.LoadedFromPath, cancellationToken);
                 LogStep("SteamVR startup manifest is ready.");
+                break;
+            case StartupLaunchMode.ScheduledTaskAndSteamVrManifest:
+                LogStep("Creating or updating persistent Terminal UI owner task...");
+                var combinedTaskResult = await ScheduledTaskInstaller.CreateOrUpdateAsync(
+                    startWatcherImmediately: true,
+                    skipCurrentSteamVrSession: true,
+                    useDesktopTuiDefaultInterface: true,
+                    persistentSupervisorOwner: true,
+                    config.LoadedFromPath,
+                    cancellationToken);
+                LogStep(combinedTaskResult.OperatorMessage);
+                LogStep("Creating or updating attach-first SteamVR startup manifest...");
+                await SteamVrStartupInstaller.CreateOrUpdateAsync(plan, config.LoadedFromPath, cancellationToken);
+                LogStep("Combined Terminal UI and SteamVR overlay startup is ready.");
                 break;
             case StartupLaunchMode.None:
                 LogStep("Deleting VRChat auto-launch scheduled task if present...");
@@ -11755,9 +11843,12 @@ internal static class SteamVrStartupInstaller
     private const string HostIconRelativePath = @"Assets\vr-overlay-icon.png";
     private static readonly TimeSpan OpenVrRegistryTimeout = TimeSpan.FromSeconds(3);
 
-    public static async Task<SteamVrStartupDetails> CreateOrUpdateAsync(CancellationToken cancellationToken)
+    public static async Task<SteamVrStartupDetails> CreateOrUpdateAsync(
+        StartupLaunchPlan plan,
+        string? configPath,
+        CancellationToken cancellationToken)
     {
-        await ScheduledTaskInstaller.CreateOrUpdateSteamVrStartHelperAsync(cancellationToken);
+        await ScheduledTaskInstaller.CreateOrUpdateSteamVrStartHelperAsync(plan, configPath, cancellationToken);
 
         var manifestPath = GetManifestPath();
         var hostPath = GetHostExecutablePath();
@@ -12910,6 +13001,7 @@ internal sealed class SupervisorConfig
     public JsonElement MouthTrackerUser { get; set; }
     public JsonElement TurnOffSecondaryMonitors { get; set; }
     public JsonElement AutoLaunchScheduledTask { get; set; }
+    [JsonConverter(typeof(SafeStartupLaunchModeJsonConverter))]
     public StartupLaunchMode StartupLaunchMode { get; set; } = StartupLaunchMode.Unspecified;
     public bool StopWithSteamVr { get; set; }
     public string[][] PimaxDetectors { get; init; } =
@@ -13094,9 +13186,14 @@ internal sealed class SupervisorConfig
             return StartupLaunchMode;
         }
 
-        return TryGetAutoLaunchScheduledTask(out var autoLaunchScheduledTask)
-            ? autoLaunchScheduledTask ? StartupLaunchMode.ScheduledTask : StartupLaunchMode.None
-            : StartupLaunchMode.Unspecified;
+        bool? legacyAutoLaunch = TryGetAutoLaunchScheduledTask(out var autoLaunchScheduledTask)
+            ? autoLaunchScheduledTask
+            : null;
+        return StartupLaunchPlanning.Resolve(
+            configuredValue: null,
+            legacyAutoLaunch,
+            StopWithSteamVr,
+            out _);
     }
 
     public void SaveAutoLaunchScheduledTaskPreference()

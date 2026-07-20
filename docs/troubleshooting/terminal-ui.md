@@ -12,7 +12,7 @@ Check:
 
 ## Terminal UI Closes When SteamVR Exits
 
-This is expected when Terminal UI was opened by Terminal Mode autostart. Manual Terminal UI launches remain open until you exit.
+This is expected in **Terminal UI only**, where the owner is SteamVR-scoped. In **Terminal UI + SteamVR Overlay**, Supervisor and Terminal UI are persistent and should remain available after SteamVR exits.
 
 ## Q Does Not Just Close Terminal UI
 

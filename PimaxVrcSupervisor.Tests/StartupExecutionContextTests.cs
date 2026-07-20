@@ -88,6 +88,16 @@ public sealed class StartupExecutionContextTests
     }
 
     [Fact]
+    public void PersistentCombinedOwnerDoesNotImplicitlyOwnSteamVrLifecycle()
+    {
+        var context = StartupExecutionContext.Parse(["--persistent-supervisor-owner"]);
+
+        Assert.True(context.PersistentSupervisorOwner);
+        Assert.False(context.ManagedSteamVrSession);
+        Assert.False(context.IsInteractiveSupervisorLaunch);
+    }
+
+    [Fact]
     public void HiddenHelperOnlyHidesWhenResultDialogIsNotRequested()
     {
         var hidden = StartupExecutionContext.Parse(["--apply-startup-integration", "--hide-startup-helper"]);

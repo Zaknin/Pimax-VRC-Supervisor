@@ -11,10 +11,11 @@ The top of the window shows the selected config file and friendly display name. 
 Open **General** and choose **Autostart mode**:
 
 - **Off**: no managed autostart.
-- **Terminal Mode**: starts during SteamVR sessions.
-- **SteamVR Overlay**: starts through the SteamVR dashboard overlay path.
+- **Terminal UI only**: opens the desktop dashboard for SteamVR sessions.
+- **SteamVR Overlay only**: starts through the SteamVR dashboard overlay path.
+- **Terminal UI + SteamVR Overlay**: keeps one persistent Supervisor and attaches both clients.
 
-For most users, choose **Terminal Mode** and leave **Use Terminal UI as default interface** enabled.
+For most users, choose **Terminal UI only**.
 
 ## 3. Set Tool Paths
 
@@ -35,4 +36,4 @@ Click **Validate**. Fix missing paths or invalid entries before saving.
 
 Click **Save**, then **Launch Supervisor**.
 
-If Terminal UI is the default interface, Launch Supervisor starts the Supervisor and opens Terminal UI. If it is unchecked, Launch Supervisor starts the classic visible console.
+When the selected interface mode includes Terminal UI, Launch Supervisor starts the Supervisor and opens Terminal UI.

@@ -16,6 +16,6 @@ The Configurator is the safest place to make changes. It validates paths, shows 
 
 ## Recommended First Choice
 
-Use **Terminal Mode** and keep **Use Terminal UI as default interface** enabled unless you specifically want the SteamVR dashboard overlay.
+Use **Terminal UI only** unless you specifically want the SteamVR dashboard overlay.
 
-Use **SteamVR Overlay** if you prefer controls inside SteamVR and do not need Terminal UI as your main interface.
+Use **SteamVR Overlay only** if you prefer controls inside SteamVR, or **Terminal UI + SteamVR Overlay** when you want both.

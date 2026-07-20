@@ -11,6 +11,7 @@ internal sealed record StartupExecutionContext(
     bool ShowStartupIntegrationResult,
     bool HideStartupIntegrationHelperWindow,
     bool DesktopTuiDefaultInterface,
+    bool PersistentSupervisorOwner,
     bool InstallAutoLaunchTask,
     bool EmergencyBaseStationCleanup,
     bool ExplicitConfigOptionPresent,
@@ -37,6 +38,7 @@ internal sealed record StartupExecutionContext(
             && !LaunchDesktopTuiAfterReady
             && !SteamVrStart
             && !ManagedSteamVrSession
+            && !PersistentSupervisorOwner
             && !WatchVrchatAutoLaunch
             && !ApplyStartupIntegration
             && !InstallAutoLaunchTask
@@ -82,6 +84,7 @@ internal sealed record StartupExecutionContext(
             showStartupIntegrationResult,
             hideStartupIntegrationHelperWindow,
             HasFlag(commandLineArgs, "--desktop-tui-default-interface"),
+            HasFlag(commandLineArgs, "--persistent-supervisor-owner"),
             HasFlag(commandLineArgs, "--install-auto-launch-task"),
             emergencyBaseStationCleanup,
             explicitConfigOptionPresent,

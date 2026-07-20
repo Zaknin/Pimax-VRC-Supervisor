@@ -15,7 +15,7 @@ The top area lets you choose a config file. **Display name** is a friendly label
 
 ### General
 
-Choose autostart mode, Terminal UI default behavior, monitor handling, diagnostics, and basic utility actions.
+Choose **Terminal UI only**, **SteamVR Overlay only**, **Terminal UI + SteamVR Overlay**, or Off. The one interface-mode control prevents invalid combinations; saving applies the matching watcher, helper task, and SteamVR registration plan.
 
 ### Face Tracking
 

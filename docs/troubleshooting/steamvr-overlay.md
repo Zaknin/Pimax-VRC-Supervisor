@@ -2,7 +2,7 @@
 
 ## Overlay Does Not Appear
 
-1. Set **Autostart mode** to **SteamVR Overlay**.
+1. Set **Interface mode** to **SteamVR Overlay only** or **Terminal UI + SteamVR Overlay**.
 2. Save from Configurator.
 3. Restart SteamVR.
 4. Confirm `PimaxVrcSupervisorSteamVrHost.exe` exists.
@@ -13,7 +13,7 @@ Use Configurator **Validate** and check whether Windows approval is needed for e
 
 ## Terminal UI Opens Instead
 
-You are likely using Terminal Mode. Switch **Autostart mode** to **SteamVR Overlay** and save.
+You are likely using **Terminal UI only**. Switch **Interface mode** to an overlay-enabled choice and save.
 
 ## Restart SteamVR Does Not Start
 
