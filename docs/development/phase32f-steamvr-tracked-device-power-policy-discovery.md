@@ -1,6 +1,6 @@
 # Phase 32F SteamVR Tracked-Device Power Policy Discovery
 
-Status: discovery and read-only live inventory complete; no controller, tracker, HMD, base-station, USB, SteamVR-setting, Supervisor-config, or SteamVR process state was changed. Implementation and destructive live acceptance remain blocked pending review of the final-exit ownership contract and the unavailable per-device capability property described below.
+Status: discovery, read-only live inventory, and native-shutdown observation complete. Phase 32F implementation is blocked pending a documented supported API or driver capability that can provide the requested controller and tracker power-off behavior. Phase 32F2 must not be implemented from the currently available evidence.
 
 Baseline: `phase/32e-pimax-reconnect-scoped-recovery` at `7797e090f7309d3a7549f7cf236501924884d390`.
 
@@ -20,6 +20,14 @@ The active `steamvr.vrsettings` overrides `turnOffControllersTimeout` to `1800` 
 
 The user setting and installed default must be read through `IVRSettings` when available. Direct JSON editing is not recommended because SteamVR owns the file and may rewrite it. A missing user value is not equivalent to an explicit `false`; effective-value and value-source evidence must be kept separate.
 
+### Live native-shutdown result
+
+On 2026-07-20, both Index controllers and all three connected VIVE Tracker 3.0 devices were powered on, awake, and connected immediately before a normal SteamVR shutdown. The effective `power.powerOffOnExit` value was `true`. After SteamVR completed its normal shutdown, both Index controllers and all three trackers remained powered on.
+
+This is an observed failure of the native setting to deliver the requested outcome for the installed SteamVR runtime and device-driver combination. It does not establish that the setting is ineffective with every runtime, driver, or device, but it rules out treating `powerOffOnExit=true` as an effective Phase 32F mechanism on this installation. `Prop_DeviceCanPowerOff_Bool` remains `TrackedProp_UnknownProperty` for every inventoried device, including both controllers and all three trackers.
+
+The shutdown observation does not alter or replace the authoritative inventory evidence below. It also does not authorize private debug requests, per-device fallback commands, USB manipulation, or settings changes.
+
 ## OpenVR supported boundary
 
 The public OpenVR client API supports the required read-only discovery:
@@ -31,7 +39,7 @@ The public OpenVR client API supports the required read-only discovery:
 
 Valve's public client API does not expose a generic per-device power-off method. `IVRDebug::DriverDebugRequest` is device-specific, and its request strings are not a portable power contract. Lighthouse console commands, USB disable/enable, dongle manipulation, private vrmonitor IPC, and vendor-specific debug strings are therefore rejected for this feature.
 
-At the driver boundary, SteamVR calls `ITrackedDeviceServerDriver::EnterStandby` when a user requests device power-off, the system enters standby, or the system shuts down. The safest supported cross-device mechanism is consequently SteamVR's own normal shutdown with `power.powerOffOnExit`, allowing SteamVR and each device driver to decide whether and how a capable device enters standby.
+At the driver boundary, SteamVR calls `ITrackedDeviceServerDriver::EnterStandby` when a user requests device power-off, the system enters standby, or the system shuts down. SteamVR's own normal shutdown with `power.powerOffOnExit` is therefore the relevant supported cross-device path exposed by the installed runtime. The live native-shutdown result above proves that this path does not power off the connected Index controllers or VIVE Tracker 3.0 devices with the installed runtime and drivers.
 
 Primary references:
 
@@ -68,22 +76,22 @@ The probe did not expose or call a debug request, settings setter, standby/power
 
 ## Policy recommendation
 
-Add a Configurator enum with a backwards-compatible default:
+If a future documented supported API or driver capability resolves the blocker, retain the following Configurator policy contract with a backwards-compatible default:
 
 | Policy | Recommended meaning |
 | --- | --- |
-| `FollowSteamVr` | Never mutate the SteamVR setting. On a native SteamVR exit, SteamVR uses its effective `power.powerOffOnExit` value. This is the default and preserves current behavior. |
-| `PowerOffOnFinalExit` | For a Supervisor-owned **final normal SteamVR shutdown only**, use a bounded setting transaction that makes the effective value `true` before the one normal shutdown request. Let SteamVR power off only devices its drivers consider capable. Restore the prior setting after runtime exit, with crash-safe recovery evidence. |
-| `LeavePoweredOnFinalExit` | For a Supervisor-owned **final normal SteamVR shutdown only**, use the same transaction with an effective value of `false`, then restore the prior setting after runtime exit. Do not send any per-device wake or keepalive command. |
+| `FollowSteamVr` | Never mutate the SteamVR setting. On a native SteamVR exit, SteamVR uses its effective `power.powerOffOnExit` value. This is the proposed default and preserves current behavior, but the live result proves that effective `true` does not power off the tested devices on this installation. |
+| `PowerOffOnFinalExit` | Blocked. For a Supervisor-owned **final normal SteamVR shutdown only**, a future implementation would require a documented supported mechanism that actually powers off eligible controllers and trackers. A bounded transaction that merely makes `powerOffOnExit` effective `true` is insufficient on this installation. |
+| `LeavePoweredOnFinalExit` | Not implemented while Phase 32F is blocked. Any future contract remains limited to a Supervisor-owned **final normal SteamVR shutdown only** and must not send a per-device wake or keepalive command. |
 
 The two deterministic policies cannot be guaranteed for a SteamVR exit that was already initiated externally: by the time Supervisor observes process loss, SteamVR may already have read the setting and entered driver shutdown. Implementation must not pretend that a post-exit write changed that exit. Review must choose one of these honest contracts:
 
 1. deterministic modes apply only when Supervisor owns and requests the final normal SteamVR shutdown; external SteamVR UI Exit follows SteamVR; or
 2. Supervisor gains a reviewed final-exit flow that requests SteamVR shutdown, while the existing reactive UI-exit path remains observational.
 
-No public supported mechanism was found that can deterministically power off capable controllers and trackers while leaving SteamVR running. Phase 32F must not substitute a private or vendor-specific command to fill that gap.
+No public supported mechanism was found that can deterministically power off capable controllers and trackers while leaving SteamVR running. The only identified native shutdown path was also ineffective in the live test. Phase 32F must not substitute a private or vendor-specific command to fill either gap.
 
-The live result narrows the recommendation further: `Prop_DeviceCanPowerOff_Bool` can be recorded diagnostically, but it cannot be an execution allow-list on this system because every intended controller and tracker returns `TrackedProp_UnknownProperty`. Phase 32F2 must either rely exclusively on SteamVR's native `powerOffOnExit` behavior during a Supervisor-owned final normal SteamVR shutdown, or remain blocked. It must not add per-device fallback commands.
+`Prop_DeviceCanPowerOff_Bool` can be recorded diagnostically, but it cannot be an execution allow-list on this system because every intended controller and tracker returns `TrackedProp_UnknownProperty`. Because effective `powerOffOnExit=true` also failed to power off those devices during normal SteamVR shutdown, Phase 32F2 must not rely on the setting or add per-device fallback commands. Phase 32F implementation is blocked until a documented supported API or driver capability is identified and reviewed.
 
 ## Eligibility and exclusions
 
@@ -138,20 +146,21 @@ Phase 32F must remain downstream of the accepted lifecycle boundaries:
 9. Existing Phase 32D/32E tests remain unchanged and required, especially shutdown issue count, expected-shutdown classification, replacement adoption, Pimax scoped dispatch, client redelivery, and Valve `28DE:2101` dongle exclusion.
 10. Source guards reject `lighthouse_console`, device debug requests, SetupAPI/USB mutation, direct SteamVR JSON editing, and a second `vrstartup.exe -shutdown` call site.
 
-### Read-only live tests before review
+### Live discovery and observation results
 
 1. Complete: with SteamVR already running and devices powered, two captures returned stable index/serial/class/model/capability results.
-2. Deferred: do not stop SteamVR for this discovery pass. A later already-stopped observation may confirm background init returns no-server without launching SteamVR.
+2. Deferred: the earlier read-only inventory intentionally did not stop SteamVR. A later already-stopped observation may confirm background init returns no-server without launching SteamVR; this is separate from the completed native-shutdown observation.
 3. Complete: `IVRSettings` returned effective `true`; the user file has no override and the installed default is `true`.
 4. Complete: process identities and guarded file hashes/timestamps were unchanged. No device, base-station, monitor, USB, or configuration mutation was requested.
+5. Complete: immediately before normal SteamVR shutdown, both Index controllers and all three VIVE Tracker 3.0 devices were powered on, awake, and connected, and the effective `power.powerOffOnExit` value was `true`. None of the five devices powered off after shutdown. The native path is ineffective for this installed runtime/driver combination.
 
-### Destructive live acceptance after explicit review only
+### Future live acceptance after the capability blocker is resolved
 
-1. Prove `FollowSteamVr` matches both native setting values without Supervisor writes.
-2. Prove `PowerOffOnFinalExit` powers off connected capable Index controllers and Vive Trackers during one Supervisor-owned final normal SteamVR exit, while the HMD, base stations, and USB devices receive no Phase 32F command.
+1. Re-prove the supported mechanism and its documented capability contract before adding any Phase 32F2 implementation.
+2. Prove `PowerOffOnFinalExit` powers off connected capable Index controllers and Vive Trackers during one Supervisor-owned final normal SteamVR exit, while the HMD, base stations, and USB devices receive no Phase 32F command. Effective `powerOffOnExit=true` alone does not satisfy this gate on the current installation.
 3. Prove `LeavePoweredOnFinalExit` leaves those devices powered during the same final-exit shape.
 4. For each deterministic policy, run action 7 and prove controllers/trackers stay powered, the setting transaction is absent, one shutdown request occurs, replacement adoption succeeds, and Phase 32D state is preserved.
 5. Exercise Pimax scoped recovery, client reconnect, and separate Index/Vive dongle remove/reinsert tests and prove zero policy execution and zero delayed action.
 6. Verify the prior SteamVR setting is restored after the final exit and after simulated interrupted-transaction recovery.
 
-No Phase 32F2 implementation or destructive live acceptance should begin until the final-exit ownership contract and the `TrackedProp_UnknownProperty` implication are reviewed.
+Phase 32F2 must not be implemented. Phase 32F remains blocked until a documented supported API or driver capability can satisfy the requested controller and tracker power-off behavior without weakening the final-exit-only lifecycle gate, device exclusions, Phase 32D/32E preservation, or safety conclusions documented above.
