@@ -274,9 +274,9 @@ Add one configuration enum in a later implementation:
 | Value | Contract |
 | --- | --- |
 | `Disabled` | No automatic network request. Cached state may still be displayed. An explicit Configurator **Check now** is allowed. Missing/invalid values fail closed to this value. |
-| `NotifyStable` | Supervisor may check the published stable channel automatically and show notifications. It still cannot download or install anything. |
+| `Notify` | Supervisor may check the fixed published Stable channel automatically and show notifications. It still cannot download or install anything. |
 
-The packaged default config may select `NotifyStable` for new installations, but an upgraded config with no field resolves to `Disabled` until the user chooses and saves a policy. This avoids silently adding network traffic for existing installations.
+The packaged default and an upgraded config with no field both resolve to `Disabled` until the user chooses and saves `Notify`. Unknown, old, custom, or malformed values also resolve to `Disabled`. This avoids silently adding network traffic for existing installations.
 
 Automatic scheduling:
 
@@ -328,25 +328,25 @@ State is a cache, not authority. `updateAvailable` may be shown only when the cu
 
 ### Configurator
 
-- Add an **Updates** tab containing the policy selector, installed version, last/next check, verification status, latest verified version, and failure category.
-- Add **Check now**, **Open release page**, and **Dismiss this version**. Only the explicit open action launches the fixed canonical HTTPS URL.
+- Add an **Updates** tab containing the policy selector, installed version, fixed Stable channel, last attempt, last successful check, verification status, latest verified version, dismissal state, and bounded failure result.
+- Add **Check now**, **Dismiss verified update**, and **Clear dismissal**. This slice exposes no release URL and opens no browser.
 - Do not add Download, Install, Replace, Restart, or Apply Update controls.
 - Saving the policy changes only `UpdatePolicy`; update-state writes stay in LocalAppData and are not mixed into `supervisor.config.json`.
 
 ### Supervisor and bridge
 
 - Add a standalone `UpdateDiscoveryService` with no references to lifecycle, USB, recovery, process-launch, SteamVR, or settings components.
-- Extend the structured status snapshot with an optional `update` object: policy, check state, latest version, update-available flag, dismissed flag, and canonical release URL.
-- Add read-only `query-json {"resource":"updates"}`. If manual checking through a running Supervisor is later desired, expose a separate low-risk, non-lifecycle `check-updates` request with one-operation deduplication; it must not be a session action card.
+- Add read-only `query-json {"resource":"update-status"}` containing only cached policy, channel, version, attempt/success/error, verification, due, dismissal, and operation fields. It contains no asset or package URL and performs zero network I/O.
+- Add low-risk non-lifecycle `action-json` operations `check-for-updates`, `dismiss-update`, and `clear-update-dismissal`. Manual checks use a dedicated asynchronous operation ID and terminal result, survive a requesting-client disconnect, and reject concurrent manual requests instead of queueing them.
 - Preserve `line-oriented-tcp-v1` and all existing fields. Older clients ignore the additive field; newer clients tolerate an older Supervisor with no update object.
 
-### Terminal UI
+### Terminal UI (later Phase 33A slice)
 
 - Render a non-modal banner only for a verified, non-dismissed version newer than the running version.
 - Show `Update vX.Y.Z available - open Configurator or the GitHub release page`; do not auto-open a browser and do not add a download/install action.
 - A failed or offline check belongs in the System/details view, not the operator-warning channel used for session failures.
 
-### SteamVR overlay
+### SteamVR overlay (later Phase 33A slice)
 
 - Render one compact informational line from Supervisor's verified bridge projection.
 - Never perform network or signature work in the overlay host.

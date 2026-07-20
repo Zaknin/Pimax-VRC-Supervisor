@@ -64,6 +64,9 @@ internal sealed class UpdateDiscoveryScheduler
     private readonly SemaphoreSlim _checkLock = new(1, 1);
     private int _automaticSessionStarted;
     private int _automaticAttempted;
+    private int _checkInProgress;
+
+    public bool IsCheckInProgress => Volatile.Read(ref _checkInProgress) == 1;
 
     public UpdateDiscoveryScheduler(
         UpdateStateStore stateStore,
@@ -111,6 +114,11 @@ internal sealed class UpdateDiscoveryScheduler
                             ErrorCode: "clock_rollback"));
                         return;
                     case AutomaticUpdateCheckDecision.Wait:
+                        _diagnostics.Record(new UpdateDiscoveryDiagnostic(
+                            UpdateCheckKind.Automatic,
+                            "notDue",
+                            Status: null,
+                            ErrorCode: null));
                         await _clock.DelayAsync(eligibility.Delay, cancellationToken).ConfigureAwait(false);
                         continue;
                     case AutomaticUpdateCheckDecision.Due:
@@ -119,6 +127,11 @@ internal sealed class UpdateDiscoveryScheduler
                             return;
                         }
 
+                        _diagnostics.Record(new UpdateDiscoveryDiagnostic(
+                            UpdateCheckKind.Automatic,
+                            "due",
+                            Status: null,
+                            ErrorCode: null));
                         await ExecuteCheckAsync(UpdateCheckKind.Automatic, cancellationToken).ConfigureAwait(false);
                         return;
                     default:
@@ -191,6 +204,7 @@ internal sealed class UpdateDiscoveryScheduler
         CancellationToken cancellationToken)
     {
         await _checkLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        Interlocked.Exchange(ref _checkInProgress, 1);
         try
         {
             var load = _stateStore.Load();
@@ -220,6 +234,7 @@ internal sealed class UpdateDiscoveryScheduler
                 await _stateStore.SaveAsync(
                     state with { LastAttemptUtc = attemptAtUtc },
                     cancellationToken).ConfigureAwait(false);
+                _diagnostics.Record(new UpdateDiscoveryDiagnostic(kind, "attemptStatePersisted", Status: null, ErrorCode: null));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or UpdateContractException)
             {
@@ -232,10 +247,12 @@ internal sealed class UpdateDiscoveryScheduler
             var result = await _client.CheckAsync(state.ETag, cancellationToken).ConfigureAwait(false);
             var completedAtUtc = _clock.UtcNow;
             result = EnforcePersistedRollbackBoundary(state, result);
+            RecordVerificationDiagnostics(kind, result);
             var nextState = BuildNextState(state, result, attemptAtUtc, completedAtUtc);
             try
             {
                 await _stateStore.SaveAsync(nextState, cancellationToken).ConfigureAwait(false);
+                _diagnostics.Record(new UpdateDiscoveryDiagnostic(kind, "resultStatePersisted", result.Status, result.ErrorCode));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or UpdateContractException)
             {
@@ -253,7 +270,40 @@ internal sealed class UpdateDiscoveryScheduler
         }
         finally
         {
+            Interlocked.Exchange(ref _checkInProgress, 0);
             _checkLock.Release();
+        }
+    }
+
+    private void RecordVerificationDiagnostics(UpdateCheckKind kind, UpdateDiscoveryCheckResult result)
+    {
+        if (result.Status is UpdateDiscoveryStatus.UpdateAvailable or UpdateDiscoveryStatus.Current or UpdateDiscoveryStatus.Ignored)
+        {
+            _diagnostics.Record(new UpdateDiscoveryDiagnostic(kind, "releaseCandidateSelected", result.Status, null));
+        }
+
+        if (result.Status == UpdateDiscoveryStatus.UpdateAvailable && result.VerifiedManifest is not null)
+        {
+            _diagnostics.Record(new UpdateDiscoveryDiagnostic(kind, "signatureVerified", result.Status, null));
+            _diagnostics.Record(new UpdateDiscoveryDiagnostic(kind, "manifestValidated", result.Status, null));
+            _diagnostics.Record(new UpdateDiscoveryDiagnostic(kind, "semanticVersionUpdateAvailable", result.Status, null));
+            return;
+        }
+
+        var verificationEvent = result.ErrorCategory switch
+        {
+            UpdateErrorCategory.Signature => "signatureRejected",
+            UpdateErrorCategory.Schema or UpdateErrorCategory.ReleaseMismatch => "manifestRejected",
+            _ => result.Status switch
+            {
+                UpdateDiscoveryStatus.Current => "semanticVersionCurrent",
+                UpdateDiscoveryStatus.Ignored => "semanticVersionIneligible",
+                _ => null
+            }
+        };
+        if (verificationEvent is not null)
+        {
+            _diagnostics.Record(new UpdateDiscoveryDiagnostic(kind, verificationEvent, result.Status, result.ErrorCode));
         }
     }
 

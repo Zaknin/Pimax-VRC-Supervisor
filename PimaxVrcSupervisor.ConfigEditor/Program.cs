@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.Reflection;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
@@ -12,6 +13,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Text.Json.Serialization;
 using PimaxVrcSupervisor.BaseStations;
+using PimaxVrcSupervisor.Updates;
 
 namespace PimaxVrcSupervisor.Configurator;
 
@@ -112,6 +114,21 @@ internal sealed class ConfigEditorForm : Form
     private readonly CheckBox _mouthTrackerCheckBox = CreateOptionalConfigCheckBox("Detect Vive Face Tracker usage");
     private readonly CheckBox _turnOffMonitorsCheckBox = CreateOptionalConfigCheckBox("Turn off secondary monitors during headset sessions");
     private readonly ComboBox _autostartModeComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Left, Width = 310 };
+    private readonly ComboBox _updatePolicyComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Left, Width = 340 };
+    private readonly Label _updateCurrentVersionLabel = CreateValueLabel();
+    private readonly Label _updateChannelLabel = CreateValueLabel();
+    private readonly Label _updateLatestVersionLabel = CreateValueLabel();
+    private readonly Label _updateLastSuccessLabel = CreateValueLabel();
+    private readonly Label _updateLastAttemptLabel = CreateValueLabel();
+    private readonly Label _updateDismissedLabel = CreateValueLabel();
+    private readonly Label _updateErrorLabel = CreateValueLabel();
+    private readonly Label _updateVerificationLabel = CreateValueLabel();
+    private readonly Label _updateInlineResultLabel = new() { AutoSize = true, MaximumSize = new Size(850, 0), Tag = "Muted" };
+    private readonly Button _checkForUpdatesButton = CreateButton("Check now", width: 130);
+    private readonly Button _dismissUpdateButton = CreateButton("Dismiss verified update", width: 190);
+    private readonly Button _clearUpdateDismissalButton = CreateButton("Clear dismissal", width: 140);
+    private readonly IConfiguratorUpdateBridge _updateBridge = new ConfiguratorUpdateBridgeClient();
+    private readonly ConfiguratorUpdateCheckRunner _updateCheckRunner;
     private readonly CheckBox _faceTrackerAutomationEnabledCheckBox = new ThemedCheckBox { Text = "Enable Face Tracking Auto Startup", AutoSize = true };
     private readonly CheckBox _faceTrackerRestartOnReconnectCheckBox = new ThemedCheckBox { Text = "Enable automatic restart on headset reconnects", AutoSize = true };
     private readonly CheckBox _usePimaxLogCheckBox = new ThemedCheckBox { Text = "Watch Pimax PiService logs for fast reconnects", AutoSize = true };
@@ -208,13 +225,16 @@ internal sealed class ConfigEditorForm : Form
     private bool _suppressConfigSelectorChange;
     private bool _saveInProgress;
     private bool _startupIntegrationApplyInProgress;
+    private bool _updateActionInProgress;
     private bool _mouthTrackerPreferenceTouched;
     private bool _turnOffMonitorsPreferenceTouched;
     private bool _startupIntegrationPreferenceTouched;
     private string? _startupModeLoadWarning;
+    private UpdateStatusSnapshotV1? _lastUpdateStatus;
 
     public ConfigEditorForm(string? requestedConfigPath)
     {
+        _updateCheckRunner = new ConfiguratorUpdateCheckRunner(_updateBridge);
         Text = BaseWindowTitle;
         SetWindowIconFromExecutable();
         MinimumSize = new Size(1180, 860);
@@ -248,7 +268,11 @@ internal sealed class ConfigEditorForm : Form
             LoadConfig(defaultConfigPath);
         }
 
-        Shown += async (_, _) => await PromptForExistingStartupTaskMigrationAsync();
+        Shown += async (_, _) =>
+        {
+            await PromptForExistingStartupTaskMigrationAsync();
+            await RefreshUpdateStatusAsync();
+        };
     }
 
     private void SetWindowIconFromExecutable()
@@ -482,6 +506,7 @@ internal sealed class ConfigEditorForm : Form
         _tabs.AddTab("OSC Router", BuildOscRouterTab());
         _tabs.AddTab("OSCGoesBrrr", BuildLovenseTab());
         _tabs.AddTab("Timers", BuildTimingTab());
+        _tabs.AddTab("Updates", BuildUpdatesTab());
         _tabs.AddTab("Raw JSON", BuildRawJsonTab());
         _tabs.SelectTab(Math.Clamp(selectedTab, 0, _tabs.TabCount - 1));
         _tabs.SelectedIndexChanged += (_, _) =>
@@ -490,6 +515,147 @@ internal sealed class ConfigEditorForm : Form
             RefreshVisibleStatus();
         };
         return _tabs;
+    }
+
+    private Control BuildUpdatesTab()
+    {
+        _updatePolicyComboBox.Items.Add("Do not check automatically");
+        _updatePolicyComboBox.Items.Add("Notify me when a verified update is available");
+        _updatePolicyComboBox.SelectedIndex = 0;
+        _updateCurrentVersionLabel.Text = AppVersion.Current;
+        _updateChannelLabel.Text = "Stable";
+        _updateLatestVersionLabel.Text = "Not checked";
+        _updateLastSuccessLabel.Text = "Never";
+        _updateLastAttemptLabel.Text = "Never";
+        _updateDismissedLabel.Text = "None";
+        _updateErrorLabel.Text = "None";
+        _updateVerificationLabel.Text = "Loading...";
+        _dismissUpdateButton.Enabled = false;
+        _clearUpdateDismissalButton.Enabled = false;
+
+        _checkForUpdatesButton.Click += async (_, _) => await RunUpdateActionAsync(UpdateUiAction.Check);
+        _dismissUpdateButton.Click += async (_, _) => await RunUpdateActionAsync(UpdateUiAction.Dismiss);
+        _clearUpdateDismissalButton.Click += async (_, _) => await RunUpdateActionAsync(UpdateUiAction.ClearDismissal);
+
+        var layout = CreateFormLayout(3);
+        layout.Dock = DockStyle.Top;
+        layout.AutoSize = true;
+        AddSectionHeader(layout, "Policy");
+        AddLabeledRow(layout, "Automatic checks", _updatePolicyComboBox, "Disabled sends no automatic update requests. Notify checks only signed Stable-channel metadata when 24 hours have elapsed. Manual checks remain available for both policies.");
+        AddSectionHeader(layout, "Verified status");
+        AddLabeledRow(layout, "Current version", _updateCurrentVersionLabel, "The installed application version.");
+        AddLabeledRow(layout, "Channel", _updateChannelLabel, "Phase 33A supports only the Stable channel.");
+        AddLabeledRow(layout, "Latest verified", _updateLatestVersionLabel, "Only a version from a successfully signed and validated manifest is shown here.");
+        AddLabeledRow(layout, "Last successful check", _updateLastSuccessLabel, "The most recent completed verified metadata check.");
+        AddLabeledRow(layout, "Last attempt", _updateLastAttemptLabel, "The most recent network check attempt.");
+        AddLabeledRow(layout, "Dismissed version", _updateDismissedLabel, "A dismissed verified version stays quiet until a newer verified version appears.");
+        AddLabeledRow(layout, "Verification", _updateVerificationLabel, "Production checks fail closed when no embedded production trust root is configured.");
+        AddLabeledRow(layout, "Last bounded error", _updateErrorLabel, "A bounded diagnostic code and summary; no response bodies or sensitive headers are displayed.");
+
+        var actions = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Dock = DockStyle.Fill, Margin = new Padding(0, 8, 0, 0) };
+        actions.Controls.Add(_checkForUpdatesButton);
+        actions.Controls.Add(_dismissUpdateButton);
+        actions.Controls.Add(_clearUpdateDismissalButton);
+        AddFullWidth(layout, actions, "These actions retrieve metadata or update the local dismissal only. No package download or installation path exists in Phase 33A.");
+        AddFullWidth(layout, _updateInlineResultLabel, "Manual results are shown inline and automatic failures remain non-modal.");
+        return BuildTabWithDescription(
+            "Secure update discovery",
+            "Review verified Stable-channel update metadata. Saving the policy uses the existing config Apply flow and does not change startup integration by itself.",
+            layout,
+            limitWidth: true);
+    }
+
+    private async Task RunUpdateActionAsync(UpdateUiAction action)
+    {
+        if (_updateActionInProgress)
+        {
+            return;
+        }
+
+        _updateActionInProgress = true;
+        SetUpdateButtonsEnabled(false);
+        try
+        {
+            _updateInlineResultLabel.Text = action == UpdateUiAction.Check ? "Checking signed update metadata..." : "Updating dismissal...";
+            if (action == UpdateUiAction.Check)
+            {
+                var result = await _updateCheckRunner.TryRunAsync(ApplyUpdateStatus, CancellationToken.None);
+                _updateInlineResultLabel.Text = result.Summary;
+                return;
+            }
+
+            var acceptance = action == UpdateUiAction.Dismiss
+                ? await _updateBridge.DismissAsync(CancellationToken.None)
+                : await _updateBridge.ClearDismissalAsync(CancellationToken.None);
+            _updateInlineResultLabel.Text = acceptance.Message;
+            await RefreshUpdateStatusAsync();
+        }
+        catch (Exception ex) when (ex is IOException or SocketException or JsonException or InvalidOperationException or OperationCanceledException)
+        {
+            _updateInlineResultLabel.Text = "Could not contact the running Supervisor: " + BoundUpdateText(ex.Message);
+        }
+        finally
+        {
+            _updateActionInProgress = false;
+            RefreshUpdateButtonStates();
+        }
+    }
+
+    private async Task RefreshUpdateStatusAsync()
+    {
+        try
+        {
+            ApplyUpdateStatus(await _updateBridge.QueryStatusAsync(CancellationToken.None));
+        }
+        catch (Exception ex) when (ex is IOException or SocketException or JsonException or InvalidOperationException or OperationCanceledException)
+        {
+            _updateVerificationLabel.Text = "Supervisor unavailable";
+            _updateInlineResultLabel.Text = "Start the Supervisor to view its cached verified update state. " + BoundUpdateText(ex.Message);
+        }
+    }
+
+    private void ApplyUpdateStatus(UpdateStatusSnapshotV1 status)
+    {
+        _lastUpdateStatus = status;
+        _updateCurrentVersionLabel.Text = status.CurrentVersion;
+        _updateChannelLabel.Text = status.Channel;
+        _updateLatestVersionLabel.Text = status.LatestVerifiedVersion ?? "Not checked";
+        _updateLastSuccessLabel.Text = FormatUpdateTimestamp(status.LastSuccessfulCheckAt);
+        _updateLastAttemptLabel.Text = FormatUpdateTimestamp(status.LastAttemptAt);
+        _updateDismissedLabel.Text = status.DismissedVersion ?? "None";
+        _updateErrorLabel.Text = status.LastErrorCode is null ? "None" : status.LastErrorCode + " - " + status.LastErrorSummary;
+        _updateVerificationLabel.Text = status.VerificationConfigured
+            ? "Configured (offline embedded trust root)"
+            : "Unavailable - no production trust root is configured";
+        RefreshUpdateButtonStates();
+    }
+
+    private void SetUpdateButtonsEnabled(bool enabled)
+    {
+        _checkForUpdatesButton.Enabled = enabled;
+        _dismissUpdateButton.Enabled = enabled;
+        _clearUpdateDismissalButton.Enabled = enabled;
+    }
+
+    private void RefreshUpdateButtonStates()
+    {
+        _checkForUpdatesButton.Enabled = !_updateActionInProgress && _lastUpdateStatus?.CheckInProgress != true;
+        _dismissUpdateButton.Enabled = !_updateActionInProgress && _lastUpdateStatus is { UpdateAvailable: true, Dismissed: false };
+        _clearUpdateDismissalButton.Enabled = !_updateActionInProgress && _lastUpdateStatus?.DismissedVersion is not null;
+    }
+
+    private static string FormatUpdateTimestamp(DateTimeOffset? value)
+        => value is null ? "Never" : value.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture);
+
+    private static string BoundUpdateText(string value) => value.Length <= 256 ? value : value[..256];
+
+    private static Label CreateValueLabel() => new() { AutoSize = true, MaximumSize = new Size(850, 0) };
+
+    private enum UpdateUiAction
+    {
+        Check,
+        Dismiss,
+        ClearDismissal
     }
 
     private Control BuildBasicsTab()
@@ -3385,6 +3551,7 @@ internal sealed class ConfigEditorForm : Form
         _startupModeLoadWarning = null;
         _displayNameTextBox.Text = NormalizeDisplayNameForDisplay(
             GetStringOrDefault(node, "DisplayName", GetFallbackDisplayName(_configPathTextBox.Text)));
+        _updatePolicyComboBox.SelectedIndex = string.Equals(GetString(node, "UpdatePolicy"), "Notify", StringComparison.Ordinal) ? 1 : 0;
         _brokenEyePathTextBox.Text = GetString(node, "BrokenEyePath");
         _vrcFaceTrackingPathTextBox.Text = GetString(node, "VrcFaceTrackingPath");
         _intifacePathTextBox.Text = GetStringOrDefault(node, "IntifacePath", DefaultIntifacePath);
@@ -4206,6 +4373,7 @@ internal sealed class ConfigEditorForm : Form
     {
         var json = string.IsNullOrWhiteSpace(baseJson) ? "{\r\n}\r\n" : baseJson;
         json = JsonPropertyEditor.ReplaceTopLevel(json, "DisplayName", Serialize(NormalizeDisplayNameForStorage(_displayNameTextBox.Text).Value));
+        json = JsonPropertyEditor.ReplaceTopLevel(json, "UpdatePolicy", Serialize(_updatePolicyComboBox.SelectedIndex == 1 ? "Notify" : "Disabled"));
         json = JsonPropertyEditor.Replace(json, "BrokenEyePath", Serialize(_brokenEyePathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "VrcFaceTrackingPath", Serialize(_vrcFaceTrackingPathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "IntifacePath", Serialize(_intifacePathTextBox.Text.Trim()));

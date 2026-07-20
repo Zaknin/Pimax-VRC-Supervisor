@@ -18,6 +18,7 @@ using System.Drawing.Drawing2D;
 using Microsoft.Win32;
 using PimaxVrcSupervisor;
 using PimaxVrcSupervisor.BaseStations;
+using PimaxVrcSupervisor.Updates;
 using Windows.Devices.Bluetooth.Advertisement;
 
 using var shutdown = new CancellationTokenSource();
@@ -1868,6 +1869,7 @@ internal sealed class AppSupervisor
     private const string ForcedManualReloadMarkerFileName = "PimaxVrcSupervisorForcedManualReload.marker";
     private const string StartSteamVrCommandName = "start-steamvr";
     private const string RestartVrSessionCommandName = "restart-vr-session";
+    private const string CheckForUpdatesCommandName = "check-for-updates";
     private const string SteamVrSteamAppUri = "steam://rungameid/250820";
     private const string VrChatSteamAppUri = "steam://rungameid/438100";
     private static readonly JsonSerializerOptions CommandBridgeJsonOptions = new()
@@ -1903,6 +1905,7 @@ internal sealed class AppSupervisor
     private readonly TimeSpan _pollInterval;
     private readonly SupervisorDiagnosticsSession _diagnostics;
     private readonly CancellationTokenSource _shutdown;
+    private readonly SupervisorUpdateCoordinator _updateCoordinator;
     private readonly SteamVrLifecycleCoordinator _steamVrLifecycle;
     private readonly SteamVrRecoveryCoordinator _steamVrRecovery;
     private readonly SteamVrLifecycleEvidenceReader _steamVrLifecycleEvidence;
@@ -2003,6 +2006,10 @@ internal sealed class AppSupervisor
         _autoLaunchTaskBindingDeferredByUser = autoLaunchTaskBindingDeferredByUser;
         _diagnostics = diagnostics;
         _shutdown = shutdown;
+        _updateCoordinator = SupervisorUpdateCoordinator.CreateProduction(
+            config.EffectiveUpdatePolicy,
+            diagnostic => WriteDiagnosticEvent(
+                $"updateDiscovery; kind={diagnostic.Kind}; event={diagnostic.Event}; status={diagnostic.Status?.ToString() ?? "none"}; errorCode={diagnostic.ErrorCode ?? "none"}"));
         _steamVrLifecycle = new SteamVrLifecycleCoordinator(managedSteamVrSession, Environment.ProcessId);
         _steamVrRecovery = new SteamVrRecoveryCoordinator(managedSteamVrSession);
         _steamVrLifecycleEvidence = new SteamVrLifecycleEvidenceReader();
@@ -2086,6 +2093,7 @@ internal sealed class AppSupervisor
             _config.SaveInitialSetupQuestionsComplete();
         }
         _commandServer = SupervisorCommandServer.Start(this, cancellationToken);
+        _updateCoordinator.StartAutomaticSession(_shutdown.Token);
         if (_launchDesktopTuiAfterReady)
         {
             Console.WriteLine("Supervisor received startup interface: Terminal UI.");
@@ -2409,6 +2417,7 @@ internal sealed class AppSupervisor
         {
             _commandServer?.Dispose();
             _commandServer = null;
+            _updateCoordinator.Dispose();
             StopOscRouter();
             ClearWatchedProcessHandles();
         }
@@ -4424,6 +4433,18 @@ internal sealed class AppSupervisor
                     tuiExecutable: true,
                     blockedReason: null),
                 CommandDefinition(
+                    CheckForUpdatesCommandName,
+                    "Check for Updates",
+                    "Starts one asynchronous signed Stable-channel metadata check.",
+                    "Updates",
+                    "ActionResult",
+                    "Low risk: retrieves release metadata, manifest, and detached signature only. No package download or installation.",
+                    requiresConfirmation: false,
+                    actionSupported: true,
+                    actionSafetyCategory: "LowRisk",
+                    tuiExecutable: false,
+                    blockedReason: "Exposed only to the Configurator/desktop management context in this Phase 33A slice."),
+                CommandDefinition(
                     "force-stop-supervisor",
                     "Force Stop Supervisor",
                     "Hard-stops the supervisor without cleanup routines.",
@@ -4519,7 +4540,7 @@ internal sealed class AppSupervisor
                 message: "query-json request requires a resource.",
                 resultType: "error",
                 data: null,
-                error: "Missing resource. Supported resources: status, commands, log, pimax-connectivity.");
+                error: "Missing resource. Supported resources: status, commands, log, pimax-connectivity, update-status.");
         }
 
         return resource.ToLowerInvariant() switch
@@ -4552,13 +4573,20 @@ internal sealed class AppSupervisor
                 resultType: "pimaxConnectivity",
                 data: await BuildPimaxConnectivitySnapshotAsync(cancellationToken),
                 error: null),
+            "update-status" => ReadOnlyJsonQueryResult(
+                requestId,
+                success: true,
+                message: "Cached verified update status returned.",
+                resultType: "updateStatus",
+                data: _updateCoordinator.GetStatus(),
+                error: null),
             _ => ReadOnlyJsonQueryResult(
                 requestId,
                 success: false,
                 message: $"Unsupported query-json resource: {resource}.",
                 resultType: "error",
                 data: null,
-                error: "Supported resources: status, commands, log, pimax-connectivity.")
+                error: "Supported resources: status, commands, log, pimax-connectivity, update-status.")
         };
     }
 
@@ -4639,7 +4667,7 @@ internal sealed class AppSupervisor
                 success: false,
                 message: "action-json request requires a command.",
                 data: null,
-                error: "Missing command. Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps, start-steamvr, restart-vr-session.");
+                error: "Missing command. Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps, start-steamvr, restart-vr-session, check-for-updates, dismiss-update, clear-update-dismissal.");
         }
 
         if (string.Equals(canonicalCommand, "force-stop-supervisor", StringComparison.Ordinal))
@@ -4674,6 +4702,9 @@ internal sealed class AppSupervisor
             "reload-autostart-apps" => await ExecuteConfirmedActionAsync(request.RequestId, canonicalCommand, request.Confirmed, ReloadAutostartAppsCommandAsync, cancellationToken),
             StartSteamVrCommandName => ExecuteConfirmedSteamVrStartAction(request.RequestId, canonicalCommand, request.Confirmed, request.Source),
             RestartVrSessionCommandName => ExecuteConfirmedVrSessionRestartAction(request, canonicalCommand),
+            CheckForUpdatesCommandName => ExecuteUpdateCheckAction(request.RequestId, canonicalCommand),
+            "dismiss-update" => await ExecuteUpdateStateActionAsync(request.RequestId, canonicalCommand, dismiss: true, cancellationToken),
+            "clear-update-dismissal" => await ExecuteUpdateStateActionAsync(request.RequestId, canonicalCommand, dismiss: false, cancellationToken),
             "status" or "status-json" or "commands-json" or "log" or "log-json" or "query-json" or "pimax-connectivity-json" => ActionJsonResult(
                 request.RequestId,
                 canonicalCommand,
@@ -4687,8 +4718,52 @@ internal sealed class AppSupervisor
                 success: false,
                 message: $"Unsupported action-json command: {canonicalCommand}.",
                 data: null,
-                error: "Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps, start-steamvr, restart-vr-session.")
+                error: "Supported commands: restart-core-apps, start-osc-goes-brrr, base-stations-on, base-stations-off, restart-osc-router, reload-autostart-apps, start-steamvr, restart-vr-session, check-for-updates, dismiss-update, clear-update-dismissal.")
         };
+    }
+
+    private SupervisorCommandResult ExecuteUpdateCheckAction(string? requestId, string canonicalCommand)
+    {
+        var acceptance = _updateCoordinator.TryStartManualCheck(_shutdown.Token);
+        return ActionJsonResult(
+            requestId,
+            canonicalCommand,
+            acceptance.Accepted,
+            acceptance.Message,
+            new
+            {
+                operationId = acceptance.OperationId,
+                accepted = acceptance.Accepted,
+                alreadyInProgress = acceptance.AlreadyInProgress,
+                status = acceptance.Accepted ? "accepted" : "rejected"
+            },
+            acceptance.Accepted ? null : acceptance.Message,
+            acceptance.Accepted ? "accepted" : "action");
+    }
+
+    private async Task<SupervisorCommandResult> ExecuteUpdateStateActionAsync(
+        string? requestId,
+        string canonicalCommand,
+        bool dismiss,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = dismiss
+                ? await _updateCoordinator.DismissAsync(cancellationToken)
+                : await _updateCoordinator.ClearDismissalAsync(cancellationToken);
+            return ActionJsonResult(
+                requestId,
+                canonicalCommand,
+                result.Accepted,
+                result.Message,
+                new { accepted = result.Accepted, alreadyInProgress = false, operationId = (string?)null },
+                result.Accepted ? null : result.Message);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or UpdateContractException)
+        {
+            return ActionJsonResult(requestId, canonicalCommand, false, "Could not update the saved dismissal.", null, "update_state_write");
+        }
     }
 
     private async Task<SupervisorCommandResult> ExecuteLifecycleJsonAsync(string payload)
@@ -12940,6 +13015,10 @@ internal sealed class SupervisorConfig
     private const string ActiveConfigSelectionFileName = "supervisor.active-config.txt";
 
     public string DisplayName { get; init; } = "";
+    public string UpdatePolicy { get; init; } = nameof(SupervisorUpdatePolicy.Disabled);
+
+    [JsonIgnore]
+    public SupervisorUpdatePolicy EffectiveUpdatePolicy => SupervisorUpdatePolicyContract.ParseConfigValue(UpdatePolicy);
     public string BrokenEyePath { get; set; } = "";
     public string VrcFaceTrackingPath { get; set; } = "";
     public string IntifacePath { get; set; } = "";

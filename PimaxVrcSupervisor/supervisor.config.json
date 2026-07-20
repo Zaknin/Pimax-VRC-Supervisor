@@ -2,6 +2,9 @@
   // Friendly name shown in the config editor and supervisor startup banner.
   "DisplayName": "Default",
 
+  // Update checks are opt-in. Allowed values: Disabled, Notify. Checks retrieve signed metadata only.
+  "UpdatePolicy": "Disabled",
+
   // Full path to Broken Eye. This app is started first when UseBrokenEye is true.
   // If UseBrokenEye is true and this path is missing or invalid, the supervisor opens a browse dialog and saves your selection here.
   "BrokenEyePath": "",
