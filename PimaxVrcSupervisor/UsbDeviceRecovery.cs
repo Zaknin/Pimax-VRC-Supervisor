@@ -232,17 +232,25 @@ internal sealed class UsbPhysicalDeviceInventory
 
 internal sealed class UsbDeviceRecoveryCoordinator
 {
+    private const string PimaxServicePendingKey = "piservice:pimax-crystal";
     private readonly UsbDeviceAttributionRules _rules;
     private readonly TimeSpan _pendingReconnectLifetime;
+    private readonly TimeSpan _readinessStabilityDelay;
     private readonly Dictionary<string, PendingReconnect> _pending = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _seenPimaxServiceEvents = new(StringComparer.Ordinal);
+    private readonly Queue<string> _seenPimaxServiceEventOrder = new();
     private UsbPhysicalDeviceInventory? _previous;
+    private PimaxHeadsetIdentity? _lastPimaxServiceHeadsetIdentity;
+    private PimaxServiceReadinessProgress? _pimaxServiceReadiness;
 
     public UsbDeviceRecoveryCoordinator(
         UsbDeviceAttributionRules rules,
-        TimeSpan pendingReconnectLifetime)
+        TimeSpan pendingReconnectLifetime,
+        TimeSpan? readinessStabilityDelay = null)
     {
         _rules = rules;
         _pendingReconnectLifetime = pendingReconnectLifetime;
+        _readinessStabilityDelay = readinessStabilityDelay ?? TimeSpan.Zero;
     }
 
     public bool HasPimaxRecoveryAwaitingReadiness
@@ -253,12 +261,65 @@ internal sealed class UsbDeviceRecoveryCoordinator
         => _pending.Values.Any(pending => pending.Stage == PendingReconnectStage.AwaitingReadiness
             && RecoveryReason(pending.Classification) == DeviceRecoveryReason.ViveFaceTrackerRecovered);
 
+    public void SeedPimaxServiceHeadsetIdentity(PimaxHeadsetIdentity identity)
+    {
+        if (identity.IsPositivePimaxCrystalP3b)
+        {
+            _lastPimaxServiceHeadsetIdentity = identity;
+        }
+    }
+
+    public PimaxServiceReconnectObservation ObservePimaxServiceLog(
+        IEnumerable<PimaxServiceLogEvent> events,
+        DateTimeOffset now,
+        bool suppressRecovery)
+    {
+        var diagnostics = new List<PimaxServiceReconnectDiagnostic>();
+        if (suppressRecovery)
+        {
+            _pending.Clear();
+            _pimaxServiceReadiness = null;
+            return new PimaxServiceReconnectObservation(diagnostics.ToArray());
+        }
+
+        foreach (var entry in events.OrderBy(entry => entry.Timestamp))
+        {
+            RecordPimaxServiceExpiry(ExpirePendingKeys(entry.Timestamp), diagnostics);
+            if (!RememberPimaxServiceEvent(entry.EventKey))
+            {
+                diagnostics.Add(Diagnostic(
+                    PimaxServiceReconnectDiagnosticCode.DuplicateSuppressed,
+                    $"Repeated PiService {entry.Kind} marker was suppressed as a duplicate."));
+                continue;
+            }
+
+            switch (entry.Kind)
+            {
+                case PimaxServiceLogEventKind.HmdDisconnected:
+                    ObservePimaxDisconnect(entry, diagnostics);
+                    break;
+                case PimaxServiceLogEventKind.HmdConnected:
+                    ObservePimaxReturn(entry, diagnostics);
+                    break;
+                case PimaxServiceLogEventKind.HidReady:
+                case PimaxServiceLogEventKind.DisplayRestore:
+                case PimaxServiceLogEventKind.RegistrationSucceeded:
+                    ObservePimaxReadiness(entry, diagnostics);
+                    break;
+            }
+        }
+
+        RecordPimaxServiceExpiry(ExpirePendingKeys(now), diagnostics);
+
+        return new PimaxServiceReconnectObservation(diagnostics.ToArray());
+    }
+
     public UsbDeviceInventoryObservation Observe(
         PimaxUsbEnumerationSnapshot snapshot,
         DateTimeOffset now,
         bool suppressRecovery)
     {
-        var expired = ExpirePending(now);
+        var expired = ExpirePendingKeys(now).Length;
         if (snapshot.Errors.Length > 0)
         {
             return new UsbDeviceInventoryObservation(
@@ -300,7 +361,10 @@ internal sealed class UsbDeviceRecoveryCoordinator
                 _pending[removed.PhysicalKey] = new PendingReconnect(
                     removed.Classification,
                     PendingReconnectStage.AwaitingReturn,
-                    now.Add(_pendingReconnectLifetime));
+                    now.Add(_pendingReconnectLifetime),
+                    now,
+                    PendingReconnectSource.UsbInventory,
+                    ServiceReadinessConfirmed: false);
             }
         }
 
@@ -322,7 +386,8 @@ internal sealed class UsbDeviceRecoveryCoordinator
                 _pending[added.PhysicalKey] = matchedPending with
                 {
                     Stage = PendingReconnectStage.AwaitingReadiness,
-                    ExpiresAt = now.Add(_pendingReconnectLifetime)
+                    ExpiresAt = now.Add(_pendingReconnectLifetime),
+                    RecoveryNotBefore = now.Add(_readinessStabilityDelay)
                 };
             }
 
@@ -352,7 +417,7 @@ internal sealed class UsbDeviceRecoveryCoordinator
         DateTimeOffset now,
         bool suppressRecovery)
     {
-        ExpirePending(now);
+        ExpirePendingKeys(now);
         if (suppressRecovery)
         {
             _pending.Clear();
@@ -367,23 +432,31 @@ internal sealed class UsbDeviceRecoveryCoordinator
                     && RecoveryReason(pair.Value.Classification) == reason)
                 .Select(pair => pair.Key)
                 .ToArray();
-            if (matchingKeys.Length == 0 || !IsReady(reason, readiness))
+            var serviceReady = matchingKeys.Any(key => _pending[key].ServiceReadinessConfirmed);
+            var stabilityDelayComplete = matchingKeys.All(key => _pending[key].RecoveryNotBefore <= now);
+            if (matchingKeys.Length == 0 || (!IsReady(reason, readiness) && !serviceReady) || !stabilityDelayComplete)
             {
                 continue;
             }
 
             var targets = Targets(reason, dependencies);
-            plans.Add(new DeviceRecoveryPlan(reason, targets, matchingKeys.Length));
+            var physicalDeviceCount = matchingKeys.Count(key => _pending[key].Source == PendingReconnectSource.UsbInventory);
+            plans.Add(new DeviceRecoveryPlan(reason, targets, Math.Max(1, physicalDeviceCount)));
             foreach (var key in matchingKeys)
             {
                 _pending.Remove(key);
+            }
+
+            if (reason == DeviceRecoveryReason.PimaxEyeRuntimeRecovered)
+            {
+                _pimaxServiceReadiness = null;
             }
         }
 
         return plans.ToArray();
     }
 
-    private int ExpirePending(DateTimeOffset now)
+    private string[] ExpirePendingKeys(DateTimeOffset now)
     {
         var expired = _pending
             .Where(pair => pair.Value.ExpiresAt <= now)
@@ -394,8 +467,204 @@ internal sealed class UsbDeviceRecoveryCoordinator
             _pending.Remove(key);
         }
 
-        return expired.Length;
+        return expired;
     }
+
+    private void ObservePimaxDisconnect(
+        PimaxServiceLogEvent entry,
+        List<PimaxServiceReconnectDiagnostic> diagnostics)
+    {
+        diagnostics.Add(Diagnostic(
+            PimaxServiceReconnectDiagnosticCode.DisconnectObserved,
+            "Pimax disconnect observed in PiService for the P3B headset."));
+        if (entry.Identity?.IsPositivePimaxCrystalP3b != true || !HasPresentPimaxRecoveryIdentity())
+        {
+            diagnostics.Add(Diagnostic(
+                PimaxServiceReconnectDiagnosticCode.PhysicalIdentityUnavailable,
+                "Pimax log disconnect was not armed because no positively attributed Pimax runtime/eye physical device was present."));
+            return;
+        }
+
+        if (_pending.ContainsKey(PimaxServicePendingKey))
+        {
+            diagnostics.Add(Diagnostic(
+                PimaxServiceReconnectDiagnosticCode.DuplicateSuppressed,
+                "Overlapping Pimax disconnect marker was suppressed; the existing reconnect operation remains authoritative."));
+            return;
+        }
+
+        var expectedIdentity = _lastPimaxServiceHeadsetIdentity ?? entry.Identity;
+        _pending[PimaxServicePendingKey] = new PendingReconnect(
+            UsbPhysicalDeviceClassification.PimaxRuntime,
+            PendingReconnectStage.AwaitingReturn,
+            entry.Timestamp.Add(_pendingReconnectLifetime),
+            entry.Timestamp,
+            PendingReconnectSource.PimaxService,
+            ServiceReadinessConfirmed: false);
+        _pimaxServiceReadiness = new PimaxServiceReadinessProgress(expectedIdentity, null, false, false, false);
+        diagnostics.Add(Diagnostic(
+            PimaxServiceReconnectDiagnosticCode.PendingArmed,
+            "Pending Pimax reconnect armed from a positive P3B disconnect and structured physical-device attribution."));
+    }
+
+    private void ObservePimaxReturn(
+        PimaxServiceLogEvent entry,
+        List<PimaxServiceReconnectDiagnostic> diagnostics)
+    {
+        diagnostics.Add(Diagnostic(
+            PimaxServiceReconnectDiagnosticCode.CandidateReturnObserved,
+            "Candidate Pimax P3B return observed in PiService."));
+        if (_pending.TryGetValue(PimaxServicePendingKey, out var pending)
+            && pending.Stage == PendingReconnectStage.AwaitingReadiness
+            && _pimaxServiceReadiness?.CandidateIdentity is { } acceptedIdentity)
+        {
+            diagnostics.Add(Diagnostic(
+                acceptedIdentity.Matches(entry.Identity ?? new PimaxHeadsetIdentity(null, null, null))
+                    ? PimaxServiceReconnectDiagnosticCode.DuplicateSuppressed
+                    : PimaxServiceReconnectDiagnosticCode.IdentityMismatch,
+                acceptedIdentity.Matches(entry.Identity ?? new PimaxHeadsetIdentity(null, null, null))
+                    ? "Repeated Pimax return was suppressed; the existing reconnect operation remains authoritative."
+                    : "Overlapping Pimax return was rejected because its available headset identity did not match the accepted return."));
+            return;
+        }
+
+        if (pending is null
+            || pending.Stage != PendingReconnectStage.AwaitingReturn
+            || _pimaxServiceReadiness is null)
+        {
+            if (entry.Identity?.IsPositivePimaxCrystalP3b == true)
+            {
+                _lastPimaxServiceHeadsetIdentity = entry.Identity;
+            }
+
+            diagnostics.Add(Diagnostic(
+                PimaxServiceReconnectDiagnosticCode.StandaloneReturnIgnored,
+                "Pimax return appeared without a qualifying disconnect; no recovery scheduled."));
+            return;
+        }
+
+        if (entry.Identity is null || !_pimaxServiceReadiness.ExpectedIdentity.Matches(entry.Identity))
+        {
+            diagnostics.Add(Diagnostic(
+                PimaxServiceReconnectDiagnosticCode.IdentityMismatch,
+                "Candidate Pimax return was rejected because its available physical headset identity did not match the disconnected headset."));
+            return;
+        }
+
+        _lastPimaxServiceHeadsetIdentity = entry.Identity;
+        _pimaxServiceReadiness = _pimaxServiceReadiness with { CandidateIdentity = entry.Identity };
+        _pending[PimaxServicePendingKey] = pending with
+        {
+            Stage = PendingReconnectStage.AwaitingReadiness,
+            ExpiresAt = entry.Timestamp.Add(_pendingReconnectLifetime),
+            RecoveryNotBefore = entry.Timestamp.Add(_readinessStabilityDelay)
+        };
+    }
+
+    private void ObservePimaxReadiness(
+        PimaxServiceLogEvent entry,
+        List<PimaxServiceReconnectDiagnostic> diagnostics)
+    {
+        diagnostics.Add(Diagnostic(
+            PimaxServiceReconnectDiagnosticCode.ReadinessMarkerObserved,
+            $"Pimax reconnect readiness marker observed: {ReadinessLabel(entry.Kind)}."));
+        if (!_pending.TryGetValue(PimaxServicePendingKey, out var pending)
+            || pending.Stage != PendingReconnectStage.AwaitingReadiness
+            || _pimaxServiceReadiness is null)
+        {
+            diagnostics.Add(Diagnostic(
+                PimaxServiceReconnectDiagnosticCode.DuplicateSuppressed,
+                "Pimax readiness marker had no pending correlated reconnect and was ignored."));
+            return;
+        }
+
+        var markerAlreadyObserved = entry.Kind switch
+        {
+            PimaxServiceLogEventKind.HidReady => _pimaxServiceReadiness.HidReady,
+            PimaxServiceLogEventKind.DisplayRestore => _pimaxServiceReadiness.DisplayRestored,
+            PimaxServiceLogEventKind.RegistrationSucceeded => _pimaxServiceReadiness.RegistrationSucceeded,
+            _ => false
+        };
+        if (markerAlreadyObserved)
+        {
+            diagnostics.Add(Diagnostic(
+                PimaxServiceReconnectDiagnosticCode.DuplicateSuppressed,
+                $"Repeated Pimax {ReadinessLabel(entry.Kind)} marker was suppressed."));
+            return;
+        }
+
+        _pimaxServiceReadiness = entry.Kind switch
+        {
+            PimaxServiceLogEventKind.HidReady => _pimaxServiceReadiness with { HidReady = true },
+            PimaxServiceLogEventKind.DisplayRestore => _pimaxServiceReadiness with { DisplayRestored = true },
+            PimaxServiceLogEventKind.RegistrationSucceeded => _pimaxServiceReadiness with { RegistrationSucceeded = true },
+            _ => _pimaxServiceReadiness
+        };
+        _pending[PimaxServicePendingKey] = pending with { ExpiresAt = entry.Timestamp.Add(_pendingReconnectLifetime) };
+
+        if (_pimaxServiceReadiness.RegistrationSucceeded)
+        {
+            _pending[PimaxServicePendingKey] = _pending[PimaxServicePendingKey] with { ServiceReadinessConfirmed = true };
+            diagnostics.Add(Diagnostic(
+                PimaxServiceReconnectDiagnosticCode.Ready,
+                "Pimax P3B registration succeeded; correlated reconnect readiness is complete."));
+        }
+        else
+        {
+            diagnostics.Add(Diagnostic(
+                PimaxServiceReconnectDiagnosticCode.ReadinessIncomplete,
+                "Pimax reconnect readiness is still incomplete; waiting for P3B registration success."));
+        }
+    }
+
+    private bool HasPresentPimaxRecoveryIdentity()
+        => _previous?.Devices.Values.Any(device => device.Classification is
+            UsbPhysicalDeviceClassification.PimaxRuntime or UsbPhysicalDeviceClassification.PimaxEyeTracking) == true;
+
+    private void RecordPimaxServiceExpiry(
+        IEnumerable<string> expiredKeys,
+        List<PimaxServiceReconnectDiagnostic> diagnostics)
+    {
+        if (!expiredKeys.Contains(PimaxServicePendingKey, StringComparer.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _pimaxServiceReadiness = null;
+        diagnostics.Add(Diagnostic(
+            PimaxServiceReconnectDiagnosticCode.Expired,
+            "Pimax reconnect expired before readiness completed; no recovery scheduled."));
+    }
+
+    private bool RememberPimaxServiceEvent(string eventKey)
+    {
+        if (!_seenPimaxServiceEvents.Add(eventKey))
+        {
+            return false;
+        }
+
+        _seenPimaxServiceEventOrder.Enqueue(eventKey);
+        while (_seenPimaxServiceEventOrder.Count > 2048)
+        {
+            _seenPimaxServiceEvents.Remove(_seenPimaxServiceEventOrder.Dequeue());
+        }
+
+        return true;
+    }
+
+    private static PimaxServiceReconnectDiagnostic Diagnostic(
+        PimaxServiceReconnectDiagnosticCode code,
+        string message)
+        => new(code, message);
+
+    private static string ReadinessLabel(PimaxServiceLogEventKind kind)
+        => kind switch
+        {
+            PimaxServiceLogEventKind.HidReady => "HID ready",
+            PimaxServiceLogEventKind.DisplayRestore => "display restore",
+            PimaxServiceLogEventKind.RegistrationSucceeded => "registration success",
+            _ => kind.ToString()
+        };
 
     private static bool IsReady(DeviceRecoveryReason reason, DeviceRecoveryReadiness readiness)
         => reason switch
@@ -453,10 +722,26 @@ internal sealed class UsbDeviceRecoveryCoordinator
         AwaitingReadiness
     }
 
+    private enum PendingReconnectSource
+    {
+        UsbInventory,
+        PimaxService
+    }
+
     private sealed record PendingReconnect(
         UsbPhysicalDeviceClassification Classification,
         PendingReconnectStage Stage,
-        DateTimeOffset ExpiresAt);
+        DateTimeOffset ExpiresAt,
+        DateTimeOffset RecoveryNotBefore,
+        PendingReconnectSource Source,
+        bool ServiceReadinessConfirmed);
+
+    private sealed record PimaxServiceReadinessProgress(
+        PimaxHeadsetIdentity ExpectedIdentity,
+        PimaxHeadsetIdentity? CandidateIdentity,
+        bool HidReady,
+        bool DisplayRestored,
+        bool RegistrationSucceeded);
 }
 
 internal static class UsbDeviceRecoveryLog

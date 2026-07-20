@@ -1593,7 +1593,10 @@ internal sealed record ResolvedExecutablePath(string Path, bool WasSelected);
 internal sealed record ManagedAutoLaunchApp(string DisplayName, string Path, string[] ProcessNames, bool RestartOnPimaxReconnect, bool RunAsAdmin, bool StartMinimized);
 internal sealed record AutoLaunchExecutableIdentity(string Label, string Original, string? FullPath, string FileName);
 
-internal sealed record PimaxServiceReconnect(DateTimeOffset RemoveAt, DateTimeOffset AddAt);
+internal sealed record PimaxServiceReconnect(
+    DateTimeOffset? RemoveAt,
+    DateTimeOffset? AddAt,
+    PimaxServiceLogEvent[] Events);
 
 internal enum ManagedAppStopReason
 {
@@ -1948,9 +1951,11 @@ internal sealed class AppSupervisor
     private SupervisorCommandServer? _commandServer;
     private bool _oscGoesBrrrBleScannerWarningShown;
     private DateTimeOffset? _watchedProcessMissingSince;
-    private DateTimeOffset? _lastPimaxServiceLogEventSeenAt;
     private DateTimeOffset? _pendingPimaxServiceHidRemoveAt;
     private DateTimeOffset? _lastPimaxServiceReconnectAt;
+    private readonly HashSet<string> _pimaxServiceLogEventsSeen = new(StringComparer.Ordinal);
+    private readonly Queue<string> _pimaxServiceLogEventOrder = new();
+    private bool _pimaxServiceLogWatcherInitialized;
     private DateTimeOffset? _lastMouthTrackerPnPEventSeenAt;
     private bool _mouthTrackerPnPEventWarningShown;
     private bool _usbInventoryUnavailableWarningShown;
@@ -1988,7 +1993,8 @@ internal sealed class AppSupervisor
         _steamVrLifecycleEvidence = new SteamVrLifecycleEvidenceReader();
         _usbDeviceRecovery = new UsbDeviceRecoveryCoordinator(
             UsbDeviceAttributionRules.FromConfig(config),
-            TimeSpan.FromMinutes(5));
+            TimeSpan.FromMinutes(5),
+            TimeSpan.FromSeconds(Math.Max(0, config.RestartDelayAfterReconnectSeconds)));
         _baseStationDiagnostics = BaseStationDiagnosticSink.ForProcess("Supervisor", AppVersion.Current);
         _xsOverlayDiagnostics = XsOverlayDiagnosticSink.ForProcess("Supervisor", AppVersion.Current);
         _xsOverlayMonitorTransition = new XsOverlaySafeMonitorTransitionCoordinator(
@@ -2044,6 +2050,8 @@ internal sealed class AppSupervisor
         {
             Console.WriteLine("Warning: this process is not elevated. Build/run the exe directly so the manifest can request administrator permission.");
         }
+
+        InitializePimaxServiceLogWatcher();
 
         if (_config.FaceTrackerAutomationEnabled && !await EnsureExecutablePathsAsync(cancellationToken))
         {
@@ -2154,6 +2162,8 @@ internal sealed class AppSupervisor
                 {
                     RefreshOscGoesBrrrWorkflowState();
                     await HandleConsoleHotkeysAsync(cancellationToken);
+                    var suppressDeviceRecovery = ShouldSuppressDeviceRecovery()
+                        || Interlocked.Exchange(ref _discardNextDeviceInventoryChanges, 0) == 1;
                     var pimaxServiceTopologySignal = _config.UsePimaxServiceLogReconnectDetector
                         ? DetectPimaxServiceLogReconnect()
                         : null;
@@ -2168,9 +2178,18 @@ internal sealed class AppSupervisor
                             + $"; kernelPnp={mouthTrackerPnpTopologySignal}");
                     }
 
-                    var suppressDeviceRecovery = ShouldSuppressDeviceRecovery()
-                        || Interlocked.Exchange(ref _discardNextDeviceInventoryChanges, 0) == 1;
-                    ObserveUsbDeviceInventory(suppressDeviceRecovery);
+                    var deviceRecoveryObservedAt = DateTimeOffset.UtcNow;
+                    var pimaxServiceObservation = _usbDeviceRecovery.ObservePimaxServiceLog(
+                        pimaxServiceTopologySignal?.Events ?? [],
+                        deviceRecoveryObservedAt,
+                        suppressDeviceRecovery);
+                    foreach (var diagnostic in pimaxServiceObservation.Diagnostics)
+                    {
+                        Console.WriteLine(diagnostic.Message);
+                        WriteDebug($"Pimax service reconnect; stage={diagnostic.Code}; {diagnostic.Message}");
+                    }
+
+                    ObserveUsbDeviceInventory(suppressDeviceRecovery, deviceRecoveryObservedAt);
                     if (IsVrSessionRestartActive())
                     {
                         continue;
@@ -3188,7 +3207,9 @@ internal sealed class AppSupervisor
             || !_managedAppsStarted
             || _coreAppRestartLock.CurrentCount == 0;
 
-    private void ObserveUsbDeviceInventory(bool suppressRecovery)
+    private void ObserveUsbDeviceInventory(
+        bool suppressRecovery,
+        DateTimeOffset? observedAt = null)
     {
         PimaxUsbEnumerationSnapshot snapshot;
         try
@@ -3206,7 +3227,10 @@ internal sealed class AppSupervisor
             return;
         }
 
-        var observation = _usbDeviceRecovery.Observe(snapshot, DateTimeOffset.UtcNow, suppressRecovery);
+        var observation = _usbDeviceRecovery.Observe(
+            snapshot,
+            observedAt ?? DateTimeOffset.UtcNow,
+            suppressRecovery);
         if (observation.InventoryUnavailable)
         {
             if (!_usbInventoryUnavailableWarningShown)
@@ -3328,11 +3352,15 @@ internal sealed class AppSupervisor
                 return;
             }
 
-            var restartVrcFaceTracking = plan.Targets.Contains(DeviceRecoveryTarget.VrcFaceTracking);
-            var restartBrokenEye = plan.Targets.Contains(DeviceRecoveryTarget.BrokenEye);
-            var autoLaunchApps = plan.Targets.Contains(DeviceRecoveryTarget.PimaxDependentAutoLaunchApps)
-                ? GetPimaxDependentAutoLaunchApps()
-                : [];
+            var selection = ScopedDeviceRecoverySelection.Create(plan, GetPimaxDependentAutoLaunchApps());
+            var restartVrcFaceTracking = selection.RestartVrcFaceTracking;
+            var restartBrokenEye = selection.RestartBrokenEye;
+            var autoLaunchApps = selection.AutoLaunchApps;
+            var selectedApplications = selection.ApplicationNames;
+            Console.WriteLine("Scoped device recovery selected applications: " + string.Join(", ", selectedApplications));
+            WriteDiagnosticEvent(
+                "scoped device recovery dispatched"
+                + $"; applications={string.Join(",", selectedApplications)}");
 
             foreach (var app in autoLaunchApps.Reverse())
             {
@@ -3369,6 +3397,13 @@ internal sealed class AppSupervisor
             }
 
             Console.WriteLine("Scoped device recovery complete.");
+            WriteDiagnosticEvent("scoped device recovery completed; applications=" + string.Join(",", selectedApplications));
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            Console.WriteLine($"Scoped device recovery failed: {ex.Message}");
+            WriteDiagnosticEvent($"scoped device recovery failed; error={ex.GetType().Name}: {ex.Message}");
+            throw;
         }
         finally
         {
@@ -3395,21 +3430,26 @@ internal sealed class AppSupervisor
                     return null;
                 }
 
+                var events = new List<PimaxServiceLogEvent>();
+                DateTimeOffset? removeAt = null;
+                DateTimeOffset? addAt = null;
                 foreach (var entry in ReadRecentPimaxServiceLogEvents(logFile))
                 {
-                    if (entry.Timestamp <= _startedAt || entry.Timestamp <= (_lastPimaxServiceLogEventSeenAt ?? DateTimeOffset.MinValue))
+                    if (entry.Timestamp <= _startedAt || !RememberPimaxServiceLogEvent(entry.EventKey))
                     {
                         continue;
                     }
 
-                    _lastPimaxServiceLogEventSeenAt = entry.Timestamp;
-                    if (entry.IsRemove)
+                    events.Add(entry);
+                    if (entry.Kind == PimaxServiceLogEventKind.LegacyHidRemoved)
                     {
                         _pendingPimaxServiceHidRemoveAt = entry.Timestamp;
                         continue;
                     }
 
-                    if (entry.IsAdd && _pendingPimaxServiceHidRemoveAt is { } removeAt && entry.Timestamp >= removeAt)
+                    if (entry.Kind == PimaxServiceLogEventKind.LegacyHidAdded
+                        && _pendingPimaxServiceHidRemoveAt is { } pendingRemoveAt
+                        && entry.Timestamp >= pendingRemoveAt)
                     {
                         _pendingPimaxServiceHidRemoveAt = null;
                         if (_lastPimaxServiceReconnectAt == entry.Timestamp)
@@ -3418,9 +3458,16 @@ internal sealed class AppSupervisor
                         }
 
                         _lastPimaxServiceReconnectAt = entry.Timestamp;
+                        removeAt = pendingRemoveAt;
+                        addAt = entry.Timestamp;
                         foundReconnect = true;
-                        return new PimaxServiceReconnect(removeAt, entry.Timestamp);
                     }
+                }
+
+                if (events.Count > 0)
+                {
+                    foundReconnect = true;
+                    return new PimaxServiceReconnect(removeAt, addAt, events.ToArray());
                 }
             }
             catch (Exception ex)
@@ -3514,6 +3561,63 @@ internal sealed class AppSupervisor
             .FirstOrDefault();
     }
 
+    private void InitializePimaxServiceLogWatcher()
+    {
+        if (_pimaxServiceLogWatcherInitialized || !_config.UsePimaxServiceLogReconnectDetector)
+        {
+            return;
+        }
+
+        _pimaxServiceLogWatcherInitialized = true;
+        try
+        {
+            var logFile = GetNewestPimaxServiceLogFile();
+            if (logFile is null)
+            {
+                WriteDebug($"Pimax service log watcher initialized; cutoff={_startedAt:O}; file=none; seededIdentity=false");
+                return;
+            }
+
+            var seedIdentity = ReadRecentPimaxServiceLogEvents(logFile)
+                .Where(entry => entry.Timestamp <= _startedAt
+                    && entry.Kind == PimaxServiceLogEventKind.HmdConnected
+                    && entry.Identity?.IsPositivePimaxCrystalP3b == true)
+                .OrderBy(entry => entry.Timestamp)
+                .LastOrDefault()?.Identity;
+            if (seedIdentity is not null)
+            {
+                _usbDeviceRecovery.SeedPimaxServiceHeadsetIdentity(seedIdentity);
+            }
+
+            WriteDebug(
+                "Pimax service log watcher initialized"
+                + $"; cutoff={_startedAt:O}"
+                + $"; file={Path.GetFileName(logFile)}"
+                + $"; seededIdentity={seedIdentity is not null}"
+                + "; position=events-after-supervisor-start");
+        }
+        catch (Exception ex)
+        {
+            WriteDebug($"Pimax service log watcher initialization failed; cutoff={_startedAt:O}; error={ex.Message}");
+        }
+    }
+
+    private bool RememberPimaxServiceLogEvent(string eventKey)
+    {
+        if (!_pimaxServiceLogEventsSeen.Add(eventKey))
+        {
+            return false;
+        }
+
+        _pimaxServiceLogEventOrder.Enqueue(eventKey);
+        while (_pimaxServiceLogEventOrder.Count > 2048)
+        {
+            _pimaxServiceLogEventsSeen.Remove(_pimaxServiceLogEventOrder.Dequeue());
+        }
+
+        return true;
+    }
+
     private IEnumerable<PimaxServiceLogEvent> ReadRecentPimaxServiceLogEvents(string logFile)
     {
         using var stream = new FileStream(
@@ -3527,14 +3631,12 @@ internal sealed class AppSupervisor
 
         foreach (var line in lines)
         {
-            var isRemove = line.Contains("removed hid device", StringComparison.OrdinalIgnoreCase);
-            var isAdd = line.Contains("added hid device", StringComparison.OrdinalIgnoreCase);
-            if ((!isRemove && !isAdd) || !TryParsePimaxServiceTimestamp(line, out var timestamp))
+            if (!PimaxServiceLogParser.TryParse(line, out var entry))
             {
                 continue;
             }
 
-            yield return new PimaxServiceLogEvent(timestamp, isRemove, isAdd);
+            yield return entry!;
         }
     }
 
@@ -3544,22 +3646,6 @@ internal sealed class AppSupervisor
         {
             yield return line;
         }
-    }
-
-    private static bool TryParsePimaxServiceTimestamp(string line, out DateTimeOffset timestamp)
-    {
-        timestamp = default;
-        if (line.Length < 23)
-        {
-            return false;
-        }
-
-        return DateTimeOffset.TryParseExact(
-            line[..23],
-            "yyyy-MM-dd HH:mm:ss.fff",
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.AssumeLocal,
-            out timestamp);
     }
 
     private WatchedProcessState ObserveWatchedShutdownProcesses()
@@ -10715,8 +10801,6 @@ internal sealed record ScheduledTaskApplyResult(
         _ => "unknown"
     };
 }
-
-internal sealed record PimaxServiceLogEvent(DateTimeOffset Timestamp, bool IsRemove, bool IsAdd);
 
 internal sealed record ProcessResult(int ExitCode, string Output, string Error);
 
