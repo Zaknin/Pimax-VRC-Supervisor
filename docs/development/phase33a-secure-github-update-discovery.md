@@ -1,6 +1,6 @@
 # Phase 33A Secure GitHub Update Discovery and Notification
 
-Status: discovery and contract design only. No update client, network request, package download, installer, version change, release-workflow change, or lifecycle/configuration write is implemented by this phase.
+Status: the reviewed manifest/signature/state contracts and standalone bounded discovery/scheduling services are implemented. They are not wired into Supervisor startup, Configurator, TUI, overlay, bridge, or configuration yet. No package download, installer, version change, release-workflow change, GitHub setting change, or lifecycle/configuration write is implemented.
 
 Baseline: `codex/phase-33a-secure-update-discovery` from Phase 32F commit `62e4ed9971934e1c767400ea4dbd0c76464cd660`.
 
@@ -236,6 +236,8 @@ Recommended trust model:
 - treat keyless Sigstore workflow identity and GitHub attestations as independent provenance evidence, not as a remotely replaceable application trust root;
 - require protected-environment approval before the draft-publish job, even though the manifest was signed offline.
 
+The production trust-root registry is isolated in `ProductionUpdateTrustRoots.cs` and intentionally remains empty until approved offline public-key bytes and key IDs are supplied for an auditable rotation commit. Tests generate ephemeral P-256 keys only in the test assembly. An empty production registry rejects every signature rather than falling back to a remote key or TOFU.
+
 Routine rotation is an overlap:
 
 1. release N is signed by the embedded current key and embeds the next public key and key ID in application code;
@@ -279,15 +281,16 @@ The packaged default config may select `NotifyStable` for new installations, but
 Automatic scheduling:
 
 1. Supervisor is the only automatic-check owner. TUI and overlay make no Internet requests.
-2. Persist `lastAutomaticAttemptAtUtc` before starting network I/O.
-3. An automatic attempt is eligible only when at least 24 hours have elapsed since that timestamp.
-4. Run only after normal Supervisor startup is stable, on a cancellable background task. Never await it from startup readiness, command handling, action 7, replacement/recovery, reconnect, cleanup, or exit.
-5. Success or failure consumes the 24-hour slot. There is no rapid retry loop.
-6. A manual Configurator check may bypass the automatic window, but only one check may run at a time; a successful manual check also advances the automatic timestamp.
-7. HTTP uses no GitHub credential, a fixed User-Agent, HTTPS-only endpoints, a 10-second connect/request budget, bounded redirects to GitHub-owned HTTPS hosts, and the response caps above.
-8. Conditional requests may use a persisted ETag, but HTTP `304` can reuse only a previously signature-verified cached result.
-9. Clock rollback leaves the stored future boundary in force. Invalid state delays the first automatic attempt for 24 hours from the current startup instead of causing a request burst.
-10. One dismissal applies only to one verified version. A later verified version may notify again.
+2. Persist `lastAttemptUtc` before starting network I/O, but determine eligibility only from `lastSuccessfulCheckUtc`.
+3. An automatic attempt is due when no successful completion exists or when at least 24 hours have elapsed since the last successful completion; the exact 24-hour boundary is due.
+4. A long-running session waits until that boundary and performs one check when it becomes due.
+5. Run only after normal Supervisor startup is stable, on a cancellable background task. Never await it from startup readiness, command handling, action 7, replacement/recovery, reconnect, cleanup, or exit.
+6. Permit at most one automatic attempt per Supervisor session. Failure does not advance the successful-completion timestamp, and the same session never rapidly retries.
+7. A manual Configurator check bypasses policy and the automatic window under every policy, but only one check runs at a time; a successful manual check advances `lastSuccessfulCheckUtc`.
+8. HTTP uses no GitHub credential, a fixed User-Agent, explicit connect/request timeouts, bounded redirects to the exact required GitHub-owned HTTPS hosts, and the response caps above.
+9. Conditional requests may use a persisted ETag, but HTTP `304` can reuse only a previously signature-verified cached result.
+10. Clock rollback suppresses the automatic request conservatively. Invalid or corrupt state recovers to the disabled default instead of causing a request burst.
+11. One dismissal applies only to one verified version. A later verified version may notify again.
 
 ## Persistent update-state v1
 
@@ -391,7 +394,7 @@ State is a cache, not authority. `updateAvailable` may be shown only when the cu
 3. Trust-boundary tests prove signature verification precedes manifest JSON parsing and reject a manifest/envelope-supplied public key, an unembedded `keyId`, TOFU, remote key discovery, BOM, comments, trailing comma, duplicate/unknown properties, oversized body, invalid UTF-8, wrong types, fractional/negative numbers, and timestamp offsets.
 4. Semantic cases: repository/channel mismatch, bad tag/URL/commit, asset name/version mismatch, missing/duplicate/extra variant, hash/size mismatch, draft/prerelease/mutable release, lower/equal/newer versions, stale sequence, and GitHub asset mismatch.
 5. HTTP cases with a fake handler: HTTPS enforcement, redirects, host allowlist, timeouts, cancellation, response caps, rate limit, ETag/304 with and without verified cache, and no credentials.
-6. Scheduler cases: missing/invalid state, exactly-before/at/after 24 hours, failure consuming the slot, persisted-before-I/O, manual bypass, clock rollback, restart, cancellation, and one concurrent writer.
+6. Scheduler cases: missing/invalid state, exactly-before/at/after 24 hours, last-success eligibility, one automatic attempt per session, long-running due transition, persisted-before-I/O, manual bypass under every policy, clock rollback, cancellation, and serialized checks.
 7. Atomic state cases: partial temp write, replace failure, stale revision, corrupt JSON, and recovery without losing highest accepted sequence.
 8. Config cases: exact enum values, missing/invalid fail closed, packaged new-install default, Configurator load/save/raw-JSON preservation, and no lifecycle-field mutation.
 9. Bridge compatibility: old/new Supervisor and TUI combinations, optional update snapshot, read-only updates resource, overlay reconnect, and no command replay.
