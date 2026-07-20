@@ -132,7 +132,7 @@ The checker first treats the manifest as opaque, bounded bytes. The detached sig
 
 ```json
 {
-  "schemaVersion": "pimax-vrc-supervisor-update-manifest-v1",
+  "schemaVersion": 1,
   "repository": "Zaknin/Pimax-VRC-Supervisor",
   "channel": "stable",
   "releaseSequence": 1,
@@ -209,7 +209,7 @@ The checker fetches metadata only. It never follows a package asset URL.
 
 ```json
 {
-  "schemaVersion": "pimax-vrc-supervisor-update-signatures-v1",
+  "schemaVersion": 1,
   "manifestFile": "PimaxVrcSupervisor-v1.4.0-update-manifest-v1.json",
   "manifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
   "signatures": [
@@ -295,12 +295,12 @@ Proposed `%LOCALAPPDATA%\PimaxVrcSupervisor\Update\update-state-v1.json`:
 
 ```json
 {
-  "schemaVersion": "pimax-vrc-supervisor-update-state-v1",
-  "stateRevision": 7,
-  "writtenAtUtc": "2026-07-20T19:05:00Z",
-  "lastAutomaticAttemptAtUtc": "2026-07-20T19:04:50Z",
-  "lastSuccessfulCheckAtUtc": "2026-07-20T19:05:00Z",
-  "nextAutomaticCheckAtUtc": "2026-07-21T19:04:50Z",
+  "schemaVersion": 1,
+  "policy": "notifyStable",
+  "channel": "stable",
+  "installedVariant": "with-dotnet9",
+  "lastAttemptUtc": "2026-07-20T19:04:50.0000000Z",
+  "lastSuccessfulCheckUtc": "2026-07-20T19:05:00.0000000Z",
   "etag": "W/\"example\"",
   "lastManifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
   "highestAcceptedReleaseSequence": 1,
@@ -308,16 +308,16 @@ Proposed `%LOCALAPPDATA%\PimaxVrcSupervisor\Update\update-state-v1.json`:
   "latestVerifiedVersion": "1.4.0",
   "latestVerifiedTag": "v1.4.0",
   "latestVerifiedReleaseUrl": "https://github.com/Zaknin/Pimax-VRC-Supervisor/releases/tag/v1.4.0",
-  "verificationStatus": "verified",
-  "updateAvailable": true,
   "dismissedVersion": null,
   "dismissedAtUtc": null,
-  "lastFailureCategory": null,
-  "lastFailureAtUtc": null
+  "lastError": null,
+  "packageDownload": null,
+  "packageStaging": null,
+  "packageInstallation": null
 }
 ```
 
-Allowed `verificationStatus` values are `never-checked`, `verified`, `not-modified`, and `failed`. Failure categories are bounded enums such as `offline`, `timeout`, `http`, `schema`, `signature`, `rollback`, `release-mismatch`, and `state`; do not persist raw response bodies, stack traces, tokens, headers other than ETag, or package URLs.
+`lastError` contains only a bounded category, bounded code, and UTC timestamp. Allowed categories include `offline`, `timeout`, `http`, `schema`, `signature`, `rollback`, `releaseMismatch`, `state`, and `cancelled`; do not persist raw response bodies, stack traces, tokens, headers other than ETag, or package URLs. The three package fields are reserved schema slots that must remain `null` in Phase 33A.
 
 State is a cache, not authority. `updateAvailable` may be shown only when the current process has successfully revalidated state integrity/semantics or has accepted a fresh verified result under the current embedded trust root.
 
