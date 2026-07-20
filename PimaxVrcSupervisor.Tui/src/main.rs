@@ -136,7 +136,11 @@ fn run(
     supervisor_process_notice: Option<String>,
 ) -> Result<()> {
     let bridge_disconnect_auto_exit = exit_when_supervisor_exits && supervisor_monitor.is_none();
-    let mut app = App::new(diagnostics, bridge_disconnect_auto_exit);
+    let mut app = App::new(
+        diagnostics,
+        bridge_disconnect_auto_exit,
+        exit_when_supervisor_exits,
+    );
     app.set_mouse_status(
         mouse_capture_error.is_none(),
         mouse_capture_error.map(|error| format!("Mouse disabled; keyboard-only mode: {error}")),
@@ -487,7 +491,7 @@ mod tests {
     use ratatui::layout::Rect;
 
     fn connected_app() -> App {
-        let mut app = App::new(TuiDiagnostics::disabled(), false);
+        let mut app = App::new(TuiDiagnostics::disabled(), false, false);
         app.connection = app::ConnectionState::Connected;
         app.status.steam_vr = "running".to_string();
         app.commands = vec![

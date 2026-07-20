@@ -7,18 +7,25 @@ internal sealed record TerminalUiLaunchSpec(
 
 internal static class TerminalUiLaunchArguments
 {
-    public static TerminalUiLaunchSpec BuildPersistentClient(string supervisorPath, string? configPath)
+    public static TerminalUiLaunchSpec BuildPersistentClient(
+        string supervisorPath,
+        string? configPath,
+        int supervisorPid)
     {
         var spec = Build(supervisorPath, configPath);
-        return new TerminalUiLaunchSpec(spec.ExecutablePath, spec.WorkingDirectory, spec.Arguments);
+        return AssociateWithSupervisorOwner(spec, supervisorPid);
     }
 
     public static TerminalUiLaunchSpec BuildSupervisorOwned(
         string supervisorPath,
         string? configPath,
         int supervisorPid)
+        => AssociateWithSupervisorOwner(Build(supervisorPath, configPath), supervisorPid);
+
+    private static TerminalUiLaunchSpec AssociateWithSupervisorOwner(
+        TerminalUiLaunchSpec spec,
+        int supervisorPid)
     {
-        var spec = Build(supervisorPath, configPath);
         var arguments = spec.Arguments.ToList();
         arguments.Add("--exit-when-supervisor-exits");
         arguments.Add("--supervisor-pid");

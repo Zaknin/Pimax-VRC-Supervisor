@@ -2880,7 +2880,10 @@ internal sealed class AppSupervisor
     {
         var supervisorPath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
         var launchSpec = _persistentSupervisorOwner
-            ? TerminalUiLaunchArguments.BuildPersistentClient(supervisorPath ?? "", _config.LoadedFromPath)
+            ? TerminalUiLaunchArguments.BuildPersistentClient(
+                supervisorPath ?? "",
+                _config.LoadedFromPath,
+                Environment.ProcessId)
             : TerminalUiLaunchArguments.BuildSupervisorOwned(
                 supervisorPath ?? "",
                 _config.LoadedFromPath,

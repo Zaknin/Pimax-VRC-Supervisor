@@ -1735,7 +1735,7 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
     fn app_with_steamvr_commands(steam_vr: &str) -> App {
-        let mut app = App::new(TuiDiagnostics::disabled(), false);
+        let mut app = App::new(TuiDiagnostics::disabled(), false, false);
         app.connection = ConnectionState::Connected;
         app.status.steam_vr = steam_vr.to_string();
         app.commands = vec![

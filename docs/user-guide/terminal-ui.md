@@ -43,7 +43,7 @@ When Terminal UI is disconnected, **Close TUI only** exits only Terminal UI. The
 
 In **Terminal UI only**, the Supervisor starts Terminal UI after the dashboard is ready. Terminal UI follows that paired Supervisor process and closes when it exits.
 
-In **Terminal UI + SteamVR Overlay**, Terminal UI is restart-persistent. Closing it—including the Windows close button—does not request Supervisor shutdown while SteamVR is running. It stays open across a Supervisor-requested action-7 runtime replacement and is not duplicated. A later normal SteamVR exit runs standard final cleanup and closes Terminal UI with the Supervisor.
+In **Terminal UI + SteamVR Overlay**, Terminal UI is restart-persistent. Closing it—including the Windows close button—does not request Supervisor shutdown while SteamVR is running. It stays open across a Supervisor-requested action-7 runtime replacement and is not duplicated. Every automatically launched TUI is associated with the exact Supervisor owner PID. A later normal SteamVR exit signals final cleanup and closes Terminal UI; exact owner-process monitoring also closes it if the Supervisor disappears unexpectedly.
 
 Manual Terminal UI launches stay open while disconnected until you exit.
 

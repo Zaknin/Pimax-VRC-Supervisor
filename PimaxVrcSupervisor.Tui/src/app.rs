@@ -147,7 +147,8 @@ pub struct App {
     pub console_close_enabled: bool,
     pub console_close_notice: Option<String>,
     pub supervisor_process_notice: Option<String>,
-    exit_when_supervisor_exits: bool,
+    exit_after_supervisor_disconnect: bool,
+    exit_on_supervisor_shutdown_signal: bool,
     was_connected_once: bool,
     supervisor_disconnect_seen_at: Option<Instant>,
     auto_exit_after_supervisor_disconnect: Option<Instant>,
@@ -163,12 +164,17 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(diagnostics: TuiDiagnostics, exit_when_supervisor_exits: bool) -> Self {
+    pub fn new(
+        diagnostics: TuiDiagnostics,
+        exit_after_supervisor_disconnect: bool,
+        exit_on_supervisor_shutdown_signal: bool,
+    ) -> Self {
         let (action_result_tx, action_result_rx) = channel();
         let (shutdown_result_tx, shutdown_result_rx) = channel();
         Self::with_channels(
             diagnostics,
-            exit_when_supervisor_exits,
+            exit_after_supervisor_disconnect,
+            exit_on_supervisor_shutdown_signal,
             action_result_tx,
             action_result_rx,
             shutdown_result_tx,
@@ -178,7 +184,8 @@ impl App {
 
     fn with_channels(
         diagnostics: TuiDiagnostics,
-        exit_when_supervisor_exits: bool,
+        exit_after_supervisor_disconnect: bool,
+        exit_on_supervisor_shutdown_signal: bool,
         action_result_tx: Sender<CompletedActionResult>,
         action_result_rx: Receiver<CompletedActionResult>,
         shutdown_result_tx: Sender<ShutdownRequestResult>,
@@ -222,7 +229,8 @@ impl App {
             console_close_enabled: false,
             console_close_notice: None,
             supervisor_process_notice: None,
-            exit_when_supervisor_exits,
+            exit_after_supervisor_disconnect,
+            exit_on_supervisor_shutdown_signal,
             was_connected_once: false,
             supervisor_disconnect_seen_at: None,
             auto_exit_after_supervisor_disconnect: None,
@@ -257,6 +265,7 @@ impl App {
                 self.commands = commands;
                 self.logs = logs;
                 self.sync_operational_actions(now);
+                self.apply_supervisor_owner_shutdown_signal();
                 self.last_success = Some(now);
                 self.last_error = None;
                 self.last_error_at = None;
@@ -894,7 +903,7 @@ impl App {
     }
 
     fn update_supervisor_disconnect_auto_exit(&mut self, now: Instant) {
-        if !self.exit_when_supervisor_exits {
+        if !self.exit_after_supervisor_disconnect {
             return;
         }
 
@@ -913,6 +922,18 @@ impl App {
                 }
             }
             ConnectionState::Disconnected => {}
+        }
+    }
+
+    fn apply_supervisor_owner_shutdown_signal(&mut self) {
+        if self.exit_on_supervisor_shutdown_signal
+            && self
+                .status
+                .lifecycle
+                .eq_ignore_ascii_case("shutdown-running")
+        {
+            self.close_tui_requested = true;
+            self.mark_render_needed();
         }
     }
 
@@ -1385,7 +1406,11 @@ mod tests {
     use super::*;
 
     fn app(exit_when_supervisor_exits: bool) -> App {
-        App::new(TuiDiagnostics::disabled(), exit_when_supervisor_exits)
+        App::new(
+            TuiDiagnostics::disabled(),
+            exit_when_supervisor_exits,
+            exit_when_supervisor_exits,
+        )
     }
 
     fn executable_command(name: &str, requires_confirmation: bool) -> CommandSummary {
@@ -1490,6 +1515,33 @@ mod tests {
         assert!(!app.should_exit_after_supervisor_disconnect(
             now + Duration::from_secs(1) + SUPERVISOR_DISCONNECT_AUTO_EXIT_DELAY
         ));
+    }
+
+    #[test]
+    fn owned_tui_exits_when_supervisor_reports_final_cleanup() {
+        let mut app = App::new(TuiDiagnostics::disabled(), false, true);
+        app.connection = ConnectionState::Connected;
+        app.status.lifecycle = "shutdown-running".to_string();
+
+        app.apply_supervisor_owner_shutdown_signal();
+
+        assert!(app.should_close_tui());
+    }
+
+    #[test]
+    fn action_seven_restart_does_not_look_like_final_owner_shutdown() {
+        let mut app = restart_ready_app();
+        app.status.lifecycle = "vrchat-running".to_string();
+        app.status.current_action = Some(crate::models::OperationalActionSummary {
+            operation_id: "vrrestart-request".to_string(),
+            command: RESTART_VR_SESSION_COMMAND.to_string(),
+            status: "running".to_string(),
+            ..crate::models::OperationalActionSummary::default()
+        });
+
+        app.apply_supervisor_owner_shutdown_signal();
+
+        assert!(!app.should_close_tui());
     }
 
     #[test]

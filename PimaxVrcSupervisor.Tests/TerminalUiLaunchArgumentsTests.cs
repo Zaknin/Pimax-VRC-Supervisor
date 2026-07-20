@@ -41,14 +41,17 @@ public sealed class TerminalUiLaunchArgumentsTests
     }
 
     [Fact]
-    public void PersistentCombinedClientSurvivesSupervisorReplacement()
+    public void PersistentCombinedClientIsAssociatedWithExactSupervisorOwner()
     {
         var spec = TerminalUiLaunchArguments.BuildPersistentClient(
             @"D:\VR\PimaxVrcSupervisor.exe",
-            @"D:\VR\supervisor.config.json");
+            @"D:\VR\supervisor.config.json",
+            5678);
 
-        Assert.Equal(["--config", @"D:\VR\supervisor.config.json"], spec.Arguments);
-        Assert.DoesNotContain("--exit-when-supervisor-exits", spec.Arguments);
-        Assert.DoesNotContain("--supervisor-pid", spec.Arguments);
+        Assert.Equal(
+            ["--config", @"D:\VR\supervisor.config.json", "--exit-when-supervisor-exits", "--supervisor-pid", "5678"],
+            spec.Arguments);
+        Assert.Single(spec.Arguments, argument => argument == "--exit-when-supervisor-exits");
+        Assert.Single(spec.Arguments, argument => argument == "--supervisor-pid");
     }
 }
