@@ -88,5 +88,6 @@ nav:
       - Phase32D Manual Acceptance: development/phase32d-manual-acceptance.md
       - Phase32E1 Manual Acceptance: development/phase32e1-manual-acceptance.md
       - Phase32F Tracked-Device Power Policy Discovery: development/phase32f-steamvr-tracked-device-power-policy-discovery.md
+      - Phase33A Secure GitHub Update Discovery: development/phase33a-secure-github-update-discovery.md
       - Shortcuts: reference/shortcuts.md
       - Release Packaging: reference/release-packaging.md
