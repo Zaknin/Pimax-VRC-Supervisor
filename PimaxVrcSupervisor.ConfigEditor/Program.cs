@@ -6931,6 +6931,12 @@ internal sealed class ConfigEditorForm : Form
                 button.FlatAppearance.MouseDownBackColor = _theme.ButtonPressed;
                 button.BackColor = Equals(button.Tag, "Primary") ? _theme.PrimaryButtonBack : _theme.ButtonBack;
                 button.ForeColor = _theme.Text;
+                if (button is ThemedActionButton themedActionButton)
+                {
+                    themedActionButton.DisabledBackColor = _theme.InputBack;
+                    themedActionButton.DisabledForeColor = _theme.DisabledText;
+                    themedActionButton.DisabledBorderColor = _theme.Border;
+                }
                 button.Invalidate();
                 break;
             case CheckBox checkBox:
@@ -7608,6 +7614,18 @@ internal sealed class ThemedActionButton : Button
     private bool _hovered;
     private bool _pressed;
 
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Color DisabledBackColor { get; set; } = SystemColors.Control;
+
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Color DisabledForeColor { get; set; } = SystemColors.GrayText;
+
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Color DisabledBorderColor { get; set; } = SystemColors.ControlDark;
+
     public ThemedActionButton()
     {
         FlatStyle = FlatStyle.Flat;
@@ -7651,6 +7669,12 @@ internal sealed class ThemedActionButton : Button
 
     protected override void OnEnabledChanged(EventArgs e)
     {
+        if (!Enabled)
+        {
+            _hovered = false;
+            _pressed = false;
+        }
+
         Invalidate();
         base.OnEnabledChanged(e);
     }
@@ -7664,7 +7688,7 @@ internal sealed class ThemedActionButton : Button
         var backColor = BackColor;
         if (!Enabled)
         {
-            backColor = SystemColors.Control;
+            backColor = DisabledBackColor;
         }
         else if (_pressed)
         {
@@ -7677,11 +7701,11 @@ internal sealed class ThemedActionButton : Button
 
         using var path = CreateRoundedRectanglePath(bounds, Radius);
         using var background = new SolidBrush(backColor);
-        using var border = new Pen(Enabled ? ColorOrFallback(FlatAppearance.BorderColor, SystemColors.ControlDark) : SystemColors.ControlDark);
+        using var border = new Pen(Enabled ? ColorOrFallback(FlatAppearance.BorderColor, SystemColors.ControlDark) : DisabledBorderColor);
         pevent.Graphics.FillPath(background, path);
         pevent.Graphics.DrawPath(border, path);
 
-        var textColor = Enabled ? ForeColor : SystemColors.GrayText;
+        var textColor = Enabled ? ForeColor : DisabledForeColor;
         TextRenderer.DrawText(
             pevent.Graphics,
             Text,
@@ -7690,7 +7714,7 @@ internal sealed class ThemedActionButton : Button
             textColor,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
-        if (Focused && ShowFocusCues)
+        if (Enabled && Focused && ShowFocusCues)
         {
             ControlPaint.DrawFocusRectangle(pevent.Graphics, Rectangle.Inflate(bounds, -4, -4), textColor, backColor);
         }
@@ -7915,6 +7939,12 @@ internal sealed class ThemedTabHost : UserControl
                 button.FlatAppearance.MouseDownBackColor = _theme.ButtonPressed;
                 button.BackColor = Equals(button.Tag, "Primary") ? _theme.PrimaryButtonBack : _theme.ButtonBack;
                 button.ForeColor = _theme.Text;
+                if (button is ThemedActionButton themedActionButton)
+                {
+                    themedActionButton.DisabledBackColor = _theme.InputBack;
+                    themedActionButton.DisabledForeColor = _theme.DisabledText;
+                    themedActionButton.DisabledBorderColor = _theme.Border;
+                }
                 button.Invalidate();
                 break;
             case CheckBox checkBox:
