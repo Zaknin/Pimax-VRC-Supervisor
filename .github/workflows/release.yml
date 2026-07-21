@@ -83,6 +83,12 @@ jobs:
             './scripts/New-ReleaseCandidate.ps1',
             './scripts/Invoke-OfflineManifestSigning.ps1',
             './scripts/Publish-ImmutableRelease.ps1',
+            './scripts/ProductionUpdateKeyCeremony.psm1',
+            './scripts/New-ProductionUpdateTrustKey.ps1',
+            './scripts/Sign-UpdateAcceptanceFixture.ps1',
+            './scripts/Test-ProductionUpdateTrustDescriptor.ps1',
+            './scripts/tests/Test-ProductionUpdateKeyCeremony.ps1',
+            './scripts/tests/Test-ProductionUpdateTrustDescriptor.ps1',
             './scripts/tests/Test-ReleasePipeline.ps1'
           )
           foreach ($script in $scripts) {

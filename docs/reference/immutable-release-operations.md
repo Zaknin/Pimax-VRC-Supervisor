@@ -12,7 +12,7 @@ Do not edit, recreate, add assets to, or otherwise retrofit the historical mutab
 
 ## Key custody and rotation
 
-The offline ECDSA P-256 private key must never enter the repository, GitHub Actions secrets, GitHub environments, workflow artifacts, CI logs, or release assets. Keep it offline or hardware-backed under the project's approved access, backup, and dual-control procedure. This repository intentionally provides no production-key generation or export command.
+The offline ECDSA P-256 private key must never enter the repository, GitHub Actions secrets, GitHub environments, workflow artifacts, CI logs, or release assets. Keep it offline or hardware-backed under the project's approved access, backup, and dual-control procedure. The explicit operator-only [Production Update Trust-Key Ceremony](production-update-key-ceremony.md) creates it outside the repository; no build, test, package, workflow, or application path invokes that tool.
 
 The approved public key used by the local publisher also comes from the separately reviewed trust-root ceremony. The publisher refuses a public-key file inside the repository or candidate so candidate-supplied metadata cannot select the trust decision.
 
@@ -45,7 +45,7 @@ Run:
 ```powershell
 .\scripts\Invoke-OfflineManifestSigning.ps1 `
   -CandidateDirectory 'D:\release-candidate\v1.4.0' `
-  -PrivateKeyPath 'X:\offline-keys\pimax-update-current.pem' `
+  -PrivateKeyPath 'X:\offline-keys\pimax-update-current.private.pk8' `
   -KeyId 'pimax-update-primary-2026' `
   -RepositoryRoot 'C:\reviewed\Pimax-VRC-Supervisor'
 ```
@@ -67,7 +67,7 @@ Run:
 ```powershell
 .\scripts\Publish-ImmutableRelease.ps1 `
   -CandidateDirectory 'D:\release-candidate\v1.4.0' `
-  -ApprovedPublicKeyPath 'D:\approved-trust\pimax-update-current-public.pem' `
+  -ApprovedPublicKeyPath 'D:\approved-trust\pimax-update-current.public.spki.der' `
   -ExpectedKeyId 'pimax-update-primary-2026' `
   -ReportDirectory 'D:\release-reports\v1.4.0' `
   -RepositoryRoot 'C:\reviewed\Pimax-VRC-Supervisor' `
@@ -99,3 +99,13 @@ Keep the success report with the release ceremony evidence. It is deliberately o
 If a check fails before publication, stop. Leave any draft unpublished, diagnose the mismatch, and regenerate/review the complete candidate if necessary. Never bypass a hash, identity, signature, asset, or immutability failure.
 
 If a check fails after publication, the publisher writes `post-publish-vX.Y.Z-incident.json`, reports the release as verification-failed, and performs no further GitHub mutation. Preserve local assets, reports, workflow run identity, command output, and the published URL for investigation. Do not upload a replacement, delete/recreate the release, reuse the tag, or attempt an automated repair. Correct the release process and publish a new version/tag only after a separate review.
+
+## Key-loss or compromise recovery
+
+If the current private key is lost or suspected compromised, stop signing and publishing. Preserve custody, ceremony, and signing evidence; open an incident; and determine whether a previously embedded next key remains trustworthy.
+
+- If a trusted next key is already embedded in supported clients, use its separately approved custody procedure and publish only a new version/tag after incident review. Do not remotely alter trust metadata.
+- If no trusted next key is embedded, existing clients cannot authenticate a new trust root. Build and distribute a separately reviewed application release for manual installation with the replacement public root embedded.
+- Never use TOFU, a manifest-supplied key, a downloaded key, a test bypass, a replacement asset on an immutable release, or reuse of the compromised key ID.
+
+The first updater-capable release also requires manual installation because v1.3.1 does not contain the enrolled production trust root.

@@ -15,6 +15,11 @@
     <FileVersion>1.3.1.0</FileVersion>
     <InformationalVersion>1.3.1</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <ProductionUpdateKeyId>pimax-update-primary-2026</ProductionUpdateKeyId>
+    <ProductionUpdateAlgorithm>ecdsa-p256-sha256-der</ProductionUpdateAlgorithm>
+    <ProductionUpdatePublicKeySize>91</ProductionUpdatePublicKeySize>
+    <ProductionUpdatePublicKeySha256>929fa8e2a3a8d46064202a415f6c62e3e731f334be3de4c1d6d7045267371933</ProductionUpdatePublicKeySha256>
+    <ProductionUpdateTrustRootCount>1</ProductionUpdateTrustRootCount>
   </PropertyGroup>
 
   <ItemGroup>
@@ -34,5 +39,9 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
+
+  <Target Name="ValidateProductionUpdateTrustDescriptor" BeforeTargets="CoreCompile" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec Command="pwsh -NoLogo -NoProfile -File &quot;$(MSBuildProjectDirectory)\..\scripts\Test-ProductionUpdateTrustDescriptor.ps1&quot; -SourcePath &quot;$(MSBuildProjectDirectory)\ProductionUpdateTrustRoots.cs&quot; -ExpectedKeyId &quot;$(ProductionUpdateKeyId)&quot; -ExpectedAlgorithm &quot;$(ProductionUpdateAlgorithm)&quot; -ExpectedSize &quot;$(ProductionUpdatePublicKeySize)&quot; -ExpectedFingerprint &quot;$(ProductionUpdatePublicKeySha256)&quot; -ExpectedRootCount &quot;$(ProductionUpdateTrustRootCount)&quot;" />
+  </Target>
 
 </Project>

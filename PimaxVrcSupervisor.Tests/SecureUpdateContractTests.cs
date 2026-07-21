@@ -265,11 +265,23 @@ public sealed class SecureUpdateContractTests
     }
 
     [Fact]
-    public void ProductionTrustRegistryContainsNoTestKeys()
+    public void ProductionTrustRegistryContainsOnlyApprovedCurrentKey()
     {
         var production = ProductionUpdateTrustRoots.CreateTrustStore();
+        var descriptors = ProductionUpdateTrustRoots.GetAuditedDescriptors();
 
-        Assert.Equal(0, production.Count);
+        var descriptor = Assert.Single(descriptors);
+        Assert.Equal("pimax-update-primary-2026", descriptor.KeyId);
+        Assert.Equal("ecdsa-p256-sha256-der", descriptor.Algorithm);
+        Assert.Equal(91, descriptor.SubjectPublicKeyInfoSize);
+        Assert.Equal("929fa8e2a3a8d46064202a415f6c62e3e731f334be3de4c1d6d7045267371933", descriptor.SubjectPublicKeyInfoSha256);
+        Assert.Equal(91, descriptor.SubjectPublicKeyInfo.Length);
+        Assert.Equal(
+            descriptor.SubjectPublicKeyInfoSha256,
+            Convert.ToHexString(SHA256.HashData(descriptor.SubjectPublicKeyInfo.AsSpan())).ToLowerInvariant());
+        Assert.Equal(1, production.Count);
+        Assert.True(production.TryGet(descriptor.KeyId, out var root));
+        Assert.Equal(descriptor.SubjectPublicKeyInfo.ToArray(), root.SubjectPublicKeyInfo.ToArray());
         Assert.False(production.TryGet(UpdateContractTestData.KeyId, out _));
     }
 

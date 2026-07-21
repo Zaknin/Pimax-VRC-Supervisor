@@ -275,7 +275,7 @@ public sealed class GitHubUpdateDiscoveryTests
 
 internal sealed class DiscoveryScenario
 {
-    private DiscoveryScenario(SignedUpdateTestData signed)
+    internal DiscoveryScenario(SignedUpdateTestData signed)
     {
         Signed = signed;
         ReleaseMetadata = CreateReleaseMetadata();

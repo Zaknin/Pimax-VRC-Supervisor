@@ -1,6 +1,6 @@
 # Phase 33A Secure GitHub Update Discovery and Notification
 
-Status: the reviewed manifest/signature/state contracts, bounded discovery/scheduling services, verified status surfaces, and operator-assisted immutable-release tooling are implemented. No package download, staging, installation, version change, production trust key, GitHub setting change, release publication, tag creation, or lifecycle write is implemented.
+Status: the reviewed manifest/signature/state contracts, bounded discovery/scheduling services, verified status surfaces, operator-assisted immutable-release tooling, approved production public trust root, and notification-only acceptance fixture are implemented. No package download, staging, installation, version change, GitHub setting change, release publication, tag creation, or lifecycle write is implemented.
 
 Baseline: `codex/phase-33a-secure-update-discovery` from Phase 32F commit `62e4ed9971934e1c767400ea4dbd0c76464cd660`.
 
@@ -229,7 +229,7 @@ Recommended trust model:
 - treat keyless Sigstore workflow identity and GitHub attestations as independent provenance evidence, not as a remotely replaceable application trust root;
 - require protected-environment approval before the draft-publish job, even though the manifest was signed offline.
 
-The production trust-root registry is isolated in `ProductionUpdateTrustRoots.cs` and intentionally remains empty until approved offline public-key bytes and key IDs are supplied for an auditable rotation commit. Tests generate ephemeral P-256 keys only in the test assembly. An empty production registry rejects every signature rather than falling back to a remote key or TOFU.
+The production trust-root registry is isolated in `ProductionUpdateTrustRoots.cs`. It contains exactly the approved current key `pimax-update-primary-2026`, whose 91-byte DER SubjectPublicKeyInfo SHA-256 is `929fa8e2a3a8d46064202a415f6c62e3e731f334be3de4c1d6d7045267371933`. Independent build descriptors and runtime cryptographic checks reject any key ID, algorithm, size, encoding, curve, or fingerprint mismatch. The registry structure supports a separately reviewed current/next overlap. Tests generate ephemeral P-256 keys only in the test assembly for negative cases; the sole production-key-positive fixture is a static manifest deliberately signed offline by the operator. No production path falls back to a remote key, manifest key, test key, bypass, or TOFU.
 
 Routine rotation is an overlap:
 
