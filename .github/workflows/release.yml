@@ -1,340 +1,270 @@
-name: Release
+name: Release Candidate
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Release tag/name, for example v1.3.1"
+      version:
+        description: "Strict stable SemVer without v, for example 1.4.0"
         required: true
         type: string
-      replace_existing_assets:
-        description: "Type REPLACE to replace all assets on an existing release"
-        required: false
+      tag:
+        description: "Exact release tag, for example v1.4.0"
+        required: true
         type: string
-      replacement_reason:
-        description: "Required reason when replacing existing assets"
-        required: false
+      source_commit:
+        description: "Exact 40-character source commit SHA"
+        required: true
         type: string
+      channel:
+        description: "Only the stable update channel is supported"
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
 
 permissions:
-  contents: write
+  contents: read
   id-token: write
   attestations: write
+  artifact-metadata: write
 
 jobs:
-  build-sign-release:
-    name: Build, sign, attest, and publish release
+  build-candidate:
+    name: Build and attest unsigned release candidate
     runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_SOURCE_COMMIT: ${{ inputs.source_commit }}
+      RELEASE_CHANNEL: ${{ inputs.channel }}
+      RELEASE_WORKFLOW_RUN_ID: ${{ github.run_id }}
+      RELEASE_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+      RELEASE_WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      RELEASE_WORKFLOW_REF: ${{ github.workflow_ref }}
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - name: Check out exact source commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          ref: ${{ inputs.source_commit }}
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: "9.0.x"
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set up stable Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
-      - name: Resolve release version
+      - name: Validate immutable candidate identity
         shell: pwsh
         run: |
-          $version = "${{ github.event.inputs.tag }}"
-          if ([string]::IsNullOrWhiteSpace($version)) {
-            $version = "${{ github.ref_name }}"
+          ./scripts/Test-ReleaseIdentity.ps1 `
+            -Version $env:RELEASE_VERSION `
+            -Tag $env:RELEASE_TAG `
+            -SourceCommit $env:RELEASE_SOURCE_COMMIT `
+            -Channel $env:RELEASE_CHANNEL `
+            -RepositoryRoot $env:GITHUB_WORKSPACE
+
+          if (git status --porcelain --untracked-files=no) {
+            throw 'Tracked build inputs are not clean.'
           }
 
-          if ([string]::IsNullOrWhiteSpace($version)) {
-            throw "Could not determine release version. Push a v* tag or provide the manual workflow version input."
-          }
-
-          if ($version -match "-test") {
-            throw "Release version must not contain '-test': $version"
-          }
-
-          if ($version -notmatch "^v\d+\.\d+\.\d+$") {
-            throw "Release version must look like v1.3.1. Received: $version"
-          }
-
-          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "RELEASE_TAG=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "ARTIFACT_DIR=artifacts" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "SKIP_EXISTING_RELEASE=false" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "REPLACEMENT_MODE=false" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-          $tagRef = "refs/tags/$version"
-          git show-ref --verify --quiet $tagRef
-          if ($LASTEXITCODE -ne 0) {
-            throw "Release tag does not exist locally after checkout: $tagRef"
-          }
-
-          $headCommit = git rev-parse HEAD
-          if ($LASTEXITCODE -ne 0) {
-            throw "Unable to resolve checked-out HEAD."
-          }
-
-          $tagCommit = git rev-list -n 1 $version
-          if ($LASTEXITCODE -ne 0) {
-            throw "Unable to resolve release tag $version."
-          }
-
-          if ($headCommit -ne $tagCommit) {
-            throw "Checked-out commit $headCommit does not match tag commit $tagCommit."
-          }
-
-          Write-Host "release_tag=$version"
-          Write-Host "release_commit=$tagCommit"
-
-      - name: Check existing release policy
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $replace = "${{ github.event.inputs.replace_existing_assets }}"
-          $reason = "${{ github.event.inputs.replacement_reason }}"
-          $isDispatch = "${{ github.event_name }}" -eq "workflow_dispatch"
-          $releaseListJson = gh release list --limit 1000 --json tagName,isDraft,isPrerelease 2>&1
-          if ($LASTEXITCODE -ne 0) {
-            throw "Unable to query GitHub releases. gh release list failed: $releaseListJson"
-          }
-
-          try {
-            $releases = @($releaseListJson | ConvertFrom-Json)
-          } catch {
-            throw "Unable to parse GitHub release list JSON. $($_.Exception.Message)"
-          }
-
-          $existingRelease = $releases |
-            Where-Object { $_.tagName -eq $env:RELEASE_VERSION } |
-            Select-Object -First 1
-
-          $releaseExists = $null -ne $existingRelease
-          if (-not $releaseExists) {
-            Write-Host "No existing release detected for $env:RELEASE_VERSION."
-          }
-
-          if ($releaseExists -and -not $isDispatch) {
-            Write-Host "Existing release detected for $env:RELEASE_VERSION."
-            Write-Host "No release assets were modified."
-            Write-Host "Use workflow_dispatch replacement mode to replace existing assets."
-            "SKIP_EXISTING_RELEASE=true" | Out-File -FilePath $env:GITHUB_ENV -Append
-            exit 0
-          }
-
-          if ($releaseExists) {
-            if (-not $existingRelease.isDraft) {
-              throw "Existing published release detected for $env:RELEASE_VERSION. Published releases are not replaced by this workflow."
-            }
-
-            if ($replace -ne "REPLACE" -or [string]::IsNullOrWhiteSpace($reason)) {
-              throw "Existing release replacement requires replace_existing_assets=REPLACE and a non-empty replacement_reason."
-            }
-
-            Write-Host "Existing release replacement mode confirmed for $env:RELEASE_VERSION."
-            Write-Host "Replacement reason: $reason"
-            "REPLACEMENT_MODE=true" | Out-File -FilePath $env:GITHUB_ENV -Append
-          }
-
-      - name: Build package directories
-        if: env.SKIP_EXISTING_RELEASE != 'true'
+      - name: Validate PowerShell release tools
         shell: pwsh
         run: |
-          .\scripts\package-release.ps1 -Version $env:RELEASE_VERSION -Runtime win-x64 -Configuration Release -ReleaseRoot .\artifacts
-
-      - name: Authenticode-sign app binaries
-        if: env.SKIP_EXISTING_RELEASE != 'true'
-        shell: pwsh
-        env:
-          WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
-          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERTIFICATE_BASE64)) {
-            Write-Warning "Skipping Authenticode signing because WINDOWS_SIGNING_CERTIFICATE_BASE64 is not set."
-            exit 0
-          }
-
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD)) {
-            Write-Warning "Skipping Authenticode signing because WINDOWS_SIGNING_CERTIFICATE_PASSWORD is not set."
-            exit 0
-          }
-
-          $certificatePath = Join-Path $env:RUNNER_TEMP "windows-code-signing.pfx"
-          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64))
-
-          $signTool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
-            Where-Object { $_.FullName -like "*\x64\signtool.exe" } |
-            Sort-Object FullName -Descending |
-            Select-Object -First 1 -ExpandProperty FullName
-
-          if ([string]::IsNullOrWhiteSpace($signTool)) {
-            throw "Could not find signtool.exe on the Windows runner."
-          }
-
-          $packageDirs = Get-ChildItem -Path $env:ARTIFACT_DIR -Directory -Filter "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-*"
-          $files = $packageDirs |
-            ForEach-Object { Get-ChildItem -Path $_.FullName -Recurse -File -Include "PimaxVrcSupervisor*.exe", "PimaxVrcSupervisor*.dll" }
-
-          if ($files.Count -eq 0) {
-            throw "No app binaries were found to sign."
-          }
-
-          foreach ($file in $files) {
-            & $signTool sign /f $certificatePath /p $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $file.FullName
-            if ($LASTEXITCODE -ne 0) {
-              throw "Signing failed for $($file.FullName)."
-            }
-
-            & $signTool verify /pa /all $file.FullName
-            if ($LASTEXITCODE -ne 0) {
-              throw "Signature verification failed for $($file.FullName)."
-            }
-          }
-
-          Remove-Item -LiteralPath $certificatePath -Force
-
-      - name: Recreate zips after binary signing
-        if: env.SKIP_EXISTING_RELEASE != 'true'
-        shell: pwsh
-        run: |
-          $packageDirs = @(
-            Join-Path $env:ARTIFACT_DIR "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-with-dotnet9"
-            Join-Path $env:ARTIFACT_DIR "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-no-dotnet9"
+          $scripts = @(
+            './scripts/ReleasePipeline.psm1',
+            './scripts/Test-ReleaseIdentity.ps1',
+            './scripts/New-ReleaseCandidate.ps1',
+            './scripts/Invoke-OfflineManifestSigning.ps1',
+            './scripts/Publish-ImmutableRelease.ps1',
+            './scripts/tests/Test-ReleasePipeline.ps1'
           )
-
-          foreach ($dir in $packageDirs) {
-            if (-not (Test-Path -LiteralPath $dir)) {
-              throw "Missing package directory: $dir"
-            }
-
-            $zip = "$dir.zip"
-            if (Test-Path -LiteralPath $zip) {
-              Remove-Item -LiteralPath $zip -Force
-            }
-
-            Compress-Archive -Path (Join-Path $dir "*") -DestinationPath $zip -CompressionLevel Optimal
-          }
-
-      - name: Verify package inventories
-        if: env.SKIP_EXISTING_RELEASE != 'true'
-        shell: pwsh
-        run: |
-          $required = @(
-            "PimaxVrcSupervisor.exe",
-            "PimaxVrcSupervisorConfigurator.exe",
-            "PimaxVrcSupervisorSteamVrHost.exe",
-            "PimaxVrcSupervisorTui.exe",
-            "PimaxVrcSupervisorStartupHelper.exe",
-            "PimaxVrcSupervisorWatcher.exe",
-            "supervisor.config.json",
-            "README.md",
-            "RELEASE_NOTES.md",
-            "Assets/vr-overlay-icon.png"
-          )
-
-          $zips = @(
-            Join-Path $env:ARTIFACT_DIR "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-with-dotnet9.zip"
-            Join-Path $env:ARTIFACT_DIR "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-no-dotnet9.zip"
-          )
-
-          foreach ($zip in $zips) {
-            if (-not (Test-Path -LiteralPath $zip)) {
-              throw "Missing zip: $zip"
-            }
-
-            $entries = @(tar -tf $zip)
-            foreach ($file in $required) {
-              if ($entries -notcontains $file) {
-                throw "Missing required package file in $zip`: $file"
-              }
-            }
-
-            if ($entries | Select-String "1\.3\.0-test|v1\.3\.0-test") {
-              throw "Stale test name found in $zip."
-            }
-
-            if ($entries | Select-String '(^|/)(cs|de|es|fr|it|ja|ko|pl|pt-BR|ru|tr|zh-Hans|zh-Hant)/') {
-              throw "Satellite culture folder found in $zip."
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $script),
+              [ref]$tokens,
+              [ref]$errors)
+            if ($errors.Count -ne 0) {
+              throw "PowerShell parser errors in $script`: $($errors -join '; ')"
             }
           }
 
-      - name: Create SHA256 checksums
-        if: env.SKIP_EXISTING_RELEASE != 'true'
+      - name: Run focused release-pipeline tests
+        shell: pwsh
+        run: ./scripts/tests/Test-ReleasePipeline.ps1
+
+      - name: Run complete managed validation
         shell: pwsh
         run: |
-          $zips = Get-ChildItem -Path $env:ARTIFACT_DIR -Filter "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-*.zip" -File
+          dotnet test ./PimaxVrcSupervisor.Tests/PimaxVrcSupervisor.Tests.csproj -c Debug
+          if ($LASTEXITCODE -ne 0) { throw 'Debug managed tests failed.' }
+          dotnet test ./PimaxVrcSupervisor.Tests/PimaxVrcSupervisor.Tests.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { throw 'Release managed tests failed.' }
+
+          $projects = @(
+            './PimaxVrcSupervisor/PimaxVrcSupervisor.csproj',
+            './PimaxVrcSupervisor.ConfigEditor/PimaxVrcSupervisor.ConfigEditor.csproj',
+            './PimaxVrcSupervisor.SteamVrHost/PimaxVrcSupervisor.SteamVrHost.csproj',
+            './PimaxVrcSupervisor.Tests/PimaxVrcSupervisor.Tests.csproj'
+          )
+          foreach ($configuration in @('Debug', 'Release')) {
+            foreach ($project in $projects) {
+              dotnet build $project -c $configuration --no-restore
+              if ($LASTEXITCODE -ne 0) { throw "$configuration build failed for $project." }
+            }
+          }
+          foreach ($project in $projects) {
+            dotnet format $project --verify-no-changes --no-restore
+            if ($LASTEXITCODE -ne 0) { throw "Formatting failed for $project." }
+          }
+
+      - name: Run complete Rust validation
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path ./PimaxVrcSupervisor.Tui/Cargo.toml -- --check
+          if ($LASTEXITCODE -ne 0) { throw 'Rust formatting failed.' }
+          cargo clippy --manifest-path ./PimaxVrcSupervisor.Tui/Cargo.toml --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'Debug Rust clippy failed.' }
+          cargo clippy --manifest-path ./PimaxVrcSupervisor.Tui/Cargo.toml --release --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'Release Rust clippy failed.' }
+          cargo test --manifest-path ./PimaxVrcSupervisor.Tui/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'Debug Rust tests failed.' }
+          cargo test --manifest-path ./PimaxVrcSupervisor.Tui/Cargo.toml --release
+          if ($LASTEXITCODE -ne 0) { throw 'Release Rust tests failed.' }
+          cargo build --manifest-path ./PimaxVrcSupervisor.Tui/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'Debug Rust build failed.' }
+          cargo build --manifest-path ./PimaxVrcSupervisor.Tui/Cargo.toml --release
+          if ($LASTEXITCODE -ne 0) { throw 'Release Rust build failed.' }
+
+      - name: Validate documentation
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check mkdocs-material
+          python -m mkdocs build --strict
+          if ($LASTEXITCODE -ne 0) { throw 'Strict MkDocs validation failed.' }
+          if (Test-Path -LiteralPath ./site) {
+            Remove-Item -LiteralPath ./site -Recurse -Force
+          }
+
+      - name: Build both final package variants
+        shell: pwsh
+        run: |
+          ./scripts/package-release.ps1 `
+            -Version $env:RELEASE_TAG `
+            -Runtime win-x64 `
+            -Configuration Release `
+            -ReleaseRoot ./artifacts
+
+          New-Item -ItemType Directory -Path ./candidate -Force | Out-Null
+          $zips = @(Get-ChildItem -LiteralPath ./artifacts -File -Filter '*.zip')
           if ($zips.Count -ne 2) {
-            throw "Expected exactly two release zips, found $($zips.Count)."
+            throw "Expected exactly two package ZIPs, found $($zips.Count)."
           }
-
           foreach ($zip in $zips) {
-            $checksumPath = "$($zip.FullName).sha256"
-            $hash = (Get-FileHash -Path $zip.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($zip.Name)" | Out-File -FilePath $checksumPath -Encoding ascii
+            Copy-Item -LiteralPath $zip.FullName -Destination ./candidate
+            $hash = (Get-FileHash -LiteralPath $zip.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            [IO.File]::WriteAllText(
+              (Join-Path ./candidate "$($zip.Name).sha256"),
+              "$hash  $($zip.Name)",
+              [Text.UTF8Encoding]::new($false))
           }
 
-      - name: Install cosign
-        if: env.SKIP_EXISTING_RELEASE != 'true'
-        uses: sigstore/cosign-installer@v3
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
 
-      - name: Sigstore-sign release zips
-        if: env.SKIP_EXISTING_RELEASE != 'true'
+      - name: Sigstore-sign package candidates
         shell: pwsh
         run: |
-          $zips = Get-ChildItem -Path $env:ARTIFACT_DIR -Filter "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-*.zip" -File
-          foreach ($zip in $zips) {
-            $bundlePath = "$($zip.FullName).sigstore.json"
-            cosign sign-blob --yes --bundle $bundlePath $zip.FullName
-
-            cosign verify-blob $zip.FullName `
-              --bundle $bundlePath `
-              --certificate-identity-regexp "^https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/(heads|tags)/.+$" `
-              --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+          foreach ($zip in Get-ChildItem -LiteralPath ./candidate -File -Filter '*.zip') {
+            cosign sign-blob --yes --bundle "$($zip.FullName).sigstore.json" $zip.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Cosign failed for $($zip.Name)." }
           }
 
-      - name: Attest release zips
-        if: env.SKIP_EXISTING_RELEASE != 'true'
-        uses: actions/attest-build-provenance@v2
+      - name: Attest with-dotnet9 package
+        id: attest_with
+        uses: actions/attest@36051bcae73b7c2a8a6945a48cbf80953c6baa35 # v4
         with:
-          subject-path: artifacts/PimaxVrcSupervisor-${{ env.RELEASE_VERSION }}-win-x64-*.zip
+          subject-path: candidate/PimaxVrcSupervisor-${{ inputs.tag }}-win-x64-with-dotnet9.zip
 
-      - name: Create or update draft GitHub release
-        if: env.SKIP_EXISTING_RELEASE != 'true'
+      - name: Preserve with-dotnet9 attestation bundle
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          ATTESTATION_BUNDLE_PATH: ${{ steps.attest_with.outputs.bundle-path }}
+        run: Copy-Item -LiteralPath $env:ATTESTATION_BUNDLE_PATH -Destination "./candidate/PimaxVrcSupervisor-$env:RELEASE_TAG-win-x64-with-dotnet9.zip.attestation.json"
+
+      - name: Attest no-dotnet9 package
+        id: attest_without
+        uses: actions/attest@36051bcae73b7c2a8a6945a48cbf80953c6baa35 # v4
+        with:
+          subject-path: candidate/PimaxVrcSupervisor-${{ inputs.tag }}-win-x64-no-dotnet9.zip
+
+      - name: Preserve no-dotnet9 attestation bundle
+        shell: pwsh
+        env:
+          ATTESTATION_BUNDLE_PATH: ${{ steps.attest_without.outputs.bundle-path }}
+        run: Copy-Item -LiteralPath $env:ATTESTATION_BUNDLE_PATH -Destination "./candidate/PimaxVrcSupervisor-$env:RELEASE_TAG-win-x64-no-dotnet9.zip.attestation.json"
+
+      - name: Generate exact-byte update manifest
+        shell: pwsh
         run: |
-          $releaseFiles = @(
-            Get-ChildItem -Path $env:ARTIFACT_DIR -Filter "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-*.zip" -File
-            Get-ChildItem -Path $env:ARTIFACT_DIR -Filter "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-*.zip.sha256" -File
-            Get-ChildItem -Path $env:ARTIFACT_DIR -Filter "PimaxVrcSupervisor-$env:RELEASE_VERSION-win-x64-*.zip.sigstore.json" -File
-          ) | ForEach-Object { $_.FullName }
+          $commitTime = [DateTimeOffset]::Parse((git show -s --format=%cI $env:RELEASE_SOURCE_COMMIT)).UtcDateTime.ToString('yyyy-MM-ddTHH:mm:ssZ')
+          ./scripts/New-ReleaseCandidate.ps1 `
+            -Stage Manifest `
+            -CandidateDirectory ./candidate `
+            -Version $env:RELEASE_VERSION `
+            -Tag $env:RELEASE_TAG `
+            -SourceCommit $env:RELEASE_SOURCE_COMMIT `
+            -Channel $env:RELEASE_CHANNEL `
+            -GeneratedAtUtc $commitTime
 
-          if ($releaseFiles.Count -ne 6) {
-            throw "Expected 6 release upload files, found $($releaseFiles.Count)."
+      - name: Sigstore-sign update manifest
+        shell: pwsh
+        run: |
+          $manifest = Resolve-Path './candidate/PimaxVrcSupervisor-${{ inputs.tag }}-update-manifest-v1.json'
+          cosign sign-blob --yes --bundle "$manifest.sigstore.json" $manifest
+          if ($LASTEXITCODE -ne 0) { throw 'Cosign failed for the update manifest.' }
+
+      - name: Attest update manifest
+        id: attest_manifest
+        uses: actions/attest@36051bcae73b7c2a8a6945a48cbf80953c6baa35 # v4
+        with:
+          subject-path: candidate/PimaxVrcSupervisor-${{ inputs.tag }}-update-manifest-v1.json
+
+      - name: Preserve manifest attestation and finalize inventory
+        shell: pwsh
+        env:
+          ATTESTATION_BUNDLE_PATH: ${{ steps.attest_manifest.outputs.bundle-path }}
+        run: |
+          Copy-Item -LiteralPath $env:ATTESTATION_BUNDLE_PATH -Destination "./candidate/PimaxVrcSupervisor-$env:RELEASE_TAG-update-manifest-v1.json.attestation.json"
+          ./scripts/New-ReleaseCandidate.ps1 `
+            -Stage Complete `
+            -CandidateDirectory ./candidate `
+            -Version $env:RELEASE_VERSION `
+            -Tag $env:RELEASE_TAG `
+            -SourceCommit $env:RELEASE_SOURCE_COMMIT `
+            -Channel $env:RELEASE_CHANNEL `
+            -WorkflowRunId $env:RELEASE_WORKFLOW_RUN_ID `
+            -WorkflowRunAttempt $env:RELEASE_WORKFLOW_RUN_ATTEMPT `
+            -WorkflowRunUrl $env:RELEASE_WORKFLOW_RUN_URL `
+            -WorkflowRef $env:RELEASE_WORKFLOW_REF
+
+          if (Get-ChildItem -LiteralPath ./candidate -File | Where-Object { $_.Name -match '\.sig$|signatures\.json$|offline-signing-report\.json$' }) {
+            throw 'The unsigned candidate must not contain an offline ECDSA signature or signing report.'
           }
 
-          if ($env:REPLACEMENT_MODE -eq "true") {
-            gh release upload $env:RELEASE_VERSION @releaseFiles --clobber
-            if ($LASTEXITCODE -ne 0) {
-              throw "Release asset upload failed for $env:RELEASE_VERSION."
-            }
-
-            $releaseNotes = Get-Content -LiteralPath .\RELEASE_NOTES.md -Raw
-            gh release edit $env:RELEASE_VERSION --notes "$releaseNotes"
-            if ($LASTEXITCODE -ne 0) {
-              throw "Release note update failed for $env:RELEASE_VERSION."
-            }
-          } else {
-            gh release create $env:RELEASE_VERSION @releaseFiles --title "Pimax VRC Supervisor $env:RELEASE_VERSION" --notes-file RELEASE_NOTES.md --draft --verify-tag
-            if ($LASTEXITCODE -ne 0) {
-              throw "Draft release creation failed for $env:RELEASE_VERSION."
-            }
-          }
+      - name: Upload one bounded unsigned candidate artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: PimaxVrcSupervisor-${{ inputs.tag }}-unsigned-release-candidate
+          path: candidate/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

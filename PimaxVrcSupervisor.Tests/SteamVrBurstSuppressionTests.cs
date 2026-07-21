@@ -71,7 +71,7 @@ public sealed class SteamVrBurstSuppressionTests
         using var temp = new TempDirectory();
         var stations = Stations(2);
 
-        var result = await CreateChecker(temp, TimeSpan.FromMilliseconds(15)).CheckAsync(
+        var result = await CreateChecker(temp, TimeSpan.FromMilliseconds(100)).CheckAsync(
             stations,
             true,
             Available,

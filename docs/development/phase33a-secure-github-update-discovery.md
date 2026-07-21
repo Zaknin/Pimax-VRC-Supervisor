@@ -1,6 +1,6 @@
 # Phase 33A Secure GitHub Update Discovery and Notification
 
-Status: the reviewed manifest/signature/state contracts and standalone bounded discovery/scheduling services are implemented. They are not wired into Supervisor startup, Configurator, TUI, overlay, bridge, or configuration yet. No package download, installer, version change, release-workflow change, GitHub setting change, or lifecycle/configuration write is implemented.
+Status: the reviewed manifest/signature/state contracts, bounded discovery/scheduling services, verified status surfaces, and operator-assisted immutable-release tooling are implemented. No package download, staging, installation, version change, production trust key, GitHub setting change, release publication, tag creation, or lifecycle write is implemented.
 
 Baseline: `codex/phase-33a-secure-update-discovery` from Phase 32F commit `62e4ed9971934e1c767400ea4dbd0c76464cd660`.
 
@@ -41,19 +41,11 @@ Both include Supervisor, Configurator, SteamVR host, Rust TUI, the Startup Helpe
 
 ### Release and verification workflow
 
-The current `.github/workflows/release.yml`:
+The hardened `.github/workflows/release.yml` is now a manually dispatched, unsigned candidate builder. It requires strict version, tag, exact commit, and Stable-channel inputs; validates component-version parity and the complete managed/Rust/documentation suites; builds exactly both package variants; creates exact-byte manifest, checksum, Sigstore, attestation, inventory, and verification material; and uploads one bounded candidate artifact. Every action is pinned to a reviewed commit SHA. It has read-only repository contents permission and no release-creation, release-upload, release-publication, offline ECDSA key, or detached ECDSA signing path.
 
-1. accepts a strict `vX.Y.Z` tag and verifies checkout/tag identity;
-2. builds both variants;
-3. optionally Authenticode-signs app binaries, but currently skips rather than fails when signing secrets are absent;
-4. recreates and inventories both ZIPs;
-5. writes one SHA-256 file and one keyless Sigstore bundle per ZIP;
-6. creates GitHub build-provenance attestations for the ZIPs;
-7. creates or updates a draft release with six files: two ZIPs, two checksum files, and two Sigstore bundles.
+The former `.github/workflows/sign-release-assets.yml` post-publication mutator is removed. No workflow triggered by `release.published` remains to add, replace, or clobber release assets. Authenticode is not claimed by this candidate contract; the workflow does not silently downgrade an expected Authenticode step.
 
-It does not publish the draft, attach attestation bundles as release assets, create or sign an update manifest, or perform post-publication verification.
-
-The separate `.github/workflows/sign-release-assets.yml` runs on `release.published`, downloads the two ZIPs, signs/checksums them, and uploads four companion assets after publication. That ordering is incompatible with immutable releases and duplicates the main release workflow. It must be retired, not adapted to mutate a published release.
+Offline signing and publication are separate local operator actions. `scripts/Invoke-OfflineManifestSigning.ps1` validates the candidate and signs only the exact manifest bytes using an explicitly supplied key outside the repository and candidate. `scripts/Publish-ImmutableRelease.ps1` revalidates everything, refuses disabled immutability or an existing published release, constructs/reuses a draft, uploads and verifies the complete draft, requests an exact confirmation, publishes once, and performs read-only post-publication verification. See [Immutable Release Operations](../reference/immutable-release-operations.md).
 
 Read-only GitHub discovery on 2026-07-20 found:
 
@@ -118,6 +110,7 @@ Each release must attach these manifest files while still a draft:
 
 ```text
 PimaxVrcSupervisor-vX.Y.Z-update-manifest-v1.json
+PimaxVrcSupervisor-vX.Y.Z-update-manifest-v1.json.sig
 PimaxVrcSupervisor-vX.Y.Z-update-manifest-v1.signatures.json
 PimaxVrcSupervisor-vX.Y.Z-update-manifest-v1.json.sha256
 PimaxVrcSupervisor-vX.Y.Z-update-manifest-v1.json.sigstore.json
@@ -253,9 +246,10 @@ For every stable tag, the draft must contain exactly:
 
 - two ZIP packages;
 - one `.sha256`, one `.sigstore.json`, and one attached `.attestation.json` bundle per ZIP;
-- the manifest JSON plus its detached signatures, checksum, Sigstore bundle, and attached attestation bundle.
+- the manifest JSON, raw Base64-DER `.sig`, updater-compatible detached-signature envelope, checksum, Sigstore bundle, and attached attestation bundle;
+- `SHA256SUMS.txt`, the CI verification report, candidate inventory, and bounded offline-signing report.
 
-That is 13 named assets in the v1 contract. GitHub's release-level attestation is created/associated at immutable publication and is verified after publication; it is separate from the attached artifact-attestation bundles.
+That is exactly 18 named assets in the implemented v1 release contract: 15 in the unsigned Actions candidate plus three offline signing outputs. GitHub's release-level attestation is created/associated at immutable publication and is verified after publication; it is separate from the attached artifact-attestation bundles.
 
 Variant rules:
 
@@ -359,32 +353,23 @@ State is a cache, not authority. `updateAvailable` may be shown only when the cu
 - Record version/tag, elapsed time, response size, and bounded failure category only. Never log manifest/signature bodies, GitHub response headers beyond an ETag hash, credentials, or local package paths.
 - Update diagnostics are passive and cannot set session `OperatorWarning`, trigger an action result, or alter existing diagnostics enablement.
 
-## Required release-workflow changes
+## Implemented release-workflow contract and remaining operator gate
 
-1. Enable **Settings -> Releases -> Enable release immutability** once with repository administration, preferably enforced by owner policy. Do not give the release job an administration token merely to toggle the setting.
-2. Add a hard preflight using the immutable-releases API. Fail before build/publish unless `enabled=true` or `enforced_by_owner=true`.
-3. Pin every action, including Rust toolchain and Cosign installer, to reviewed full commit SHAs and use Dependabot for controlled updates.
-4. Make missing Authenticode credentials a release failure, or explicitly remove Authenticode from the claimed release contract. Do not silently publish a partially signed release.
-5. Build/sign/package once, then create checksums and Sigstore bundles from the final ZIP bytes.
-6. Use current `actions/attest` with least-privilege `contents: read`, `id-token: write`, `attestations: write`, and `artifact-metadata: write`; copy each `bundle-path` into the final asset set.
-7. Generate the manifest from final file names, sizes, SHA-256 digests, tag, and commit. Obtain its offline detached signature, then independently checksum, Sigstore-sign, and attest the exact manifest bytes.
-8. Create the GitHub release as a draft. Upload all 13 final assets while it remains a draft.
-9. Re-query the draft and compare the exact asset-name/count/size/digest set. Verify checksums, offline manifest signature, Sigstore identities, attestation subjects/signer workflow, package inventory, version parity, and tag/commit parity before publication.
-10. Gate publication behind a protected GitHub Environment/manual approval. Publish the existing draft with `gh release edit TAG --draft=false`; never create a second release.
-11. After publication, require `isDraft=false`, `isImmutable=true`, the same tag/commit, and the same asset digests. Run:
+The candidate, signer, publisher, post-publication verifier, source guards, and mocked regression suite are implemented. The remaining external gate is deliberately manual: before the next release, a repository administrator must enable **Settings -> Releases -> Enable release immutability**. The workflow and publisher do not have authority to change that setting. The publisher calls the immutable-releases API and fails before draft creation unless `enabled=true`.
 
-    ```powershell
-    gh release verify $tag --repo Zaknin/Pimax-VRC-Supervisor
-    gh release verify-asset $tag $localAsset --repo Zaknin/Pimax-VRC-Supervisor
-    Get-FileHash $localZip -Algorithm SHA256
-    cosign verify-blob $localZip --bundle $sigstoreBundle --certificate-identity "https://github.com/Zaknin/Pimax-VRC-Supervisor/.github/workflows/release.yml@refs/tags/$tag" --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
-    gh attestation verify $localAsset --repo Zaknin/Pimax-VRC-Supervisor --signer-workflow Zaknin/Pimax-VRC-Supervisor/.github/workflows/release.yml
-    ```
+The implemented sequence is:
 
-    Repeat asset-level verification for every final asset covered by the release/attestation contract. Use the still-present runner files; no post-publication release download is required.
-12. Delete or disable `sign-release-assets.yml`. No workflow may upload, replace, resign, or clobber assets after publication.
-13. If post-publication verification fails, fail and alert without attempting mutation. Investigate and publish a new version/tag; do not reuse the immutable tag.
-14. Leave the historical mutable `v1.3.1` release unchanged. Do not retrofit, replace, or republish its assets when enabling this contract for future tags.
+1. manually dispatch the candidate workflow from the reviewed `main` workflow with strict version, exact `v<version>` tag, exact 40-character source commit, and Stable channel;
+2. download the single unsigned candidate artifact and keep the production private key outside the repository, CI, artifact, environment, logs, and release assets;
+3. validate and sign the exact manifest bytes offline, producing the raw `.sig`, the updater-compatible signature envelope, and a bounded report;
+4. run the local publisher from a clean checkout at the same commit with an externally approved public key;
+5. require correct GitHub identity/repository, enabled immutability, exact remote tag commit, no published same-tag release, exact draft metadata, exact 18-asset inventory, local/remote sizes, and downloaded draft SHA-256 values;
+6. show repository, tag, version, commit, key ID, draft URL/status, and every asset digest/size; require the exact `PUBLISH <tag>` confirmation;
+7. publish the existing draft exactly once and perform no later GitHub mutation;
+8. require published `immutable=true`, non-draft/non-prerelease metadata, exact assets, `gh release verify`, `gh release verify-asset` for every asset, `SHA256SUMS.txt`, offline ECDSA, pinned-identity Sigstore, and repository workflow attestation checks;
+9. write a bounded success report outside the candidate, or a bounded incident report when any post-publication check fails. A failure is never repaired, deleted, recreated, or re-uploaded automatically.
+
+The historical mutable `v1.3.1` release remains untouched and is rejected explicitly by the identity and publisher contracts. The first updater-capable release must be installed manually; Phase 33A still has no package download or installation path.
 
 ## Phase 33A test strategy
 
@@ -401,7 +386,7 @@ State is a cache, not authority. `updateAvailable` may be shown only when the cu
 9. Bridge compatibility: old/new Supervisor and TUI combinations, optional update snapshot, read-only updates resource, overlay reconnect, and no command replay.
 10. UX tests: only verified newer versions notify; current/lower/dismissed/failed states do not; no update result becomes `OperatorWarning` or session action state.
 11. Source guards allow only release-metadata, manifest, and detached-signature retrieval, and reject package download/staging/extraction/installation/process execution, install-directory writes, arbitrary URLs, update references from lifecycle/recovery/USB modules, and post-publish `gh release upload --clobber`.
-12. Release-workflow fixtures prove exact 13-asset inventory, draft-first ordering, immutability preflight, signing/attestation before publish, protected publish gate, and all post-publish verification commands.
+12. Release-workflow fixtures prove exact 18-asset inventory, draft-first ordering, immutability preflight, signing/attestation before publish, explicit local publish confirmation, and all post-publish verification commands.
 13. Preserve the full accepted .NET and Rust regression suites, strict MkDocs build, package-inventory checks, and Phase 32D/32E lifecycle tests.
 
 ### Manual tests after design review
