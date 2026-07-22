@@ -117,6 +117,7 @@ jobs:
 
           $projects = @(
             './PimaxVrcSupervisor/PimaxVrcSupervisor.csproj',
+            './PimaxVrcSupervisor.UpdateWorker/PimaxVrcSupervisor.UpdateWorker.csproj',
             './PimaxVrcSupervisor.ConfigEditor/PimaxVrcSupervisor.ConfigEditor.csproj',
             './PimaxVrcSupervisor.SteamVrHost/PimaxVrcSupervisor.SteamVrHost.csproj',
             './PimaxVrcSupervisor.Tests/PimaxVrcSupervisor.Tests.csproj'

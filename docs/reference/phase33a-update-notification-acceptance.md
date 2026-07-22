@@ -44,7 +44,7 @@ Use a fresh `no-dotnet9` package extracted below `C:\Users\operator\Documents\Pi
 
 1. Confirm the Configurator Updates tab shows installed `1.3.1`, channel Stable, and policy Disabled.
 2. With the Supervisor bridge available, press **Check now** under Disabled and confirm the bridge remains authoritative, the UI stays responsive, and one structured terminal result appears without a worker process.
-3. With no Supervisor bridge available, press **Check now** and confirm the exact sibling one-shot worker runs without starting Supervisor lifecycle, SteamVR, Pimax, base-station, monitor, managed-application, watcher, TUI, or overlay behavior. Confirm one bounded result appears and no helper process remains after completion.
+3. With no Supervisor bridge available, press **Check now** and confirm the exact sibling `PimaxVrcSupervisor.UpdateWorker.exe` one-shot worker runs without a UAC prompt and without starting Supervisor lifecycle, SteamVR, Pimax Play, base-station, monitor, managed-application, watcher, TUI, overlay, normal bridge, startup integration, session ownership, or cleanup behavior. Confirm one bounded result appears and no helper process remains after completion.
 4. Select Notify, save, reopen, and confirm the exact policy persists. Restore the prior configuration after the observation.
 5. Feed the dedicated harness's verified cached projection and confirm only `1.4.0` is shown as verified. Feed altered/incorrectly signed cases and confirm no unverified version is displayed.
 6. Confirm the TUI shows one compact passive indicator without overflow and the overlay shows one passive non-modal badge outside action controls.
@@ -54,6 +54,24 @@ Use a fresh `no-dotnet9` package extracted below `C:\Users\operator\Documents\Pi
 10. Search the deployment, update-state directory, and network evidence for ZIP output. There must be no downloaded package file.
 
 Do not run lifecycle steps merely to validate update UI when an active Pimax/SteamVR session would be disturbed. In that case record those manual rows as deferred and rely only on the preserved Phase 32D/32E regression gates until the normal hardware acceptance window.
+
+## Mixed-integrity update-admission evidence
+
+The secure admission remains one SID-derived `Global\\` mutex with the explicit current-user owner and exact protected SID-only DACL. It is intentionally not relaxed for standard-user checking.
+
+Automated subprocess coverage runs at one integrity level and proves contention, no operation allocation/network/state mutation on rejection, release recovery, identity stability, and fail-closed `gate_unavailable` handling when descriptor security cannot be established. CI must not attempt UAC elevation.
+
+For local Windows evidence after building both configurations, run the following from a standard-user PowerShell session. It deliberately prompts twice for UAC and performs no package or installation operation:
+
+```powershell
+.\scripts\Test-UpdateWorkerMixedIntegrity.ps1 -Configuration Release
+```
+
+The harness proves an unelevated gate owner rejects the elevated legacy Supervisor one-shot compatibility path, an elevated gate owner rejects the unelevated shipped UpdateWorker, both rejections return `already_running` with no operation status, and the gate is usable after each release. Run `UpdateCheckAdmissionSecurityTests` alongside it to prove descriptor security errors remain `gate_unavailable`; never reinterpret them as contention or repair the owner/DACL.
+
+## Future installation contract (documented only)
+
+Checking and any future package download/verification remain unelevated. UAC may be requested only after an explicit user installation action, by a separate minimal elevated installer executable. That installer performs no network access and independently revalidates the manifest, package hash, target path, and version before any mutation. If the user cancels UAC, the current installation remains unchanged. Phase 33A implements none of those installation capabilities.
 
 ## 2026-07-21 acceptance evidence
 

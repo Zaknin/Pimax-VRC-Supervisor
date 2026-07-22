@@ -8,7 +8,7 @@ public sealed class ConfiguratorStandaloneUpdateCheckLauncherTests
     public async Task LaunchUsesExactSiblingExecutableAndFixedNoShellArguments()
     {
         using var temp = new TempDirectory();
-        var executable = Path.Combine(temp.Path, "PimaxVrcSupervisor.exe");
+        var executable = Path.Combine(temp.Path, "PimaxVrcSupervisor.UpdateWorker.exe");
         File.WriteAllBytes(executable, []);
         var runner = new RecordingProcessRunner(Output(ValidJson()));
         var launcher = new ConfiguratorStandaloneUpdateCheckLauncher(temp.Path, runner, TimeSpan.FromSeconds(2));
@@ -94,7 +94,7 @@ public sealed class ConfiguratorStandaloneUpdateCheckLauncherTests
     public async Task LauncherReturnsControlWhileWorkerProcessIsRunning()
     {
         using var temp = new TempDirectory();
-        File.WriteAllBytes(Path.Combine(temp.Path, "PimaxVrcSupervisor.exe"), []);
+        File.WriteAllBytes(Path.Combine(temp.Path, "PimaxVrcSupervisor.UpdateWorker.exe"), []);
         var runner = new BlockingProcessRunner();
         var launcher = new ConfiguratorStandaloneUpdateCheckLauncher(temp.Path, runner, TimeSpan.FromSeconds(2));
 
@@ -153,7 +153,7 @@ public sealed class ConfiguratorStandaloneUpdateCheckLauncherTests
     private static async Task<StandaloneUpdateCheckResultV1> RunWithOutputAsync(UpdateCheckWorkerProcessOutput output)
     {
         using var temp = new TempDirectory();
-        File.WriteAllBytes(Path.Combine(temp.Path, "PimaxVrcSupervisor.exe"), []);
+        File.WriteAllBytes(Path.Combine(temp.Path, "PimaxVrcSupervisor.UpdateWorker.exe"), []);
         var launcher = new ConfiguratorStandaloneUpdateCheckLauncher(
             temp.Path,
             new RecordingProcessRunner(output),

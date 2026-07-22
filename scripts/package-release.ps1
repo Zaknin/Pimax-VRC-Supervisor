@@ -20,6 +20,7 @@ $withoutRuntimeZip = "$withoutRuntimeDir.zip"
 
 $projects = @(
     ".\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj",
+    ".\PimaxVrcSupervisor.UpdateWorker\PimaxVrcSupervisor.UpdateWorker.csproj",
     ".\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj",
     ".\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj"
 )
@@ -30,6 +31,7 @@ $cultureFolders = @(
 
 $expectedFiles = @(
     "PimaxVrcSupervisor.exe",
+    "PimaxVrcSupervisor.UpdateWorker.exe",
     "PimaxVrcSupervisorConfigurator.exe",
     "PimaxVrcSupervisorSteamVrHost.exe",
     "PimaxVrcSupervisorTui.exe",

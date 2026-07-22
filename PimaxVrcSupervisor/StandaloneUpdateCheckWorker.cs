@@ -91,9 +91,17 @@ internal sealed class StandaloneUpdateCheckWorker
         }
     }
 
-    public static async Task<StandaloneUpdateCheckResultV1> RunProductionAsync(CancellationToken cancellationToken)
+    public static async Task<StandaloneUpdateCheckResultV1> RunProductionAsync(
+        CancellationToken cancellationToken,
+        string runtimeConfigFileName = "PimaxVrcSupervisor.runtimeconfig.json")
     {
-        var runtimeConfigPath = Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.runtimeconfig.json");
+        ArgumentException.ThrowIfNullOrWhiteSpace(runtimeConfigFileName);
+        if (!string.Equals(runtimeConfigFileName, Path.GetFileName(runtimeConfigFileName), StringComparison.Ordinal))
+        {
+            throw new ArgumentException("The runtime configuration file name must not include a path.", nameof(runtimeConfigFileName));
+        }
+
+        var runtimeConfigPath = Path.Combine(AppContext.BaseDirectory, runtimeConfigFileName);
         var variant = InstalledPackageVariantDetector.Detect(File.ReadAllBytes(runtimeConfigPath));
         var store = new UpdateStateStore(variant);
         var clock = new SystemUpdateScheduleClock();

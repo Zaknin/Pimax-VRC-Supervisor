@@ -76,6 +76,7 @@ function Test-ReleaseComponentVersions {
     $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
     $projectPaths = @(
         'PimaxVrcSupervisor/PimaxVrcSupervisor.csproj',
+        'PimaxVrcSupervisor.UpdateWorker/PimaxVrcSupervisor.UpdateWorker.csproj',
         'PimaxVrcSupervisor.ConfigEditor/PimaxVrcSupervisor.ConfigEditor.csproj',
         'PimaxVrcSupervisor.SteamVrHost/PimaxVrcSupervisor.SteamVrHost.csproj'
     )

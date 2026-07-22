@@ -83,6 +83,7 @@ For most users, start with **Terminal UI only**. Choose **Terminal UI + SteamVR 
 | App | Purpose |
 | --- | --- |
 | `PimaxVrcSupervisor.exe` | Session Supervisor and classic console. |
+| `PimaxVrcSupervisor.UpdateWorker.exe` | Noninteractive standard-user update-check worker launched only by Configurator when the Supervisor bridge is unavailable. |
 | `PimaxVrcSupervisorConfigurator.exe` | GUI setup and validation tool. |
 | `PimaxVrcSupervisorTui.exe` | Terminal UI dashboard and controls. |
 | `PimaxVrcSupervisorSteamVrHost.exe` | SteamVR Overlay host. |

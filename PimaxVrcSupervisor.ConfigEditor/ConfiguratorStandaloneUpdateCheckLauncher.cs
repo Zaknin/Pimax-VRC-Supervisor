@@ -24,7 +24,7 @@ internal interface IUpdateCheckWorkerProcessRunner
 
 internal sealed class ConfiguratorStandaloneUpdateCheckLauncher : IStandaloneUpdateCheckLauncher
 {
-    private const string SupervisorExecutableName = "PimaxVrcSupervisor.exe";
+    private const string UpdateWorkerExecutableName = "PimaxVrcSupervisor.UpdateWorker.exe";
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(45);
     private static readonly Regex StableVersionPattern = new(
         @"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$",
@@ -57,7 +57,7 @@ internal sealed class ConfiguratorStandaloneUpdateCheckLauncher : IStandaloneUpd
     public async Task<StandaloneUpdateCheckResultV1> RunAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var executablePath = Path.GetFullPath(Path.Combine(_installationDirectory, SupervisorExecutableName));
+        var executablePath = Path.GetFullPath(Path.Combine(_installationDirectory, UpdateWorkerExecutableName));
         if (!string.Equals(
                 Path.GetDirectoryName(executablePath)?.TrimEnd(Path.DirectorySeparatorChar),
                 _installationDirectory.TrimEnd(Path.DirectorySeparatorChar),
