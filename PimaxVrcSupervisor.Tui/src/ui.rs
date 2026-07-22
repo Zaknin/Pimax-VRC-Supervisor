@@ -1634,25 +1634,55 @@ fn update_detail_lines(status: Option<&UpdateStatusSummary>) -> Vec<Line<'static
 
     if !status.verification_configured {
         lines.push(Line::from(Span::styled(
-            "Update verification not configured.",
+            "Update verification is not available in this build.",
             theme::secondary_style(),
         )));
     } else if status.last_error_code.is_some() || status.last_error_summary.is_some() {
-        let code = status.last_error_code.as_deref().unwrap_or("check_failed");
-        let summary = status
-            .last_error_summary
-            .as_deref()
-            .unwrap_or("The cached update check did not complete successfully.");
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<14}", "Update error"), theme::label_style()),
+            Span::styled(format!("{:<14}", "Update result"), theme::label_style()),
             Span::styled(
-                truncate(&format!("{code}: {summary}"), 92),
+                truncate(&update_status_message(status), 92),
                 theme::secondary_style(),
             ),
         ]));
     }
 
     lines
+}
+
+fn update_status_message(status: &UpdateStatusSummary) -> String {
+    if !status.verification_configured {
+        return "Update verification is not available in this build.".to_string();
+    }
+
+    match status.last_error_code.as_deref() {
+        Some("release_mutable") => "No verified update is available yet.".to_string(),
+        Some("already_running") => "An update check is already in progress.".to_string(),
+        Some("request_timeout") | Some("timeout") | Some("worker_timeout") => {
+            "The update check timed out. Try again.".to_string()
+        }
+        Some("network_unavailable") | Some("response_io") => {
+            "Couldn't check for updates. Check your connection and try again.".to_string()
+        }
+        Some("verification_unavailable") => {
+            "Update verification is not available in this build.".to_string()
+        }
+        Some("worker_start_failed") | Some("gate_unavailable") => {
+            "The update check could not be started.".to_string()
+        }
+        Some("cancelled") => "The update check was cancelled.".to_string(),
+        Some("ignored") => "No newer stable release was found.".to_string(),
+        Some(code)
+            if code.starts_with("signature_")
+                || code.starts_with("manifest_")
+                || code.starts_with("repository_")
+                || code.starts_with("trust_")
+                || code.starts_with("release_") =>
+        {
+            "A release was found, but it could not be verified and was ignored.".to_string()
+        }
+        _ => "Couldn't check for updates. Check your connection and try again.".to_string(),
+    }
 }
 
 fn format_update_time(value: &str) -> String {
@@ -1970,13 +2000,18 @@ mod tests {
         status.last_error_summary = Some("cached failure".to_string());
         app.update_status = Some(status);
 
+        assert_eq!(
+            update_status_message(app.update_status.as_ref().expect("status")),
+            "Update verification is not available in this build."
+        );
+
         for (width, height) in [(120, 32), (100, 26)] {
             let text = rendered_text(&render_buffer(&mut app, width, height));
             assert!(text.contains("v1.3.1 -> none"));
             assert!(text.contains("Stable  dismissed no"));
             assert!(text.contains("2026-07-21 12:00 UTC"));
             assert!(
-                text.contains("Update verification not configured."),
+                text.contains("Update verification is not available in"),
                 "{width}x{height}: {text}"
             );
             assert!(!text.contains("Update available:"));
@@ -2007,10 +2042,36 @@ mod tests {
         status.last_error_summary = Some("The cached check timed out.".to_string());
         app.update_status = Some(status);
 
+        assert_eq!(
+            update_status_message(app.update_status.as_ref().expect("status")),
+            "The update check timed out. Try again."
+        );
+
         let text = rendered_text(&render_buffer(&mut app, 120, 32));
 
-        assert!(text.contains("timeout: The cached"));
+        assert!(text.contains("The update check timed out."));
         assert!(!text.contains("Update available:"));
+    }
+
+    #[test]
+    fn cached_update_failure_uses_human_readable_message_without_internal_code() {
+        let mut app = app_with_steamvr_commands("running");
+        let mut status = verified_update();
+        status.update_available = false;
+        status.latest_verified_version = None;
+        status.last_error_code = Some("release_mutable".to_string());
+        status.last_error_summary = Some("The update check failed: release_mutable.".to_string());
+        app.update_status = Some(status);
+
+        assert_eq!(
+            update_status_message(app.update_status.as_ref().expect("status")),
+            "No verified update is available yet."
+        );
+
+        let text = rendered_text(&render_buffer(&mut app, 120, 32));
+
+        assert!(text.contains("No verified update is availabl"), "{text}");
+        assert!(!text.contains("release_mutable"));
     }
 
     #[test]

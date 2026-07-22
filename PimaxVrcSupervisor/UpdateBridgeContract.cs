@@ -52,6 +52,144 @@ internal sealed record UpdateActionAcceptance(
     string Message,
     string? ResultCode = null);
 
+internal static class UpdateStatusUserMessage
+{
+    public const string NetworkFailure = "Couldn't check for updates. Check your connection and try again.";
+
+    public static string ForResult(string? resultCode, UpdateStatusSnapshotV1? status)
+    {
+        if (!string.IsNullOrWhiteSpace(resultCode))
+        {
+            return ForCode(resultCode, status);
+        }
+
+        return status is null
+            ? NetworkFailure
+            : ForStatus(status);
+    }
+
+    public static string ForStatus(UpdateStatusSnapshotV1 status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+
+        if (!status.VerificationConfigured)
+        {
+            return "Update verification is not available in this build.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(status.LastErrorCode))
+        {
+            return ForCode(status.LastErrorCode, status);
+        }
+
+        if (status.CheckInProgress)
+        {
+            return "An update check is already in progress.";
+        }
+
+        if (status.LastAttemptAt is null)
+        {
+            return "Updates have not been checked yet.";
+        }
+
+        if (string.Equals(status.Operation?.ResultCode, "ignored", StringComparison.Ordinal))
+        {
+            return "No newer stable release was found.";
+        }
+
+        if (status.UpdateAvailable && IsStableVersion(status.LatestVerifiedVersion))
+        {
+            return Available(status.LatestVerifiedVersion!, status.CurrentVersion);
+        }
+
+        return status.LastSuccessfulCheckAt is not null
+            ? UpToDate(status.CurrentVersion)
+            : "Updates have not been checked yet.";
+    }
+
+    private static string ForCode(string code, UpdateStatusSnapshotV1? status)
+    {
+        if (string.Equals(code, "release_mutable", StringComparison.Ordinal))
+        {
+            return "No verified update is available yet.";
+        }
+
+        if (string.Equals(code, "already_running", StringComparison.Ordinal))
+        {
+            return "An update check is already in progress.";
+        }
+
+        if (string.Equals(code, "request_timeout", StringComparison.Ordinal)
+            || string.Equals(code, "worker_timeout", StringComparison.Ordinal))
+        {
+            return "The update check timed out. Try again.";
+        }
+
+        if (string.Equals(code, "network_unavailable", StringComparison.Ordinal)
+            || string.Equals(code, "response_io", StringComparison.Ordinal))
+        {
+            return NetworkFailure;
+        }
+
+        if (string.Equals(code, "verification_unavailable", StringComparison.Ordinal))
+        {
+            return "Update verification is not available in this build.";
+        }
+
+        if (string.Equals(code, "worker_start_failed", StringComparison.Ordinal)
+            || string.Equals(code, "gate_unavailable", StringComparison.Ordinal))
+        {
+            return "The update check could not be started.";
+        }
+
+        if (string.Equals(code, "cancelled", StringComparison.Ordinal))
+        {
+            return "The update check was cancelled.";
+        }
+
+        if (string.Equals(code, "ignored", StringComparison.Ordinal))
+        {
+            return "No newer stable release was found.";
+        }
+
+        if (string.Equals(code, "current", StringComparison.Ordinal)
+            || string.Equals(code, "not_modified", StringComparison.Ordinal))
+        {
+            return UpToDate(status?.CurrentVersion);
+        }
+
+        if (string.Equals(code, "update_available", StringComparison.Ordinal)
+            && status is { UpdateAvailable: true }
+            && IsStableVersion(status.LatestVerifiedVersion))
+        {
+            return Available(status.LatestVerifiedVersion!, status.CurrentVersion);
+        }
+
+        if (IsValidationFailure(code))
+        {
+            return "A release was found, but it could not be verified and was ignored.";
+        }
+
+        return NetworkFailure;
+    }
+
+    private static bool IsValidationFailure(string code)
+        => code.StartsWith("signature_", StringComparison.Ordinal)
+            || code.StartsWith("manifest_", StringComparison.Ordinal)
+            || code.StartsWith("repository_", StringComparison.Ordinal)
+            || code.StartsWith("trust_", StringComparison.Ordinal)
+            || code.StartsWith("release_", StringComparison.Ordinal);
+
+    private static bool IsStableVersion(string? value)
+        => !string.IsNullOrWhiteSpace(value);
+
+    private static string Available(string availableVersion, string currentVersion)
+        => $"Update {availableVersion} is available. You currently have {currentVersion}.";
+
+    private static string UpToDate(string? currentVersion)
+        => $"You're up to date. Current version: {currentVersion ?? "unknown"}.";
+}
+
 internal interface IConfiguratorUpdateBridge
 {
     Task<UpdateStatusSnapshotV1> QueryStatusAsync(CancellationToken cancellationToken);

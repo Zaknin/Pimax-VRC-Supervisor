@@ -543,26 +543,26 @@ internal sealed class ConfigEditorForm : Form
         layout.Dock = DockStyle.Top;
         layout.AutoSize = true;
         AddSectionHeader(layout, "Policy");
-        AddLabeledRow(layout, "Automatic checks", _updatePolicyComboBox, "Disabled sends no automatic update requests. Notify checks only signed Stable-channel metadata when 24 hours have elapsed. Manual checks remain available for both policies.");
+        AddLabeledRow(layout, "Automatic checks", _updatePolicyComboBox, "Disabled does not check automatically. Notify checks Stable releases after 24 hours. Manual checks remain available for both policies.");
         AddSectionHeader(layout, "Verified status");
         AddLabeledRow(layout, "Current version", _updateCurrentVersionLabel, "The installed application version.");
         AddLabeledRow(layout, "Channel", _updateChannelLabel, "Phase 33A supports only the Stable channel.");
-        AddLabeledRow(layout, "Latest verified", _updateLatestVersionLabel, "Only a version from a successfully signed and validated manifest is shown here.");
+        AddLabeledRow(layout, "Latest verified version", _updateLatestVersionLabel, "Shows the newest version accepted for this device.");
         AddLabeledRow(layout, "Last successful check", _updateLastSuccessLabel, "The most recent completed verified metadata check.");
-        AddLabeledRow(layout, "Last attempt", _updateLastAttemptLabel, "The most recent network check attempt.");
+        AddLabeledRow(layout, "Last check attempt", _updateLastAttemptLabel, "The most recent network check attempt.");
         AddLabeledRow(layout, "Dismissed version", _updateDismissedLabel, "A dismissed verified version stays quiet until a newer verified version appears.");
-        AddLabeledRow(layout, "Verification", _updateVerificationLabel, "Production checks fail closed when no embedded production trust root is configured.");
-        AddLabeledRow(layout, "Last bounded error", _updateErrorLabel, "A bounded diagnostic code and summary; no response bodies or sensitive headers are displayed.");
+        AddLabeledRow(layout, "Update verification", _updateVerificationLabel, "Shows whether this build can check for verified updates.");
+        AddLabeledRow(layout, "Last check result", _updateErrorLabel, "The last update-check result is shown without remote response details.");
 
         var actions = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Dock = DockStyle.Fill, Margin = new Padding(0, 8, 0, 0) };
         actions.Controls.Add(_checkForUpdatesButton);
         actions.Controls.Add(_dismissUpdateButton);
         actions.Controls.Add(_clearUpdateDismissalButton);
-        AddFullWidth(layout, actions, "These actions retrieve metadata or update the local dismissal only. No package download or installation path exists in Phase 33A.");
+        AddFullWidth(layout, actions, "These actions check for updates or change the local dismissal. No download or installation occurs here.");
         AddFullWidth(layout, _updateInlineResultLabel, "Manual results are shown inline and automatic failures remain non-modal.");
         return BuildTabWithDescription(
-            "Secure update discovery",
-            "Review verified Stable-channel update metadata. Saving the policy uses the existing config Apply flow and does not change startup integration by itself.",
+            "Updates",
+            "Review Stable update information. Saving the policy uses the existing config Apply flow and does not change startup integration by itself.",
             layout,
             limitWidth: true);
     }
@@ -578,11 +578,13 @@ internal sealed class ConfigEditorForm : Form
         SetUpdateButtonsEnabled(false);
         try
         {
-            _updateInlineResultLabel.Text = action == UpdateUiAction.Check ? "Checking signed update metadata..." : "Updating dismissal...";
+            _updateInlineResultLabel.Text = action == UpdateUiAction.Check ? "Checking for updates..." : "Updating dismissal...";
             if (action == UpdateUiAction.Check)
             {
                 var result = await _updateCheckRunner.TryRunAsync(ApplyUpdateStatus, CancellationToken.None);
-                _updateInlineResultLabel.Text = result.Summary;
+                _updateInlineResultLabel.Text = UpdateStatusUserMessage.ForResult(
+                    result.Acceptance.ResultCode ?? result.TerminalStatus?.Operation?.ResultCode,
+                    result.TerminalStatus);
                 return;
             }
 
@@ -594,7 +596,7 @@ internal sealed class ConfigEditorForm : Form
         }
         catch (Exception ex) when (ex is IOException or SocketException or JsonException or InvalidOperationException or OperationCanceledException)
         {
-            _updateInlineResultLabel.Text = "Could not contact the running Supervisor: " + BoundUpdateText(ex.Message);
+            _updateInlineResultLabel.Text = UpdateStatusUserMessage.NetworkFailure;
         }
         finally
         {
@@ -611,8 +613,8 @@ internal sealed class ConfigEditorForm : Form
         }
         catch (Exception ex) when (ex is IOException or SocketException or JsonException or InvalidOperationException or OperationCanceledException)
         {
-            _updateVerificationLabel.Text = "Supervisor unavailable";
-            _updateInlineResultLabel.Text = "Start the Supervisor to view its cached verified update state. " + BoundUpdateText(ex.Message);
+            _updateVerificationLabel.Text = "Status unavailable";
+            _updateInlineResultLabel.Text = UpdateStatusUserMessage.NetworkFailure;
         }
     }
 
@@ -625,10 +627,10 @@ internal sealed class ConfigEditorForm : Form
         _updateLastSuccessLabel.Text = FormatUpdateTimestamp(status.LastSuccessfulCheckAt);
         _updateLastAttemptLabel.Text = FormatUpdateTimestamp(status.LastAttemptAt);
         _updateDismissedLabel.Text = status.DismissedVersion ?? "None";
-        _updateErrorLabel.Text = status.LastErrorCode is null ? "None" : status.LastErrorCode + " - " + status.LastErrorSummary;
+        _updateErrorLabel.Text = UpdateStatusUserMessage.ForStatus(status);
         _updateVerificationLabel.Text = status.VerificationConfigured
-            ? "Configured (offline embedded trust root)"
-            : "Unavailable - no production trust root is configured";
+            ? "Available"
+            : "Not available in this build";
         RefreshUpdateButtonStates();
     }
 
@@ -649,7 +651,6 @@ internal sealed class ConfigEditorForm : Form
     private static string FormatUpdateTimestamp(DateTimeOffset? value)
         => value is null ? "Never" : value.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture);
 
-    private static string BoundUpdateText(string value) => value.Length <= 256 ? value : value[..256];
 
     private static Label CreateValueLabel() => new() { AutoSize = true, MaximumSize = new Size(850, 0) };
 
