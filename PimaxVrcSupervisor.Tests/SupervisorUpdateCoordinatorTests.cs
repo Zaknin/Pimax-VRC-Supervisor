@@ -112,7 +112,7 @@ public sealed class SupervisorUpdateCoordinatorTests
         var store = new UpdateStateStore(UpdatePackageVariant.WithDotnet9, temp.Path);
         var client = new BlockingUpdateDiscoveryClient();
         var clock = new ManualUpdateScheduleClock(Now);
-        var scheduler = new UpdateDiscoveryScheduler(store, client, clock);
+        var scheduler = new UpdateDiscoveryScheduler(store, client, clock, checkExclusion: new IsolatedUpdateCheckExclusion());
         using var coordinator = new SupervisorUpdateCoordinator(
             SupervisorUpdatePolicy.Disabled,
             store,
@@ -127,9 +127,82 @@ public sealed class SupervisorUpdateCoordinatorTests
         Assert.True(first.Accepted);
         Assert.False(second.Accepted);
         Assert.True(second.AlreadyInProgress);
-        Assert.Equal(first.OperationId, second.OperationId);
+        Assert.Null(second.OperationId);
+        Assert.Equal("already_running", second.ResultCode);
         Assert.Equal(1, client.CallCount);
         client.Release();
+    }
+
+    [Fact]
+    public async Task CrossProcessContentionIsRejectedBeforeOperationStateOrNetworkWork()
+    {
+        using var temp = new TempDirectory();
+        var store = new UpdateStateStore(UpdatePackageVariant.WithDotnet9, temp.Path);
+        var initialState = store.Load().State;
+        var client = new FakeUpdateDiscoveryClient(UpdateDiscoveryCheckResult.Failure(
+            UpdateErrorCategory.Http,
+            "must_not_run"));
+        var clock = new ManualUpdateScheduleClock(Now);
+        var scheduler = new UpdateDiscoveryScheduler(
+            store,
+            client,
+            clock,
+            checkExclusion: new AlwaysBusyUpdateCheckExclusion());
+        using var coordinator = new SupervisorUpdateCoordinator(
+            SupervisorUpdatePolicy.Disabled,
+            store,
+            scheduler,
+            clock,
+            verificationConfigured: true);
+
+        var acceptance = coordinator.TryStartManualCheck(CancellationToken.None);
+        await Task.Delay(50);
+
+        Assert.False(acceptance.Accepted);
+        Assert.True(acceptance.AlreadyInProgress);
+        Assert.Null(acceptance.OperationId);
+        Assert.Equal("already_running", acceptance.ResultCode);
+        Assert.Null(coordinator.GetStatus().Operation);
+        Assert.Equal(0, client.CallCount);
+        Assert.Equal(initialState, store.Load().State);
+    }
+
+    [Fact]
+    public void AcceptanceSetupFailureReleasesAdmissionLease()
+    {
+        using var temp = new TempDirectory();
+        var store = new UpdateStateStore(UpdatePackageVariant.WithDotnet9, temp.Path);
+        var sharedExclusion = new SharedTestUpdateCheckExclusion();
+        var admission = new UpdateCheckAdmission(sharedExclusion);
+        var client = new FakeUpdateDiscoveryClient(UpdateDiscoveryCheckResult.Failure(UpdateErrorCategory.Http, "must_not_run"));
+        var clock = new ManualUpdateScheduleClock(Now);
+        var scheduler = new UpdateDiscoveryScheduler(store, client, clock, admission: admission);
+        using var coordinator = new SupervisorUpdateCoordinator(
+            SupervisorUpdatePolicy.Disabled,
+            store,
+            scheduler,
+            clock,
+            verificationConfigured: true,
+            diagnostics: new ThrowingAcceptedDiagnostics());
+
+        Assert.Throws<InvalidOperationException>(() => coordinator.TryStartManualCheck(CancellationToken.None));
+        using var recovered = admission.TryAcquire().Lease;
+
+        Assert.NotNull(recovered);
+    }
+
+    [Fact]
+    public async Task SuccessfulManualCheckUsesCanonicalResultCode()
+    {
+        using var fixture = CreateCoordinator(SupervisorUpdatePolicy.Disabled, verificationConfigured: true);
+
+        var acceptance = fixture.Coordinator.TryStartManualCheck(CancellationToken.None);
+        await WaitForTerminalAsync(fixture.Coordinator);
+        var operation = fixture.Coordinator.GetStatus().Operation;
+
+        Assert.True(acceptance.Accepted);
+        Assert.NotNull(operation);
+        Assert.Equal("current", operation!.ResultCode);
     }
 
     [Fact]
@@ -155,7 +228,7 @@ public sealed class SupervisorUpdateCoordinatorTests
         var store = new UpdateStateStore(UpdatePackageVariant.WithDotnet9, temp.Path);
         var client = new BlockingUpdateDiscoveryClient();
         var clock = new ManualUpdateScheduleClock(Now);
-        var scheduler = new UpdateDiscoveryScheduler(store, client, clock);
+        var scheduler = new UpdateDiscoveryScheduler(store, client, clock, checkExclusion: new IsolatedUpdateCheckExclusion());
         using var coordinator = new SupervisorUpdateCoordinator(SupervisorUpdatePolicy.Disabled, store, scheduler, clock, true);
         using var shutdown = new CancellationTokenSource();
 
@@ -237,7 +310,7 @@ public sealed class SupervisorUpdateCoordinatorTests
             ErrorCode = null
         });
         var clock = new ManualUpdateScheduleClock(Now);
-        var scheduler = new UpdateDiscoveryScheduler(store, client, clock);
+        var scheduler = new UpdateDiscoveryScheduler(store, client, clock, checkExclusion: new IsolatedUpdateCheckExclusion());
         var coordinator = new SupervisorUpdateCoordinator(policy, store, scheduler, clock, verificationConfigured);
         return new CoordinatorFixture(temp, store, client, coordinator);
     }
@@ -289,5 +362,21 @@ public sealed class SupervisorUpdateCoordinatorTests
         public Task WaitForStartAsync() => _started.Task;
 
         public void CompleteStart() => _release.TrySetResult();
+    }
+
+    private sealed class ThrowingAcceptedDiagnostics : IUpdateDiscoveryDiagnostics
+    {
+        public void Record(UpdateDiscoveryDiagnostic diagnostic)
+        {
+            if (diagnostic.Event == "accepted")
+            {
+                throw new InvalidOperationException("test acceptance setup failure");
+            }
+        }
+    }
+
+    private sealed class AlwaysBusyUpdateCheckExclusion : IUpdateCheckExclusion
+    {
+        public IUpdateCheckLease? TryAcquire() => null;
     }
 }

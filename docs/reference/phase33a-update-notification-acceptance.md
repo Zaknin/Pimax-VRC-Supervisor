@@ -32,23 +32,26 @@ Run both configurations:
 ```powershell
 dotnet test .\PimaxVrcSupervisor.Tests\PimaxVrcSupervisor.Tests.csproj -c Debug --filter 'FullyQualifiedName~Phase33AProductionAcceptanceFixtureTests|FullyQualifiedName~SecureUpdateContractTests|FullyQualifiedName~GitHubUpdateDiscoveryTests|FullyQualifiedName~SupervisorUpdateCoordinatorTests'
 dotnet test .\PimaxVrcSupervisor.Tests\PimaxVrcSupervisor.Tests.csproj -c Release --filter 'FullyQualifiedName~Phase33AProductionAcceptanceFixtureTests|FullyQualifiedName~SecureUpdateContractTests|FullyQualifiedName~GitHubUpdateDiscoveryTests|FullyQualifiedName~SupervisorUpdateCoordinatorTests'
+dotnet test .\PimaxVrcSupervisor.Tests\PimaxVrcSupervisor.Tests.csproj -c Debug --filter 'FullyQualifiedName~StandaloneUpdateCheckWorkerTests|FullyQualifiedName~ConfiguratorUpdateFallbackTests|FullyQualifiedName~ConfiguratorStandaloneUpdateCheckLauncherTests|FullyQualifiedName~UpdateDiscoverySchedulerTests|FullyQualifiedName~UpdateCheckAdmissionSecurityTests|FullyQualifiedName~UpdateCheckCrossProcessTests'
+dotnet test .\PimaxVrcSupervisor.Tests\PimaxVrcSupervisor.Tests.csproj -c Release --filter 'FullyQualifiedName~StandaloneUpdateCheckWorkerTests|FullyQualifiedName~ConfiguratorUpdateFallbackTests|FullyQualifiedName~ConfiguratorStandaloneUpdateCheckLauncherTests|FullyQualifiedName~UpdateDiscoverySchedulerTests|FullyQualifiedName~UpdateCheckAdmissionSecurityTests|FullyQualifiedName~UpdateCheckCrossProcessTests'
 ```
 
-The tests prove production-key load/fingerprint, exact-byte verification, one-byte rejection, unknown-key and repository rejection, verified cache creation, invalid-data non-availability, structured nonblocking Configurator manual results under Disabled, dismissal/supersession, zero bridge-client network ownership, passive TUI/overlay projections, and absence of download/install/execute surfaces.
+The tests prove production-key load/fingerprint, exact-byte verification, one-byte rejection, unknown-key and repository rejection, verified cache creation, invalid-data non-availability, structured nonblocking Configurator manual results under Disabled, bridge-first standalone fallback only when no operation was accepted, exact sibling/no-shell worker launch, bounded worker output, pre-acceptance shared admission, explicit current-user mutex ownership, an exact protected bounded SID-only `Global\\` DACL, Owner/Access inspection from the returned handle, fail-closed exact-DACL foreign-owner rejection without hostile-object repair, actual separate-process contention/release, retained-handle genuine abandoned-owner recovery, dismissal/supersession, zero bridge-client network ownership, passive TUI/overlay projections, and absence of download/install/execute surfaces. The predictable mutex name can still be squatted for fail-closed denial of service by another local user, and no protection against a local administrator is claimed.
 
 ## External manual acceptance plan
 
 Use a fresh `no-dotnet9` package extracted below `C:\Users\operator\Documents\PimaxVrcSupervisor-TestDeployments`; never use repository-local release output. Record the directory inventory and SHA-256 of every file before launching anything. Preserve the operator's current update-state directory and Supervisor configuration before the exercise; restore them afterward.
 
 1. Confirm the Configurator Updates tab shows installed `1.3.1`, channel Stable, and policy Disabled.
-2. With the Supervisor bridge available, press **Check now** under Disabled and confirm the UI stays responsive and displays one structured terminal result.
-3. Select Notify, save, reopen, and confirm the exact policy persists. Restore the prior configuration after the observation.
-4. Feed the dedicated harness's verified cached projection and confirm only `1.4.0` is shown as verified. Feed altered/incorrectly signed cases and confirm no unverified version is displayed.
-5. Confirm the TUI shows one compact passive indicator without overflow and the overlay shows one passive non-modal badge outside action controls.
-6. Dismiss `1.4.0`; confirm the prominent indicators disappear. Present a verified newer state and confirm it reappears.
-7. Disconnect/reconnect the Configurator, TUI, and overlay bridge clients. Confirm cached status returns with zero discovery requests and no action replay.
-8. Exercise the existing SteamVR restart and final-normal-shutdown paths only in the established lifecycle acceptance environment. Confirm behavior is unchanged and no update operation delays or participates in cleanup.
-9. Search the deployment, update-state directory, and network evidence for ZIP output. There must be no downloaded package file.
+2. With the Supervisor bridge available, press **Check now** under Disabled and confirm the bridge remains authoritative, the UI stays responsive, and one structured terminal result appears without a worker process.
+3. With no Supervisor bridge available, press **Check now** and confirm the exact sibling one-shot worker runs without starting Supervisor lifecycle, SteamVR, Pimax, base-station, monitor, managed-application, watcher, TUI, or overlay behavior. Confirm one bounded result appears and no helper process remains after completion.
+4. Select Notify, save, reopen, and confirm the exact policy persists. Restore the prior configuration after the observation.
+5. Feed the dedicated harness's verified cached projection and confirm only `1.4.0` is shown as verified. Feed altered/incorrectly signed cases and confirm no unverified version is displayed.
+6. Confirm the TUI shows one compact passive indicator without overflow and the overlay shows one passive non-modal badge outside action controls.
+7. Dismiss `1.4.0`; confirm the prominent indicators disappear. Present a verified newer state and confirm it reappears.
+8. Disconnect/reconnect the Configurator, TUI, and overlay bridge clients. Confirm cached status returns with zero discovery requests and no action replay.
+9. Exercise the existing SteamVR restart and final-normal-shutdown paths only in the established lifecycle acceptance environment. Confirm behavior is unchanged and no update operation delays or participates in cleanup.
+10. Search the deployment, update-state directory, and network evidence for ZIP output. There must be no downloaded package file.
 
 Do not run lifecycle steps merely to validate update UI when an active Pimax/SteamVR session would be disturbed. In that case record those manual rows as deferred and rely only on the preserved Phase 32D/32E regression gates until the normal hardware acceptance window.
 

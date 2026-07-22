@@ -49,7 +49,8 @@ internal sealed record UpdateActionAcceptance(
     bool Accepted,
     bool AlreadyInProgress,
     string? OperationId,
-    string Message);
+    string Message,
+    string? ResultCode = null);
 
 internal interface IConfiguratorUpdateBridge
 {
@@ -62,6 +63,19 @@ internal interface IConfiguratorUpdateBridge
     Task<UpdateActionAcceptance> ClearDismissalAsync(CancellationToken cancellationToken);
 }
 
+internal interface IStandaloneUpdateCheckLauncher
+{
+    Task<StandaloneUpdateCheckResultV1> RunAsync(CancellationToken cancellationToken);
+}
+
+internal sealed class SupervisorBridgeUnavailableException : IOException
+{
+    public SupervisorBridgeUnavailableException()
+        : base("The running Supervisor bridge is unavailable.")
+    {
+    }
+}
+
 internal sealed record ConfiguratorUpdateCheckResult(
     UpdateActionAcceptance Acceptance,
     UpdateStatusSnapshotV1? TerminalStatus,
@@ -70,6 +84,7 @@ internal sealed record ConfiguratorUpdateCheckResult(
 internal sealed class ConfiguratorUpdateCheckRunner
 {
     private readonly IConfiguratorUpdateBridge _bridge;
+    private readonly IStandaloneUpdateCheckLauncher? _standaloneLauncher;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private int _active;
 
@@ -78,6 +93,17 @@ internal sealed class ConfiguratorUpdateCheckRunner
         Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
         _bridge = bridge;
+        _standaloneLauncher = null;
+        _delay = delay ?? Task.Delay;
+    }
+
+    public ConfiguratorUpdateCheckRunner(
+        IConfiguratorUpdateBridge bridge,
+        IStandaloneUpdateCheckLauncher standaloneLauncher,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
+    {
+        _bridge = bridge;
+        _standaloneLauncher = standaloneLauncher;
         _delay = delay ?? Task.Delay;
     }
 
@@ -97,7 +123,31 @@ internal sealed class ConfiguratorUpdateCheckRunner
 
         try
         {
-            var acceptance = await _bridge.StartCheckAsync(cancellationToken);
+            UpdateActionAcceptance acceptance;
+            try
+            {
+                acceptance = await _bridge.StartCheckAsync(cancellationToken);
+            }
+            catch (SupervisorBridgeUnavailableException) when (_standaloneLauncher is not null)
+            {
+                var standalone = await _standaloneLauncher.RunAsync(cancellationToken);
+                if (standalone.Status is not null)
+                {
+                    statusObserved?.Invoke(standalone.Status);
+                }
+
+                var standaloneAcceptance = new UpdateActionAcceptance(
+                    Accepted: standalone.Success,
+                    AlreadyInProgress: string.Equals(standalone.ResultCode, "already_running", StringComparison.Ordinal),
+                    OperationId: null,
+                    Message: standalone.Summary,
+                    ResultCode: standalone.ResultCode);
+                return new ConfiguratorUpdateCheckResult(
+                    standaloneAcceptance,
+                    standalone.Status,
+                    standalone.Summary);
+            }
+
             if (!acceptance.Accepted || acceptance.OperationId is null)
             {
                 return new ConfiguratorUpdateCheckResult(acceptance, null, acceptance.Message);
@@ -187,14 +237,16 @@ internal sealed class ConfiguratorUpdateBridgeClient : IConfiguratorUpdateBridge
         var message = ReadBoundedString(root, "message") ?? "The Supervisor returned no result.";
         var accepted = root.TryGetProperty("success", out var success) && success.GetBoolean();
         string? operationId = null;
+        string? resultCode = null;
         var alreadyInProgress = false;
         if (root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object)
         {
             operationId = ReadBoundedString(data, "operationId");
+            resultCode = ReadBoundedString(data, "resultCode");
             alreadyInProgress = data.TryGetProperty("alreadyInProgress", out var duplicate) && duplicate.ValueKind == JsonValueKind.True;
         }
 
-        return new UpdateActionAcceptance(accepted, alreadyInProgress, operationId, message);
+        return new UpdateActionAcceptance(accepted, alreadyInProgress, operationId, message, resultCode);
     }
 
     private static async Task<JsonDocument> SendAsync(string command, CancellationToken cancellationToken)
@@ -202,7 +254,18 @@ internal sealed class ConfiguratorUpdateBridgeClient : IConfiguratorUpdateBridge
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
         using var client = new TcpClient();
-        await client.ConnectAsync("127.0.0.1", Port, timeout.Token).ConfigureAwait(false);
+        try
+        {
+            await client.ConnectAsync("127.0.0.1", Port, timeout.Token).ConfigureAwait(false);
+        }
+        catch (SocketException exception) when (exception.SocketErrorCode is
+                                                SocketError.ConnectionRefused
+                                                or SocketError.HostUnreachable
+                                                or SocketError.NetworkUnreachable
+                                                or SocketError.AddressNotAvailable)
+        {
+            throw new SupervisorBridgeUnavailableException();
+        }
         await using var stream = client.GetStream();
         await using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
         using var reader = new StreamReader(stream, Encoding.UTF8, false, leaveOpen: true);

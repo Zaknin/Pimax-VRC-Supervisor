@@ -94,7 +94,7 @@ public sealed class Phase33AProductionAcceptanceFixtureTests
         var validStore = new UpdateStateStore(UpdatePackageVariant.NoDotnet9, validDirectory.Path);
         var validTransport = scenario.CreateSuccessfulTransport();
         using var validClient = CreateClient(validTransport, fixture.TrustStore);
-        var validScheduler = new UpdateDiscoveryScheduler(validStore, validClient, new ManualUpdateScheduleClock(Now));
+        var validScheduler = new UpdateDiscoveryScheduler(validStore, validClient, new ManualUpdateScheduleClock(Now), checkExclusion: new IsolatedUpdateCheckExclusion());
 
         var validResult = await validScheduler.CheckManuallyAsync(CancellationToken.None);
         var validState = validStore.Load().State;
@@ -111,7 +111,7 @@ public sealed class Phase33AProductionAcceptanceFixtureTests
             _ => FakeUpdateHttpTransport.Response(HttpStatusCode.OK, alteredManifest),
             _ => FakeUpdateHttpTransport.Response(HttpStatusCode.OK, fixture.SignatureEnvelopeBytes));
         using var invalidClient = CreateClient(invalidTransport, fixture.TrustStore);
-        var invalidScheduler = new UpdateDiscoveryScheduler(invalidStore, invalidClient, new ManualUpdateScheduleClock(Now));
+        var invalidScheduler = new UpdateDiscoveryScheduler(invalidStore, invalidClient, new ManualUpdateScheduleClock(Now), checkExclusion: new IsolatedUpdateCheckExclusion());
 
         var invalidResult = await invalidScheduler.CheckManuallyAsync(CancellationToken.None);
         var invalidState = invalidStore.Load().State;
@@ -132,7 +132,7 @@ public sealed class Phase33AProductionAcceptanceFixtureTests
         var transport = scenario.CreateSuccessfulTransport();
         using var client = CreateClient(transport, fixture.TrustStore);
         var clock = new ManualUpdateScheduleClock(Now);
-        var scheduler = new UpdateDiscoveryScheduler(store, client, clock);
+        var scheduler = new UpdateDiscoveryScheduler(store, client, clock, checkExclusion: new IsolatedUpdateCheckExclusion());
         using var coordinator = new SupervisorUpdateCoordinator(
             SupervisorUpdatePolicy.Disabled,
             store,
@@ -155,7 +155,7 @@ public sealed class Phase33AProductionAcceptanceFixtureTests
         Assert.Equal("1.4.0", status.LatestVerifiedVersion);
         Assert.True(status.UpdateAvailable);
         Assert.True(status.Operation?.Success);
-        Assert.Equal("UpdateAvailable", status.Operation?.ResultCode);
+        Assert.Equal("update_available", status.Operation?.ResultCode);
         Assert.Contains("Verified stable update 1.4.0", status.Operation?.ResultSummary, StringComparison.Ordinal);
         Assert.DoesNotContain(transport.Requests, request => request.Uri.AbsolutePath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
     }
@@ -175,7 +175,7 @@ public sealed class Phase33AProductionAcceptanceFixtureTests
         await store.SaveAsync(initial, CancellationToken.None);
         var clock = new ManualUpdateScheduleClock(Now);
         var client = new FakeUpdateDiscoveryClient(UpdateDiscoveryCheckResult.Failure(UpdateErrorCategory.Http, "not_used"));
-        var scheduler = new UpdateDiscoveryScheduler(store, client, clock);
+        var scheduler = new UpdateDiscoveryScheduler(store, client, clock, checkExclusion: new IsolatedUpdateCheckExclusion());
         using var coordinator = new SupervisorUpdateCoordinator(SupervisorUpdatePolicy.Disabled, store, scheduler, clock, true);
 
         var dismissal = await coordinator.DismissAsync(CancellationToken.None);

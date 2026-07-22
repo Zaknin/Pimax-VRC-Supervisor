@@ -1,3 +1,4 @@
+using System.Security.Principal;
 using PimaxVrcSupervisor.Updates;
 using Xunit;
 
@@ -11,7 +12,7 @@ public sealed class UpdateDiscoverySchedulerTests
         using var temp = new TempDirectory();
         var store = new UpdateStateStore(UpdatePackageVariant.WithDotnet9, temp.Path);
         var client = new FakeUpdateDiscoveryClient(CurrentResult());
-        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now));
+        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now), checkExclusion: new IsolatedUpdateCheckExclusion());
 
         await scheduler.RunAutomaticSessionAsync(CancellationToken.None);
 
@@ -28,7 +29,7 @@ public sealed class UpdateDiscoverySchedulerTests
         var store = new UpdateStateStore(UpdatePackageVariant.WithDotnet9, temp.Path);
         await store.SaveAsync(UpdateContractTestData.CreateState(policy: policy), CancellationToken.None);
         var client = new FakeUpdateDiscoveryClient(CurrentResult());
-        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now));
+        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now), checkExclusion: new IsolatedUpdateCheckExclusion());
 
         var result = await scheduler.CheckManuallyAsync(CancellationToken.None);
 
@@ -64,7 +65,7 @@ public sealed class UpdateDiscoverySchedulerTests
         };
         await store.SaveAsync(state, CancellationToken.None);
         var client = new FakeUpdateDiscoveryClient(CurrentResult());
-        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now));
+        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now), checkExclusion: new IsolatedUpdateCheckExclusion());
 
         await scheduler.RunAutomaticSessionAsync(CancellationToken.None);
 
@@ -87,7 +88,8 @@ public sealed class UpdateDiscoverySchedulerTests
             store,
             client,
             new ManualUpdateScheduleClock(Now),
-            diagnostics);
+            diagnostics,
+            checkExclusion: new IsolatedUpdateCheckExclusion());
 
         await scheduler.RunAutomaticSessionAsync(CancellationToken.None);
         await scheduler.RunAutomaticSessionAsync(CancellationToken.None);
@@ -109,7 +111,7 @@ public sealed class UpdateDiscoverySchedulerTests
             CancellationToken.None);
         var client = new FakeUpdateDiscoveryClient(CurrentResult());
         var clock = new ManualUpdateScheduleClock(Now);
-        var scheduler = new UpdateDiscoveryScheduler(store, client, clock);
+        var scheduler = new UpdateDiscoveryScheduler(store, client, clock, checkExclusion: new IsolatedUpdateCheckExclusion());
 
         var run = scheduler.RunAutomaticSessionAsync(CancellationToken.None);
         await clock.WaitForDelayAsync();
@@ -133,7 +135,7 @@ public sealed class UpdateDiscoverySchedulerTests
             CancellationToken.None);
         var client = new FakeUpdateDiscoveryClient(CurrentResult());
         var diagnostics = new RecordingUpdateDiscoveryDiagnostics();
-        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now), diagnostics);
+        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now), diagnostics, new IsolatedUpdateCheckExclusion());
 
         await scheduler.RunAutomaticSessionAsync(CancellationToken.None);
 
@@ -151,7 +153,7 @@ public sealed class UpdateDiscoverySchedulerTests
             store.StatePath,
             "{\"schemaVersion\":1,\"policy\":\"notifyStable\",\"lastSuccessfulCheckUtc\":\"broken\"}");
         var client = new FakeUpdateDiscoveryClient(CurrentResult());
-        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now));
+        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now), checkExclusion: new IsolatedUpdateCheckExclusion());
 
         await scheduler.RunAutomaticSessionAsync(CancellationToken.None);
 
@@ -166,7 +168,7 @@ public sealed class UpdateDiscoverySchedulerTests
         var store = new UpdateStateStore(UpdatePackageVariant.WithDotnet9, temp.Path);
         var failure = UpdateDiscoveryCheckResult.Failure(UpdateErrorCategory.Http, "release_http");
         var client = new FakeUpdateDiscoveryClient(failure);
-        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now));
+        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now), checkExclusion: new IsolatedUpdateCheckExclusion());
 
         var result = await scheduler.CheckManuallyAsync(CancellationToken.None);
         var state = store.Load().State;
@@ -185,7 +187,7 @@ public sealed class UpdateDiscoverySchedulerTests
         using var temp = new TempDirectory();
         var store = new UpdateStateStore(UpdatePackageVariant.WithDotnet9, temp.Path);
         var client = new FakeUpdateDiscoveryClient(CurrentResult());
-        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now));
+        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now), checkExclusion: new IsolatedUpdateCheckExclusion());
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
 
@@ -220,7 +222,8 @@ public sealed class UpdateDiscoverySchedulerTests
         var scheduler = new UpdateDiscoveryScheduler(
             store,
             new FakeUpdateDiscoveryClient(update),
-            new ManualUpdateScheduleClock(Now));
+            new ManualUpdateScheduleClock(Now),
+            checkExclusion: new IsolatedUpdateCheckExclusion());
 
         var result = await scheduler.CheckManuallyAsync(CancellationToken.None);
         var state = store.Load().State;
@@ -265,7 +268,8 @@ public sealed class UpdateDiscoverySchedulerTests
         var scheduler = new UpdateDiscoveryScheduler(
             store,
             new FakeUpdateDiscoveryClient(update),
-            new ManualUpdateScheduleClock(Now));
+            new ManualUpdateScheduleClock(Now),
+            checkExclusion: new IsolatedUpdateCheckExclusion());
 
         var result = await scheduler.CheckManuallyAsync(CancellationToken.None);
 
@@ -303,7 +307,7 @@ public sealed class UpdateDiscoverySchedulerTests
             ErrorCategory = null,
             ErrorCode = null
         });
-        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now));
+        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now), checkExclusion: new IsolatedUpdateCheckExclusion());
 
         var result = await scheduler.CheckManuallyAsync(CancellationToken.None);
         var state = store.Load().State;
@@ -316,23 +320,122 @@ public sealed class UpdateDiscoverySchedulerTests
     }
 
     [Fact]
-    public async Task ConcurrentManualChecksAreSerialized()
+    public async Task ConcurrentManualChecksReturnAlreadyRunningWithoutQueue()
     {
         using var temp = new TempDirectory();
         var store = new UpdateStateStore(UpdatePackageVariant.WithDotnet9, temp.Path);
         var client = new BlockingUpdateDiscoveryClient();
-        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now));
+        var scheduler = new UpdateDiscoveryScheduler(store, client, new ManualUpdateScheduleClock(Now), checkExclusion: new IsolatedUpdateCheckExclusion());
 
         var first = scheduler.CheckManuallyAsync(CancellationToken.None);
         await client.WaitForFirstCallAsync();
-        var second = scheduler.CheckManuallyAsync(CancellationToken.None);
-        await Task.Yield();
+        var second = await scheduler.CheckManuallyAsync(CancellationToken.None).WaitAsync(TimeSpan.FromMilliseconds(250));
+
         Assert.Equal(1, client.CallCount);
+        Assert.Equal(UpdateDiscoveryStatus.Failed, second.Status);
+        Assert.Equal("already_running", second.ErrorCode);
 
         client.Release();
-        await Task.WhenAll(first, second);
+        await first;
 
-        Assert.Equal(2, client.CallCount);
+        Assert.Equal(1, client.CallCount);
+    }
+
+    [Fact]
+    public async Task SeparateWorkerSchedulersShareCrossProcessExclusionWithoutQueueing()
+    {
+        using var temp = new TempDirectory();
+        var firstStore = new UpdateStateStore(UpdatePackageVariant.WithDotnet9, temp.Path);
+        var secondStore = new UpdateStateStore(UpdatePackageVariant.WithDotnet9, temp.Path);
+        var firstClient = new BlockingUpdateDiscoveryClient();
+        var secondClient = new FakeUpdateDiscoveryClient(CurrentResult());
+        var sharedExclusion = new SharedTestUpdateCheckExclusion();
+        var firstScheduler = new UpdateDiscoveryScheduler(firstStore, firstClient, new ManualUpdateScheduleClock(Now), checkExclusion: sharedExclusion);
+        var secondScheduler = new UpdateDiscoveryScheduler(secondStore, secondClient, new ManualUpdateScheduleClock(Now), checkExclusion: sharedExclusion);
+
+        var first = firstScheduler.CheckManuallyAsync(CancellationToken.None);
+        await firstClient.WaitForFirstCallAsync();
+        var second = await secondScheduler.CheckManuallyAsync(CancellationToken.None);
+
+        Assert.Equal(UpdateDiscoveryStatus.Failed, second.Status);
+        Assert.Equal("already_running", second.ErrorCode);
+        Assert.Equal(0, secondClient.CallCount);
+
+        firstClient.Release();
+        await first;
+        var afterRelease = await secondScheduler.CheckManuallyAsync(CancellationToken.None);
+
+        Assert.Equal(UpdateDiscoveryStatus.Current, afterRelease.Status);
+        Assert.Equal(1, secondClient.CallCount);
+    }
+
+    [Fact]
+    public async Task AutomaticSupervisorCheckCannotOverlapStandaloneWorkerCheck()
+    {
+        using var temp = new TempDirectory();
+        var workerStore = new UpdateStateStore(UpdatePackageVariant.WithDotnet9, temp.Path);
+        var supervisorStore = new UpdateStateStore(UpdatePackageVariant.WithDotnet9, temp.Path);
+        await workerStore.SaveAsync(
+            UpdateContractTestData.CreateState(policy: UpdateCheckPolicy.NotifyStable),
+            CancellationToken.None);
+        var workerClient = new BlockingUpdateDiscoveryClient();
+        var automaticClient = new FakeUpdateDiscoveryClient(CurrentResult());
+        var diagnostics = new RecordingUpdateDiscoveryDiagnostics();
+        var sharedExclusion = new SharedTestUpdateCheckExclusion();
+        var workerScheduler = new UpdateDiscoveryScheduler(workerStore, workerClient, new ManualUpdateScheduleClock(Now), checkExclusion: sharedExclusion);
+        var automaticScheduler = new UpdateDiscoveryScheduler(
+            supervisorStore,
+            automaticClient,
+            new ManualUpdateScheduleClock(Now),
+            diagnostics,
+            checkExclusion: sharedExclusion);
+
+        var worker = workerScheduler.CheckManuallyAsync(CancellationToken.None);
+        await workerClient.WaitForFirstCallAsync();
+        var stateBeforeRejectedAutomatic = supervisorStore.Load().State;
+        await automaticScheduler.RunAutomaticSessionAsync(CancellationToken.None);
+
+        Assert.Equal(0, automaticClient.CallCount);
+        Assert.Equal(stateBeforeRejectedAutomatic, supervisorStore.Load().State);
+        Assert.Contains(
+            diagnostics.Events,
+            item => item.Kind == UpdateCheckKind.Automatic
+                && item.Event == "rejectedAlreadyRunning"
+                && item.ErrorCode == "already_running");
+        Assert.DoesNotContain(
+            diagnostics.Events,
+            item => item.Kind == UpdateCheckKind.Automatic
+                && item.Event is "attemptStatePersisted"
+                    or "started"
+                    or "resultStatePersisted"
+                    or "completed"
+                    or "failed"
+                    or "releaseCandidateSelected"
+                    or "signatureVerified"
+                    or "manifestValidated"
+                    or "semanticVersionUpdateAvailable");
+
+        workerClient.Release();
+        await worker;
+    }
+
+    [Fact]
+    public void NamedUpdateCheckMutexRecoversAfterLeaseRelease()
+    {
+        var sid = WindowsIdentity.GetCurrent().User
+            ?? throw new UnauthorizedAccessException("The current Windows user SID is unavailable.");
+        var name = @"Global\PimaxVrcSupervisor.UpdateCheck.Test." + Guid.NewGuid().ToString("N");
+        var first = UserScopedUpdateCheckExclusion.ForMutexName(name, sid);
+        var second = UserScopedUpdateCheckExclusion.ForMutexName(name, sid);
+
+        using (var lease = first.TryAcquire())
+        {
+            Assert.NotNull(lease);
+            Assert.Null(second.TryAcquire());
+        }
+
+        using var recovered = second.TryAcquire();
+        Assert.NotNull(recovered);
     }
 
     private static UpdateDiscoveryCheckResult CurrentResult() => new()

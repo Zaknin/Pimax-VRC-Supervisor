@@ -324,8 +324,23 @@ State is a cache, not authority. `updateAvailable` may be shown only when the cu
 
 - Add an **Updates** tab containing the policy selector, installed version, fixed Stable channel, last attempt, last successful check, verification status, latest verified version, dismissal state, and bounded failure result.
 - Add **Check now**, **Dismiss verified update**, and **Clear dismissal**. This slice exposes no release URL and opens no browser.
+- **Check now** first uses the running-Supervisor bridge. Only a loopback connection failure before the bridge accepts an operation may fall back to the exact sibling `PimaxVrcSupervisor.exe --update-check-once --source configurator` worker. Connected rejections and terminal verification failures never fall back.
 - Do not add Download, Install, Replace, Restart, or Apply Update controls.
 - Saving the policy changes only `UpdatePolicy`; update-state writes stay in LocalAppData and are not mixed into `supervisor.config.json`.
+
+### Standalone Configurator manual worker
+
+- `--update-check-once --source configurator` is a strict one-shot command handled before normal Supervisor startup parsing, logging, configuration loading, ownership, bridge, or lifecycle initialization. Additional, reordered, or caller-supplied repository/channel/endpoint/URL/key/manifest/signature arguments are rejected.
+- The worker initializes only the installed-variant detector, embedded production trust registry, update state store, bounded GitHub metadata transport, exact-byte manifest/signature verification, scheduler, and user-scoped update-check exclusion. It does not initialize SteamVR, Pimax, VRChat, base stations, monitors, managed applications, watcher ownership, TUI, overlay, startup integration, session ownership, or final cleanup.
+- The Configurator launches only `PimaxVrcSupervisor.exe` beside itself with `UseShellExecute=false`, redirected bounded stdout/stderr, a hidden/no-new-console process, and fixed `ArgumentList` entries. It never searches `PATH` or accepts an executable path from configuration or worker output.
+- The worker emits one bounded schema-v1 JSON result and exits. The result contains only a result code, bounded summary, verified-version availability, and cached status projection. It contains no manifest/signature body, complete remote JSON, token, credential, private path, stack trace, package URL, or executable content.
+- The LocalAppData state remains authoritative. A successful worker check persists through the same atomic store before stdout is emitted; the Configurator applies the returned cached projection after process exit.
+- Automatic Supervisor checks, bridge-manual checks, and standalone workers use one shared admission API that acquires process-local exclusion and a secure cross-process lease before any operation is accepted, state is mutated, or HTTP starts. A bridge contention rejection returns `already_running` immediately with no operation ID or later terminal operation.
+- Cross-process exclusion uses one stable, bounded `Global\\` mutex identity derived only from the current Windows user SID. `MutexAcl.Create` receives an explicit current-user owner plus a protected one-ACE DACL granting that SID only the bounded synchronize/modify/read-permissions contract; the existing-object path uses rights-limited `MutexAcl.OpenExisting`.
+- After either create or open, Owner and Access are read from that exact returned mutex handle. Admission requires the actual owner to equal the expected current-user SID and the DACL to remain protected, non-inherited, and exactly one expected-SID allow ACE with the bounded rights. Missing, malformed, foreign-owned, broad, group, Everyone, Authenticated Users, deny, additional-ACE, or unexpected-rights descriptors fail closed as `gate_unavailable` before operation allocation, state mutation, or HTTP.
+- A hostile object is never repaired: the worker does not change its owner or DACL, delete/recreate it, or fall back to `Local\\`, an unsecured object, a file lock, or process-local-only admission. Because the SID-derived name is predictable, another local user may still pre-create it and cause a fail-closed denial of service; this control does not claim protection against a local administrator.
+- Busy acquisition is nonblocking. Ownership and `ReleaseMutex` stay on one dedicated owner thread. Abandoned ownership is recovered only after `AbandonedMutexException`; the subprocess test retains a separate open handle so the named object survives the abandoning process and proves genuine recovery rather than object recreation.
+- Closing the Configurator never kills an accepted worker. Configurator waiting is bounded, the worker retains the existing bounded HTTP timeout, and no helper process remains after worker completion.
 
 ### Supervisor and bridge
 
@@ -385,9 +400,10 @@ The historical mutable `v1.3.1` release remains untouched and is rejected explic
 8. Config cases: exact enum values, missing/invalid fail closed, packaged new-install default, Configurator load/save/raw-JSON preservation, and no lifecycle-field mutation.
 9. Bridge compatibility: old/new Supervisor and TUI combinations, optional update snapshot, read-only updates resource, overlay reconnect, and no command replay.
 10. UX tests: only verified newer versions notify; current/lower/dismissed/failed states do not; no update result becomes `OperatorWarning` or session action state.
-11. Source guards allow only release-metadata, manifest, and detached-signature retrieval, and reject package download/staging/extraction/installation/process execution, install-directory writes, arbitrary URLs, update references from lifecycle/recovery/USB modules, and post-publish `gh release upload --clobber`.
+11. Source guards allow only release-metadata, manifest, and detached-signature retrieval plus the exact sibling one-shot metadata worker; they reject package download/staging/extraction/installation, arbitrary executable or process execution, install-directory writes, arbitrary URLs, update references from lifecycle/recovery/USB modules, and post-publish `gh release upload --clobber`.
 12. Release-workflow fixtures prove exact 18-asset inventory, draft-first ordering, immutability preflight, signing/attestation before publish, explicit local publish confirmation, and all post-publish verification commands.
 13. Preserve the full accepted .NET and Rust regression suites, strict MkDocs build, package-inventory checks, and Phase 32D/32E lifecycle tests.
+14. Standalone-worker cases prove the early no-lifecycle startup branch, exact sibling/no-shell launch, bridge-only-first fallback, bounded/malformed output handling, signed success, mutable-release and invalid-signature rejection, duplicate-click suppression, pre-acceptance shared admission, explicit current-user ownership plus an exact protected bounded SID-only global ACL, handle-based Owner/Access inspection, exact-DACL foreign-owner rejection without repair, actual separate-process exclusion/release, retained-handle genuine abandonment recovery, and zero state/network/operation work on rejection.
 
 ### Manual tests after design review
 

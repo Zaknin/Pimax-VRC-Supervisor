@@ -21,10 +21,36 @@ using PimaxVrcSupervisor.BaseStations;
 using PimaxVrcSupervisor.Updates;
 using Windows.Devices.Bluetooth.Advertisement;
 
+var commandLineArgs = Environment.GetCommandLineArgs().Skip(1).ToArray();
+if (StandaloneUpdateCheckCommand.IsRequested(commandLineArgs))
+{
+    StandaloneUpdateCheckResultV1 result;
+    if (!StandaloneUpdateCheckCommand.HasExactArguments(commandLineArgs))
+    {
+        result = StandaloneUpdateCheckCommand.InvalidArguments();
+    }
+    else
+    {
+        try
+        {
+            result = await StandaloneUpdateCheckWorker.RunProductionAsync(CancellationToken.None);
+        }
+        catch
+        {
+            result = StandaloneUpdateCheckCommand.Failed(
+                "worker_failed",
+                "The standalone update check failed before producing a verified result.");
+        }
+    }
+
+    Console.WriteLine(StandaloneUpdateCheckJson.Serialize(result));
+    Environment.ExitCode = result.Success ? 0 : 1;
+    return;
+}
+
 using var shutdown = new CancellationTokenSource();
 using var consoleLog = SupervisorConsoleLog.Install();
 
-var commandLineArgs = Environment.GetCommandLineArgs().Skip(1).ToArray();
 var startupContext = StartupExecutionContext.Parse(commandLineArgs);
 var desktopTuiStart = startupContext.DesktopTuiStart;
 var launchDesktopTuiAfterReady = startupContext.LaunchDesktopTuiAfterReady;
@@ -4735,6 +4761,7 @@ internal sealed class AppSupervisor
                 operationId = acceptance.OperationId,
                 accepted = acceptance.Accepted,
                 alreadyInProgress = acceptance.AlreadyInProgress,
+                resultCode = acceptance.ResultCode,
                 status = acceptance.Accepted ? "accepted" : "rejected"
             },
             acceptance.Accepted ? null : acceptance.Message,

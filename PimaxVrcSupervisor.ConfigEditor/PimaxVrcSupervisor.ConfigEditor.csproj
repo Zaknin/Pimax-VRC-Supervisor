@@ -23,6 +23,7 @@
     <Compile Include="..\PimaxVrcSupervisor\ScheduledTaskPathValidation.cs" Link="ScheduledTaskPathValidation.cs" />
     <Compile Include="..\PimaxVrcSupervisor\StartupLaunchPlanning.cs" Link="StartupLaunchPlanning.cs" />
     <Compile Include="..\PimaxVrcSupervisor\UpdateBridgeContract.cs" Link="UpdateBridgeContract.cs" />
+    <Compile Include="..\PimaxVrcSupervisor\StandaloneUpdateCheckContract.cs" Link="StandaloneUpdateCheckContract.cs" />
     <None Include="..\PimaxVrcSupervisor\supervisor.config.json" Link="supervisor.config.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

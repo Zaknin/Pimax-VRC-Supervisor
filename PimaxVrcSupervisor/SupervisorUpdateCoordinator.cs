@@ -10,7 +10,6 @@ internal sealed class SupervisorUpdateCoordinator : IDisposable
     private readonly IUpdateDiscoveryDiagnostics _diagnostics;
     private readonly object _operationLock = new();
     private UpdateCheckOperationSnapshot? _operation;
-    private int _manualCheckActive;
 
     public SupervisorUpdateCoordinator(
         SupervisorUpdatePolicy policy,
@@ -99,54 +98,74 @@ internal sealed class SupervisorUpdateCoordinator : IDisposable
             load.CorruptionDetected ? "Saved update state was corrupt and was ignored." : DescribeError(state.LastError?.Code),
             _verificationConfigured,
             _verificationConfigured && eligibility.Decision == AutomaticUpdateCheckDecision.Due,
-            Volatile.Read(ref _manualCheckActive) == 1 || _scheduler.IsCheckInProgress,
+            _scheduler.IsCheckInProgress,
             operation);
     }
 
     public UpdateActionAcceptance TryStartManualCheck(CancellationToken supervisorShutdown)
     {
-        if (Interlocked.CompareExchange(ref _manualCheckActive, 1, 0) != 0)
+        var admission = _scheduler.TryAcquireAdmission(UpdateCheckKind.Manual);
+        if (admission.Status == UpdateCheckAdmissionStatus.AlreadyRunning)
         {
-            var existing = GetOperation();
-            _diagnostics.Record(new UpdateDiscoveryDiagnostic(UpdateCheckKind.Manual, "rejectedAlreadyRunning", null, "already_running"));
-            return new UpdateActionAcceptance(false, true, existing?.OperationId, "An update check is already running.");
+            return new UpdateActionAcceptance(
+                Accepted: false,
+                AlreadyInProgress: true,
+                OperationId: null,
+                Message: "An update check is already running.",
+                ResultCode: "already_running");
         }
 
-        if (_scheduler.IsCheckInProgress)
+        if (!admission.IsAdmitted)
         {
-            Interlocked.Exchange(ref _manualCheckActive, 0);
-            _diagnostics.Record(new UpdateDiscoveryDiagnostic(UpdateCheckKind.Manual, "rejectedAlreadyRunning", null, "already_running"));
-            return new UpdateActionAcceptance(false, true, GetOperation()?.OperationId, "An update check is already running.");
+            return new UpdateActionAcceptance(
+                Accepted: false,
+                AlreadyInProgress: false,
+                OperationId: null,
+                Message: "The secure update-check gate is unavailable.",
+                ResultCode: "gate_unavailable");
         }
 
-        var operationId = "updatecheck-" + Guid.NewGuid().ToString("N");
-        SetOperation(new UpdateCheckOperationSnapshot(operationId, "running", null, "started", "Checking for a signed stable update.", _clock.UtcNow, null));
-        _diagnostics.Record(new UpdateDiscoveryDiagnostic(UpdateCheckKind.Manual, "accepted", null, null));
-        _ = Task.Run(async () =>
+        var admissionLease = admission.Lease!;
+        try
         {
-            try
+            _diagnostics.Record(new UpdateDiscoveryDiagnostic(UpdateCheckKind.Manual, "accepted", null, null));
+            var operationId = "updatecheck-" + Guid.NewGuid().ToString("N");
+            SetOperation(new UpdateCheckOperationSnapshot(operationId, "running", null, "started", "Checking for a signed stable update.", _clock.UtcNow, null));
+            _ = Task.Run(async () =>
             {
-                if (!_verificationConfigured)
+                try
                 {
-                    _diagnostics.Record(new UpdateDiscoveryDiagnostic(UpdateCheckKind.Manual, "verificationUnavailable", UpdateDiscoveryStatus.Failed, "verification_unavailable"));
-                    await PersistVerificationUnavailableAsync().ConfigureAwait(false);
-                    Complete(operationId, false, "verification_unavailable", "Update verification is unavailable because no production trust root is configured.");
-                    return;
-                }
+                    if (!_verificationConfigured)
+                    {
+                        using (admissionLease)
+                        {
+                            _diagnostics.Record(new UpdateDiscoveryDiagnostic(UpdateCheckKind.Manual, "verificationUnavailable", UpdateDiscoveryStatus.Failed, "verification_unavailable"));
+                            await PersistVerificationUnavailableAsync().ConfigureAwait(false);
+                        }
 
-                var result = await _scheduler.CheckManuallyAsync(supervisorShutdown).ConfigureAwait(false);
-                Complete(operationId, result.CompletedSuccessfully, result.ErrorCode ?? result.Status.ToString(), DescribeResult(result));
-            }
-            catch (OperationCanceledException)
-            {
-                Complete(operationId, false, "cancelled", "The update check was cancelled during Supervisor shutdown.");
-            }
-            finally
-            {
-                Interlocked.Exchange(ref _manualCheckActive, 0);
-            }
-        }, CancellationToken.None);
-        return new UpdateActionAcceptance(true, false, operationId, "Update check accepted.");
+                        Complete(operationId, false, "verification_unavailable", "Update verification is unavailable because no production trust root is configured.");
+                        return;
+                    }
+
+                    var result = await _scheduler.CheckAdmittedAsync(
+                        UpdateCheckKind.Manual,
+                        admissionLease,
+                        supervisorShutdown).ConfigureAwait(false);
+                    Complete(operationId, result.CompletedSuccessfully, ResultCode(result), DescribeResult(result));
+                }
+                catch (OperationCanceledException)
+                {
+                    admissionLease.Dispose();
+                    Complete(operationId, false, "cancelled", "The update check was cancelled during Supervisor shutdown.");
+                }
+            }, CancellationToken.None);
+            return new UpdateActionAcceptance(true, false, operationId, "Update check accepted.", "accepted");
+        }
+        catch
+        {
+            admissionLease.Dispose();
+            throw;
+        }
     }
 
     public async Task<UpdateActionAcceptance> DismissAsync(CancellationToken cancellationToken)
@@ -218,7 +237,6 @@ internal sealed class SupervisorUpdateCoordinator : IDisposable
 
     private void Complete(string operationId, bool success, string code, string summary)
     {
-        Interlocked.Exchange(ref _manualCheckActive, 0);
         lock (_operationLock)
         {
             if (_operation?.OperationId == operationId)
@@ -238,7 +256,18 @@ internal sealed class SupervisorUpdateCoordinator : IDisposable
     private static SemanticVersion? TryParseStable(string? value)
         => SemanticVersion.TryParse(value, out var version) && version.IsStable ? version : null;
 
-    private static string DescribeResult(UpdateDiscoveryCheckResult result) => result.Status switch
+    internal static string ResultCode(UpdateDiscoveryCheckResult result)
+        => result.ErrorCode ?? result.Status switch
+        {
+            UpdateDiscoveryStatus.UpdateAvailable => "update_available",
+            UpdateDiscoveryStatus.Current => "current",
+            UpdateDiscoveryStatus.NotModified => "not_modified",
+            UpdateDiscoveryStatus.Ignored => "ignored",
+            UpdateDiscoveryStatus.Cancelled => "cancelled",
+            _ => "update_failed"
+        };
+
+    internal static string DescribeResult(UpdateDiscoveryCheckResult result) => result.Status switch
     {
         UpdateDiscoveryStatus.UpdateAvailable => $"Verified stable update {result.Version} is available.",
         UpdateDiscoveryStatus.Current => "The installed version is current.",
@@ -248,7 +277,7 @@ internal sealed class SupervisorUpdateCoordinator : IDisposable
         _ => "The update check failed: " + (result.ErrorCode ?? "update_failed") + "."
     };
 
-    private static string? DescribeError(string? code)
+    internal static string? DescribeError(string? code)
         => code is null ? null : "The last update check failed: " + Bound(code, 64) + ".";
 
     private static string Bound(string value, int maximum)

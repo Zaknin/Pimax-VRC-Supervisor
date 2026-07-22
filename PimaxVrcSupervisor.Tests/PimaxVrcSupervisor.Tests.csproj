@@ -18,10 +18,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj" />
+    <ProjectReference Include="..\PimaxVrcSupervisor.UpdateCheckTestHelper\PimaxVrcSupervisor.UpdateCheckTestHelper.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
     <Compile Include="..\PimaxVrcSupervisor.SteamVrHost\OverlayUpdateStatus.cs" Link="SteamVrHost\OverlayUpdateStatus.cs" />
+    <Compile Include="..\PimaxVrcSupervisor.ConfigEditor\ConfiguratorStandaloneUpdateCheckLauncher.cs" Link="Configurator\ConfiguratorStandaloneUpdateCheckLauncher.cs" />
   </ItemGroup>
 
   <ItemGroup>

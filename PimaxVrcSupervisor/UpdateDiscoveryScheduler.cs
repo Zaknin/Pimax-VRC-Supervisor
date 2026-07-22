@@ -18,7 +18,8 @@ internal sealed class SystemUpdateScheduleClock : IUpdateScheduleClock
 internal enum UpdateCheckKind
 {
     Automatic,
-    Manual
+    Manual,
+    Worker
 }
 
 internal sealed record UpdateDiscoveryDiagnostic(
@@ -61,23 +62,32 @@ internal sealed class UpdateDiscoveryScheduler
     private readonly IUpdateDiscoveryClient _client;
     private readonly IUpdateScheduleClock _clock;
     private readonly IUpdateDiscoveryDiagnostics _diagnostics;
-    private readonly SemaphoreSlim _checkLock = new(1, 1);
+    private readonly UpdateCheckAdmission _admission;
     private int _automaticSessionStarted;
     private int _automaticAttempted;
-    private int _checkInProgress;
 
-    public bool IsCheckInProgress => Volatile.Read(ref _checkInProgress) == 1;
+    public bool IsCheckInProgress => _admission.IsActive;
 
     public UpdateDiscoveryScheduler(
         UpdateStateStore stateStore,
         IUpdateDiscoveryClient client,
         IUpdateScheduleClock clock,
-        IUpdateDiscoveryDiagnostics? diagnostics = null)
+        IUpdateDiscoveryDiagnostics? diagnostics = null,
+        IUpdateCheckExclusion? checkExclusion = null,
+        UpdateCheckAdmission? admission = null)
     {
         _stateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _diagnostics = diagnostics ?? NullUpdateDiscoveryDiagnostics.Instance;
+        if (checkExclusion is not null && admission is not null)
+        {
+            throw new ArgumentException("Specify either an update-check exclusion or a shared admission component, not both.");
+        }
+
+        _admission = admission
+            ?? new UpdateCheckAdmission(
+                checkExclusion ?? UserScopedUpdateCheckExclusion.ForCurrentUser());
     }
 
     public void StartAutomaticSessionInBackground(CancellationToken cancellationToken)
@@ -132,7 +142,16 @@ internal sealed class UpdateDiscoveryScheduler
                             "due",
                             Status: null,
                             ErrorCode: null));
-                        await ExecuteCheckAsync(UpdateCheckKind.Automatic, cancellationToken).ConfigureAwait(false);
+                        var admission = TryAcquireAdmission(UpdateCheckKind.Automatic);
+                        if (!admission.IsAdmitted)
+                        {
+                            return;
+                        }
+
+                        await CheckAdmittedAsync(
+                            UpdateCheckKind.Automatic,
+                            admission.Lease!,
+                            cancellationToken).ConfigureAwait(false);
                         return;
                     default:
                         throw new InvalidOperationException("Unknown automatic update eligibility decision.");
@@ -159,19 +178,68 @@ internal sealed class UpdateDiscoveryScheduler
 
     public async Task<UpdateDiscoveryCheckResult> CheckManuallyAsync(CancellationToken cancellationToken)
     {
-        try
+        var admission = TryAcquireAdmission(UpdateCheckKind.Manual);
+        if (!admission.IsAdmitted)
         {
-            return await ExecuteCheckAsync(UpdateCheckKind.Manual, cancellationToken).ConfigureAwait(false);
+            return AdmissionFailure(admission);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+
+        return await CheckAdmittedAsync(
+            UpdateCheckKind.Manual,
+            admission.Lease!,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public UpdateCheckAdmissionResult TryAcquireAdmission(UpdateCheckKind kind)
+    {
+        var admission = _admission.TryAcquire();
+        if (admission.Status == UpdateCheckAdmissionStatus.AlreadyRunning)
         {
-            return UpdateDiscoveryCheckResult.Cancelled();
+            _diagnostics.Record(new UpdateDiscoveryDiagnostic(
+                kind,
+                "rejectedAlreadyRunning",
+                UpdateDiscoveryStatus.Failed,
+                "already_running"));
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or UpdateContractException)
+        else if (admission.Status == UpdateCheckAdmissionStatus.Unavailable)
         {
-            return UpdateDiscoveryCheckResult.Failure(UpdateErrorCategory.State, "state_io");
+            _diagnostics.Record(new UpdateDiscoveryDiagnostic(
+                kind,
+                "rejectedGateUnavailable",
+                UpdateDiscoveryStatus.Failed,
+                "gate_unavailable"));
+        }
+
+        return admission;
+    }
+
+    public async Task<UpdateDiscoveryCheckResult> CheckAdmittedAsync(
+        UpdateCheckKind kind,
+        UpdateCheckAdmissionLease admissionLease,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(admissionLease);
+        using (admissionLease)
+        {
+            try
+            {
+                return await ExecuteCheckAsync(kind, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return UpdateDiscoveryCheckResult.Cancelled();
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or UpdateContractException)
+            {
+                return UpdateDiscoveryCheckResult.Failure(UpdateErrorCategory.State, "state_io");
+            }
         }
     }
+
+    private static UpdateDiscoveryCheckResult AdmissionFailure(UpdateCheckAdmissionResult admission)
+        => UpdateDiscoveryCheckResult.Failure(
+            UpdateErrorCategory.State,
+            admission.ErrorCode ?? "gate_unavailable");
 
     public static AutomaticUpdateCheckEligibility EvaluateAutomaticEligibility(
         UpdateStateV1 state,
@@ -203,76 +271,66 @@ internal sealed class UpdateDiscoveryScheduler
         UpdateCheckKind kind,
         CancellationToken cancellationToken)
     {
-        await _checkLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        Interlocked.Exchange(ref _checkInProgress, 1);
+        var load = _stateStore.Load();
+        var state = load.State;
+        if (kind == UpdateCheckKind.Automatic)
+        {
+            var eligibility = EvaluateAutomaticEligibility(state, _clock.UtcNow);
+            if (eligibility.Decision != AutomaticUpdateCheckDecision.Due)
+            {
+                return new UpdateDiscoveryCheckResult
+                {
+                    Status = UpdateDiscoveryStatus.Ignored,
+                    ETag = state.ETag,
+                    Version = state.LatestVerifiedVersion,
+                    Tag = state.LatestVerifiedTag,
+                    ReleaseUrl = state.LatestVerifiedReleaseUrl,
+                    VerifiedManifest = null,
+                    ErrorCategory = null,
+                    ErrorCode = null
+                };
+            }
+        }
+
+        var attemptAtUtc = _clock.UtcNow;
         try
         {
-            var load = _stateStore.Load();
-            var state = load.State;
-            if (kind == UpdateCheckKind.Automatic)
-            {
-                var eligibility = EvaluateAutomaticEligibility(state, _clock.UtcNow);
-                if (eligibility.Decision != AutomaticUpdateCheckDecision.Due)
-                {
-                    return new UpdateDiscoveryCheckResult
-                    {
-                        Status = UpdateDiscoveryStatus.Ignored,
-                        ETag = state.ETag,
-                        Version = state.LatestVerifiedVersion,
-                        Tag = state.LatestVerifiedTag,
-                        ReleaseUrl = state.LatestVerifiedReleaseUrl,
-                        VerifiedManifest = null,
-                        ErrorCategory = null,
-                        ErrorCode = null
-                    };
-                }
-            }
-
-            var attemptAtUtc = _clock.UtcNow;
-            try
-            {
-                await _stateStore.SaveAsync(
-                    state with { LastAttemptUtc = attemptAtUtc },
-                    cancellationToken).ConfigureAwait(false);
-                _diagnostics.Record(new UpdateDiscoveryDiagnostic(kind, "attemptStatePersisted", Status: null, ErrorCode: null));
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or UpdateContractException)
-            {
-                var stateFailure = UpdateDiscoveryCheckResult.Failure(UpdateErrorCategory.State, "state_write");
-                _diagnostics.Record(new UpdateDiscoveryDiagnostic(kind, "failed", stateFailure.Status, stateFailure.ErrorCode));
-                return stateFailure;
-            }
-
-            _diagnostics.Record(new UpdateDiscoveryDiagnostic(kind, "started", Status: null, ErrorCode: null));
-            var result = await _client.CheckAsync(state.ETag, cancellationToken).ConfigureAwait(false);
-            var completedAtUtc = _clock.UtcNow;
-            result = EnforcePersistedRollbackBoundary(state, result);
-            RecordVerificationDiagnostics(kind, result);
-            var nextState = BuildNextState(state, result, attemptAtUtc, completedAtUtc);
-            try
-            {
-                await _stateStore.SaveAsync(nextState, cancellationToken).ConfigureAwait(false);
-                _diagnostics.Record(new UpdateDiscoveryDiagnostic(kind, "resultStatePersisted", result.Status, result.ErrorCode));
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or UpdateContractException)
-            {
-                var stateFailure = UpdateDiscoveryCheckResult.Failure(UpdateErrorCategory.State, "state_write");
-                _diagnostics.Record(new UpdateDiscoveryDiagnostic(kind, "failed", stateFailure.Status, stateFailure.ErrorCode));
-                return stateFailure;
-            }
-
-            _diagnostics.Record(new UpdateDiscoveryDiagnostic(
-                kind,
-                result.CompletedSuccessfully ? "completed" : "failed",
-                result.Status,
-                result.ErrorCode));
-            return result;
+            await _stateStore.SaveAsync(
+                state with { LastAttemptUtc = attemptAtUtc },
+                cancellationToken).ConfigureAwait(false);
+            _diagnostics.Record(new UpdateDiscoveryDiagnostic(kind, "attemptStatePersisted", Status: null, ErrorCode: null));
         }
-        finally
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or UpdateContractException)
         {
-            Interlocked.Exchange(ref _checkInProgress, 0);
-            _checkLock.Release();
+            var stateFailure = UpdateDiscoveryCheckResult.Failure(UpdateErrorCategory.State, "state_write");
+            _diagnostics.Record(new UpdateDiscoveryDiagnostic(kind, "failed", stateFailure.Status, stateFailure.ErrorCode));
+            return stateFailure;
         }
+
+        _diagnostics.Record(new UpdateDiscoveryDiagnostic(kind, "started", Status: null, ErrorCode: null));
+        var result = await _client.CheckAsync(state.ETag, cancellationToken).ConfigureAwait(false);
+        var completedAtUtc = _clock.UtcNow;
+        result = EnforcePersistedRollbackBoundary(state, result);
+        RecordVerificationDiagnostics(kind, result);
+        var nextState = BuildNextState(state, result, attemptAtUtc, completedAtUtc);
+        try
+        {
+            await _stateStore.SaveAsync(nextState, cancellationToken).ConfigureAwait(false);
+            _diagnostics.Record(new UpdateDiscoveryDiagnostic(kind, "resultStatePersisted", result.Status, result.ErrorCode));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or UpdateContractException)
+        {
+            var stateFailure = UpdateDiscoveryCheckResult.Failure(UpdateErrorCategory.State, "state_write");
+            _diagnostics.Record(new UpdateDiscoveryDiagnostic(kind, "failed", stateFailure.Status, stateFailure.ErrorCode));
+            return stateFailure;
+        }
+
+        _diagnostics.Record(new UpdateDiscoveryDiagnostic(
+            kind,
+            result.CompletedSuccessfully ? "completed" : "failed",
+            result.Status,
+            result.ErrorCode));
+        return result;
     }
 
     private void RecordVerificationDiagnostics(UpdateCheckKind kind, UpdateDiscoveryCheckResult result)

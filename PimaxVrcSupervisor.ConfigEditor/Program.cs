@@ -234,7 +234,9 @@ internal sealed class ConfigEditorForm : Form
 
     public ConfigEditorForm(string? requestedConfigPath)
     {
-        _updateCheckRunner = new ConfiguratorUpdateCheckRunner(_updateBridge);
+        _updateCheckRunner = new ConfiguratorUpdateCheckRunner(
+            _updateBridge,
+            new ConfiguratorStandaloneUpdateCheckLauncher());
         Text = BaseWindowTitle;
         SetWindowIconFromExecutable();
         MinimumSize = new Size(1180, 860);
