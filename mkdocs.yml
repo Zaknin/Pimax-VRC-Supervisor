@@ -89,6 +89,7 @@ nav:
       - Phase32E1 Manual Acceptance: development/phase32e1-manual-acceptance.md
       - Phase32F Tracked-Device Power Policy Discovery: development/phase32f-steamvr-tracked-device-power-policy-discovery.md
       - Phase33A Secure GitHub Update Discovery: development/phase33a-secure-github-update-discovery.md
+      - Phase33B Secure Update Transaction: development/phase33b-secure-update-transaction.md
       - Immutable Release Operations: reference/immutable-release-operations.md
       - Production Update Trust-Key Ceremony: reference/production-update-key-ceremony.md
       - Phase33A Update Notification Acceptance: reference/phase33a-update-notification-acceptance.md
