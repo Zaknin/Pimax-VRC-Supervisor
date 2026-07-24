@@ -11,7 +11,7 @@ public sealed class SteamVrBurstSuppressionTests
         var stations = Stations(4);
         var poll = 0;
 
-        var result = await CreateChecker(temp).CheckAsync(
+        var result = await CreateChecker(temp, delayAsync: static (_, _) => Task.CompletedTask).CheckAsync(
             stations,
             enabled: true,
             Available,
@@ -327,11 +327,13 @@ public sealed class SteamVrBurstSuppressionTests
     private static SteamVrBurstSuppressionChecker CreateChecker(
         TempDirectory temp,
         TimeSpan? maximumDuration = null,
-        TimeSpan? pollingInterval = null)
+        TimeSpan? pollingInterval = null,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
         => new(
             new BaseStationDiagnosticSink(temp.Path, "Supervisor", "test"),
             maximumDuration ?? TimeSpan.FromMilliseconds(100),
-            pollingInterval ?? TimeSpan.FromMilliseconds(1));
+            pollingInterval ?? TimeSpan.FromMilliseconds(1),
+            delayAsync);
 
     private static (bool Available, string Reason) Available()
         => (true, "available");

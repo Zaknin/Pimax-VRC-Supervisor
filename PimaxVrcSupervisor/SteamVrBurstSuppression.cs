@@ -99,11 +99,23 @@ internal sealed class SteamVrBurstSuppressionChecker
     private readonly BaseStationDiagnosticSink _diagnostics;
     private readonly TimeSpan _maximumDuration;
     private readonly TimeSpan _pollingInterval;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
 
     public SteamVrBurstSuppressionChecker(
         BaseStationDiagnosticSink diagnostics,
         TimeSpan maximumDuration,
         TimeSpan? pollingInterval = null)
+        : this(diagnostics, maximumDuration, pollingInterval, delayAsync: null)
+    {
+    }
+
+    // The public production constructor always uses Task.Delay. The internal overload is a
+    // test-only scheduling seam; it is not reachable from application configuration or UI.
+    internal SteamVrBurstSuppressionChecker(
+        BaseStationDiagnosticSink diagnostics,
+        TimeSpan maximumDuration,
+        TimeSpan? pollingInterval,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync)
     {
         if (maximumDuration <= TimeSpan.Zero)
         {
@@ -113,6 +125,7 @@ internal sealed class SteamVrBurstSuppressionChecker
         _diagnostics = diagnostics;
         _maximumDuration = maximumDuration;
         _pollingInterval = pollingInterval ?? BaseStationCommandTiming.SteamVrConfirmationPollingInterval;
+        _delayAsync = delayAsync ?? (static (delay, cancellationToken) => Task.Delay(delay, cancellationToken));
         if (_pollingInterval <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(pollingInterval));
@@ -381,7 +394,7 @@ internal sealed class SteamVrBurstSuppressionChecker
                     return DeadlineResult();
                 }
 
-                await Task.Delay(delay < _pollingInterval ? delay : _pollingInterval, cancellationToken);
+                await _delayAsync(delay < _pollingInterval ? delay : _pollingInterval, cancellationToken);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
