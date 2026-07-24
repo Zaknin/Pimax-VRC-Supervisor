@@ -52,6 +52,22 @@ using var shutdown = new CancellationTokenSource();
 using var consoleLog = SupervisorConsoleLog.Install();
 
 var startupContext = StartupExecutionContext.Parse(commandLineArgs);
+var lifecycleComponent = startupContext.WatchVrchatAutoLaunch
+    ? "Watcher"
+    : startupContext.EmergencyBaseStationCleanup
+        ? "EmergencyCleanup"
+        : "Supervisor";
+var lifecycleEvents = LifecycleEventSink.ForCurrentProcess(lifecycleComponent, startupContext.LifecycleCorrelationId);
+lifecycleEvents.Write(
+    "lifecycle.processStart",
+    result: "started",
+    fields: new Dictionary<string, string?>
+    {
+        ["startupMode"] = lifecycleComponent,
+        ["caller"] = startupContext.LifecycleCorrelationId is null ? "direct-or-scheduled" : "watcher-child",
+        ["managedSteamVrSession"] = startupContext.ManagedSteamVrSession.ToString(),
+        ["persistentSupervisorOwner"] = startupContext.PersistentSupervisorOwner.ToString()
+    });
 var desktopTuiStart = startupContext.DesktopTuiStart;
 var launchDesktopTuiAfterReady = startupContext.LaunchDesktopTuiAfterReady;
 var steamVrStart = startupContext.SteamVrStart;
@@ -119,7 +135,17 @@ if (startupContext.ShouldHideConsole)
 if (startupContext.EmergencyBaseStationCleanup)
 {
     var emergencyConfig = SupervisorConfig.Load(startupContext.EmergencyBaseStationCleanupConfigPath);
+    lifecycleEvents.Write(
+        "baseStation.powerDown",
+        reason: "detached-emergency-cleanup",
+        result: "requested",
+        fields: new Dictionary<string, string?>
+        {
+            ["originatingComponent"] = "EmergencyCleanup",
+            ["targetStationCount"] = emergencyConfig.BaseStations.Count(station => station.Enabled && !string.IsNullOrWhiteSpace(station.BluetoothAddress)).ToString()
+        });
     await BaseStationEmergencyCleanup.RunAsync(emergencyConfig, TimeSpan.FromSeconds(startupContext.EmergencyBaseStationCleanupDelaySeconds), CancellationToken.None);
+    lifecycleEvents.Write("baseStation.powerDown", reason: "detached-emergency-cleanup", result: "completed");
     return;
 }
 
@@ -180,14 +206,19 @@ if (applyStartupIntegration)
 if (watchVrchatAutoLaunch)
 {
     var skipCurrentSteamVrSession = commandLineArgs.Any(arg => string.Equals(arg, "--skip-current-vrserver-session", StringComparison.OrdinalIgnoreCase));
-    await AutoLaunchWatcher.RunAsync(skipCurrentSteamVrSession, desktopTuiDefaultInterface, persistentSupervisorOwner, config, configPath, shutdown.Token);
+    await AutoLaunchWatcher.RunAsync(skipCurrentSteamVrSession, desktopTuiDefaultInterface, persistentSupervisorOwner, config, configPath, lifecycleEvents, shutdown.Token);
     return;
 }
 
 using var supervisorMutex = new Mutex(initiallyOwned: true, @"Local\PimaxVrcSupervisor", out var ownsSupervisorMutex);
+LifecycleOwnershipObservation.RecordAfterOriginalAcquisition(
+    lifecycleEvents,
+    @"Local\PimaxVrcSupervisor",
+    ownsSupervisorMutex);
 if (!ownsSupervisorMutex)
 {
     Console.WriteLine("Pimax VRC Supervisor is already running. Exiting this duplicate instance.");
+    lifecycleEvents.Write("lifecycle.processExit", reason: "duplicate-supervisor", result: "not-owner");
     return;
 }
 
@@ -218,7 +249,8 @@ var supervisor = new AppSupervisor(
     persistentSupervisorOwner,
     migrationResultForStartup?.AutoLaunchTaskBindingDeferredByUser ?? false,
     diagnostics,
-    shutdown);
+    shutdown,
+    lifecycleEvents);
 var supervisorStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 Console.CancelKeyPress += (_, eventArgs) =>
 {
@@ -229,11 +261,16 @@ using var consoleCloseHandler = ConsoleCloseHandler.Register(
     shutdown,
     supervisorStopped.Task,
     supervisor.IsForcedManualReloadRequested,
-    supervisor.RunEmergencyCloseCleanupAsync,
+    () =>
+    {
+        lifecycleEvents.Write("cleanup.consoleClose", reason: "console-close-handler", result: "requested");
+        return supervisor.RunEmergencyCloseCleanupAsync();
+    },
     () => BaseStationEmergencyCleanup.TryLaunchDetached(config, TimeSpan.FromSeconds(6)));
 try
 {
     await supervisor.RunAsync(shutdown.Token);
+    lifecycleEvents.Write("lifecycle.processExit", reason: supervisor.LifecycleExitReason, result: "completed");
 }
 finally
 {
@@ -1930,6 +1967,7 @@ internal sealed class AppSupervisor
     private readonly XsOverlaySafeMonitorTransitionCoordinator _xsOverlayMonitorTransition;
     private readonly TimeSpan _pollInterval;
     private readonly SupervisorDiagnosticsSession _diagnostics;
+    private readonly LifecycleEventSink _lifecycleEvents;
     private readonly CancellationTokenSource _shutdown;
     private readonly SupervisorUpdateCoordinator _updateCoordinator;
     private readonly SteamVrLifecycleCoordinator _steamVrLifecycle;
@@ -2013,6 +2051,7 @@ internal sealed class AppSupervisor
     private SteamVrRuntimeIdentity? _vrSessionRestartExpectedOldRuntime;
     private int _vrSessionRestartLifecycleMessageReported;
     private int _vrSessionRestartActive;
+    private string _lifecycleExitReason = "run-completed";
 
     public AppSupervisor(
         SupervisorConfig config,
@@ -2022,7 +2061,8 @@ internal sealed class AppSupervisor
         bool persistentSupervisorOwner,
         bool autoLaunchTaskBindingDeferredByUser,
         SupervisorDiagnosticsSession diagnostics,
-        CancellationTokenSource shutdown)
+        CancellationTokenSource shutdown,
+        LifecycleEventSink lifecycleEvents)
     {
         _config = config;
         _steamVrStart = steamVrStart;
@@ -2032,13 +2072,14 @@ internal sealed class AppSupervisor
         _autoLaunchTaskBindingDeferredByUser = autoLaunchTaskBindingDeferredByUser;
         _diagnostics = diagnostics;
         _shutdown = shutdown;
+        _lifecycleEvents = lifecycleEvents;
         _updateCoordinator = SupervisorUpdateCoordinator.CreateProduction(
             config.EffectiveUpdatePolicy,
             diagnostic => WriteDiagnosticEvent(
                 $"updateDiscovery; kind={diagnostic.Kind}; event={diagnostic.Event}; status={diagnostic.Status?.ToString() ?? "none"}; errorCode={diagnostic.ErrorCode ?? "none"}"));
         _steamVrLifecycle = new SteamVrLifecycleCoordinator(managedSteamVrSession, Environment.ProcessId);
         _steamVrRecovery = new SteamVrRecoveryCoordinator(managedSteamVrSession);
-        _steamVrLifecycleEvidence = new SteamVrLifecycleEvidenceReader();
+        _steamVrLifecycleEvidence = new SteamVrLifecycleEvidenceReader(observe: WriteSteamVrEvidenceObservation);
         _usbDeviceRecovery = new UsbDeviceRecoveryCoordinator(
             UsbDeviceAttributionRules.FromConfig(config),
             TimeSpan.FromMinutes(5),
@@ -2064,6 +2105,8 @@ internal sealed class AppSupervisor
         ResetBaseStationResolutionRefresh();
         _pollInterval = TimeSpan.FromSeconds(Math.Max(1, config.PollIntervalSeconds));
     }
+
+    public string LifecycleExitReason => _lifecycleExitReason;
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -4012,16 +4055,83 @@ internal sealed class AppSupervisor
                 continue;
             }
 
-            await StopProcessesAsync(app.DisplayName, app.ProcessNames, cancellationToken);
+            await StopManagedApplicationAsync(app.DisplayName, app.ProcessNames, reason, cancellationToken);
         }
 
-        await StopProcessesAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, cancellationToken);
+        await StopManagedApplicationAsync("VRCFaceTracking", _config.VrcFaceTrackingProcessNames, reason, cancellationToken);
         if (_config.UseBrokenEye)
         {
-            await StopProcessesAsync("Broken Eye", _config.BrokenEyeProcessNames, cancellationToken);
+            await StopManagedApplicationAsync("Broken Eye", _config.BrokenEyeProcessNames, reason, cancellationToken);
         }
 
         _managedAppsStarted = false;
+    }
+
+    private async Task StopManagedApplicationAsync(
+        string category,
+        string[] processNames,
+        ManagedAppStopReason reason,
+        CancellationToken cancellationToken,
+        bool forceFirst = false)
+    {
+        var processIdentities = DescribeProcessIdentities(processNames);
+        _lifecycleEvents.Write(
+            "managedApplication.shutdown",
+            reason: reason.ToString(),
+            result: "requested",
+            fields: new Dictionary<string, string?>
+            {
+                ["applicationCategory"] = category,
+                ["processIdentities"] = processIdentities,
+                ["terminationStrategy"] = forceFirst ? "forced-termination-first" : "graceful-close-then-forced-termination-if-needed"
+            });
+        try
+        {
+            var outcome = await StopProcessesAsync(category, processNames, cancellationToken, forceFirst);
+            _lifecycleEvents.Write(
+                "managedApplication.shutdown",
+                reason: reason.ToString(),
+                result: "completed",
+                fields: new Dictionary<string, string?>
+                {
+                    ["applicationCategory"] = category,
+                    ["processIdentities"] = processIdentities,
+                    ["terminationStrategy"] = forceFirst ? "forced-termination-first" : "graceful-close-then-forced-termination-if-needed",
+                    ["gracefulCloseAttempted"] = outcome.GracefulCloseAttempted.ToString(),
+                    ["forcedTerminationAttempted"] = outcome.ForcedTerminationAttempted.ToString()
+                });
+        }
+        catch (Exception ex)
+        {
+            _lifecycleEvents.Write(
+                "managedApplication.shutdown",
+                reason: reason.ToString(),
+                result: "failed",
+                fields: new Dictionary<string, string?>
+                {
+                    ["applicationCategory"] = category,
+                    ["processIdentities"] = processIdentities,
+                    ["exceptionType"] = ex.GetType().Name,
+                    ["terminationStrategy"] = forceFirst ? "forced-termination-first" : "graceful-close-then-forced-termination-if-needed"
+                });
+            throw;
+        }
+    }
+
+    private static string DescribeProcessIdentities(string[] processNames)
+    {
+        var processes = GetProcesses(processNames);
+        try
+        {
+            return string.Join(",", processes.Select(process => LifecycleProcessIdentity.From(process).Value));
+        }
+        finally
+        {
+            foreach (var process in processes)
+            {
+                process.Dispose();
+            }
+        }
     }
 
     private async Task RestartCoreAppsAsync(CancellationToken cancellationToken)
@@ -6044,6 +6154,26 @@ internal sealed class AppSupervisor
         WriteDebug(message);
     }
 
+    private void WriteSteamVrEvidenceObservation(SteamVrEvidenceReaderObservation observation)
+    {
+        _lifecycleEvents.Write(
+            "steamVr.evidenceHealth",
+            result: observation.ParserHealth,
+            fields: new Dictionary<string, string?>
+            {
+                ["phase"] = observation.Phase,
+                ["availableSourceCount"] = observation.AvailableSourceCount.ToString(CultureInfo.InvariantCulture),
+                ["unavailableSourceCount"] = observation.UnavailableSourceCount.ToString(CultureInfo.InvariantCulture),
+                ["sourceIdentities"] = string.Join(",", observation.SourceIdentities),
+                ["currentReadOffsets"] = string.Join(",", observation.CurrentOffsets),
+                ["truncationDetected"] = observation.TruncationDetected.ToString(),
+                ["rotationDetected"] = observation.RotationDetected.ToString(),
+                ["markerVisible"] = observation.Marker is null ? "none" : observation.Marker,
+                ["staleMarkersCleared"] = observation.StaleMarkersCleared.ToString(),
+                ["latestNormalizedState"] = _steamVrRecovery.State.ToString()
+            });
+    }
+
     private void SetShutdownProgress(string? progress)
     {
         _shutdownProgress = progress;
@@ -6221,6 +6351,16 @@ internal sealed class AppSupervisor
         bool manualOverride = false,
         bool waitForSteamVrTrackingConfirmation = true)
     {
+        var delayedWakePass = _baseStationPowerOnPassesCompleted > 0;
+        _lifecycleEvents.Write(
+            "baseStation.powerOn",
+            reason: manualOverride ? "manual-request" : "session-startup",
+            result: "requested",
+            fields: BaseStationLifecycleFields(
+                GetEnabledBaseStations().Length,
+                delayedWakePass,
+                targetPowerOnPasses,
+                _steamVrRecovery.CurrentRuntime?.ToString()));
         var startedAt = Stopwatch.GetTimestamp();
         var result = await TryPowerOnBaseStationsForSessionCoreAsync(
             targetPowerOnPasses,
@@ -6237,6 +6377,16 @@ internal sealed class AppSupervisor
             _diagnostics.RecordBaseStationWakeNoop(elapsed);
             _diagnostics.WriteVerbose($"base-station wake noop; reason={result}; elapsedMs={elapsed.TotalMilliseconds:0.0}");
         }
+
+        _lifecycleEvents.Write(
+            "baseStation.powerOn",
+            reason: manualOverride ? "manual-request" : "session-startup",
+            result: result.ToString(),
+            fields: BaseStationLifecycleFields(
+                GetEnabledBaseStations().Length,
+                delayedWakePass,
+                targetPowerOnPasses,
+                _steamVrRecovery.CurrentRuntime?.ToString()));
 
         return result;
     }
@@ -7055,16 +7205,62 @@ internal sealed class AppSupervisor
 
     private async Task TryPowerDownBaseStationsForSessionAsync(CancellationToken cancellationToken, bool manualOverride = false)
     {
+        _lifecycleEvents.Write(
+            "baseStation.powerDown",
+            reason: manualOverride ? "manual-request" : "cleanup",
+            result: "requested",
+            fields: BaseStationLifecycleFields(
+                GetEnabledBaseStations().Length,
+                delayedWakePass: false,
+                targetPowerOnPasses: 0,
+                _steamVrRecovery.CurrentRuntime?.ToString()));
         var startedAt = Stopwatch.GetTimestamp();
         try
         {
             await TryPowerDownBaseStationsForSessionCoreAsync(cancellationToken, manualOverride);
+            _lifecycleEvents.Write(
+                "baseStation.powerDown",
+                reason: manualOverride ? "manual-request" : "cleanup",
+                result: "completed",
+                fields: BaseStationLifecycleFields(
+                    GetEnabledBaseStations().Length,
+                    delayedWakePass: false,
+                    targetPowerOnPasses: 0,
+                    _steamVrRecovery.CurrentRuntime?.ToString()));
+        }
+        catch (Exception ex)
+        {
+            _lifecycleEvents.Write(
+                "baseStation.powerDown",
+                reason: manualOverride ? "manual-request" : "cleanup",
+                result: "failed",
+                fields: new Dictionary<string, string?>
+                {
+                    ["exceptionType"] = ex.GetType().Name,
+                    ["targetStationCount"] = GetEnabledBaseStations().Length.ToString(CultureInfo.InvariantCulture)
+                });
+            throw;
         }
         finally
         {
             _diagnostics.RecordBaseStationPowerDownRoutine(Stopwatch.GetElapsedTime(startedAt));
         }
     }
+
+    private Dictionary<string, string?> BaseStationLifecycleFields(
+        int targetStationCount,
+        bool delayedWakePass,
+        int targetPowerOnPasses,
+        string? observedVrserverIdentity)
+        => new()
+        {
+            ["originatingComponent"] = "Supervisor",
+            ["supervisorIdentity"] = _lifecycleEvents.ProcessIdentity.Value,
+            ["observedVrserverIdentity"] = observedVrserverIdentity ?? "none",
+            ["targetStationCount"] = targetStationCount.ToString(CultureInfo.InvariantCulture),
+            ["delayedStartupWakePass"] = delayedWakePass.ToString(),
+            ["targetPowerOnPasses"] = targetPowerOnPasses.ToString(CultureInfo.InvariantCulture)
+        };
 
     private async Task TryPowerDownBaseStationsForSessionCoreAsync(CancellationToken cancellationToken, bool manualOverride)
     {
@@ -7184,6 +7380,9 @@ internal sealed class AppSupervisor
         }
 
         _acceptedShutdownIntent = intent;
+        _lifecycleExitReason = explicitSupervisorExit
+            ? "explicit-supervisor-exit"
+            : "graceful-shutdown-requested";
         if (explicitSupervisorExit)
         {
             Environment.ExitCode = SupervisorProcessExitCodes.UserRequestedSupervisorExit;
@@ -7297,6 +7496,7 @@ internal sealed class AppSupervisor
     {
         if (!await _cleanupLock.WaitAsync(0, cancellationToken))
         {
+            WriteCleanupAdmission("rejected", "cleanup-lock-busy", waitForSteamVrServerExit, emergencyClose, intent);
             return;
         }
 
@@ -7304,8 +7504,11 @@ internal sealed class AppSupervisor
         {
             if (_cleanupStarted)
             {
+                WriteCleanupAdmission("rejected", "cleanup-already-started", waitForSteamVrServerExit, emergencyClose, intent);
                 return;
             }
+
+            WriteCleanupAdmission("admitted", "cleanup-lock-acquired", waitForSteamVrServerExit, emergencyClose, intent);
 
             if (emergencyClose)
             {
@@ -7332,6 +7535,34 @@ internal sealed class AppSupervisor
         {
             _cleanupLock.Release();
         }
+    }
+
+    private void WriteCleanupAdmission(
+        string result,
+        string reason,
+        bool waitForSteamVrServerExit,
+        bool emergencyClose,
+        SupervisorShutdownIntent intent)
+    {
+        _lifecycleEvents.Write(
+            "cleanup.admission",
+            reason,
+            result,
+            new Dictionary<string, string?>
+            {
+                ["cleanupRequested"] = "true",
+                ["currentSupervisorIdentity"] = _lifecycleEvents.ProcessIdentity.Value,
+                ["observedVrserverIdentity"] = _steamVrRecovery.CurrentRuntime?.ToString() ?? "none",
+                ["expectedVrserverIdentity"] = _vrSessionRestartExpectedOldRuntime?.ToString() ?? "none",
+                ["steamVrRecoveryState"] = _steamVrRecovery.State.ToString(),
+                ["steamVrRestartOrTransitional"] = (IsVrSessionRestartActive() || _steamVrRecovery.IsRecoveryPending).ToString(),
+                ["ownerLockState"] = "held-by-current-supervisor",
+                ["consoleCloseOrEmergencyCleanup"] = emergencyClose.ToString(),
+                ["waitForSteamVrExit"] = waitForSteamVrServerExit.ToString(),
+                ["managedApplicationsWillClose"] = _config.FaceTrackerAutomationEnabled.ToString(),
+                ["baseStationPowerDownWillBeRequested"] = SupervisorShutdownIntents.AllowsBaseStationPowerDown(intent).ToString(),
+                ["shutdownIntent"] = SupervisorShutdownIntents.ToProtocolMode(intent)
+            });
     }
 
     private async Task TryPowerDownBaseStationsWithTimeoutAsync(TimeSpan timeout)
@@ -8114,6 +8345,7 @@ internal sealed class AppSupervisor
         }
 
         _lifecyclePhase = SupervisorLifecyclePhase.ShutdownRoutineRunning;
+        _lifecycleExitReason = "steamvr-" + decision.Classification.ToString().ToLowerInvariant();
         if (decision.Classification == SteamVrRecoveryClassification.RecoveryLimitReached)
         {
             _operatorWarning = "SteamVR recovery remained unstable; normal cleanup is running.";
@@ -8969,13 +9201,22 @@ internal sealed class AppSupervisor
 
         if (_lovenseWorkflowTriggered || oscGoesBrrrRunning)
         {
-            await StopProcessesAsync("OscGoesBrrr", _config.OscGoesBrrrProcessNames, cancellationToken, forceFirst: true);
+            await StopManagedApplicationAsync(
+                "OscGoesBrrr",
+                _config.OscGoesBrrrProcessNames,
+                ManagedAppStopReason.SessionEnding,
+                cancellationToken,
+                forceFirst: true);
             _lovenseWorkflowTriggered = false;
         }
 
         if (_lovenseIntifaceStarted || intifaceRunning)
         {
-            await StopProcessesAsync("Intiface", _config.IntifaceProcessNames, cancellationToken);
+            await StopManagedApplicationAsync(
+                "Intiface",
+                _config.IntifaceProcessNames,
+                ManagedAppStopReason.SessionEnding,
+                cancellationToken);
             _lovenseIntifaceStarted = false;
         }
     }
@@ -9462,13 +9703,15 @@ internal sealed class AppSupervisor
         return minimizedAny;
     }
 
-    private async Task StopProcessesAsync(string displayName, string[] processNames, CancellationToken cancellationToken, bool forceFirst = false)
+    private sealed record ManagedProcessStopOutcome(bool GracefulCloseAttempted, bool ForcedTerminationAttempted);
+
+    private async Task<ManagedProcessStopOutcome> StopProcessesAsync(string displayName, string[] processNames, CancellationToken cancellationToken, bool forceFirst = false)
     {
         var processes = GetProcesses(processNames);
         if (processes.Count == 0)
         {
             Console.WriteLine($"{displayName} is already closed.");
-            return;
+            return new ManagedProcessStopOutcome(false, false);
         }
 
         Console.WriteLine($"Closing {displayName}...");
@@ -9490,7 +9733,7 @@ internal sealed class AppSupervisor
                 if (!IsAnyProcessRunning(processNames))
                 {
                     Console.WriteLine($"{displayName} is closed.");
-                    return;
+                    return new ManagedProcessStopOutcome(false, true);
                 }
 
                 await Task.Delay(250, cancellationToken);
@@ -9514,6 +9757,7 @@ internal sealed class AppSupervisor
         }
 
         processes = GetProcesses(processNames);
+        var forcedTerminationAttempted = processes.Count > 0;
         foreach (var process in processes)
         {
             using (process)
@@ -9529,7 +9773,7 @@ internal sealed class AppSupervisor
             if (!IsAnyProcessRunning(processNames))
             {
                 Console.WriteLine($"{displayName} is closed.");
-                return;
+                return new ManagedProcessStopOutcome(true, forcedTerminationAttempted);
             }
 
             await Task.Delay(500, cancellationToken);
@@ -10616,11 +10860,14 @@ internal static class AutoLaunchWatcher
         bool persistentSupervisorOwner,
         SupervisorConfig config,
         string? configPath,
+        LifecycleEventSink lifecycleEvents,
         CancellationToken cancellationToken)
     {
         using var mutex = new Mutex(initiallyOwned: true, WatcherMutexName, out var ownsMutex);
+        LifecycleOwnershipObservation.RecordAfterOriginalAcquisition(lifecycleEvents, WatcherMutexName, ownsMutex);
         if (!ownsMutex)
         {
+            lifecycleEvents.Write("watcher.decision", reason: "duplicate-watcher", result: "exit-not-owner");
             return;
         }
 
@@ -10651,6 +10898,7 @@ internal static class AutoLaunchWatcher
                 persistentSupervisorOwner,
                 launchedForCurrentSteamVrSession,
                 userExitSuppressedSteamVrSession,
+                lifecycleEvents,
                 token),
             cancellationToken);
     }
@@ -10673,9 +10921,12 @@ internal static class AutoLaunchWatcher
         bool persistentSupervisorOwner,
         SteamVrSessionIdentity? launchedForCurrentSteamVrSession,
         SteamVrSessionIdentity? userExitSuppressedSteamVrSession,
+        LifecycleEventSink lifecycleEvents,
         CancellationToken cancellationToken)
     {
         SteamVrSessionIdentity? relaunchSuppressionLoggedFor = null;
+        string? previousState = null;
+        var lastHealthSummaryAt = DateTimeOffset.MinValue;
         while (!cancellationToken.IsCancellationRequested)
         {
             var currentSteamVrSession = TryGetCurrentSteamVrSessionIdentity();
@@ -10694,6 +10945,27 @@ internal static class AutoLaunchWatcher
                 currentSteamVrSession,
                 supervisorRunning,
                 launchedForCurrentSteamVrSession);
+            var currentState = DescribeWatcherDecisionState(currentSteamVrSession, supervisorRunning, decision);
+            var now = DateTimeOffset.UtcNow;
+            if (!string.Equals(previousState, currentState, StringComparison.Ordinal)
+                || now - lastHealthSummaryAt >= TimeSpan.FromMinutes(5))
+            {
+                lifecycleEvents.Write(
+                    "watcher.decision",
+                    reason: currentState,
+                    result: decision.ShouldLaunchSupervisor ? "launch" : "wait-or-suppress",
+                    fields: new Dictionary<string, string?>
+                    {
+                        ["previousState"] = previousState ?? "initial",
+                        ["ownerLockState"] = "held-by-current-watcher",
+                        ["supervisorObservedAlive"] = supervisorRunning.ToString(),
+                        ["vrserverIdentity"] = currentSteamVrSession?.ToString() ?? "none",
+                        ["launchSuppressed"] = decision.SuppressedForCurrentSession.ToString(),
+                        ["launchedForVrserverIdentity"] = decision.LaunchedForSteamVrSession?.ToString() ?? "none"
+                    });
+                previousState = currentState;
+                lastHealthSummaryAt = now;
+            }
 
             if (decision.SuppressedForCurrentSession
                 && currentSteamVrSession is not null
@@ -10711,7 +10983,13 @@ internal static class AutoLaunchWatcher
                 Console.WriteLine(useDesktopTuiDefaultInterface
                     ? "Watcher selected startup interface: Terminal UI."
                     : "Watcher selected startup interface: Classic Console.");
-                StartSupervisor(supervisorPath, configPath, useDesktopTuiDefaultInterface, persistentSupervisorOwner);
+                StartSupervisorWithLifecycleCorrelation(
+                    supervisorPath,
+                    configPath,
+                    useDesktopTuiDefaultInterface,
+                    persistentSupervisorOwner,
+                    currentSteamVrSession,
+                    lifecycleEvents);
             }
 
             launchedForCurrentSteamVrSession = decision.LaunchedForSteamVrSession;
@@ -10827,11 +11105,66 @@ internal static class AutoLaunchWatcher
         }
     }
 
-    private static void StartSupervisor(
+    private static void StartSupervisorWithLifecycleCorrelation(
         string supervisorPath,
         string? configPath,
         bool useDesktopTuiDefaultInterface,
-        bool persistentSupervisorOwner)
+        bool persistentSupervisorOwner,
+        SteamVrSessionIdentity? currentSteamVrSession,
+        LifecycleEventSink lifecycleEvents)
+    {
+        var childCorrelationId = Guid.NewGuid();
+        lifecycleEvents.Write(
+            "watcher.childLaunch",
+            reason: "watcher-launch-decision",
+            result: "attempting",
+            fields: new Dictionary<string, string?>
+            {
+                ["childLifecycleCorrelationId"] = childCorrelationId.ToString("N"),
+                ["vrserverIdentity"] = currentSteamVrSession?.ToString() ?? "none"
+            });
+        try
+        {
+            using var child = StartSupervisor(
+                supervisorPath,
+                configPath,
+                useDesktopTuiDefaultInterface,
+                persistentSupervisorOwner,
+                childCorrelationId);
+            lifecycleEvents.Write(
+                "watcher.childLaunch",
+                reason: "watcher-launch-decision",
+                result: "started",
+                fields: new Dictionary<string, string?>
+                {
+                    ["childLifecycleCorrelationId"] = childCorrelationId.ToString("N"),
+                    ["childProcessId"] = child.Id.ToString(CultureInfo.InvariantCulture),
+                    ["childProcessStartIdentity"] = LifecycleProcessIdentity.From(child).Value,
+                    ["vrserverIdentity"] = currentSteamVrSession?.ToString() ?? "none"
+                });
+        }
+        catch (Exception ex)
+        {
+            lifecycleEvents.Write(
+                "watcher.childLaunch",
+                reason: "watcher-launch-decision",
+                result: "failed",
+                fields: new Dictionary<string, string?>
+                {
+                    ["childLifecycleCorrelationId"] = childCorrelationId.ToString("N"),
+                    ["exceptionType"] = ex.GetType().Name,
+                    ["vrserverIdentity"] = currentSteamVrSession?.ToString() ?? "none"
+                });
+            throw;
+        }
+    }
+
+    private static Process StartSupervisor(
+        string supervisorPath,
+        string? configPath,
+        bool useDesktopTuiDefaultInterface,
+        bool persistentSupervisorOwner,
+        Guid childCorrelationId)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -10849,6 +11182,8 @@ internal static class AutoLaunchWatcher
         }
 
         startInfo.ArgumentList.Add("--managed-steamvr-session");
+        startInfo.ArgumentList.Add("--lifecycle-correlation");
+        startInfo.ArgumentList.Add(childCorrelationId.ToString("D"));
         if (persistentSupervisorOwner)
         {
             startInfo.ArgumentList.Add("--persistent-supervisor-owner");
@@ -10860,7 +11195,30 @@ internal static class AutoLaunchWatcher
             startInfo.ArgumentList.Add("--launch-desktop-tui-after-ready");
         }
 
-        Process.Start(startInfo);
+        return Process.Start(startInfo) ?? throw new InvalidOperationException("Watcher could not start Supervisor.");
+    }
+
+    private static string DescribeWatcherDecisionState(
+        SteamVrSessionIdentity? currentSteamVrSession,
+        bool supervisorRunning,
+        WatcherLaunchDecision decision)
+    {
+        if (currentSteamVrSession is null)
+        {
+            return "wait-vrserver-absent";
+        }
+
+        if (decision.SuppressedForCurrentSession)
+        {
+            return "launch-suppressed-current-session";
+        }
+
+        if (supervisorRunning)
+        {
+            return "wait-supervisor-alive";
+        }
+
+        return decision.ShouldLaunchSupervisor ? "launch-supervisor" : "wait";
     }
 
     public static void RequestSkipCurrentSteamVrSession()

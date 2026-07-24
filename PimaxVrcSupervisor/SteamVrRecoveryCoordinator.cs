@@ -138,6 +138,10 @@ internal sealed class SteamVrRecoveryCoordinator
 
     public SteamVrRecoveryState State => _state;
 
+    public SteamVrRuntimeIdentity? CurrentRuntime => _currentRuntime;
+
+    public SteamVrRuntimeIdentity? LostRuntime => _lostRuntime;
+
     public bool IsRecoveryPending => _state is SteamVrRecoveryState.LossDetected or SteamVrRecoveryState.RecoveryPending;
 
     public void MarkSupervisorExitRequested()

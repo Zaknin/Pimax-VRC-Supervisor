@@ -17,7 +17,8 @@ internal sealed record StartupExecutionContext(
     bool ExplicitConfigOptionPresent,
     string? ExplicitConfigPath,
     string? EmergencyBaseStationCleanupConfigPath,
-    int EmergencyBaseStationCleanupDelaySeconds)
+    int EmergencyBaseStationCleanupDelaySeconds,
+    Guid? LifecycleCorrelationId)
 {
     public bool ExplicitConfigSupplied => ExplicitConfigOptionPresent;
 
@@ -75,6 +76,10 @@ internal sealed record StartupExecutionContext(
                 : 0;
         var explicitConfigOptionPresent =
             TryGetCommandOption(commandLineArgs, "--config", out var explicitConfigPath);
+        var lifecycleCorrelationId = TryGetCommandOption(commandLineArgs, "--lifecycle-correlation", out var lifecycleCorrelationText)
+            && Guid.TryParse(lifecycleCorrelationText, out var parsedLifecycleCorrelationId)
+                ? (Guid?)parsedLifecycleCorrelationId
+                : null;
 
         return new StartupExecutionContext(
             commandLineArgs,
@@ -93,7 +98,8 @@ internal sealed record StartupExecutionContext(
             explicitConfigOptionPresent,
             explicitConfigPath,
             emergencyConfigPath,
-            cleanupDelaySeconds);
+            cleanupDelaySeconds,
+            lifecycleCorrelationId);
     }
 
     private static bool HasFlag(string[] args, string name)
