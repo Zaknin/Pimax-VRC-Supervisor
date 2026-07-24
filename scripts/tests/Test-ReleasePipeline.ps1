@@ -395,6 +395,19 @@ try {
     Assert-True -Condition ($workflow -notmatch '\bgh\s+release\b') -Message 'release candidate workflow cannot create or mutate releases'
     Assert-True -Condition ($workflow -notmatch 'PRIVATE.KEY|privateKey|ECDSA_PRIVATE') -Message 'release candidate workflow has no offline ECDSA key input'
     Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $repositoryRoot '.github\workflows\sign-release-assets.yml'))) -Message 'post-publish signing workflow is retired'
+    Assert-True -Condition ($workflow -match 'Prepare controlled native validation root') -Message 'release workflow prepares a runner-local controlled native validation root'
+    Assert-True -Condition ($workflow -match 'GetPathRoot\(\$env:RUNNER_TEMP\)') -Message 'release workflow derives the controlled native validation volume from the runner-local temporary path'
+    Assert-True -Condition ($workflow -match 'New-Item -ItemType Directory -Path \$validationRoot -Force') -Message 'release workflow creates the controlled native validation root when absent'
+    Assert-True -Condition ($workflow -match 'WindowsIdentity\]::GetCurrent\(\)\.User') -Message 'release workflow resolves the protected validation ACL principal from the runner environment'
+    Assert-True -Condition ($workflow -match 'PHASE33B_NATIVE_VALIDATION_ROOT=\$validationRoot') -Message 'release workflow propagates the runner-local validation root to native tests'
+    Assert-True -Condition ($workflow -match 'Clean controlled native validation root') -Message 'release workflow has deterministic controlled native validation cleanup'
+    Assert-True -Condition ($workflow -match 'Remove-Item -LiteralPath \$validationRoot -Force') -Message 'release workflow removes only an empty exact controlled native validation root'
+    Assert-True -Condition ($workflow -notmatch 'DESKTOP-3V1929C|FucktoryVR') -Message 'release workflow contains no local machine or user principal dependency'
+    Assert-True -Condition ($workflow -notmatch "C:\\\\PimaxVrcSupervisor-PrivilegedNativeValidation") -Message 'release workflow does not pin native validation to a fixed drive layout'
+
+    $packageScript = Get-Content -LiteralPath (Join-Path $repositoryRoot 'scripts\package-release.ps1') -Raw
+    Assert-True -Condition ($packageScript -match 'System\.IO\.Compression\.ZipFile\]::OpenRead') -Message 'package inventory uses managed ZIP inspection for native Windows paths'
+    Assert-True -Condition ($packageScript -notmatch '\btar\s+-tf\b') -Message 'package inventory does not depend on an MSYS tar path conversion'
 
     Write-Host "Release pipeline tests passed: $script:AssertionCount assertions."
 } finally {

@@ -46,6 +46,31 @@ public sealed class Phase33AProductionAcceptanceFixtureTests
     }
 
     [Fact]
+    public async Task OnlyTheEmbeddedProductionSignaturePathMintsDownloadAuthority()
+    {
+        var productionFixture = LoadProductionFixture();
+        var productionScenario = new DiscoveryScenario(productionFixture);
+        using var productionClient = CreateClient(productionScenario.CreateSuccessfulTransport(), productionFixture.TrustStore);
+
+        var productionResult = await productionClient.CheckAsync(null, CancellationToken.None);
+
+        Assert.Equal(UpdateDiscoveryStatus.UpdateAvailable, productionResult.Status);
+        Assert.True(GitHubUpdateDiscoveryClient.TryGetVerifiedPackageAuthority(productionResult.VerifiedPackageAuthority, out var productionPackage));
+        Assert.Equal(
+            $"https://github.com/{UpdateManifestConstants.Repository}/releases/download/v1.4.0/PimaxVrcSupervisor-v1.4.0-win-x64-no-dotnet9.zip",
+            productionPackage.BrowserDownloadUri.AbsoluteUri);
+
+        var testSigned = UpdateContractTestData.Sign(UpdateContractTestData.CreateManifest());
+        var testSignedFailure = Assert.Throws<UpdateContractException>(() => UpdateManifestVerifier.VerifyAndParse(
+            testSigned.ManifestBytes,
+            testSigned.SignatureEnvelopeBytes,
+            ProductionUpdateTrustRoots.CreateTrustStore(),
+            UpdatePackageVariant.NoDotnet9));
+
+        Assert.Equal("unknown_key", testSignedFailure.Code);
+    }
+
+    [Fact]
     public void OneByteMutationOfOperatorSignedManifestFailsClosed()
     {
         var fixture = LoadProductionFixture();
@@ -310,7 +335,7 @@ public sealed class Phase33AProductionAcceptanceFixtureTests
         IUpdateHttpTransport transport,
         UpdateTrustStore trustStore,
         TimeSpan? timeout = null)
-        => new(
+        => TestOnlyDiscoveryHarness.Create(
             transport,
             trustStore,
             new UpdateDiscoveryOptions

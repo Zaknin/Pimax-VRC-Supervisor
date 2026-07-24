@@ -87,6 +87,7 @@ jobs:
             './scripts/New-ProductionUpdateTrustKey.ps1',
             './scripts/Sign-UpdateAcceptanceFixture.ps1',
             './scripts/Test-ProductionUpdateTrustDescriptor.ps1',
+            './scripts/Test-PrivilegedNativeStagingPreflight.ps1',
             './scripts/tests/Test-ProductionUpdateKeyCeremony.ps1',
             './scripts/tests/Test-ProductionUpdateTrustDescriptor.ps1',
             './scripts/tests/Test-ReleasePipeline.ps1'
@@ -107,9 +108,41 @@ jobs:
         shell: pwsh
         run: ./scripts/tests/Test-ReleasePipeline.ps1
 
+      - name: Prepare controlled native validation root
+        shell: pwsh
+        run: |
+          $validationVolumeRoot = [IO.Path]::GetPathRoot($env:RUNNER_TEMP)
+          if ([string]::IsNullOrWhiteSpace($validationVolumeRoot)) {
+            throw 'GitHub runner temporary-path volume is unavailable for controlled native validation.'
+          }
+          $validationRoot = Join-Path $validationVolumeRoot 'PimaxVrcSupervisor-PrivilegedNativeValidation'
+          if (Test-Path -LiteralPath $validationRoot) {
+            $rootItem = Get-Item -LiteralPath $validationRoot -Force
+            if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+              throw 'Controlled native validation root must be an ordinary directory.'
+            }
+            $children = @(Get-ChildItem -LiteralPath $validationRoot -Force)
+            if ($children.Count -ne 0) {
+              throw "Controlled native validation root must be empty before use. Entries: $($children.Name -join ', ')"
+            }
+          } else {
+            New-Item -ItemType Directory -Path $validationRoot -Force | Out-Null
+          }
+
+          $runnerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+          if ($null -eq $runnerSid) {
+            throw 'GitHub runner current-user SID is unavailable for protected native validation ACLs.'
+          }
+          "PHASE33B_NATIVE_VALIDATION_ROOT=$validationRoot" | Add-Content -LiteralPath $env:GITHUB_ENV
+          "PHASE33B_NATIVE_VALIDATION_SID=$($runnerSid.Value)" | Add-Content -LiteralPath $env:GITHUB_ENV
+
       - name: Run complete managed validation
         shell: pwsh
         run: |
+          ./scripts/Test-PrivilegedNativeStagingPreflight.ps1 `
+            -ProbeRoot $env:PHASE33B_NATIVE_VALIDATION_ROOT
+          if ($LASTEXITCODE -ne 0) { throw 'Privileged native staging preflight failed.' }
+
           dotnet test ./PimaxVrcSupervisor.Tests/PimaxVrcSupervisor.Tests.csproj -c Debug
           if ($LASTEXITCODE -ne 0) { throw 'Debug managed tests failed.' }
           dotnet test ./PimaxVrcSupervisor.Tests/PimaxVrcSupervisor.Tests.csproj -c Release
@@ -275,3 +308,29 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
+
+      - name: Clean controlled native validation root
+        if: always()
+        shell: pwsh
+        run: |
+          $validationRoot = $env:PHASE33B_NATIVE_VALIDATION_ROOT
+          if ([string]::IsNullOrWhiteSpace($validationRoot)) {
+            throw 'Controlled native validation root was not propagated from setup.'
+          }
+          if (-not (Test-Path -LiteralPath $validationRoot)) {
+            exit 0
+          }
+
+          $rootItem = Get-Item -LiteralPath $validationRoot -Force
+          if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'Controlled native validation root cleanup refused a non-directory or reparse-point root.'
+          }
+          $children = @(Get-ChildItem -LiteralPath $validationRoot -Force)
+          if ($children.Count -ne 0) {
+            throw "Controlled native validation root cleanup refused non-empty root. Entries: $($children.Name -join ', ')"
+          }
+
+          Remove-Item -LiteralPath $validationRoot -Force
+          if (Test-Path -LiteralPath $validationRoot) {
+            throw 'Controlled native validation root remained after deterministic empty-root cleanup.'
+          }

@@ -68,7 +68,7 @@ function Publish-Variant {
 
     foreach ($project in $projects) {
         Write-Host "Publishing $project to $OutputDirectory (self-contained=$SelfContained)"
-        dotnet publish $project -c $Configuration -r $Runtime --self-contained $selfContainedValue -o $OutputDirectory
+        dotnet publish $project -c $Configuration -r $Runtime --self-contained $selfContainedValue -p:Phase33BTestTrust=false -o $OutputDirectory
     }
 }
 
@@ -176,7 +176,12 @@ function Show-ZipSummary {
 
     Write-Host ""
     Write-Host "--- Zip inventory: $(Split-Path -Leaf $ZipPath) ---"
-    $entries = @(tar -tf $ZipPath)
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        $entries = @($archive.Entries | ForEach-Object { $_.FullName })
+    } finally {
+        $archive.Dispose()
+    }
     $entries | ForEach-Object { $_ }
     Write-Host "Entries: $($entries.Count)"
 }

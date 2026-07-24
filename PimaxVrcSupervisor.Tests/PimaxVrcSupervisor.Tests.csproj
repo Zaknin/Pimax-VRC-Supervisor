@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <Phase33BTestTrust>true</Phase33BTestTrust>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,7 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj" />
+    <ProjectReference Include="..\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj" AdditionalProperties="Phase33BTestTrust=true" />
     <ProjectReference Include="..\PimaxVrcSupervisor.UpdateCheckTestHelper\PimaxVrcSupervisor.UpdateCheckTestHelper.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 

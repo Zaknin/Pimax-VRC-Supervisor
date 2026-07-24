@@ -119,7 +119,11 @@ All package and transaction material is beneath the fixed current-user root:
       <variant>\
         <filename>.partial
         <filename>
-        verified-package.v1.json
+        verified-package-v1.json
+        verified-package-v1.journal.json
+        verified-release-evidence-v1.json
+        verified-release-manifest-v1.bin
+        verified-release-signature-v1.bin
   Transactions\
     <operation-guid>\
       transaction.v1.json
@@ -137,15 +141,21 @@ No full ZIP is buffered in memory. The downloader uses explicit connect, request
 
 Before download, the application refreshes/revalidates the same signed immutable release and resolves the exact release asset through the fixed GitHub release identity. It requires exact asset name and metadata size agreement; it never derives a URL from an untrusted manifest string.
 
-`verified-package.v1.json` is evidence, not a new trust root. It records schema, operation ID, version/tag/repository/release identity, variant/filename, expected/actual size and hash, manifest digest, key ID, verified timestamp, canonical local package-relative path, and `DownloadedAndVerified`. It is bounded, atomically written, strictly parsed, and independently rechecked by the installer.
+`verified-package-v1.json` is evidence, not a new trust root. It records schema, operation ID, version/tag/repository/release identity, variant/filename, expected/actual size and hash, manifest digest, key ID, verified timestamp, canonical local package-relative path, and `DownloadedAndVerified`. It is bounded, atomically written, strictly parsed, and never becomes install authority through a path-only lookup.
+
+`verified-release-evidence-v1.json` binds the release identity, release sequence, exact package name/size/digest, signature key/algorithm, and SHA-256 values of the two adjacent opaque byte files. `verified-release-manifest-v1.bin` preserves the exact manifest bytes that were signed; `verified-release-signature-v1.bin` preserves the exact detached signature envelope bytes. The downloader writes both byte files, writes the bounded evidence record, then reopens all three through pinned handles and verifies byte identity against the verifier-minted authority. Production builds additionally re-verify those reopened exact bytes with embedded production trust roots without network access. A changed or missing byte file fails closed and is retained for forensic investigation. `verified-package-v1.journal.json` is the bounded durable download/recovery journal; it is retired only through the same identity-verified handle that was validated for retirement.
 
 ### State compatibility and ownership
 
-`update-state-v1.json` remains a Phase 33A-compatible cached-status projection during Commit 2: its reserved `packageDownload`, `packageStaging`, and `packageInstallation` fields remain `null`, and an older UpdateWorker therefore fails closed rather than accepting new package state. Download evidence lives in the separate per-package `verified-package.v1.json`; installation/recovery evidence lives in a separate per-operation `transaction.v1.json`. Both are strict, versioned records with atomic replace/flush and previous-copy recovery, never extensions silently inserted into the current v1 status schema.
+`update-state-v1.json` remains a Phase 33A-compatible cached-status projection during Commit 2: its reserved `packageDownload`, `packageStaging`, and `packageInstallation` fields remain `null`, and an older UpdateWorker therefore fails closed rather than accepting new package state. Download evidence lives in the separate per-package `verified-package-v1.json`; installation/recovery evidence lives in a separate per-operation `transaction.v1.json`. Both are strict, versioned records with atomic replace/flush and previous-copy recovery, never extensions silently inserted into the current v1 status schema.
 
 The operation coordinator is the only component allowed to create an operation ID, select a record path, or write its record after it obtains the shared protected admission lease. A later bridge projection reads bounded summaries only. This removes cross-process writer races without treating the existing `UpdateStateStore` semaphore as a global lock, and gives old workers a deterministic null-slot compatibility behavior.
 
 ## Package payload contract
+
+### Current implementation boundary
+
+The current Phase 33B implementation covers discovery-minted authority, exact signed-evidence persistence with current/previous coherent-generation recovery, offline production-root re-verification in production builds, handle-bound package/journal/record recovery, protected handle-relative staging, and staging-only anti-rollback rechecks against the durable update-state boundary. The anti-rollback commit duplicates each new accepted high-water boundary into current and previous records, and load fails back to the validated higher previous boundary when current regresses or conflicts. Production binaries embed only production trust roots: test-trust roots and test-only authority construction are excluded from production builds and publish output, while production and test-trust verification share the same verification logic apart from root selection. Negative production-root verification paths are automated. Positive runtime verification of a genuinely production-signed package remains a future controlled release-ceremony operator acceptance gate; this development checkpoint neither accesses the production private key nor ships a Phase 33B production-signed package fixture. It does **not** implement ZIP extraction, installer invocation, elevation, installation, rollback execution, lifecycle mutation, or health checks. The installer and payload sections below remain future design constraints, not implemented behavior.
 
 Each package will contain exactly one `install-payload.v1.json` at the ZIP root, generated by packaging before ZIP creation. The outer signed ZIP hash protects it; to avoid circular hashing, it inventories every shipped regular payload file except this one fixed manifest entry.
 
@@ -295,7 +305,7 @@ The implementation is split into these reviewable commits:
 
 Every code slice starts with focused Debug and Release failing tests and ends with the corresponding focused verification. The final matrix includes managed Debug/Release tests and builds with zero warnings, format verification, Rust formatting/clippy/tests/builds, PowerShell/YAML/release-pipeline validation, strict MkDocs with generated `site` removed, secret scan, package inventory/manifest/version checks, and `git diff --check`.
 
-Automated tests use disposable directories, injected transports/fake processes, and ephemeral keys only. They never mutate an active installation or user-owned deployment and never launch or disturb Pimax, SteamVR, VRChat, Supervisor, watcher, TUI, overlay, or Configurator sessions.
+Automated tests use disposable directories, injected transports/fake processes, and ephemeral keys only. Controlled native validation runs use a runner-selected fixed local NTFS volume root only through pinned, GUID-named children; the release workflow derives that volume from `RUNNER_TEMP`, creates an empty runner-local root when absent, resolves the current runner SID at runtime, rejects a pre-existing non-empty or reparse-point root, and removes only the exact empty root in an `always()` cleanup step. Native preflight fails with actionable output on unsupported Windows/filesystem/link capability rather than silently running zero checks. Tests never mutate an active installation or user-owned deployment and never launch or disturb Pimax, SteamVR, VRChat, Supervisor, watcher, TUI, overlay, or Configurator sessions.
 
 ### Production-trust manual gate
 

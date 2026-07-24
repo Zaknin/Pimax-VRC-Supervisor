@@ -107,6 +107,10 @@ internal sealed record UpdateDiscoveryCheckResult
 
     public required ValidatedUpdateManifest? VerifiedManifest { get; init; }
 
+    // Opaque capability. Only GitHubUpdateDiscoveryClient can create its concrete runtime type.
+    // A caller-supplied object never becomes download authority.
+    internal object? VerifiedPackageAuthority { get; init; }
+
     public required UpdateErrorCategory? ErrorCategory { get; init; }
 
     public required string? ErrorCode { get; init; }
@@ -125,6 +129,7 @@ internal sealed record UpdateDiscoveryCheckResult
         Tag = null,
         ReleaseUrl = null,
         VerifiedManifest = null,
+        VerifiedPackageAuthority = null,
         ErrorCategory = category,
         ErrorCode = code
     };
@@ -137,6 +142,7 @@ internal sealed record UpdateDiscoveryCheckResult
         Tag = null,
         ReleaseUrl = null,
         VerifiedManifest = null,
+        VerifiedPackageAuthority = null,
         ErrorCategory = UpdateErrorCategory.Cancelled,
         ErrorCode = "cancelled"
     };
@@ -154,26 +160,43 @@ internal sealed class GitHubUpdateDiscoveryClient : IUpdateDiscoveryClient, IDis
     private readonly UpdateDiscoveryOptions _options;
     private readonly IDisposable? _ownedTransport;
 
-    public GitHubUpdateDiscoveryClient(
+    private GitHubUpdateDiscoveryClient(
         IUpdateHttpTransport transport,
-        UpdateTrustStore trustStore,
         UpdateDiscoveryOptions options)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
-        _trustStore = trustStore ?? throw new ArgumentNullException(nameof(trustStore));
+        _trustStore = ProductionUpdateTrustRoots.CreateTrustStore();
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _options.Validate();
     }
 
     private GitHubUpdateDiscoveryClient(
         IUpdateHttpTransport transport,
-        UpdateTrustStore trustStore,
         UpdateDiscoveryOptions options,
         IDisposable ownedTransport)
-        : this(transport, trustStore, options)
+        : this(transport, options)
     {
         _ownedTransport = ownedTransport;
     }
+
+#if PHASE33B_TEST_TRUST
+    private GitHubUpdateDiscoveryClient(
+        IUpdateHttpTransport transport,
+        UpdateDiscoveryOptions options,
+        UpdateTrustStore testTrustStore)
+    {
+        _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        _trustStore = testTrustStore ?? throw new ArgumentNullException(nameof(testTrustStore));
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+        _options.Validate();
+    }
+
+    internal static GitHubUpdateDiscoveryClient CreateForTestTrust(
+        IUpdateHttpTransport transport,
+        UpdateTrustStore testTrustStore,
+        UpdateDiscoveryOptions options)
+        => new(transport, options, testTrustStore);
+#endif
 
     public static GitHubUpdateDiscoveryClient CreateProduction(UpdateDiscoveryOptions options)
     {
@@ -182,9 +205,57 @@ internal sealed class GitHubUpdateDiscoveryClient : IUpdateDiscoveryClient, IDis
         var transport = new GitHubUpdateHttpTransport(options.ConnectTimeout);
         return new GitHubUpdateDiscoveryClient(
             transport,
-            ProductionUpdateTrustRoots.CreateTrustStore(),
             options,
             transport);
+    }
+
+    internal static bool TryGetVerifiedPackageAuthority(object? authority, out VerifiedPackageAuthorityView view)
+    {
+        if (authority is PackageAuthority packageAuthority && IsExactAuthorityView(packageAuthority.View))
+        {
+            view = packageAuthority.View;
+            return true;
+        }
+
+        view = null!;
+        return false;
+    }
+
+    internal static VerifiedPackageAuthorityView RequireVerifiedPackageAuthority(object? authority)
+        => TryGetVerifiedPackageAuthority(authority, out var view)
+            ? view
+            : throw new UpdateContractException("package_authority", "A verifier-created package authority capability is required.");
+
+    private static bool IsExactAuthorityView(VerifiedPackageAuthorityView view)
+    {
+        if (view is null
+            || !string.Equals(view.Repository, UpdateManifestConstants.Repository, StringComparison.Ordinal)
+            || !string.Equals(view.Channel, UpdateManifestConstants.Channel, StringComparison.Ordinal)
+            || !string.Equals(view.Tag, "v" + view.Version, StringComparison.Ordinal)
+            || !Uri.TryCreate(
+                $"https://github.com/{UpdateManifestConstants.Repository}/releases/download/{view.Tag}/{view.FileName}",
+                UriKind.Absolute,
+                out var expected))
+        {
+            return false;
+        }
+
+        if (view.ReleaseSequence <= 0
+            || !UpdateContractValidation.IsSafeIdentifier(view.ReleaseCommitSha, 128)
+            || !string.Equals(view.SignatureAlgorithm, UpdateManifestConstants.SignatureAlgorithm, StringComparison.Ordinal)
+            || view.SignedManifestBytes.IsDefaultOrEmpty
+            || view.SignatureEnvelopeBytes.IsDefaultOrEmpty
+            || view.SignedManifestBytes.Length > UpdateManifestConstants.MaximumManifestBytes
+            || view.SignatureEnvelopeBytes.Length > UpdateManifestConstants.MaximumSignatureEnvelopeBytes
+            || !string.Equals(
+                Convert.ToHexString(SHA256.HashData(view.SignedManifestBytes.AsSpan())).ToLowerInvariant(),
+                view.SignedManifestSha256,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return NormalizedUriEquals(view.BrowserDownloadUri, expected);
     }
 
     public void Dispose() => _ownedTransport?.Dispose();
@@ -210,6 +281,7 @@ internal sealed class GitHubUpdateDiscoveryClient : IUpdateDiscoveryClient, IDis
                     Tag = null,
                     ReleaseUrl = null,
                     VerifiedManifest = null,
+                    VerifiedPackageAuthority = null,
                     ErrorCategory = null,
                     ErrorCode = null
                 };
@@ -274,7 +346,8 @@ internal sealed class GitHubUpdateDiscoveryClient : IUpdateDiscoveryClient, IDis
             }
 
             candidate.ValidateCompleteAssetSet(verified);
-            return CandidateResult(UpdateDiscoveryStatus.UpdateAvailable, candidate, releaseResponse.ETag, verified);
+            var authority = MintAuthority(candidate, verified, manifestResponse.Body, signatureResponse.Body);
+            return CandidateResult(UpdateDiscoveryStatus.UpdateAvailable, candidate, releaseResponse.ETag, verified, authority);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -413,11 +486,89 @@ internal sealed class GitHubUpdateDiscoveryClient : IUpdateDiscoveryClient, IDis
         }
     }
 
+    private static PackageAuthority MintAuthority(
+        GitHubReleaseCandidate candidate,
+        ValidatedUpdateManifest manifest,
+        ReadOnlySpan<byte> manifestBytes,
+        ReadOnlySpan<byte> signatureEnvelopeBytes)
+    {
+        if (candidate.Draft
+            || candidate.Prerelease
+            || !candidate.Immutable
+            || candidate.Version.CompareTo(manifest.Version) != 0
+            || !string.Equals(manifest.Manifest.Repository, UpdateManifestConstants.Repository, StringComparison.Ordinal)
+            || !string.Equals(manifest.Manifest.Channel, UpdateManifestConstants.Channel, StringComparison.Ordinal)
+            || !string.Equals(manifest.Manifest.Release.Tag, candidate.Tag, StringComparison.Ordinal)
+            || !string.Equals(manifest.Manifest.Release.ReleaseUrl, candidate.ReleaseUrl, StringComparison.Ordinal))
+        {
+            throw new UpdateDiscoveryException(UpdateErrorCategory.ReleaseMismatch, "package_authority_release");
+        }
+
+        ValidateExactReleaseAsset(candidate, UpdateManifestConstants.ManifestFileName(manifest.Version), manifestBytes);
+        ValidateExactReleaseAsset(candidate, UpdateManifestConstants.SignatureFileName(manifest.Version), signatureEnvelopeBytes);
+        candidate.ValidateCompleteAssetSet(manifest);
+        var package = manifest.SelectedPackage;
+        var expectedUri = new Uri($"https://github.com/{UpdateManifestConstants.Repository}/releases/download/{candidate.Tag}/{package.FileName}", UriKind.Absolute);
+        var releaseAsset = candidate.GetRequiredAsset(package.FileName);
+        if (releaseAsset.Size != package.SizeBytes
+            || !string.Equals(releaseAsset.Digest, "sha256:" + package.Sha256, StringComparison.Ordinal)
+            || !NormalizedUriEquals(releaseAsset.BrowserDownloadUri, expectedUri)
+            || manifest.SignatureKeyId.Length == 0)
+        {
+            throw new UpdateDiscoveryException(UpdateErrorCategory.ReleaseMismatch, "package_authority_mismatch");
+        }
+
+        return new PackageAuthority(new VerifiedPackageAuthorityView(
+            UpdateManifestConstants.Repository,
+            candidate.Tag,
+            manifest.Version.ToString(),
+            UpdateManifestConstants.Channel,
+            candidate.ReleaseUrl,
+            manifest.InstalledVariant,
+            package.FileName,
+            package.SizeBytes,
+            package.Sha256,
+            manifest.ManifestSha256,
+            manifest.SignatureKeyId,
+            expectedUri,
+            manifest.Manifest.Release.CommitSha,
+            manifest.Manifest.ReleaseSequence,
+            UpdateManifestConstants.SignatureAlgorithm,
+            ImmutableArray.Create(manifestBytes.ToArray()),
+            ImmutableArray.Create(signatureEnvelopeBytes.ToArray())));
+    }
+
+    private static void ValidateExactReleaseAsset(GitHubReleaseCandidate candidate, string name, ReadOnlySpan<byte> content)
+    {
+        var asset = candidate.GetRequiredAsset(name);
+        var expectedUri = new Uri($"https://github.com/{UpdateManifestConstants.Repository}/releases/download/{candidate.Tag}/{name}", UriKind.Absolute);
+        var digest = "sha256:" + Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
+        if (!string.Equals(asset.Name, name, StringComparison.Ordinal)
+            || asset.Size != content.Length
+            || !string.Equals(asset.Digest, digest, StringComparison.Ordinal)
+            || !NormalizedUriEquals(asset.BrowserDownloadUri, expectedUri))
+        {
+            throw new UpdateDiscoveryException(UpdateErrorCategory.ReleaseMismatch, "package_authority_asset");
+        }
+    }
+
+    private static bool NormalizedUriEquals(Uri actual, Uri expected)
+        => actual is not null
+            && actual.IsAbsoluteUri
+            && string.Equals(actual.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            && actual.IsDefaultPort
+            && string.IsNullOrEmpty(actual.UserInfo)
+            && string.IsNullOrEmpty(actual.Fragment)
+            && string.Equals(actual.GetComponents(UriComponents.AbsoluteUri, UriFormat.UriEscaped), expected.GetComponents(UriComponents.AbsoluteUri, UriFormat.UriEscaped), StringComparison.Ordinal);
+
+    private sealed record PackageAuthority(VerifiedPackageAuthorityView View);
+
     private static UpdateDiscoveryCheckResult CandidateResult(
         UpdateDiscoveryStatus status,
         GitHubReleaseCandidate candidate,
         string? etag,
-        ValidatedUpdateManifest? verifiedManifest)
+        ValidatedUpdateManifest? verifiedManifest,
+        object? verifiedPackageAuthority = null)
         => new()
         {
             Status = status,
@@ -426,6 +577,7 @@ internal sealed class GitHubUpdateDiscoveryClient : IUpdateDiscoveryClient, IDis
             Tag = candidate.Tag,
             ReleaseUrl = candidate.ReleaseUrl,
             VerifiedManifest = verifiedManifest,
+            VerifiedPackageAuthority = status == UpdateDiscoveryStatus.UpdateAvailable ? verifiedPackageAuthority : null,
             ErrorCategory = null,
             ErrorCode = null
         };
@@ -557,6 +709,25 @@ internal sealed record GitHubReleaseAsset(
     long Size,
     string? Digest,
     Uri BrowserDownloadUri);
+
+internal sealed record VerifiedPackageAuthorityView(
+    string Repository,
+    string Tag,
+    string Version,
+    string Channel,
+    string ReleaseUrl,
+    UpdatePackageVariant Variant,
+    string FileName,
+    long ExpectedSize,
+    string ExpectedSha256,
+    string SignedManifestSha256,
+    string SignatureKeyId,
+    Uri BrowserDownloadUri,
+    string ReleaseCommitSha = "",
+    long ReleaseSequence = 0,
+    string SignatureAlgorithm = "",
+    ImmutableArray<byte> SignedManifestBytes = default,
+    ImmutableArray<byte> SignatureEnvelopeBytes = default);
 
 internal sealed record GitHubReleaseCandidate(
     SemanticVersion Version,

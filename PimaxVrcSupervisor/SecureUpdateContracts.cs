@@ -154,7 +154,10 @@ internal sealed record ValidatedUpdateManifest(
     ImmutableDictionary<UpdatePackageVariant, UpdateManifestAssetV1> Packages,
     UpdatePackageVariant InstalledVariant,
     UpdateManifestAssetV1 SelectedPackage,
-    string ManifestSha256);
+    string ManifestSha256)
+{
+    public string SignatureKeyId { get; init; } = string.Empty;
+}
 
 internal sealed class UpdateContractException : Exception
 {
@@ -307,7 +310,7 @@ internal static class UpdateManifestVerifier
             throw new UpdateContractException("manifest_file", "The signature envelope manifest file does not match the verified release version.");
         }
 
-        return validated;
+        return validated with { SignatureKeyId = envelope.Signatures[0].KeyId };
     }
 
     private static void ValidateEnvelope(UpdateSignatureEnvelopeV1 envelope)

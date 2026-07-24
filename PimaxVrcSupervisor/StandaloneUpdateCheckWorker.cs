@@ -110,11 +110,9 @@ internal sealed class StandaloneUpdateCheckWorker
             InstalledVersion = SemanticVersion.Parse(AppVersion.Current),
             InstalledVariant = variant
         };
-        var trustStore = ProductionUpdateTrustRoots.CreateTrustStore();
-        using var transport = new GitHubUpdateHttpTransport(options.ConnectTimeout);
-        using var client = new GitHubUpdateDiscoveryClient(transport, trustStore, options);
+        using var client = GitHubUpdateDiscoveryClient.CreateProduction(options);
         var scheduler = new UpdateDiscoveryScheduler(store, client, clock);
-        var worker = new StandaloneUpdateCheckWorker(store, scheduler, clock, trustStore.Count > 0);
+        var worker = new StandaloneUpdateCheckWorker(store, scheduler, clock, verificationConfigured: true);
         return await worker.RunAsync(cancellationToken).ConfigureAwait(false);
     }
 

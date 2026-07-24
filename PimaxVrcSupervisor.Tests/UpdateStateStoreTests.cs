@@ -54,6 +54,34 @@ public sealed class UpdateStateStoreTests
     }
 
     [Fact]
+    public async Task LowerCurrentBoundaryFallsBackToValidatedHigherPreviousBoundary()
+    {
+        using var temp = new TempDirectory();
+        var store = new UpdateStateStore(UpdatePackageVariant.WithDotnet9, temp.Path);
+        var accepted = UpdateContractTestData.CreateState() with
+        {
+            HighestAcceptedReleaseSequence = 10,
+            HighestAcceptedVersion = "1.4.0",
+            LastManifestSha256 = new string('a', 64)
+        };
+        await store.SaveAsync(accepted, CancellationToken.None);
+        await store.SaveAsync(accepted with { ETag = "\"duplicate-high-water\"" }, CancellationToken.None);
+
+        var current = JsonNode.Parse(await File.ReadAllTextAsync(store.StatePath))!.AsObject();
+        current["highestAcceptedReleaseSequence"] = 0;
+        current["highestAcceptedVersion"] = null;
+        current["lastManifestSha256"] = null;
+        await File.WriteAllTextAsync(store.StatePath, current.ToJsonString());
+
+        var loaded = store.Load();
+
+        Assert.Equal(UpdateStateSource.Previous, loaded.Source);
+        Assert.True(loaded.CorruptionDetected);
+        Assert.Equal(10, loaded.State.HighestAcceptedReleaseSequence);
+        Assert.Equal("1.4.0", loaded.State.HighestAcceptedVersion);
+    }
+
+    [Fact]
     public async Task MalformedCurrentAndPreviousStateRecoverToDisabledDefault()
     {
         using var temp = new TempDirectory();

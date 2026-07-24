@@ -262,7 +262,7 @@ public sealed class GitHubUpdateDiscoveryTests
         UpdateTrustStore trustStore,
         string installedVersion = "1.3.1",
         TimeSpan? requestTimeout = null)
-        => new(
+        => TestOnlyDiscoveryHarness.Create(
             transport,
             trustStore,
             new UpdateDiscoveryOptions
@@ -432,6 +432,15 @@ internal sealed record CapturedUpdateRequest(
     string UserAgent,
     string? Authorization,
     string? IfNoneMatch);
+
+internal static class TestOnlyDiscoveryHarness
+{
+    internal static GitHubUpdateDiscoveryClient Create(
+        IUpdateHttpTransport transport,
+        UpdateTrustStore trustStore,
+        UpdateDiscoveryOptions options)
+        => GitHubUpdateDiscoveryClient.CreateForTestTrust(transport, trustStore, options);
+}
 
 internal sealed class TrackingHttpContent : HttpContent
 {

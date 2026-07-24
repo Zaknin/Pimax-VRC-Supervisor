@@ -290,6 +290,40 @@ public sealed class UpdateCheckAdmissionSecurityTests
         Assert.Equal(1, exclusion.AcquireCount);
     }
 
+    [Fact]
+    public void AbandonedSecureOwnerIsRecoveredWithoutQueueingOrWeakeningAclValidation()
+    {
+        var currentSid = CurrentSid();
+        var name = UniqueMutexName();
+        using var abandoned = MutexAcl.Create(
+            initiallyOwned: false,
+            name,
+            out var createdNew,
+            UserScopedUpdateCheckExclusion.BuildMutexSecurity(currentSid));
+        using var acquired = new ManualResetEventSlim(false);
+        var owner = new Thread(() =>
+        {
+            abandoned.WaitOne();
+            acquired.Set();
+        });
+        owner.Start();
+        Assert.True(acquired.Wait(TimeSpan.FromSeconds(5)));
+        owner.Join();
+        var abandonedObserved = 0;
+        var exclusion = UserScopedUpdateCheckExclusion.ForMutexName(
+            name,
+            currentSid,
+            abandonedObserver: () => Interlocked.Increment(ref abandonedObserved));
+
+        using var lease = exclusion.TryAcquire();
+
+        Assert.True(createdNew);
+        Assert.NotNull(lease);
+        Assert.Equal(1, abandonedObserved);
+        using var observer = MutexAcl.OpenExisting(name, UserScopedUpdateCheckExclusion.RequiredRights);
+        UserScopedUpdateCheckExclusion.ValidateMutexSecurity(observer, currentSid);
+    }
+
     private static MutexSecurity InvalidDescriptor(SecurityIdentifier expectedSid, InvalidDaclKind kind)
     {
         var expectedRule = new MutexAccessRule(

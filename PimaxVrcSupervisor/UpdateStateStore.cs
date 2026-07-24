@@ -171,12 +171,20 @@ internal sealed class UpdateStateStore
     public UpdateStateLoadResult Load()
     {
         var current = TryLoad(StatePath);
+        var previous = TryLoad(PreviousStatePath);
         if (current.State is not null)
         {
+            if (previous.State is not null && CurrentBoundaryConflictsOrRegresses(current.State, previous.State))
+            {
+                return new UpdateStateLoadResult(
+                    previous.State,
+                    UpdateStateSource.Previous,
+                    CorruptionDetected: true);
+            }
+
             return new UpdateStateLoadResult(current.State, UpdateStateSource.Current, CorruptionDetected: false);
         }
 
-        var previous = TryLoad(PreviousStatePath);
         if (previous.State is not null)
         {
             return new UpdateStateLoadResult(
@@ -190,6 +198,13 @@ internal sealed class UpdateStateStore
             UpdateStateSource.Default,
             CorruptionDetected: current.Corrupt || previous.Corrupt);
     }
+
+    private static bool CurrentBoundaryConflictsOrRegresses(UpdateStateV1 current, UpdateStateV1 previous)
+        => current.HighestAcceptedReleaseSequence < previous.HighestAcceptedReleaseSequence
+            || (current.HighestAcceptedReleaseSequence == previous.HighestAcceptedReleaseSequence
+                && current.HighestAcceptedReleaseSequence != 0
+                && (!string.Equals(current.HighestAcceptedVersion, previous.HighestAcceptedVersion, StringComparison.Ordinal)
+                    || !string.Equals(current.LastManifestSha256, previous.LastManifestSha256, StringComparison.Ordinal)));
 
     public async Task SaveAsync(UpdateStateV1 state, CancellationToken cancellationToken)
     {
