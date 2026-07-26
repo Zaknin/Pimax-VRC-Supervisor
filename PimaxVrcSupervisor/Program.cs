@@ -18,6 +18,7 @@ using System.Drawing.Drawing2D;
 using Microsoft.Win32;
 using PimaxVrcSupervisor;
 using PimaxVrcSupervisor.BaseStations;
+using PimaxVrcSupervisor.LifecycleObservability;
 using PimaxVrcSupervisor.Updates;
 using Windows.Devices.Bluetooth.Advertisement;
 
@@ -124,6 +125,15 @@ if (commandLineArgs.Any(arg => string.Equals(arg, "pimax-usb-physical-port-map-j
     var request = PimaxUsbPhysicalPortMapRequest.Parse(commandLineArgs);
     var result = await new PimaxUsbPhysicalPortMapper(diagnosticConfig).RunAsync(request, shutdown.Token);
     Console.WriteLine(JsonSerializer.Serialize(result, PimaxUsbPhysicalPortMapJson.Options));
+    return;
+}
+
+if (commandLineArgs.Any(arg => string.Equals(arg, "lifecycle-journal-capture", StringComparison.OrdinalIgnoreCase)))
+{
+    var request = LifecycleJournalCaptureRequest.Parse(commandLineArgs);
+    var result = new LifecycleJournalCaptureWorker().Capture(request);
+    Console.WriteLine(LifecycleJournalCaptureJson.Serialize(result));
+    Environment.ExitCode = result.Errors.Length == 0 ? 0 : 1;
     return;
 }
 
