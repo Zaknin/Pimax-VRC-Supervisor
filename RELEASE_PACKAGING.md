@@ -25,6 +25,11 @@ PimaxVrcSupervisor-vX.Y.Z\
   PimaxVrcSupervisor.deps.json
   PimaxVrcSupervisor.runtimeconfig.json
 
+  PimaxVrcSupervisor.UpdateWorker.exe
+  PimaxVrcSupervisor.UpdateWorker.dll
+  PimaxVrcSupervisor.UpdateWorker.deps.json
+  PimaxVrcSupervisor.UpdateWorker.runtimeconfig.json
+
   PimaxVrcSupervisorConfigurator.exe
   PimaxVrcSupervisorConfigurator.dll
   PimaxVrcSupervisorConfigurator.deps.json

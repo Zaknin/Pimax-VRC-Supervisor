@@ -256,7 +256,7 @@ impl DiagnosticsHandle {
                 "config_path": inner
                     .config_path
                     .as_ref()
-                    .map(path_to_string)
+                    .map(|path| path_to_string(path.as_path()))
                     .unwrap_or_default(),
                 "log_path": path_to_string(&inner.log_path),
                 "interval_seconds": inner.interval.as_secs()
@@ -740,7 +740,7 @@ fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
     writeln!(file, "{line}")
 }
 
-fn path_to_string(path: &PathBuf) -> String {
+fn path_to_string(path: &Path) -> String {
     path.display().to_string()
 }
 

@@ -35,6 +35,19 @@ For intermittent failures, keep three snapshots when possible:
 
 1. A healthy snapshot while Pimax Client detects the headset.
 2. A failed snapshot before restarting anything.
-3. A recovery snapshot after the headset registers again.
+3. A later snapshot after the headset registers again.
 
 This makes it easier to tell whether the failure boundary is Windows USB enumeration, Pimax Client/runtime registration, or another layer.
+
+## Unrelated USB Changes
+
+Removing or reinserting an Index-controller or Vive Tracker radio dongle should produce a concise unrelated-device decision and zero Supervisor-managed application restarts. VRCFaceTracking, Broken Eye, XSOverlay, Autostart apps, SteamVR, monitors, and base stations should keep their current state.
+
+If an unrelated dongle appears to trigger recovery:
+
+1. Record the PIDs of the affected applications before touching the dongle.
+2. Enable Supervisor debug diagnostics.
+3. Reproduce one controlled removal and reinsertion.
+4. Preserve the physical-device classification, VID/PID, stable container identity, and selected recovery-plan lines.
+
+An unknown device classification fails closed and does not restart applications. Do not add a friendly-name rule as a workaround.

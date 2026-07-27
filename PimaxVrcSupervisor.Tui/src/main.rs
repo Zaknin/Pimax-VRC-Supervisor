@@ -9,8 +9,8 @@ mod ui;
 
 use std::{ffi::OsStr, io, time::Instant};
 
-use crate::models::TuiAction;
-use app::{App, ClickAction, LOG_PAGE_SIZE};
+use crate::models::{ExitOption, TuiAction};
+use app::{App, ClickAction, LOG_PAGE_SIZE, ModalButtonFocus};
 use color_eyre::eyre::Result;
 use crossterm::{
     event::{
@@ -68,7 +68,7 @@ fn main() -> Result<()> {
         Err(error) => (
             None,
             Some(format!(
-                "Window-close shutdown handler disabled; keyboard shutdown still works: {error}"
+                "Window-close handler disabled; use Close TUI only from the exit menu: {error}"
             )),
         ),
     };
@@ -136,7 +136,11 @@ fn run(
     supervisor_process_notice: Option<String>,
 ) -> Result<()> {
     let bridge_disconnect_auto_exit = exit_when_supervisor_exits && supervisor_monitor.is_none();
-    let mut app = App::new(diagnostics, bridge_disconnect_auto_exit);
+    let mut app = App::new(
+        diagnostics,
+        bridge_disconnect_auto_exit,
+        exit_when_supervisor_exits,
+    );
     app.set_mouse_status(
         mouse_capture_error.is_none(),
         mouse_capture_error.map(|error| format!("Mouse disabled; keyboard-only mode: {error}")),
@@ -161,6 +165,10 @@ fn run(
         }
 
         if app.should_exit_after_shutdown(now) {
+            break;
+        }
+
+        if app.should_close_tui() {
             break;
         }
 
@@ -209,14 +217,37 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     let now = Instant::now();
     let shortcut = Shortcut::from_key(key);
 
-    if app.shutdown_confirmation {
+    if app.action_result_dialog.is_some() {
         match key.code {
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                app.confirm_shutdown(now);
+            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Esc => {
+                app.acknowledge_action_result();
                 return false;
             }
+            _ => return false,
+        }
+    }
+
+    if app.exit_dialog {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                return app.confirm_selected_exit_option(now);
+            }
             KeyCode::Esc => {
-                app.cancel_shutdown_confirmation();
+                app.cancel_exit_dialog();
+                return false;
+            }
+            KeyCode::Up => {
+                app.move_exit_selection_up();
+                return false;
+            }
+            KeyCode::Down => {
+                app.move_exit_selection_down();
+                return false;
+            }
+            KeyCode::Char(value) => {
+                if let Some(option) = ExitOption::from_digit(value) {
+                    return app.confirm_exit_option(option, now);
+                }
                 return false;
             }
             _ => return false,
@@ -226,11 +257,15 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     if app.confirmation.is_some() {
         match key.code {
             KeyCode::Enter | KeyCode::Char(' ') => {
-                app.confirm_action(now);
+                app.activate_focused_confirmation(now);
                 return false;
             }
             KeyCode::Esc => {
                 app.cancel_confirmation(now);
+                return false;
+            }
+            KeyCode::Tab | KeyCode::Left | KeyCode::Right => {
+                app.move_confirmation_focus();
                 return false;
             }
             _ => return false,
@@ -238,12 +273,14 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     }
 
     if app.help_visible {
-        app.close_help();
-        return false;
+        match key.code {
+            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Esc => app.close_help(),
+            _ => {}
+        }
+        false
     } else {
         match shortcut {
-            Some(Shortcut::Quit) => app.request_shutdown_confirmation(now),
-            Some(Shortcut::Cancel) => false,
+            Some(Shortcut::Quit) | Some(Shortcut::Cancel) => app.request_exit_dialog(now),
             Some(Shortcut::Refresh) => {
                 app.refresh(now);
                 false
@@ -257,7 +294,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
                 false
             }
             Some(Shortcut::OpenAction(action)) => {
-                app.request_action_confirmation(action, now);
+                app.activate_action(action, now);
                 false
             }
             Some(Shortcut::Confirm) => false,
@@ -267,12 +304,32 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
 }
 
 fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
-    if app.help_visible {
-        app.close_help();
+    if app.action_result_dialog.is_some() {
+        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return false;
+        }
+
+        let Some(action) = app.click_action_at(mouse.column, mouse.row) else {
+            return false;
+        };
+
+        if matches!(action, ClickAction::CloseModal) {
+            app.acknowledge_action_result();
+        }
+
         return false;
     }
 
-    if app.shutdown_confirmation {
+    if app.help_visible {
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && app.click_action_at(mouse.column, mouse.row) == Some(ClickAction::CloseModal)
+        {
+            app.close_help();
+        }
+        return false;
+    }
+
+    if app.exit_dialog {
         if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
             return false;
         }
@@ -284,11 +341,10 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
 
         match action {
             ClickAction::ConfirmModal => {
-                app.confirm_shutdown(now);
-                return false;
+                return app.confirm_selected_exit_option(now);
             }
             ClickAction::CancelModal => {
-                app.cancel_shutdown_confirmation();
+                app.cancel_exit_dialog();
                 return false;
             }
             _ => return false,
@@ -307,10 +363,12 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
 
         match action {
             ClickAction::ConfirmModal => {
+                app.focus_confirmation_button(ModalButtonFocus::Confirm);
                 app.confirm_action(now);
                 return false;
             }
             ClickAction::CancelModal => {
+                app.focus_confirmation_button(ModalButtonFocus::Cancel);
                 app.cancel_confirmation(now);
                 return false;
             }
@@ -356,12 +414,12 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
             app.refresh(now);
             false
         }
-        ClickAction::QuitTui => app.request_shutdown_confirmation(now),
+        ClickAction::QuitTui => app.request_exit_dialog(now),
         ClickAction::SelectAction(action) => {
-            app.request_action_start(action, now);
+            app.activate_action(action, now);
             false
         }
-        ClickAction::ConfirmModal | ClickAction::CancelModal => false,
+        ClickAction::ConfirmModal | ClickAction::CancelModal | ClickAction::CloseModal => false,
     }
 }
 
@@ -409,7 +467,9 @@ impl Shortcut {
     fn from_char(value: char) -> Option<Self> {
         match value {
             '0' => Some(Self::Help),
-            '1' | '2' | '3' | '4' | '5' | '6' => TuiAction::from_digit(value).map(Self::OpenAction),
+            '1' | '2' | '3' | '4' | '5' | '6' | '7' => {
+                TuiAction::from_digit(value).map(Self::OpenAction)
+            }
             'h' | 'H' => Some(Self::Help),
             'f' | 'F' => Some(Self::FollowLogs),
             'r' | 'R' | 'к' | 'К' => Some(Self::Refresh),
@@ -417,5 +477,133 @@ impl Shortcut {
             ' ' => Some(Self::Confirm),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        diagnostics::TuiDiagnostics,
+        models::{CommandSummary, RESTART_VR_SESSION_COMMAND, START_STEAMVR_COMMAND},
+    };
+    use crossterm::event::KeyModifiers;
+    use ratatui::layout::Rect;
+
+    fn connected_app() -> App {
+        let mut app = App::new(TuiDiagnostics::disabled(), false, false);
+        app.connection = app::ConnectionState::Connected;
+        app.status.steam_vr = "running".to_string();
+        app.commands = vec![
+            command(START_STEAMVR_COMMAND),
+            command(RESTART_VR_SESSION_COMMAND),
+        ];
+        app
+    }
+
+    fn command(name: &str) -> CommandSummary {
+        CommandSummary {
+            name: name.to_string(),
+            category: "Actions".to_string(),
+            output_kind: "Text".to_string(),
+            dangerous: false,
+            requires_confirmation: true,
+            action_supported: true,
+            action_safety_category: "Managed".to_string(),
+            tui_executable: true,
+            blocked_reason: String::new(),
+        }
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn click(column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn confirmation_defaults_to_cancel_and_enter_cancels() {
+        let mut app = connected_app();
+        app.activate_action(TuiAction::RestartVrSession, Instant::now());
+
+        assert_eq!(app.confirmation_focus, ModalButtonFocus::Cancel);
+        assert!(!handle_key(&mut app, key(KeyCode::Enter)));
+        assert!(app.confirmation.is_none());
+        assert!(app.running_actions.is_empty());
+    }
+
+    #[test]
+    fn tab_and_arrows_move_focus_and_space_sends_exactly_one_command() {
+        let mut app = connected_app();
+        app.activate_action(TuiAction::RestartVrSession, Instant::now());
+
+        handle_key(&mut app, key(KeyCode::Tab));
+        assert_eq!(app.confirmation_focus, ModalButtonFocus::Confirm);
+        handle_key(&mut app, key(KeyCode::Right));
+        assert_eq!(app.confirmation_focus, ModalButtonFocus::Cancel);
+        handle_key(&mut app, key(KeyCode::Left));
+        assert_eq!(app.confirmation_focus, ModalButtonFocus::Confirm);
+        handle_key(&mut app, key(KeyCode::Char(' ')));
+        handle_key(&mut app, key(KeyCode::Char(' ')));
+
+        assert!(app.confirmation.is_none());
+        assert_eq!(app.running_actions.len(), 1);
+        assert_eq!(app.running_actions[0].command, RESTART_VR_SESSION_COMMAND);
+    }
+
+    #[test]
+    fn escape_always_cancels_confirmation() {
+        let mut app = connected_app();
+        app.activate_action(TuiAction::RestartVrSession, Instant::now());
+        app.focus_confirmation_button(ModalButtonFocus::Confirm);
+
+        handle_key(&mut app, key(KeyCode::Esc));
+
+        assert!(app.confirmation.is_none());
+        assert!(app.running_actions.is_empty());
+    }
+
+    #[test]
+    fn mouse_confirm_cancel_and_outside_clicks_use_exact_regions() {
+        let mut cancel_app = connected_app();
+        cancel_app.activate_action(TuiAction::RestartVrSession, Instant::now());
+        cancel_app.add_click_region(Rect::new(10, 10, 11, 1), ClickAction::ConfirmModal);
+        cancel_app.add_click_region(Rect::new(25, 10, 10, 1), ClickAction::CancelModal);
+
+        handle_mouse(&mut cancel_app, click(1, 1));
+        assert!(cancel_app.confirmation.is_some());
+        handle_mouse(&mut cancel_app, click(25, 10));
+        assert!(cancel_app.confirmation.is_none());
+        assert!(cancel_app.running_actions.is_empty());
+
+        let mut confirm_app = connected_app();
+        confirm_app.activate_action(TuiAction::RestartVrSession, Instant::now());
+        confirm_app.add_click_region(Rect::new(10, 10, 11, 1), ClickAction::ConfirmModal);
+        handle_mouse(&mut confirm_app, click(10, 10));
+        handle_mouse(&mut confirm_app, click(10, 10));
+
+        assert!(confirm_app.confirmation.is_none());
+        assert_eq!(confirm_app.running_actions.len(), 1);
+    }
+
+    #[test]
+    fn help_closes_only_from_supported_keys_or_visible_close_button() {
+        let mut app = connected_app();
+        app.help_visible = true;
+        app.add_click_region(Rect::new(20, 10, 9, 1), ClickAction::CloseModal);
+
+        handle_key(&mut app, key(KeyCode::Char('x')));
+        handle_mouse(&mut app, click(1, 1));
+        assert!(app.help_visible);
+
+        handle_mouse(&mut app, click(20, 10));
+        assert!(!app.help_visible);
     }
 }

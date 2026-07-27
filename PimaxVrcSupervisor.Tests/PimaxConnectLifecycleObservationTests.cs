@@ -104,7 +104,6 @@ public sealed class PimaxConnectLifecycleObservationTests
         Assert.Equal("pimax-connectivity-v1", PimaxConnectivitySchema.Version);
         Assert.Equal("pimax-usb-enumeration-v1", PimaxUsbEnumerationSchema.Version);
         Assert.Equal("pimax-registration-assessment-v1", PimaxRegistrationAssessmentSchema.Version);
-        Assert.Equal("pimax-recovery-experiment-v1", PimaxRecoveryExperimentSchema.Version);
         Assert.Equal("pimax-connect-lifecycle-observation-v1", PimaxConnectLifecycleObservationSchema.Version);
     }
 
@@ -164,7 +163,13 @@ public sealed class PimaxConnectLifecycleObservationTests
     private static string RepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, ".git"))) directory = directory.Parent;
+        while (directory is not null && !HasGitMetadata(directory.FullName)) directory = directory.Parent;
         return directory?.FullName ?? throw new DirectoryNotFoundException("Repository root not found.");
+    }
+
+    private static bool HasGitMetadata(string directory)
+    {
+        var path = Path.Combine(directory, ".git");
+        return Directory.Exists(path) || File.Exists(path);
     }
 }

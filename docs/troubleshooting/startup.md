@@ -8,9 +8,9 @@
 4. Save to reapply startup integration.
 5. If you moved the release folder, save from the new folder.
 
-## Terminal UI Does Not Open In Terminal Mode
+## Terminal UI Does Not Open
 
-1. Confirm **Use Terminal UI as default interface** is checked.
+1. Confirm **Interface mode** is **Terminal UI only** or **Terminal UI + SteamVR Overlay**.
 2. Confirm `PimaxVrcSupervisorTui.exe` exists in the release folder.
 3. Save again from Configurator.
 
@@ -20,9 +20,7 @@ Open the intended config in Configurator and save/apply startup mode again. The 
 
 ## Classic Console Opens Instead Of Terminal UI
 
-Check **Use Terminal UI as default interface**. If it is unchecked, Terminal Mode preserves classic console behavior.
-
-If it is checked and Classic Console still opens, re-save startup integration from the current release folder. The scheduled task should keep the Terminal UI preference after repair.
+Re-save a Terminal UI interface mode from the current release folder. The scheduled task should then contain the Terminal UI startup intent after repair.
 
 ## Startup Task Needs Repair
 

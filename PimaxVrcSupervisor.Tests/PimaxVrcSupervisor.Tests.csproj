@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <Phase33BTestTrust>true</Phase33BTestTrust>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,7 +18,17 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj" />
+    <ProjectReference Include="..\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj" AdditionalProperties="Phase33BTestTrust=true" />
+    <ProjectReference Include="..\PimaxVrcSupervisor.UpdateCheckTestHelper\PimaxVrcSupervisor.UpdateCheckTestHelper.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\PimaxVrcSupervisor.SteamVrHost\OverlayUpdateStatus.cs" Link="SteamVrHost\OverlayUpdateStatus.cs" />
+    <Compile Include="..\PimaxVrcSupervisor.ConfigEditor\ConfiguratorStandaloneUpdateCheckLauncher.cs" Link="Configurator\ConfiguratorStandaloneUpdateCheckLauncher.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Fixtures\Phase33A\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

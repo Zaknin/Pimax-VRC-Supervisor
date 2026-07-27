@@ -43,6 +43,7 @@ jobs:
         shell: pwsh
         run: |
           dotnet build .\PimaxVrcSupervisor\PimaxVrcSupervisor.csproj -c Release
+          dotnet build .\PimaxVrcSupervisor.UpdateWorker\PimaxVrcSupervisor.UpdateWorker.csproj -c Release
           dotnet build .\PimaxVrcSupervisor.ConfigEditor\PimaxVrcSupervisor.ConfigEditor.csproj -c Release
           dotnet build .\PimaxVrcSupervisor.SteamVrHost\PimaxVrcSupervisor.SteamVrHost.csproj -c Release
 

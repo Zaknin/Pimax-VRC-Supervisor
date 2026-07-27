@@ -17,10 +17,10 @@
 |---|---|
 | `0` | Help |
 | `F5` | Refresh |
-| `1`-`6` | Open action confirmation |
+| `1`-`7` | Open action confirmation |
 | `Enter` / `Space` | Confirm modal |
-| `Esc` | Cancel / back |
-| `Q` | Shutdown flow when connected, exit only when disconnected |
+| `Esc` | Open exit options, or cancel an open modal |
+| `Q` | Open exit options |
 | `Up` / `PageUp` | Scroll logs older |
 | `Down` / `PageDown` | Scroll logs newer |
 | `End` / `F` | Follow latest logs |
@@ -35,4 +35,5 @@
 | `4` | Turn off controlled base stations |
 | `5` | OSC Router launch/restart |
 | `6` | Reload Autostart apps |
+| `7` | SteamVR control: Start when stopped, Restart when running |
 | `F1` | Show console shortcuts |

@@ -32,6 +32,32 @@ internal enum BaseStationPowerState
     Waking
 }
 
+internal enum BaseStationCommandFailureStage
+{
+    None,
+    BluetoothAdapter,
+    DeviceResolution,
+    GattService,
+    Characteristic,
+    Write,
+    Cancelled,
+    Unknown
+}
+
+internal sealed class BaseStationCommandException : InvalidOperationException
+{
+    public BaseStationCommandException(
+        BaseStationCommandFailureStage failureStage,
+        string message,
+        Exception? innerException = null)
+        : base(message, innerException)
+    {
+        FailureStage = failureStage;
+    }
+
+    public BaseStationCommandFailureStage FailureStage { get; }
+}
+
 internal static class BaseStationCommandTiming
 {
     public static readonly TimeSpan InterStationDelay = TimeSpan.FromSeconds(1);
@@ -44,6 +70,8 @@ internal static class BaseStationCommandTiming
     public static readonly TimeSpan PowerDownStateReadDelay = TimeSpan.FromSeconds(2);
     public static readonly TimeSpan PowerOnRetryPassDelay = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan OpenVrTrackingCheckDelay = TimeSpan.FromSeconds(10);
+    public static readonly TimeSpan SteamVrBurstSuppressionTimeout = TimeSpan.FromSeconds(2);
+    public static readonly TimeSpan SteamVrConfirmationPollingInterval = TimeSpan.FromMilliseconds(150);
     public const int PowerOnPasses = 3;
     public const int OpenVrPowerOnCycles = 5;
     public const int PowerOnAttempts = 2;
@@ -337,11 +365,34 @@ internal static class BluetoothAddressConverter
     }
 }
 
+internal sealed record BaseStationDiscoveryCleanupResult(
+    int WatcherCount,
+    int StartedWatcherCount,
+    int StopRequestCount,
+    bool HandlersDetached,
+    bool Succeeded,
+    string Result)
+{
+    public static BaseStationDiscoveryCleanupResult NotStarted(string result)
+        => new(0, 0, 0, true, true, result);
+}
+
+internal sealed record BaseStationDiscoveryObservation(
+    BaseStationDevice Station,
+    string Source);
+
+internal interface IBaseStationDiscoveryObserver
+{
+    void OnStationObserved(BaseStationDiscoveryObservation observation);
+}
+
 internal static class BaseStationDiscovery
 {
-    public static async Task<bool> HasBluetoothLeAdapterAsync()
+    public static readonly TimeSpan ConfiguratorScanDuration = TimeSpan.FromSeconds(10);
+
+    public static async Task<bool> HasBluetoothLeAdapterAsync(CancellationToken cancellationToken = default)
     {
-        var adapter = await BluetoothAdapter.GetDefaultAsync().AsTask();
+        var adapter = await BluetoothAdapter.GetDefaultAsync().AsTask(cancellationToken);
         return adapter is not null && adapter.IsLowEnergySupported;
     }
 
@@ -350,8 +401,12 @@ internal static class BaseStationDiscovery
         CancellationToken cancellationToken,
         BaseStationDiagnosticSink? diagnostics = null,
         string? scanSessionId = null,
-        string trigger = "unspecified")
+        string trigger = "unspecified",
+        Action<BaseStationDiscoveryCleanupResult>? cleanupObserver = null,
+        IBaseStationDiscoveryObserver? observer = null)
     {
+        using var scanLifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var scanLifetimeToken = scanLifetimeCancellation.Token;
         scanSessionId ??= BaseStationDiagnosticSink.CreateId("bs-scan");
         var isConfiguratorScan = string.Equals(trigger, "Configurator Scan", StringComparison.OrdinalIgnoreCase);
         diagnostics?.WriteEvent(
@@ -364,8 +419,24 @@ internal static class BaseStationDiscovery
             trigger,
             scanSessionId: scanSessionId,
             currentStage: "adapterLookup");
-        if (!await HasBluetoothLeAdapterAsync())
+        bool hasBluetoothLeAdapter;
+        try
         {
+            hasBluetoothLeAdapter = await HasBluetoothLeAdapterAsync(scanLifetimeToken);
+        }
+        catch
+        {
+            NotifyCleanup(
+                cleanupObserver,
+                BaseStationDiscoveryCleanupResult.NotStarted("bluetoothAdapterLookupFailed"));
+            throw;
+        }
+
+        if (!hasBluetoothLeAdapter)
+        {
+            NotifyCleanup(
+                cleanupObserver,
+                BaseStationDiscoveryCleanupResult.NotStarted("bluetoothAdapterUnavailable"));
             diagnostics?.WriteEvent(
                 "bluetoothAdapterLookupCompleted",
                 trigger,
@@ -416,7 +487,7 @@ internal static class BaseStationDiscovery
                 var address = TryReadBluetoothAddress(deviceInfo);
                 if (string.IsNullOrWhiteSpace(address))
                 {
-                    using var device = await BluetoothLEDevice.FromIdAsync(deviceInfo.Id).AsTask();
+                    using var device = await BluetoothLEDevice.FromIdAsync(deviceInfo.Id).AsTask(scanLifetimeToken);
                     if (device is null)
                     {
                         return;
@@ -433,13 +504,15 @@ internal static class BaseStationDiscovery
                     Version = version,
                     Enabled = true
                 };
-                BaseStationObservationTracker.Record(found[address], DateTimeOffset.UtcNow);
+                var station = found[address];
+                BaseStationObservationTracker.Record(station, DateTimeOffset.UtcNow);
+                NotifyObserver(observer, new BaseStationDiscoveryObservation(station, "deviceWatcher"));
                 diagnostics?.WriteEvent(
                     isConfiguratorScan ? "configuratorStationObserved" : "discoveryStationObserved",
                     trigger,
                     scanSessionId: scanSessionId,
                     currentStage: "deviceWatcher",
-                    station: found[address],
+                    station: station,
                     discoveryState: "deviceWatcher",
                     outcome: "observed");
             }
@@ -467,34 +540,40 @@ internal static class BaseStationDiscovery
                 Version = version,
                 Enabled = true
             };
-            BaseStationObservationTracker.Record(found[address], DateTimeOffset.UtcNow);
+            var station = found[address];
+            BaseStationObservationTracker.Record(station, DateTimeOffset.UtcNow);
+            NotifyObserver(observer, new BaseStationDiscoveryObservation(station, "advertisementWatcher"));
             diagnostics?.WriteEvent(
                 isConfiguratorScan ? "configuratorStationObserved" : "discoveryStationObserved",
                 trigger,
                 scanSessionId: scanSessionId,
                 currentStage: "advertisementWatcher",
-                station: found[address],
+                station: station,
                 discoveryState: "advertisementWatcher",
                 outcome: "observed");
         }
 
-        foreach (var watcher in watchers)
-        {
-            watcher.Added += OnAdded;
-            watcher.Start();
-        }
-        advertisementWatcher.Received += OnAdvertisementReceived;
-        advertisementWatcher.Start();
-        diagnostics?.WriteEvent(
-            isConfiguratorScan ? "configuratorWatcherStarted" : "discoveryWatcherStarted",
-            trigger,
-            scanSessionId: scanSessionId,
-            currentStage: "scan",
-            discoveryState: "started");
-
+        var startedWatcherCount = 0;
         try
         {
-            await Task.Delay(duration, cancellationToken);
+            foreach (var watcher in watchers)
+            {
+                watcher.Added += OnAdded;
+                watcher.Start();
+                startedWatcherCount++;
+            }
+
+            advertisementWatcher.Received += OnAdvertisementReceived;
+            advertisementWatcher.Start();
+            startedWatcherCount++;
+            diagnostics?.WriteEvent(
+                isConfiguratorScan ? "configuratorWatcherStarted" : "discoveryWatcherStarted",
+                trigger,
+                scanSessionId: scanSessionId,
+                currentStage: "scan",
+                discoveryState: "started");
+
+            await Task.Delay(duration, scanLifetimeToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -505,26 +584,77 @@ internal static class BaseStationDiscovery
         }
         finally
         {
+            scanLifetimeCancellation.Cancel();
+            var cleanupErrors = new List<string>();
+            var stopRequestCount = 0;
+            var handlersDetached = true;
             foreach (var watcher in watchers)
             {
-                watcher.Added -= OnAdded;
-                if (watcher.Status is DeviceWatcherStatus.Created or DeviceWatcherStatus.Started or DeviceWatcherStatus.EnumerationCompleted)
+                try
                 {
-                    watcher.Stop();
+                    watcher.Added -= OnAdded;
+                }
+                catch (Exception ex)
+                {
+                    handlersDetached = false;
+                    cleanupErrors.Add(ex.GetType().Name);
+                }
+
+                try
+                {
+                    if (watcher.Status is DeviceWatcherStatus.Created or DeviceWatcherStatus.Started or DeviceWatcherStatus.EnumerationCompleted)
+                    {
+                        watcher.Stop();
+                        stopRequestCount++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    cleanupErrors.Add(ex.GetType().Name);
                 }
             }
 
-            advertisementWatcher.Received -= OnAdvertisementReceived;
-            if (advertisementWatcher.Status is BluetoothLEAdvertisementWatcherStatus.Created or BluetoothLEAdvertisementWatcherStatus.Started)
+            try
             {
-                advertisementWatcher.Stop();
+                advertisementWatcher.Received -= OnAdvertisementReceived;
             }
+            catch (Exception ex)
+            {
+                handlersDetached = false;
+                cleanupErrors.Add(ex.GetType().Name);
+            }
+
+            try
+            {
+                if (advertisementWatcher.Status is BluetoothLEAdvertisementWatcherStatus.Created or BluetoothLEAdvertisementWatcherStatus.Started)
+                {
+                    advertisementWatcher.Stop();
+                    stopRequestCount++;
+                }
+            }
+            catch (Exception ex)
+            {
+                cleanupErrors.Add(ex.GetType().Name);
+            }
+
+            var cleanupSucceeded = handlersDetached && cleanupErrors.Count == 0;
+            var cleanupResult = new BaseStationDiscoveryCleanupResult(
+                watchers.Length + 1,
+                startedWatcherCount,
+                stopRequestCount,
+                handlersDetached,
+                cleanupSucceeded,
+                cleanupSucceeded
+                    ? $"stopRequests={stopRequestCount}; handlersDetached=true; scanLifetimeCancelled=true"
+                    : $"stopRequests={stopRequestCount}; handlersDetached={handlersDetached.ToString().ToLowerInvariant()}; scanLifetimeCancelled=true; errors={string.Join(',', cleanupErrors)}");
+            NotifyCleanup(cleanupObserver, cleanupResult);
             diagnostics?.WriteEvent(
                 isConfiguratorScan ? "configuratorWatcherStopped" : "discoveryWatcherStopped",
                 trigger,
                 scanSessionId: scanSessionId,
                 currentStage: "scan",
-                discoveryState: "stopped");
+                discoveryState: "stopped",
+                outcome: cleanupSucceeded ? "succeeded" : "failed");
         }
 
         var result = found.Values
@@ -539,6 +669,34 @@ internal static class BaseStationDiscovery
             discoveryState: "complete",
             outcome: "succeeded");
         return result;
+    }
+
+    private static void NotifyCleanup(
+        Action<BaseStationDiscoveryCleanupResult>? cleanupObserver,
+        BaseStationDiscoveryCleanupResult cleanupResult)
+    {
+        try
+        {
+            cleanupObserver?.Invoke(cleanupResult);
+        }
+        catch
+        {
+            // Cleanup observation is diagnostic-only and must not alter discovery behavior.
+        }
+    }
+
+    private static void NotifyObserver(
+        IBaseStationDiscoveryObserver? observer,
+        BaseStationDiscoveryObservation observation)
+    {
+        try
+        {
+            observer?.OnStationObserved(observation);
+        }
+        catch
+        {
+            // Streaming observation is advisory and must not affect shared discovery.
+        }
     }
 
     private static string TryReadBluetoothAddress(DeviceInformation deviceInfo)
@@ -573,12 +731,13 @@ internal sealed class BaseStationGattClient
     public Task PowerOnAsync(
         BaseStationDevice baseStation,
         CancellationToken cancellationToken,
-        BaseStationOperationDiagnostics? diagnostics = null)
+        BaseStationOperationDiagnostics? diagnostics = null,
+        bool stopAfterResolutionFailure = false)
     {
         var version = GetSupportedVersion(baseStation);
         return version == BaseStationVersion.V1
-            ? ControlV1Async(baseStation, powerOn: true, cancellationToken, diagnostics)
-            : WriteV2PowerCharacteristicAsync(baseStation, 0x01, cancellationToken, diagnostics);
+            ? ControlV1Async(baseStation, powerOn: true, cancellationToken, diagnostics, stopAfterResolutionFailure)
+            : WriteV2PowerCharacteristicAsync(baseStation, 0x01, cancellationToken, diagnostics, stopAfterResolutionFailure);
     }
 
     public Task SleepAsync(
@@ -674,14 +833,23 @@ internal sealed class BaseStationGattClient
         BaseStationDevice baseStation,
         byte value,
         CancellationToken cancellationToken,
-        BaseStationOperationDiagnostics? diagnostics)
-        => WritePowerCharacteristicAsync(baseStation, V2ControlService, V2PowerCharacteristic, [value], cancellationToken, diagnostics);
+        BaseStationOperationDiagnostics? diagnostics,
+        bool stopAfterResolutionFailure = false)
+        => WritePowerCharacteristicAsync(
+            baseStation,
+            V2ControlService,
+            V2PowerCharacteristic,
+            [value],
+            cancellationToken,
+            diagnostics,
+            stopAfterResolutionFailure);
 
     private static Task ControlV1Async(
         BaseStationDevice baseStation,
         bool powerOn,
         CancellationToken cancellationToken,
-        BaseStationOperationDiagnostics? diagnostics)
+        BaseStationOperationDiagnostics? diagnostics,
+        bool stopAfterResolutionFailure = false)
     {
         var id = baseStation.Id.Trim();
         if (id.Length != 8)
@@ -700,7 +868,14 @@ internal sealed class BaseStationGattClient
             .Concat(Enumerable.Repeat<byte>(0x00, 12))
             .ToArray();
 
-        return WritePowerCharacteristicAsync(baseStation, V1ControlService, V1PowerCharacteristic, data, cancellationToken, diagnostics);
+        return WritePowerCharacteristicAsync(
+            baseStation,
+            V1ControlService,
+            V1PowerCharacteristic,
+            data,
+            cancellationToken,
+            diagnostics,
+            stopAfterResolutionFailure);
     }
 
     private static async Task WritePowerCharacteristicAsync(
@@ -709,7 +884,8 @@ internal sealed class BaseStationGattClient
         Guid characteristicGuid,
         byte[] data,
         CancellationToken cancellationToken,
-        BaseStationOperationDiagnostics? diagnostics = null)
+        BaseStationOperationDiagnostics? diagnostics = null,
+        bool stopAfterResolutionFailure = false)
     {
         diagnostics?.BeginStage("bluetoothAdapterLookup");
         if (!await BaseStationDiscovery.HasBluetoothLeAdapterAsync())
@@ -720,24 +896,39 @@ internal sealed class BaseStationGattClient
 
         const int retryCount = 10;
         Exception? lastException = null;
+        var failureStage = BaseStationCommandFailureStage.Unknown;
         for (var attempt = 1; attempt <= retryCount; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
+                failureStage = BaseStationCommandFailureStage.DeviceResolution;
                 diagnostics?.BeginStage("deviceResolution");
                 using var device = await GetBluetoothLeDeviceAsync(baseStation.BluetoothAddressValue, cancellationToken);
                 diagnostics?.CompleteStage("deviceResolution", deviceResolutionResult: "succeeded");
+                failureStage = BaseStationCommandFailureStage.GattService;
                 diagnostics?.BeginStage("gattServiceQuery");
                 using var service = await GetServiceAsync(device, serviceGuid, cancellationToken);
                 diagnostics?.CompleteStage("gattServiceQuery", gattServiceResult: "succeeded");
+                failureStage = BaseStationCommandFailureStage.Characteristic;
                 diagnostics?.BeginStage("characteristicResolution");
                 var characteristic = await GetCharacteristicAsync(service, characteristicGuid, cancellationToken);
                 diagnostics?.CompleteStage("characteristicResolution", characteristicResult: "succeeded");
+                failureStage = BaseStationCommandFailureStage.Write;
                 diagnostics?.BeginStage("powerWrite");
                 await WriteCharacteristicAsync(characteristic, data, cancellationToken);
                 diagnostics?.CompleteStage("powerWrite", writeResult: "succeeded");
                 return;
+            }
+            catch (Exception ex) when (
+                failureStage == BaseStationCommandFailureStage.DeviceResolution
+                && stopAfterResolutionFailure
+                && !cancellationToken.IsCancellationRequested)
+            {
+                throw new BaseStationCommandException(
+                    BaseStationCommandFailureStage.DeviceResolution,
+                    $"Could not resolve {baseStation.DisplayName}.",
+                    ex);
             }
             catch (Exception ex) when (attempt < retryCount && !cancellationToken.IsCancellationRequested)
             {
@@ -748,6 +939,14 @@ internal sealed class BaseStationGattClient
             {
                 lastException = ex;
             }
+        }
+
+        if (stopAfterResolutionFailure)
+        {
+            throw new BaseStationCommandException(
+                failureStage,
+                $"Could not communicate with {baseStation.DisplayName}.",
+                lastException);
         }
 
         throw new InvalidOperationException($"Could not communicate with {baseStation.DisplayName}.", lastException);

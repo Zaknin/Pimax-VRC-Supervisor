@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.Reflection;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
@@ -12,6 +13,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Text.Json.Serialization;
 using PimaxVrcSupervisor.BaseStations;
+using PimaxVrcSupervisor.Updates;
 
 namespace PimaxVrcSupervisor.Configurator;
 
@@ -40,8 +42,10 @@ internal sealed class ConfigEditorForm : Form
     private const string DefaultVrcFaceTrackingDirectory = @"C:\Program Files (x86)\Steam\steamapps\common\VRCFaceTracking";
     private const int MaxDisplayNameLength = 64;
     private const string AutostartModeOff = "Off";
-    private const string AutostartModeScheduledTask = "Terminal Mode";
-    private const string AutostartModeSteamVrManifest = "SteamVR Overlay";
+    private const string AutostartModeScheduledTask = "Terminal UI only";
+    private const string AutostartModeSteamVrManifest = "SteamVR Overlay only";
+    private const string AutostartModeCombined = "Terminal UI + SteamVR Overlay";
+    private const string AutostartModeLegacyClassicConsole = "Classic Console only (legacy)";
     private static readonly string DefaultIntifacePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "IntifaceCentral",
@@ -110,6 +114,21 @@ internal sealed class ConfigEditorForm : Form
     private readonly CheckBox _mouthTrackerCheckBox = CreateOptionalConfigCheckBox("Detect Vive Face Tracker usage");
     private readonly CheckBox _turnOffMonitorsCheckBox = CreateOptionalConfigCheckBox("Turn off secondary monitors during headset sessions");
     private readonly ComboBox _autostartModeComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Left, Width = 310 };
+    private readonly ComboBox _updatePolicyComboBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Left, Width = 340 };
+    private readonly Label _updateCurrentVersionLabel = CreateValueLabel();
+    private readonly Label _updateChannelLabel = CreateValueLabel();
+    private readonly Label _updateLatestVersionLabel = CreateValueLabel();
+    private readonly Label _updateLastSuccessLabel = CreateValueLabel();
+    private readonly Label _updateLastAttemptLabel = CreateValueLabel();
+    private readonly Label _updateDismissedLabel = CreateValueLabel();
+    private readonly Label _updateErrorLabel = CreateValueLabel();
+    private readonly Label _updateVerificationLabel = CreateValueLabel();
+    private readonly Label _updateInlineResultLabel = new() { AutoSize = true, MaximumSize = new Size(850, 0), Tag = "Muted" };
+    private readonly Button _checkForUpdatesButton = CreateButton("Check now", width: 130);
+    private readonly Button _dismissUpdateButton = CreateButton("Dismiss verified update", width: 190);
+    private readonly Button _clearUpdateDismissalButton = CreateButton("Clear dismissal", width: 140);
+    private readonly IConfiguratorUpdateBridge _updateBridge = new ConfiguratorUpdateBridgeClient();
+    private readonly ConfiguratorUpdateCheckRunner _updateCheckRunner;
     private readonly CheckBox _faceTrackerAutomationEnabledCheckBox = new ThemedCheckBox { Text = "Enable Face Tracking Auto Startup", AutoSize = true };
     private readonly CheckBox _faceTrackerRestartOnReconnectCheckBox = new ThemedCheckBox { Text = "Enable automatic restart on headset reconnects", AutoSize = true };
     private readonly CheckBox _usePimaxLogCheckBox = new ThemedCheckBox { Text = "Watch Pimax PiService logs for fast reconnects", AutoSize = true };
@@ -206,12 +225,18 @@ internal sealed class ConfigEditorForm : Form
     private bool _suppressConfigSelectorChange;
     private bool _saveInProgress;
     private bool _startupIntegrationApplyInProgress;
+    private bool _updateActionInProgress;
     private bool _mouthTrackerPreferenceTouched;
     private bool _turnOffMonitorsPreferenceTouched;
     private bool _startupIntegrationPreferenceTouched;
+    private string? _startupModeLoadWarning;
+    private UpdateStatusSnapshotV1? _lastUpdateStatus;
 
     public ConfigEditorForm(string? requestedConfigPath)
     {
+        _updateCheckRunner = new ConfiguratorUpdateCheckRunner(
+            _updateBridge,
+            new ConfiguratorStandaloneUpdateCheckLauncher());
         Text = BaseWindowTitle;
         SetWindowIconFromExecutable();
         MinimumSize = new Size(1180, 860);
@@ -245,7 +270,11 @@ internal sealed class ConfigEditorForm : Form
             LoadConfig(defaultConfigPath);
         }
 
-        Shown += async (_, _) => await PromptForExistingStartupTaskMigrationAsync();
+        Shown += async (_, _) =>
+        {
+            await PromptForExistingStartupTaskMigrationAsync();
+            await RefreshUpdateStatusAsync();
+        };
     }
 
     private void SetWindowIconFromExecutable()
@@ -479,6 +508,7 @@ internal sealed class ConfigEditorForm : Form
         _tabs.AddTab("OSC Router", BuildOscRouterTab());
         _tabs.AddTab("OSCGoesBrrr", BuildLovenseTab());
         _tabs.AddTab("Timers", BuildTimingTab());
+        _tabs.AddTab("Updates", BuildUpdatesTab());
         _tabs.AddTab("Raw JSON", BuildRawJsonTab());
         _tabs.SelectTab(Math.Clamp(selectedTab, 0, _tabs.TabCount - 1));
         _tabs.SelectedIndexChanged += (_, _) =>
@@ -487,6 +517,148 @@ internal sealed class ConfigEditorForm : Form
             RefreshVisibleStatus();
         };
         return _tabs;
+    }
+
+    private Control BuildUpdatesTab()
+    {
+        _updatePolicyComboBox.Items.Add("Do not check automatically");
+        _updatePolicyComboBox.Items.Add("Notify me when a verified update is available");
+        _updatePolicyComboBox.SelectedIndex = 0;
+        _updateCurrentVersionLabel.Text = AppVersion.Current;
+        _updateChannelLabel.Text = "Stable";
+        _updateLatestVersionLabel.Text = "Not checked";
+        _updateLastSuccessLabel.Text = "Never";
+        _updateLastAttemptLabel.Text = "Never";
+        _updateDismissedLabel.Text = "None";
+        _updateErrorLabel.Text = "None";
+        _updateVerificationLabel.Text = "Loading...";
+        _dismissUpdateButton.Enabled = false;
+        _clearUpdateDismissalButton.Enabled = false;
+
+        _checkForUpdatesButton.Click += async (_, _) => await RunUpdateActionAsync(UpdateUiAction.Check);
+        _dismissUpdateButton.Click += async (_, _) => await RunUpdateActionAsync(UpdateUiAction.Dismiss);
+        _clearUpdateDismissalButton.Click += async (_, _) => await RunUpdateActionAsync(UpdateUiAction.ClearDismissal);
+
+        var layout = CreateFormLayout(3);
+        layout.Dock = DockStyle.Top;
+        layout.AutoSize = true;
+        AddSectionHeader(layout, "Policy");
+        AddLabeledRow(layout, "Automatic checks", _updatePolicyComboBox, "Disabled does not check automatically. Notify checks Stable releases after 24 hours. Manual checks remain available for both policies.");
+        AddSectionHeader(layout, "Verified status");
+        AddLabeledRow(layout, "Current version", _updateCurrentVersionLabel, "The installed application version.");
+        AddLabeledRow(layout, "Channel", _updateChannelLabel, "Phase 33A supports only the Stable channel.");
+        AddLabeledRow(layout, "Latest verified version", _updateLatestVersionLabel, "Shows the newest version accepted for this device.");
+        AddLabeledRow(layout, "Last successful check", _updateLastSuccessLabel, "The most recent completed verified metadata check.");
+        AddLabeledRow(layout, "Last check attempt", _updateLastAttemptLabel, "The most recent network check attempt.");
+        AddLabeledRow(layout, "Dismissed version", _updateDismissedLabel, "A dismissed verified version stays quiet until a newer verified version appears.");
+        AddLabeledRow(layout, "Update verification", _updateVerificationLabel, "Shows whether this build can check for verified updates.");
+        AddLabeledRow(layout, "Last check result", _updateErrorLabel, "The last update-check result is shown without remote response details.");
+
+        var actions = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Dock = DockStyle.Fill, Margin = new Padding(0, 8, 0, 0) };
+        actions.Controls.Add(_checkForUpdatesButton);
+        actions.Controls.Add(_dismissUpdateButton);
+        actions.Controls.Add(_clearUpdateDismissalButton);
+        AddFullWidth(layout, actions, "These actions check for updates or change the local dismissal. No download or installation occurs here.");
+        AddFullWidth(layout, _updateInlineResultLabel, "Manual results are shown inline and automatic failures remain non-modal.");
+        return BuildTabWithDescription(
+            "Updates",
+            "Review Stable update information. Saving the policy uses the existing config Apply flow and does not change startup integration by itself.",
+            layout,
+            limitWidth: true);
+    }
+
+    private async Task RunUpdateActionAsync(UpdateUiAction action)
+    {
+        if (_updateActionInProgress)
+        {
+            return;
+        }
+
+        _updateActionInProgress = true;
+        SetUpdateButtonsEnabled(false);
+        try
+        {
+            _updateInlineResultLabel.Text = action == UpdateUiAction.Check ? "Checking for updates..." : "Updating dismissal...";
+            if (action == UpdateUiAction.Check)
+            {
+                var result = await _updateCheckRunner.TryRunAsync(ApplyUpdateStatus, CancellationToken.None);
+                _updateInlineResultLabel.Text = UpdateStatusUserMessage.ForResult(
+                    result.Acceptance.ResultCode ?? result.TerminalStatus?.Operation?.ResultCode,
+                    result.TerminalStatus);
+                return;
+            }
+
+            var acceptance = action == UpdateUiAction.Dismiss
+                ? await _updateBridge.DismissAsync(CancellationToken.None)
+                : await _updateBridge.ClearDismissalAsync(CancellationToken.None);
+            _updateInlineResultLabel.Text = acceptance.Message;
+            await RefreshUpdateStatusAsync();
+        }
+        catch (Exception ex) when (ex is IOException or SocketException or JsonException or InvalidOperationException or OperationCanceledException)
+        {
+            _updateInlineResultLabel.Text = UpdateStatusUserMessage.NetworkFailure;
+        }
+        finally
+        {
+            _updateActionInProgress = false;
+            RefreshUpdateButtonStates();
+        }
+    }
+
+    private async Task RefreshUpdateStatusAsync()
+    {
+        try
+        {
+            ApplyUpdateStatus(await _updateBridge.QueryStatusAsync(CancellationToken.None));
+        }
+        catch (Exception ex) when (ex is IOException or SocketException or JsonException or InvalidOperationException or OperationCanceledException)
+        {
+            _updateVerificationLabel.Text = "Status unavailable";
+            _updateInlineResultLabel.Text = UpdateStatusUserMessage.NetworkFailure;
+        }
+    }
+
+    private void ApplyUpdateStatus(UpdateStatusSnapshotV1 status)
+    {
+        _lastUpdateStatus = status;
+        _updateCurrentVersionLabel.Text = status.CurrentVersion;
+        _updateChannelLabel.Text = status.Channel;
+        _updateLatestVersionLabel.Text = status.LatestVerifiedVersion ?? "Not checked";
+        _updateLastSuccessLabel.Text = FormatUpdateTimestamp(status.LastSuccessfulCheckAt);
+        _updateLastAttemptLabel.Text = FormatUpdateTimestamp(status.LastAttemptAt);
+        _updateDismissedLabel.Text = status.DismissedVersion ?? "None";
+        _updateErrorLabel.Text = UpdateStatusUserMessage.ForStatus(status);
+        _updateVerificationLabel.Text = status.VerificationConfigured
+            ? "Available"
+            : "Not available in this build";
+        RefreshUpdateButtonStates();
+    }
+
+    private void SetUpdateButtonsEnabled(bool enabled)
+    {
+        _checkForUpdatesButton.Enabled = enabled;
+        _dismissUpdateButton.Enabled = enabled;
+        _clearUpdateDismissalButton.Enabled = enabled;
+    }
+
+    private void RefreshUpdateButtonStates()
+    {
+        _checkForUpdatesButton.Enabled = !_updateActionInProgress && _lastUpdateStatus?.CheckInProgress != true;
+        _dismissUpdateButton.Enabled = !_updateActionInProgress && _lastUpdateStatus is { UpdateAvailable: true, Dismissed: false };
+        _clearUpdateDismissalButton.Enabled = !_updateActionInProgress && _lastUpdateStatus?.DismissedVersion is not null;
+    }
+
+    private static string FormatUpdateTimestamp(DateTimeOffset? value)
+        => value is null ? "Never" : value.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture);
+
+
+    private static Label CreateValueLabel() => new() { AutoSize = true, MaximumSize = new Size(850, 0) };
+
+    private enum UpdateUiAction
+    {
+        Check,
+        Dismiss,
+        ClearDismissal
     }
 
     private Control BuildBasicsTab()
@@ -500,21 +672,17 @@ internal sealed class ConfigEditorForm : Form
         _autostartModeComboBox.Items.Add(AutostartModeOff);
         _autostartModeComboBox.Items.Add(AutostartModeScheduledTask);
         _autostartModeComboBox.Items.Add(AutostartModeSteamVrManifest);
+        _autostartModeComboBox.Items.Add(AutostartModeCombined);
+        _autostartModeComboBox.Items.Add(AutostartModeLegacyClassicConsole);
         if (_autostartModeComboBox.SelectedIndex < 0)
         {
             _autostartModeComboBox.SelectedItem = AutostartModeOff;
         }
 
         AddSectionHeader(layout, "Autostart");
-        AddLabeledRow(layout, "Autostart mode", _autostartModeComboBox, "Choose what the Supervisor should do automatically when SteamVR is running. Terminal Mode starts a watcher when SteamVR is running; depending on the Terminal UI default-interface option, it can launch hidden Supervisor + Terminal UI or preserve classic visible CLI behavior.");
+        AddLabeledRow(layout, "Interface mode", _autostartModeComboBox, "Choose Terminal UI only, SteamVR Overlay only, or both. Combined mode keeps one Supervisor owner and lets both interfaces attach to it. Classic Console remains available only for backward compatibility.");
 
         AddSectionHeader(layout, "Startup");
-        _useDesktopTuiAsDefaultInterfaceCheckBox.CheckedChanged += (_, _) =>
-        {
-            _editorState.UseDesktopTuiAsDefaultInterface = _useDesktopTuiAsDefaultInterfaceCheckBox.Checked;
-            SaveEditorState();
-        };
-        AddFullWidth(layout, _useDesktopTuiAsDefaultInterfaceCheckBox, "When enabled, Launch Supervisor starts the Supervisor hidden and opens the Terminal UI.");
         AddFullWidth(layout, _turnOffMonitorsCheckBox, "Checked saves the current monitor layout and disables secondary monitors during the VR session. The layout is restored after VRChat and SteamVR close.");
         AddSectionHeader(layout, "Diagnostics");
         AddFullWidth(layout, _diagnosticsEnabledCheckBox, "Checked enables diagnostic and debug settings in this editor. Unchecked saves all diagnostic and debug options as disabled.");
@@ -686,6 +854,9 @@ internal sealed class ConfigEditorForm : Form
 
         _autostartModeComboBox.SelectedIndexChanged += (_, _) =>
         {
+            _useDesktopTuiAsDefaultInterfaceCheckBox.Checked = GetSelectedStartupLaunchMode()
+                is "ScheduledTask" or StartupLaunchPlanning.CombinedModeName;
+            _editorState.UseDesktopTuiAsDefaultInterface = _useDesktopTuiAsDefaultInterfaceCheckBox.Checked;
             if (!_suppressDirtyTracking)
             {
                 _startupIntegrationPreferenceTouched = true;
@@ -927,7 +1098,7 @@ internal sealed class ConfigEditorForm : Form
                 scanSessionId: scanSessionId,
                 currentStage: "scan");
             var discovered = await BaseStationDiscovery.ScanAsync(
-                TimeSpan.FromSeconds(10),
+                BaseStationDiscovery.ConfiguratorScanDuration,
                 CancellationToken.None,
                 _baseStationDiagnostics,
                 scanSessionId,
@@ -1571,7 +1742,7 @@ internal sealed class ConfigEditorForm : Form
     private void OnAutoLaunchAppsGridDefaultValuesNeeded(object? sender, DataGridViewRowEventArgs e)
     {
         e.Row.Cells["Enabled"].Value = true;
-        e.Row.Cells["RestartOnPimaxReconnect"].Value = true;
+        e.Row.Cells["RestartOnPimaxReconnect"].Value = false;
         e.Row.Cells["RunAsAdmin"].Value = false;
         e.Row.Cells["StartMinimized"].Value = false;
     }
@@ -3060,7 +3231,7 @@ internal sealed class ConfigEditorForm : Form
 
     private void LaunchSupervisor()
     {
-        if (_useDesktopTuiAsDefaultInterfaceCheckBox.Checked)
+        if (GetSelectedStartupLaunchMode() is "ScheduledTask" or StartupLaunchPlanning.CombinedModeName)
         {
             LaunchSupervisorWithDesktopTui();
             return;
@@ -3197,6 +3368,10 @@ internal sealed class ConfigEditorForm : Form
             if (launchDesktopTuiAfterReady)
             {
                 startInfo.ArgumentList.Add("--launch-desktop-tui-after-ready");
+            }
+            if (GetSelectedStartupLaunchMode() == StartupLaunchPlanning.CombinedModeName)
+            {
+                startInfo.ArgumentList.Add("--persistent-supervisor-owner");
             }
 
             if (!IsAdministrator())
@@ -3343,7 +3518,7 @@ internal sealed class ConfigEditorForm : Form
                 _rawJsonTextBox.Text = _loadedJson;
                 _rawJsonHasUnappliedChanges = false;
                 _editorState.LastConfigPath = Path.GetFullPath(path);
-                SetCleanStatus("Config file does not exist yet. Fill values, then Save.");
+                SetCleanStatus(_startupModeLoadWarning ?? "Config file does not exist yet. Fill values, then Save.");
                 return;
             }
 
@@ -3357,7 +3532,7 @@ internal sealed class ConfigEditorForm : Form
             _rawJsonHasUnappliedChanges = false;
             _editorState.LastConfigPath = Path.GetFullPath(path);
             SaveActiveConfigSelection(path);
-            SetCleanStatus("Loaded " + path);
+            SetCleanStatus(_startupModeLoadWarning ?? "Loaded " + path);
         }
         catch (Exception ex)
         {
@@ -3376,8 +3551,10 @@ internal sealed class ConfigEditorForm : Form
 
     private void PopulateControls(JsonNode? node)
     {
+        _startupModeLoadWarning = null;
         _displayNameTextBox.Text = NormalizeDisplayNameForDisplay(
             GetStringOrDefault(node, "DisplayName", GetFallbackDisplayName(_configPathTextBox.Text)));
+        _updatePolicyComboBox.SelectedIndex = string.Equals(GetString(node, "UpdatePolicy"), "Notify", StringComparison.Ordinal) ? 1 : 0;
         _brokenEyePathTextBox.Text = GetString(node, "BrokenEyePath");
         _vrcFaceTrackingPathTextBox.Text = GetString(node, "VrcFaceTrackingPath");
         _intifacePathTextBox.Text = GetStringOrDefault(node, "IntifacePath", DefaultIntifacePath);
@@ -3396,7 +3573,12 @@ internal sealed class ConfigEditorForm : Form
         _oscRouterReceivePortInput.Value = Math.Clamp(GetInt(node, "OscRouterReceivePort", 9001), (int)_oscRouterReceivePortInput.Minimum, (int)_oscRouterReceivePortInput.Maximum);
         _mouthTrackerCheckBox.Checked = GetBoolCheckState(node, "MouthTrackerUser") == CheckState.Checked;
         _turnOffMonitorsCheckBox.Checked = GetBoolCheckState(node, "TurnOffSecondaryMonitors") == CheckState.Checked;
-        SetStartupLaunchMode(GetStartupLaunchModeForEditor(node));
+        var startupModeForEditor = GetStartupLaunchModeForEditor(node, out _startupModeLoadWarning);
+        if (startupModeForEditor == "ScheduledTask" && !_editorState.UseDesktopTuiAsDefaultInterface)
+        {
+            startupModeForEditor = "ScheduledTaskClassicConsole";
+        }
+        SetStartupLaunchMode(startupModeForEditor);
         _usePimaxLogCheckBox.Checked = GetBool(node, "UsePimaxServiceLogReconnectDetector", defaultValue: true);
         _useMouthTrackerPnPCheckBox.Checked = GetBool(node, "UseMouthTrackerPnPReconnectDetector", defaultValue: false);
         _mouthTrackerRestartOnReconnectCheckBox.Checked = GetBool(node, "MouthTrackerRestartOnReconnectEnabled", defaultValue: true);
@@ -3566,7 +3748,7 @@ internal sealed class ConfigEditorForm : Form
                 return true;
             }
 
-            return currentMode == "SteamVrManifest"
+            return currentMode is "SteamVrManifest" or StartupLaunchPlanning.CombinedModeName
                 && !File.Exists(Path.Combine(AppContext.BaseDirectory, "PimaxVrcSupervisor.vrmanifest"));
         }
         catch
@@ -3577,19 +3759,15 @@ internal sealed class ConfigEditorForm : Form
 
     private static string GetEffectiveStartupLaunchMode(JsonNode? node)
     {
-        var startupLaunchMode = GetStartupLaunchMode(node);
-        if (!string.IsNullOrWhiteSpace(startupLaunchMode))
-        {
-            return startupLaunchMode;
-        }
-
         var autoLaunchTask = GetBoolCheckState(node, "AutoLaunchScheduledTask");
-        return autoLaunchTask switch
-        {
-            CheckState.Checked => "ScheduledTask",
-            CheckState.Unchecked => "None",
-            _ => "Unspecified"
-        };
+        bool? legacyAutoLaunch = autoLaunchTask == CheckState.Indeterminate
+            ? null
+            : autoLaunchTask == CheckState.Checked;
+        return StartupLaunchPlanning.Resolve(
+            GetStartupLaunchMode(node),
+            legacyAutoLaunch,
+            GetBoolCheckState(node, "StopWithSteamVr") == CheckState.Checked,
+            out _).ToString();
     }
 
     private void ApplyStartupIntegration(string configPath)
@@ -3630,7 +3808,7 @@ internal sealed class ConfigEditorForm : Form
             startInfo.ArgumentList.Add("--hide-startup-helper");
             startInfo.ArgumentList.Add("--config");
             startInfo.ArgumentList.Add(Path.GetFullPath(configPath));
-            if (_useDesktopTuiAsDefaultInterfaceCheckBox.Checked)
+            if (startupLaunchMode is "ScheduledTask" or StartupLaunchPlanning.CombinedModeName)
             {
                 startInfo.ArgumentList.Add("--desktop-tui-default-interface");
             }
@@ -3825,7 +4003,7 @@ internal sealed class ConfigEditorForm : Form
         switch (choice)
         {
             case StartupTaskMigrationChoice.Rebind:
-                SetStartupLaunchMode(SelectStartupLaunchModeForTasks(staleTasks));
+                SetStartupLaunchMode(SelectStartupLaunchModeForTasks(staleTasks, _loadedJson, GetSelectedStartupLaunchMode()));
                 SaveConfig(forceApplyStartupIntegration: true);
                 break;
             case StartupTaskMigrationChoice.TurnOffAutostart:
@@ -3847,11 +4025,22 @@ internal sealed class ConfigEditorForm : Form
             .ToArray();
     }
 
-    private static string SelectStartupLaunchModeForTasks(IReadOnlyList<ScheduledTaskExecutableValidationResult> tasks)
+    private static string SelectStartupLaunchModeForTasks(
+        IReadOnlyList<ScheduledTaskExecutableValidationResult> tasks,
+        string loadedJson,
+        string selectedMode)
     {
-        return tasks.Any(task => string.Equals(task.TaskName, global::ScheduledTaskPathValidator.SteamVrStartTaskName, StringComparison.OrdinalIgnoreCase))
-            ? "SteamVrManifest"
-            : "ScheduledTask";
+        var configuredMode = GetEffectiveStartupLaunchMode(ParseJson(loadedJson));
+        if (configuredMode != "Unspecified")
+        {
+            return selectedMode;
+        }
+
+        var hasSteamVrHelper = tasks.Any(task => string.Equals(task.TaskName, global::ScheduledTaskPathValidator.SteamVrStartTaskName, StringComparison.OrdinalIgnoreCase));
+        var hasWatcher = tasks.Any(task => string.Equals(task.TaskName, global::ScheduledTaskPathValidator.AutoLaunchTaskName, StringComparison.OrdinalIgnoreCase));
+        return hasSteamVrHelper && hasWatcher
+            ? StartupLaunchPlanning.CombinedModeName
+            : hasSteamVrHelper ? "SteamVrManifest" : "ScheduledTask";
     }
 
     private void SetStartupLaunchMode(string startupLaunchMode)
@@ -3860,6 +4049,8 @@ internal sealed class ConfigEditorForm : Form
         {
             "ScheduledTask" => AutostartModeScheduledTask,
             "SteamVrManifest" => AutostartModeSteamVrManifest,
+            StartupLaunchPlanning.CombinedModeName => AutostartModeCombined,
+            "ScheduledTaskClassicConsole" => AutostartModeLegacyClassicConsole,
             _ => AutostartModeOff
         };
     }
@@ -4185,6 +4376,7 @@ internal sealed class ConfigEditorForm : Form
     {
         var json = string.IsNullOrWhiteSpace(baseJson) ? "{\r\n}\r\n" : baseJson;
         json = JsonPropertyEditor.ReplaceTopLevel(json, "DisplayName", Serialize(NormalizeDisplayNameForStorage(_displayNameTextBox.Text).Value));
+        json = JsonPropertyEditor.ReplaceTopLevel(json, "UpdatePolicy", Serialize(_updatePolicyComboBox.SelectedIndex == 1 ? "Notify" : "Disabled"));
         json = JsonPropertyEditor.Replace(json, "BrokenEyePath", Serialize(_brokenEyePathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "VrcFaceTrackingPath", Serialize(_vrcFaceTrackingPathTextBox.Text.Trim()));
         json = JsonPropertyEditor.Replace(json, "IntifacePath", Serialize(_intifacePathTextBox.Text.Trim()));
@@ -4240,7 +4432,7 @@ internal sealed class ConfigEditorForm : Form
             "AutoLaunchScheduledTask",
             startupLaunchMode == "Unspecified"
                 ? SerializeFirstRunPreferenceBool(baseNode, "AutoLaunchScheduledTask", currentValue: false, _startupIntegrationPreferenceTouched)
-                : startupLaunchMode == "ScheduledTask" ? "true" : "false");
+                : startupLaunchMode is "ScheduledTask" or "ScheduledTaskClassicConsole" or StartupLaunchPlanning.CombinedModeName ? "true" : "false");
         json = JsonPropertyEditor.Replace(json, "PimaxDetectors", Serialize(ParseStringMatrix(_pimaxDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "MouthTrackerDetectors", Serialize(ParseStringMatrix(_mouthTrackerDetectorsTextBox.Text)));
         json = JsonPropertyEditor.Replace(json, "LovenseDetectors", Serialize(ParseStringMatrix(_lovenseDetectorsTextBox.Text)));
@@ -4334,26 +4526,28 @@ internal sealed class ConfigEditorForm : Form
 
     private static string GetStartupLaunchMode(JsonNode? node)
     {
-        var value = GetString(node, "StartupLaunchMode");
-        return value is "None" or "ScheduledTask" or "SteamVrManifest" ? value : "";
+        if (node?["StartupLaunchMode"] is null)
+        {
+            return "";
+        }
+
+        return node["StartupLaunchMode"] is JsonValue value && value.TryGetValue<string>(out var text)
+            ? text
+            : "<non-string value>";
     }
 
-    private static string GetStartupLaunchModeForEditor(JsonNode? node)
+    private static string GetStartupLaunchModeForEditor(JsonNode? node, out string? warning)
     {
-        var startupLaunchMode = GetStartupLaunchMode(node);
-        if (!string.IsNullOrWhiteSpace(startupLaunchMode))
-        {
-            return startupLaunchMode;
-        }
-
-        if (GetBoolCheckState(node, "StopWithSteamVr") == CheckState.Checked)
-        {
-            return "SteamVrManifest";
-        }
-
-        return GetBoolCheckState(node, "AutoLaunchScheduledTask") == CheckState.Checked
-            ? "ScheduledTask"
-            : "None";
+        var legacyAutoLaunchState = GetBoolCheckState(node, "AutoLaunchScheduledTask");
+        bool? legacyAutoLaunch = legacyAutoLaunchState == CheckState.Indeterminate
+            ? null
+            : legacyAutoLaunchState == CheckState.Checked;
+        var mode = StartupLaunchPlanning.Resolve(
+            GetStartupLaunchMode(node),
+            legacyAutoLaunch,
+            GetBoolCheckState(node, "StopWithSteamVr") == CheckState.Checked,
+            out warning);
+        return mode.ToString();
     }
 
     private string GetSelectedStartupLaunchMode()
@@ -4361,6 +4555,8 @@ internal sealed class ConfigEditorForm : Form
         {
             AutostartModeScheduledTask => "ScheduledTask",
             AutostartModeSteamVrManifest => "SteamVrManifest",
+            AutostartModeCombined => StartupLaunchPlanning.CombinedModeName,
+            AutostartModeLegacyClassicConsole => "ScheduledTaskClassicConsole",
             _ => "None"
         };
 
@@ -4374,7 +4570,7 @@ internal sealed class ConfigEditorForm : Form
     }
 
     private static bool StartupIntegrationConfigured(JsonNode? node)
-        => !string.IsNullOrWhiteSpace(GetStartupLaunchMode(node))
+        => node?["StartupLaunchMode"] is not null
             || GetBoolCheckState(node, "AutoLaunchScheduledTask") != CheckState.Indeterminate;
 
     private void ResetFirstRunPreferenceTouchTracking()
@@ -4494,7 +4690,7 @@ internal sealed class ConfigEditorForm : Form
             switch (item)
             {
                 case JsonValue value when value.TryGetValue<string>(out var path) && !string.IsNullOrWhiteSpace(path):
-                    apps.Add(new AutoLaunchAppEditorRow("", path.Trim(), Enabled: true, RestartOnPimaxReconnect: true, RunAsAdmin: false, StartMinimized: false));
+                    apps.Add(new AutoLaunchAppEditorRow("", path.Trim(), Enabled: true, RestartOnPimaxReconnect: false, RunAsAdmin: false, StartMinimized: false));
                     break;
                 case JsonObject obj:
                     var appPath = GetString(obj, "Path").Trim();
@@ -4509,7 +4705,7 @@ internal sealed class ConfigEditorForm : Form
                         GetBool(obj, "Enabled", defaultValue: true),
                         GetOptionalBool(obj, "RestartOnPimaxReconnect")
                             ?? GetOptionalBool(obj, "CloseOnPimaxDisconnect")
-                            ?? true,
+                            ?? false,
                         GetBool(obj, "RunAsAdmin", defaultValue: false),
                         GetBool(obj, "StartMinimized", defaultValue: false)));
                     break;
@@ -4653,7 +4849,7 @@ internal sealed class ConfigEditorForm : Form
                 GetGridString(row, "Name"),
                 path,
                 GetGridBool(row, "Enabled", defaultValue: true),
-                GetGridBool(row, "RestartOnPimaxReconnect", defaultValue: true),
+                GetGridBool(row, "RestartOnPimaxReconnect", defaultValue: false),
                 GetGridBool(row, "RunAsAdmin", defaultValue: false),
                 GetGridBool(row, "StartMinimized", defaultValue: false)));
         }
@@ -6738,6 +6934,12 @@ internal sealed class ConfigEditorForm : Form
                 button.FlatAppearance.MouseDownBackColor = _theme.ButtonPressed;
                 button.BackColor = Equals(button.Tag, "Primary") ? _theme.PrimaryButtonBack : _theme.ButtonBack;
                 button.ForeColor = _theme.Text;
+                if (button is ThemedActionButton themedActionButton)
+                {
+                    themedActionButton.DisabledBackColor = _theme.InputBack;
+                    themedActionButton.DisabledForeColor = _theme.DisabledText;
+                    themedActionButton.DisabledBorderColor = _theme.Border;
+                }
                 button.Invalidate();
                 break;
             case CheckBox checkBox:
@@ -7415,6 +7617,18 @@ internal sealed class ThemedActionButton : Button
     private bool _hovered;
     private bool _pressed;
 
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Color DisabledBackColor { get; set; } = SystemColors.Control;
+
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Color DisabledForeColor { get; set; } = SystemColors.GrayText;
+
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Color DisabledBorderColor { get; set; } = SystemColors.ControlDark;
+
     public ThemedActionButton()
     {
         FlatStyle = FlatStyle.Flat;
@@ -7458,6 +7672,12 @@ internal sealed class ThemedActionButton : Button
 
     protected override void OnEnabledChanged(EventArgs e)
     {
+        if (!Enabled)
+        {
+            _hovered = false;
+            _pressed = false;
+        }
+
         Invalidate();
         base.OnEnabledChanged(e);
     }
@@ -7471,7 +7691,7 @@ internal sealed class ThemedActionButton : Button
         var backColor = BackColor;
         if (!Enabled)
         {
-            backColor = SystemColors.Control;
+            backColor = DisabledBackColor;
         }
         else if (_pressed)
         {
@@ -7484,11 +7704,11 @@ internal sealed class ThemedActionButton : Button
 
         using var path = CreateRoundedRectanglePath(bounds, Radius);
         using var background = new SolidBrush(backColor);
-        using var border = new Pen(Enabled ? ColorOrFallback(FlatAppearance.BorderColor, SystemColors.ControlDark) : SystemColors.ControlDark);
+        using var border = new Pen(Enabled ? ColorOrFallback(FlatAppearance.BorderColor, SystemColors.ControlDark) : DisabledBorderColor);
         pevent.Graphics.FillPath(background, path);
         pevent.Graphics.DrawPath(border, path);
 
-        var textColor = Enabled ? ForeColor : SystemColors.GrayText;
+        var textColor = Enabled ? ForeColor : DisabledForeColor;
         TextRenderer.DrawText(
             pevent.Graphics,
             Text,
@@ -7497,7 +7717,7 @@ internal sealed class ThemedActionButton : Button
             textColor,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
-        if (Focused && ShowFocusCues)
+        if (Enabled && Focused && ShowFocusCues)
         {
             ControlPaint.DrawFocusRectangle(pevent.Graphics, Rectangle.Inflate(bounds, -4, -4), textColor, backColor);
         }
@@ -7722,6 +7942,12 @@ internal sealed class ThemedTabHost : UserControl
                 button.FlatAppearance.MouseDownBackColor = _theme.ButtonPressed;
                 button.BackColor = Equals(button.Tag, "Primary") ? _theme.PrimaryButtonBack : _theme.ButtonBack;
                 button.ForeColor = _theme.Text;
+                if (button is ThemedActionButton themedActionButton)
+                {
+                    themedActionButton.DisabledBackColor = _theme.InputBack;
+                    themedActionButton.DisabledForeColor = _theme.DisabledText;
+                    themedActionButton.DisabledBorderColor = _theme.Border;
+                }
                 button.Invalidate();
                 break;
             case CheckBox checkBox:

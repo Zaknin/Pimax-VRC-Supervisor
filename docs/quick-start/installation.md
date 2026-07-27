@@ -32,6 +32,7 @@ Windows may ask for permission when the app creates or repairs startup integrati
 The release folder should contain:
 
 - `PimaxVrcSupervisor.exe`
+- `PimaxVrcSupervisor.UpdateWorker.exe`
 - `PimaxVrcSupervisorConfigurator.exe`
 - `PimaxVrcSupervisorSteamVrHost.exe`
 - `PimaxVrcSupervisorTui.exe`

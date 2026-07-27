@@ -5,6 +5,7 @@ A release is a flat Windows folder. Keep the files together.
 ## Expected Key Files
 
 - `PimaxVrcSupervisor.exe`
+- `PimaxVrcSupervisor.UpdateWorker.exe` (noninteractive `asInvoker` Configurator update-check worker)
 - `PimaxVrcSupervisorConfigurator.exe`
 - `PimaxVrcSupervisorSteamVrHost.exe`
 - `PimaxVrcSupervisorTui.exe`

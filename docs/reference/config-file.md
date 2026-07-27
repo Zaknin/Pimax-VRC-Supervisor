@@ -12,13 +12,15 @@ If `DisplayName` is empty, Configurator uses the filename. If multiple configs s
 
 | Area | What it controls |
 |---|---|
-| Startup | Off, Terminal Mode, or SteamVR Overlay behavior |
+| Startup | Off, Terminal UI only, SteamVR Overlay only, or combined behavior |
 | Face tracking | Broken Eye, VRCFaceTracking, reconnect options |
 | Base stations | Controlled stations and power-down mode |
 | Auto Startup | Extra apps launched during sessions |
 | OSC Router | Local OSC receive port and routes |
 | OscGoesBrrr | OscGoesBrrr, Intiface, and device detection |
 | Diagnostics | Optional troubleshooting logs |
+
+For an Autostart app, `RestartOnPimaxReconnect` is an explicit dependency declaration. Missing values default to `false`; set it to `true` only when that application actually depends on the Pimax eye/runtime path. XSOverlay remains excluded from USB reconnect recovery.
 
 ## Editing Safely
 
@@ -30,3 +32,5 @@ Before hand-editing:
 4. Open Configurator and click **Validate**.
 
 Raw JSON in Configurator is safer than editing in an external editor because you can apply changes back to the normal tabs.
+
+`StartupLaunchMode` uses `None`, `ScheduledTask`, `SteamVrManifest`, or `ScheduledTaskAndSteamVrManifest`. `ScheduledTaskClassicConsole` is retained for an existing classic-console scheduled-task preference so configuration repair never silently changes that user's interface. Older `AutoLaunchScheduledTask` and `StopWithSteamVr` values migrate deterministically when the explicit field is absent. An invalid explicit value is shown as a warning and falls back to Off until you save a valid choice.

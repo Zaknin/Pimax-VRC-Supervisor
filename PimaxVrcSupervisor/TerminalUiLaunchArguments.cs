@@ -7,10 +7,33 @@ internal sealed record TerminalUiLaunchSpec(
 
 internal static class TerminalUiLaunchArguments
 {
+    public static TerminalUiLaunchSpec BuildPersistentClient(
+        string supervisorPath,
+        string? configPath,
+        int supervisorPid)
+    {
+        var spec = Build(supervisorPath, configPath);
+        return AssociateWithSupervisorOwner(spec, supervisorPid);
+    }
+
     public static TerminalUiLaunchSpec BuildSupervisorOwned(
         string supervisorPath,
         string? configPath,
         int supervisorPid)
+        => AssociateWithSupervisorOwner(Build(supervisorPath, configPath), supervisorPid);
+
+    private static TerminalUiLaunchSpec AssociateWithSupervisorOwner(
+        TerminalUiLaunchSpec spec,
+        int supervisorPid)
+    {
+        var arguments = spec.Arguments.ToList();
+        arguments.Add("--exit-when-supervisor-exits");
+        arguments.Add("--supervisor-pid");
+        arguments.Add(supervisorPid.ToString(CultureInfo.InvariantCulture));
+        return new TerminalUiLaunchSpec(spec.ExecutablePath, spec.WorkingDirectory, arguments);
+    }
+
+    private static TerminalUiLaunchSpec Build(string supervisorPath, string? configPath)
     {
         var supervisorDirectory = string.IsNullOrWhiteSpace(supervisorPath)
             ? AppContext.BaseDirectory
@@ -23,9 +46,6 @@ internal static class TerminalUiLaunchArguments
             arguments.Add(configPath);
         }
 
-        arguments.Add("--exit-when-supervisor-exits");
-        arguments.Add("--supervisor-pid");
-        arguments.Add(supervisorPid.ToString(CultureInfo.InvariantCulture));
         return new TerminalUiLaunchSpec(tuiPath, supervisorDirectory, arguments);
     }
 }

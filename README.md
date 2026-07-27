@@ -12,7 +12,7 @@ It is built for users who want less manual startup work and a cleaner SteamVR/VR
 ## What It Does
 
 - Starts Broken Eye and VRCFaceTracking in the right order.
-- Restarts face-tracking tools after headset, Vive Face Tracker, or Pimax runtime reconnects.
+- Attributes USB changes to physical devices and restarts only explicitly dependent face-tracking tools after a confirmed relevant reconnect.
 - Opens a Terminal UI dashboard for monitoring and confirmed session actions.
 - Opens autostart Terminal UI only after the Supervisor dashboard is ready.
 - Supports a SteamVR Overlay mode for in-headset controls.
@@ -76,25 +76,26 @@ Useful starting points:
 7. Click **Save**.
 8. Click **Launch Supervisor**.
 
-For most users, start with **Terminal Mode** and keep **Use Terminal UI as default interface** enabled.
+For most users, start with **Terminal UI only**. Choose **Terminal UI + SteamVR Overlay** when you want the same session controls on the desktop and inside SteamVR.
 
 ## Included Apps
 
 | App | Purpose |
 | --- | --- |
 | `PimaxVrcSupervisor.exe` | Session Supervisor and classic console. |
+| `PimaxVrcSupervisor.UpdateWorker.exe` | Noninteractive standard-user update-check worker launched only by Configurator when the Supervisor bridge is unavailable. |
 | `PimaxVrcSupervisorConfigurator.exe` | GUI setup and validation tool. |
 | `PimaxVrcSupervisorTui.exe` | Terminal UI dashboard and controls. |
 | `PimaxVrcSupervisorSteamVrHost.exe` | SteamVR Overlay host. |
 | `PimaxVrcSupervisorStartupHelper.exe` | Startup integration helper. |
-| `PimaxVrcSupervisorWatcher.exe` | Terminal Mode watcher. |
+| `PimaxVrcSupervisorWatcher.exe` | Terminal UI and combined-mode owner watcher. |
 
 ## Safety Notes
 
 - Base-station controls affect real hardware. Test with one station first if you are unsure.
 - Monitor management can change active displays during headset sessions.
-- Terminal UI actions are confirmation-gated because they can restart apps or change session state.
-- Connected Terminal UI shutdown runs Supervisor cleanup and may close managed apps.
+- Terminal UI actions 1-6 run immediately; SteamVR action 7 requires confirmation in the client that initiates it.
+- Closing only Terminal UI does not stop Supervisor or the SteamVR overlay. Explicit Supervisor exit choices run the documented cleanup.
 - Use Diagnostics when troubleshooting; leave extra diagnostics off during normal use unless needed.
 - If Pimax Client stops detecting a connected headset, collect diagnostics before restarting Pimax Client or reconnecting USB so the failed layer can be compared later.
 

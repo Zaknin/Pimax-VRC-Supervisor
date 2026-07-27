@@ -20,6 +20,7 @@ internal sealed record ParsedWatcherArguments(
     bool WatcherMode,
     bool SkipCurrentSteamVrSession,
     bool UseDesktopTuiDefaultInterface,
+    bool PersistentSupervisorOwner,
     string? ConfigPath,
     string[] UnknownArguments,
     string? UnsupportedReason);
@@ -31,6 +32,19 @@ internal static class ScheduledTaskSemantics
     public static string BuildWatcherArguments(
         bool skipCurrentSteamVrSession,
         bool useDesktopTuiDefaultInterface,
+        string? configPath,
+        IReadOnlyList<string>? preservedUnknownArguments = null)
+        => BuildWatcherArguments(
+            skipCurrentSteamVrSession,
+            useDesktopTuiDefaultInterface,
+            persistentSupervisorOwner: false,
+            configPath,
+            preservedUnknownArguments);
+
+    public static string BuildWatcherArguments(
+        bool skipCurrentSteamVrSession,
+        bool useDesktopTuiDefaultInterface,
+        bool persistentSupervisorOwner,
         string? configPath,
         IReadOnlyList<string>? preservedUnknownArguments = null)
     {
@@ -49,6 +63,11 @@ internal static class ScheduledTaskSemantics
         if (useDesktopTuiDefaultInterface)
         {
             arguments.Add("--desktop-tui-default-interface");
+        }
+
+        if (persistentSupervisorOwner)
+        {
+            arguments.Add("--persistent-supervisor-owner");
         }
 
         if (preservedUnknownArguments is not null)
@@ -130,6 +149,12 @@ internal static class ScheduledTaskSemantics
             return false;
         }
 
+        if (existingArguments.PersistentSupervisorOwner != desiredArguments.PersistentSupervisorOwner)
+        {
+            mismatchReason = "Supervisor owner lifetime setting did not match.";
+            return false;
+        }
+
         if (!PathsEqual(existingArguments.ConfigPath, desiredArguments.ConfigPath))
         {
             mismatchReason = "config path did not match.";
@@ -168,6 +193,7 @@ internal static class ScheduledTaskSemantics
                 WatcherMode: false,
                 SkipCurrentSteamVrSession: false,
                 UseDesktopTuiDefaultInterface: false,
+                PersistentSupervisorOwner: false,
                 ConfigPath: null,
                 UnknownArguments: [],
                 UnsupportedReason: "unbalanced quotes in watcher arguments.");
@@ -178,6 +204,7 @@ internal static class ScheduledTaskSemantics
         var watcherMode = false;
         var skipCurrentSteamVrSession = false;
         var useDesktopTuiDefaultInterface = false;
+        var persistentSupervisorOwner = false;
         string? configPath = null;
         for (var index = 0; index < tokens.Count; index++)
         {
@@ -197,6 +224,12 @@ internal static class ScheduledTaskSemantics
             if (string.Equals(token, "--desktop-tui-default-interface", StringComparison.OrdinalIgnoreCase))
             {
                 useDesktopTuiDefaultInterface = true;
+                continue;
+            }
+
+            if (string.Equals(token, "--persistent-supervisor-owner", StringComparison.OrdinalIgnoreCase))
+            {
+                persistentSupervisorOwner = true;
                 continue;
             }
 
@@ -226,6 +259,7 @@ internal static class ScheduledTaskSemantics
             watcherMode,
             skipCurrentSteamVrSession,
             useDesktopTuiDefaultInterface,
+            persistentSupervisorOwner,
             configPath,
             unknown.ToArray(),
             null);

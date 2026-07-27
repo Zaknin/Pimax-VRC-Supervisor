@@ -24,6 +24,8 @@ internal sealed class BaseStationDiagnosticEvent
     public string ApplicationVersion { get; init; } = "";
     public string SessionId { get; init; } = "";
     public string? OperationId { get; init; }
+    public string? OperationName { get; init; }
+    public string? WakeSequenceId { get; init; }
     public string? ScanSessionId { get; init; }
     public string? Trigger { get; init; }
     public int? BurstNumber { get; init; }
@@ -36,6 +38,8 @@ internal sealed class BaseStationDiagnosticEvent
     public bool? StageStart { get; init; }
     public double? StageDurationMilliseconds { get; init; }
     public double? TotalAttemptDurationMilliseconds { get; init; }
+    public double? ScanDurationMilliseconds { get; init; }
+    public double? ScanElapsedMilliseconds { get; init; }
     public double? TimeoutLimitMilliseconds { get; init; }
     public string? AdapterState { get; init; }
     public string? DiscoveryState { get; init; }
@@ -46,10 +50,45 @@ internal sealed class BaseStationDiagnosticEvent
     public string? CharacteristicResult { get; init; }
     public string? WriteResult { get; init; }
     public string? Outcome { get; init; }
+    public int? FoundDeviceCount { get; init; }
+    public int? UnresolvedStationCount { get; init; }
+    public int? RetryStationCount { get; init; }
+    public int? RetrySuccessCount { get; init; }
+    public double? FirstFailureElapsedMilliseconds { get; init; }
+    public int? FirstFailingStationIndex { get; init; }
+    public int? CandidateStationCount { get; init; }
+    public int? AlreadySuccessfulStationCount { get; init; }
+    public int? ObservedConfiguredStationCount { get; init; }
+    public int? DuplicateObservationCount { get; init; }
+    public int? QueueCount { get; init; }
+    public int? StreamingWakeAttemptCount { get; init; }
+    public int? StreamingWakeSuccessCount { get; init; }
+    public int? StreamingWakeFailureCount { get; init; }
+    public int? FallbackRetryCount { get; init; }
+    public int? FinalSuccessCount { get; init; }
+    public int? ConfirmedActiveStationCount { get; init; }
+    public int? MissingStationCount { get; init; }
+    public bool? SteamVrAvailable { get; init; }
+    public bool? ConfirmationTimedOut { get; init; }
+    public int? PollCount { get; init; }
+    public int? HighestConfirmedCount { get; init; }
+    public bool? SteamVrEverReachable { get; init; }
+    public double? ConfirmationMaximumDurationMilliseconds { get; init; }
+    public double? ConfirmationPollingIntervalMilliseconds { get; init; }
+    public int? MaximumPassCount { get; init; }
+    public string? IntendedAction { get; init; }
+    public string? ActualAction { get; init; }
+    public string? BurstDisposition { get; init; }
+    public string? Reason { get; init; }
+    public string? EarlyStopReason { get; init; }
+    public string? TriggerFailureStage { get; init; }
+    public string? SkipReason { get; init; }
+    public string? CleanupResult { get; init; }
     public string? ErrorCategory { get; init; }
     public string? ExceptionType { get; init; }
     public string? SanitizedErrorMessage { get; init; }
     public bool? CancellationRequested { get; init; }
+    public bool? Terminal { get; init; }
 }
 
 internal sealed partial class BaseStationDiagnosticSink
@@ -214,6 +253,8 @@ internal sealed partial class BaseStationDiagnosticSink
             ApplicationVersion = string.IsNullOrWhiteSpace(diagnosticEvent.ApplicationVersion) ? _applicationVersion : diagnosticEvent.ApplicationVersion,
             SessionId = string.IsNullOrWhiteSpace(diagnosticEvent.SessionId) ? SessionId : diagnosticEvent.SessionId,
             OperationId = diagnosticEvent.OperationId,
+            OperationName = diagnosticEvent.OperationName,
+            WakeSequenceId = diagnosticEvent.WakeSequenceId,
             ScanSessionId = diagnosticEvent.ScanSessionId,
             Trigger = diagnosticEvent.Trigger,
             BurstNumber = diagnosticEvent.BurstNumber,
@@ -226,6 +267,8 @@ internal sealed partial class BaseStationDiagnosticSink
             StageStart = diagnosticEvent.StageStart,
             StageDurationMilliseconds = diagnosticEvent.StageDurationMilliseconds,
             TotalAttemptDurationMilliseconds = diagnosticEvent.TotalAttemptDurationMilliseconds,
+            ScanDurationMilliseconds = diagnosticEvent.ScanDurationMilliseconds,
+            ScanElapsedMilliseconds = diagnosticEvent.ScanElapsedMilliseconds,
             TimeoutLimitMilliseconds = diagnosticEvent.TimeoutLimitMilliseconds,
             AdapterState = diagnosticEvent.AdapterState,
             DiscoveryState = diagnosticEvent.DiscoveryState,
@@ -236,10 +279,45 @@ internal sealed partial class BaseStationDiagnosticSink
             CharacteristicResult = diagnosticEvent.CharacteristicResult,
             WriteResult = diagnosticEvent.WriteResult,
             Outcome = diagnosticEvent.Outcome,
+            FoundDeviceCount = diagnosticEvent.FoundDeviceCount,
+            UnresolvedStationCount = diagnosticEvent.UnresolvedStationCount,
+            RetryStationCount = diagnosticEvent.RetryStationCount,
+            RetrySuccessCount = diagnosticEvent.RetrySuccessCount,
+            FirstFailureElapsedMilliseconds = diagnosticEvent.FirstFailureElapsedMilliseconds,
+            FirstFailingStationIndex = diagnosticEvent.FirstFailingStationIndex,
+            CandidateStationCount = diagnosticEvent.CandidateStationCount,
+            AlreadySuccessfulStationCount = diagnosticEvent.AlreadySuccessfulStationCount,
+            ObservedConfiguredStationCount = diagnosticEvent.ObservedConfiguredStationCount,
+            DuplicateObservationCount = diagnosticEvent.DuplicateObservationCount,
+            QueueCount = diagnosticEvent.QueueCount,
+            StreamingWakeAttemptCount = diagnosticEvent.StreamingWakeAttemptCount,
+            StreamingWakeSuccessCount = diagnosticEvent.StreamingWakeSuccessCount,
+            StreamingWakeFailureCount = diagnosticEvent.StreamingWakeFailureCount,
+            FallbackRetryCount = diagnosticEvent.FallbackRetryCount,
+            FinalSuccessCount = diagnosticEvent.FinalSuccessCount,
+            ConfirmedActiveStationCount = diagnosticEvent.ConfirmedActiveStationCount,
+            MissingStationCount = diagnosticEvent.MissingStationCount,
+            SteamVrAvailable = diagnosticEvent.SteamVrAvailable,
+            ConfirmationTimedOut = diagnosticEvent.ConfirmationTimedOut,
+            PollCount = diagnosticEvent.PollCount,
+            HighestConfirmedCount = diagnosticEvent.HighestConfirmedCount,
+            SteamVrEverReachable = diagnosticEvent.SteamVrEverReachable,
+            ConfirmationMaximumDurationMilliseconds = diagnosticEvent.ConfirmationMaximumDurationMilliseconds,
+            ConfirmationPollingIntervalMilliseconds = diagnosticEvent.ConfirmationPollingIntervalMilliseconds,
+            MaximumPassCount = diagnosticEvent.MaximumPassCount,
+            IntendedAction = diagnosticEvent.IntendedAction,
+            ActualAction = diagnosticEvent.ActualAction,
+            BurstDisposition = diagnosticEvent.BurstDisposition,
+            Reason = diagnosticEvent.Reason,
+            EarlyStopReason = diagnosticEvent.EarlyStopReason,
+            TriggerFailureStage = diagnosticEvent.TriggerFailureStage,
+            SkipReason = diagnosticEvent.SkipReason,
+            CleanupResult = diagnosticEvent.CleanupResult,
             ErrorCategory = diagnosticEvent.ErrorCategory,
             ExceptionType = diagnosticEvent.ExceptionType,
             SanitizedErrorMessage = diagnosticEvent.SanitizedErrorMessage,
-            CancellationRequested = diagnosticEvent.CancellationRequested
+            CancellationRequested = diagnosticEvent.CancellationRequested,
+            Terminal = diagnosticEvent.Terminal
         };
 
     private void RotateIfNeeded(string nextLine)

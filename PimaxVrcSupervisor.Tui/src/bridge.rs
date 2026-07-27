@@ -9,14 +9,14 @@ use serde_json::{Value, json};
 
 use crate::{
     diagnostics::DiagnosticsHandle,
-    models::{CommandResult, QueryResponse, TuiAction},
+    models::{CommandResult, ExitOption, QueryResponse},
 };
 
 pub const BACKEND_HOST: &str = "127.0.0.1";
 pub const BACKEND_PORT: u16 = 37957;
 pub const CONNECT_TIMEOUT: Duration = Duration::from_millis(1000);
 pub const READ_WRITE_TIMEOUT: Duration = Duration::from_millis(1000);
-pub const ACTION_READ_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+pub const ACTION_READ_WRITE_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub struct SupervisorBridge {
     endpoint: SocketAddr,
@@ -50,6 +50,10 @@ impl SupervisorBridge {
         self.query(json!({ "resource": "status" }))
     }
 
+    pub fn query_update_status(&self) -> Result<QueryResponse> {
+        self.query(json!({ "resource": "update-status" }))
+    }
+
     pub fn query_commands(&self) -> Result<QueryResponse> {
         self.query(json!({ "resource": "commands" }))
     }
@@ -58,9 +62,14 @@ impl SupervisorBridge {
         self.query(json!({ "resource": "log", "maxLines": max_lines }))
     }
 
-    pub fn execute_tui_action(&self, action: TuiAction) -> Result<CommandResult> {
-        let request_json =
-            serde_json::to_string(&json!({ "command": action.command_name(), "confirmed": true }))?;
+    #[cfg_attr(test, allow(dead_code))]
+    pub fn execute_tui_action(
+        &self,
+        command: &str,
+        request_id: Option<&str>,
+        client_instance_id: &str,
+    ) -> Result<CommandResult> {
+        let request_json = build_action_request_json(command, request_id, client_instance_id)?;
         let response_line = self.send_line(
             &format!("action-json {request_json}"),
             ACTION_READ_WRITE_TIMEOUT,
@@ -85,6 +94,29 @@ impl SupervisorBridge {
         let request_json = serde_json::to_string(
             &json!({ "action": "request-graceful-shutdown", "source": "Desktop TUI" }),
         )?;
+        self.send_lifecycle_request(request_json)
+    }
+
+    pub fn request_desktop_tui_close(&self) -> Result<CommandResult> {
+        let request_json = serde_json::to_string(
+            &json!({ "action": "close-desktop-tui", "source": "Desktop TUI" }),
+        )?;
+        self.send_lifecycle_request(request_json)
+    }
+
+    pub fn request_supervisor_exit(&self, option: ExitOption) -> Result<CommandResult> {
+        let Some(mode) = option.lifecycle_mode() else {
+            return Err(eyre!(
+                "exit option does not map to a Supervisor shutdown mode"
+            ));
+        };
+        let request_json = serde_json::to_string(
+            &json!({ "action": "request-supervisor-exit", "mode": mode, "source": "Desktop TUI" }),
+        )?;
+        self.send_lifecycle_request(request_json)
+    }
+
+    fn send_lifecycle_request(&self, request_json: String) -> Result<CommandResult> {
         let response_line = self.send_line(
             &format!("lifecycle-json {request_json}"),
             ACTION_READ_WRITE_TIMEOUT,
@@ -168,4 +200,62 @@ impl SupervisorBridge {
 fn is_timeout_error(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     message.contains("timed out") || message.contains("timeout") || message.contains("would block")
+}
+
+fn build_action_request_json(
+    command: &str,
+    request_id: Option<&str>,
+    client_instance_id: &str,
+) -> Result<String> {
+    let mut request = json!({
+        "command": command,
+        "confirmed": true,
+        "source": "Desktop TUI",
+        "sourceClientType": "desktop-tui",
+        "sourceClientInstanceId": client_instance_id
+    });
+    if let Some(request_id) = request_id {
+        request["requestId"] = json!(request_id);
+    }
+
+    Ok(serde_json::to_string(&request)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn action_payload_retains_request_and_client_identity() {
+        let payload =
+            build_action_request_json("restart-vr-session", Some("request-x"), "client-y")
+                .expect("payload");
+        let value: Value = serde_json::from_str(&payload).expect("json");
+
+        assert_eq!(value["requestId"], "request-x");
+        assert_eq!(value["command"], "restart-vr-session");
+        assert_eq!(value["confirmed"], true);
+        assert_eq!(value["sourceClientType"], "desktop-tui");
+        assert_eq!(value["sourceClientInstanceId"], "client-y");
+    }
+
+    #[test]
+    fn update_status_uses_only_the_cached_supervisor_resource() {
+        let request =
+            serde_json::to_string(&json!({ "resource": "update-status" })).expect("request json");
+
+        assert_eq!(request, r#"{"resource":"update-status"}"#);
+        let dependencies = include_str!("../Cargo.toml");
+        assert!(!dependencies.contains("reqwest"));
+        assert!(!dependencies.contains("hyper"));
+    }
+
+    #[test]
+    fn retained_action_payload_does_not_create_restart_request_identity() {
+        let payload =
+            build_action_request_json("restart-core-apps", None, "client-y").expect("payload");
+        let value: Value = serde_json::from_str(&payload).expect("json");
+
+        assert!(value.get("requestId").is_none());
+    }
 }

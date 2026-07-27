@@ -11,14 +11,21 @@ internal sealed record StartupExecutionContext(
     bool ShowStartupIntegrationResult,
     bool HideStartupIntegrationHelperWindow,
     bool DesktopTuiDefaultInterface,
+    bool PersistentSupervisorOwner,
     bool InstallAutoLaunchTask,
     bool EmergencyBaseStationCleanup,
     bool ExplicitConfigOptionPresent,
     string? ExplicitConfigPath,
     string? EmergencyBaseStationCleanupConfigPath,
-    int EmergencyBaseStationCleanupDelaySeconds)
+    int EmergencyBaseStationCleanupDelaySeconds,
+    Guid? LifecycleCorrelationId)
 {
     public bool ExplicitConfigSupplied => ExplicitConfigOptionPresent;
+
+    public string? UnsupportedExplicitCommand
+        => Args.FirstOrDefault(arg =>
+            arg.EndsWith("-json", StringComparison.OrdinalIgnoreCase)
+            && !SupportedExplicitCommands.Contains(arg));
 
     public bool ShouldHideConsole
         => DesktopTuiStart
@@ -32,6 +39,7 @@ internal sealed record StartupExecutionContext(
             && !LaunchDesktopTuiAfterReady
             && !SteamVrStart
             && !ManagedSteamVrSession
+            && !PersistentSupervisorOwner
             && !WatchVrchatAutoLaunch
             && !ApplyStartupIntegration
             && !InstallAutoLaunchTask
@@ -39,13 +47,25 @@ internal sealed record StartupExecutionContext(
 
     public bool CanApplyStartupIntegration => ApplyStartupIntegration;
 
+    private static readonly HashSet<string> SupportedExplicitCommands = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "pimax-connectivity-json",
+        "pimax-usb-enumeration-json",
+        "pimax-registration-assessment-json",
+        "pimax-connect-lifecycle-observe-json",
+        "pimax-usb-physical-port-map-json",
+    };
+
     public static StartupExecutionContext Parse(IEnumerable<string> args)
     {
         var commandLineArgs = args.ToArray();
         var desktopTuiStart = HasFlag(commandLineArgs, "--desktop-tui-start");
         var launchDesktopTuiAfterReady = HasFlag(commandLineArgs, "--launch-desktop-tui-after-ready");
         var steamVrStart = HasFlag(commandLineArgs, "--steamvr-start");
-        var managedSteamVrSession = steamVrStart || HasFlag(commandLineArgs, "--managed-steamvr-session");
+        var persistentSupervisorOwner = HasFlag(commandLineArgs, "--persistent-supervisor-owner");
+        var managedSteamVrSession = steamVrStart
+            || persistentSupervisorOwner
+            || HasFlag(commandLineArgs, "--managed-steamvr-session");
         var applyStartupIntegration = HasFlag(commandLineArgs, "--apply-startup-integration");
         var showStartupIntegrationResult = HasFlag(commandLineArgs, "--show-result");
         var hideStartupIntegrationHelperWindow = HasFlag(commandLineArgs, "--hide-startup-helper");
@@ -56,6 +76,10 @@ internal sealed record StartupExecutionContext(
                 : 0;
         var explicitConfigOptionPresent =
             TryGetCommandOption(commandLineArgs, "--config", out var explicitConfigPath);
+        var lifecycleCorrelationId = TryGetCommandOption(commandLineArgs, "--lifecycle-correlation", out var lifecycleCorrelationText)
+            && Guid.TryParse(lifecycleCorrelationText, out var parsedLifecycleCorrelationId)
+                ? (Guid?)parsedLifecycleCorrelationId
+                : null;
 
         return new StartupExecutionContext(
             commandLineArgs,
@@ -68,12 +92,14 @@ internal sealed record StartupExecutionContext(
             showStartupIntegrationResult,
             hideStartupIntegrationHelperWindow,
             HasFlag(commandLineArgs, "--desktop-tui-default-interface"),
+            persistentSupervisorOwner,
             HasFlag(commandLineArgs, "--install-auto-launch-task"),
             emergencyBaseStationCleanup,
             explicitConfigOptionPresent,
             explicitConfigPath,
             emergencyConfigPath,
-            cleanupDelaySeconds);
+            cleanupDelaySeconds,
+            lifecycleCorrelationId);
     }
 
     private static bool HasFlag(string[] args, string name)

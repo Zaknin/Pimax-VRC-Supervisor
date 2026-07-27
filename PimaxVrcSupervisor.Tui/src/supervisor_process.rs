@@ -20,6 +20,13 @@ impl SupervisorProcessMonitor {
     pub fn try_recv_exit(&self) -> bool {
         self.receiver.try_recv().is_ok()
     }
+
+    #[cfg(test)]
+    fn signaled() -> Self {
+        let (sender, receiver) = channel();
+        sender.send(()).expect("test receiver remains available");
+        Self { receiver }
+    }
 }
 
 pub fn from_args(args: &[std::ffi::OsString]) -> SupervisorPidArgument {
@@ -248,5 +255,12 @@ mod tests {
         assert!(
             matches!(result, SupervisorPidArgument::Fallback(message) if message.contains("Windows-only"))
         );
+    }
+
+    #[test]
+    fn unexpected_owner_exit_signal_terminates_monitoring_client() {
+        let monitor = SupervisorProcessMonitor::signaled();
+
+        assert!(monitor.try_recv_exit());
     }
 }
