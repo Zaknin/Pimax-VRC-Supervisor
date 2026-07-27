@@ -2030,6 +2030,11 @@ internal sealed class AppSupervisor
     private bool? _steamVrTrackingReferenceStartupAvailable;
     private bool _steamVrTrackingReferenceStartupUnavailableLogged;
     private bool _cleanupStarted;
+    // Cleanup concurrency: the coordinator serializes cleanup admission and ensures
+    // exactly one owner runs while concurrent callers join as waiters.
+    private readonly CleanupOperationCoordinator _cleanupCoordinator = new();
+    // Production-wired lifecycle outcome handler used by ApplySteamVrLifecycleDecisionAsync.
+    private readonly CleanupLifecycleOutcomeHandler _cleanupLifecycleHandler;
     private bool _monitorLayoutDisabledBySupervisor;
     private bool _monitorRestoreAttempted;
     private bool? _lastLovenseConnected;
@@ -2114,6 +2119,14 @@ internal sealed class AppSupervisor
             Console.WriteLine);
         ResetBaseStationResolutionRefresh();
         _pollInterval = TimeSpan.FromSeconds(Math.Max(1, config.PollIntervalSeconds));
+
+        // Wire the production lifecycle outcome handler.
+        _cleanupLifecycleHandler = new CleanupLifecycleOutcomeHandler(
+            markCompleted: () => _steamVrRecovery.MarkCompleted(),
+            establishBaseline: () => _steamVrLifecycleEvidence.EstablishBaseline(),
+            adoptExplicitReplacement: (identity, timestamp) => _steamVrRecovery.AdoptExplicitReplacement(identity, timestamp),
+            setLifecyclePhase: (phase) => { _lifecyclePhase = phase; },
+            writeLifecycleEvent: (name, reason, result, fields) => _lifecycleEvents.Write(name, reason, result, fields));
     }
 
     public string LifecycleExitReason => _lifecycleExitReason;
@@ -7498,53 +7511,123 @@ internal sealed class AppSupervisor
         }
     }
 
-    private async Task RunCleanupOnceAsync(
+    private async Task<CleanupOutcome> RunCleanupOnceAsync(
         bool waitForSteamVrServerExit,
         bool emergencyClose,
         SupervisorShutdownIntent intent,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CleanupOwnershipMode ownershipMode = CleanupOwnershipMode.CommittedGlobal)
     {
-        if (!await _cleanupLock.WaitAsync(0, cancellationToken))
-        {
-            WriteCleanupAdmission("rejected", "cleanup-lock-busy", waitForSteamVrServerExit, emergencyClose, intent);
-            return;
-        }
-
-        try
-        {
-            if (_cleanupStarted)
+        // The coordinator handles admission: exactly one owner, waiters join.
+        // The owner delegate includes lock acquisition, post-lock _cleanupStarted check,
+        // the destructive cleanup core, and lock release in finally — so that
+        // post-lock _cleanupStarted returns Completed through the same shared completion path.
+        var outcome = await _cleanupCoordinator.RunAsync(
+            async (token) =>
             {
-                WriteCleanupAdmission("rejected", "cleanup-already-started", waitForSteamVrServerExit, emergencyClose, intent);
-                return;
+                // _cleanupLock serializes destructive phases to prevent overlapping cleanup.
+                await _cleanupLock.WaitAsync(token);
+                try
+                {
+                    // Double-check after acquiring the destructive lock.
+                    if (_cleanupStarted)
+                    {
+                        return CleanupOutcome.Completed();
+                    }
+
+                    WriteCleanupAdmission("admitted", "cleanup-lock-acquired", waitForSteamVrServerExit, emergencyClose, intent, ownershipMode);
+                    return await RunCleanupCoreAsync(
+                        waitForSteamVrServerExit, emergencyClose, intent, token, ownershipMode);
+                }
+                finally
+                {
+                    _cleanupLock.Release();
+                }
+            },
+            cancellationToken,
+            onJoinedWaiter: () =>
+                WriteCleanupAdmission("joined-in-flight", "cleanup-already-running", waitForSteamVrServerExit, emergencyClose, intent, ownershipMode));
+
+        return outcome;
+    }
+
+    private async Task<CleanupOutcome> RunCleanupCoreAsync(
+        bool waitForSteamVrServerExit,
+        bool emergencyClose,
+        SupervisorShutdownIntent intent,
+        CancellationToken cancellationToken,
+        CleanupOwnershipMode ownershipMode)
+    {
+        if (emergencyClose)
+        {
+            Console.WriteLine("Emergency cleanup: restoring monitors before closing apps and base stations.");
+            RestoreSupervisorOwnedMonitorLayout();
+            await TryStopManagedAppsForEmergencyCloseAsync();
+            if (SupervisorShutdownIntents.AllowsBaseStationPowerDown(intent))
+            {
+                await TryPowerDownBaseStationsWithTimeoutAsync(TimeSpan.FromSeconds(20));
+            }
+            else
+            {
+                SuppressBaseStationPowerDownForIntent(intent);
             }
 
-            WriteCleanupAdmission("admitted", "cleanup-lock-acquired", waitForSteamVrServerExit, emergencyClose, intent);
+            _cleanupStarted = true;
+            return CleanupOutcome.Completed();
+        }
 
-            if (emergencyClose)
+        if (ownershipMode == CleanupOwnershipMode.RuntimeAbsence)
+        {
+            var outcome = await RunSupersessionCleanupAsync(waitForSteamVrServerExit, intent, cancellationToken);
+            if (outcome.Kind == CleanupOutcomeKind.Completed)
             {
-                Console.WriteLine("Emergency cleanup: restoring monitors before closing apps and base stations.");
-                RestoreSupervisorOwnedMonitorLayout();
-                await TryStopManagedAppsForEmergencyCloseAsync();
+                _cleanupStarted = true;
+            }
+            return outcome;
+        }
+
+        await RestoreMonitorsAndStopManagedAppsCoreAsync(waitForSteamVrServerExit, intent, cancellationToken);
+        _cleanupStarted = true;
+        return CleanupOutcome.Completed();
+    }
+
+    private async Task<CleanupOutcome> RunSupersessionCleanupAsync(
+        bool waitForSteamVrServerExit,
+        SupervisorShutdownIntent intent,
+        CancellationToken cancellationToken)
+    {
+        // Wait for SteamVR server exit before entering supersession context.
+        // If SteamVR reappears during this wait, the old runtime is exiting;
+        // supersession monitoring starts after this committed phase.
+        if (waitForSteamVrServerExit)
+        {
+            SetShutdownProgress("waiting for SteamVR server exit");
+            await WaitForSteamVrServerExitAsync(cancellationToken);
+        }
+
+        var context = new SteamVrCleanupSupersessionContext
+        {
+            CaptureRuntime = CaptureCurrentSteamVrRuntime,
+            RestoreMonitors = () => RestoreSupervisorOwnedMonitorLayout(),
+            PowerDownBaseStations = async token =>
+            {
                 if (SupervisorShutdownIntents.AllowsBaseStationPowerDown(intent))
                 {
-                    await TryPowerDownBaseStationsWithTimeoutAsync(TimeSpan.FromSeconds(20));
+                    await TryPowerDownBaseStationsForSessionAsync(token);
                 }
                 else
                 {
                     SuppressBaseStationPowerDownForIntent(intent);
                 }
+            },
+            StopLovenseApps = token => StopLovenseAppsAsync(token),
+            StopManagedApps = token => StopManagedAppsAsync(ManagedAppStopReason.SessionEnding, token),
+            SupersessionPollDelay = token => Task.Delay(VrSessionRestartProcessPollInterval, token),
+            WriteLifecycleEvent = (name, reason, result, fields) => _lifecycleEvents.Write(name, reason, result, fields),
+        };
 
-                _cleanupStarted = true;
-                return;
-            }
-
-            await RestoreMonitorsAndStopManagedAppsCoreAsync(waitForSteamVrServerExit, intent, cancellationToken);
-            _cleanupStarted = true;
-        }
-        finally
-        {
-            _cleanupLock.Release();
-        }
+        using var supersession = new SteamVrCleanupSupersession(context, cancellationToken);
+        return await supersession.RunAsync();
     }
 
     private void WriteCleanupAdmission(
@@ -7552,7 +7635,8 @@ internal sealed class AppSupervisor
         string reason,
         bool waitForSteamVrServerExit,
         bool emergencyClose,
-        SupervisorShutdownIntent intent)
+        SupervisorShutdownIntent intent,
+        CleanupOwnershipMode ownershipMode = CleanupOwnershipMode.CommittedGlobal)
     {
         _lifecycleEvents.Write(
             "cleanup.admission",
@@ -7571,7 +7655,8 @@ internal sealed class AppSupervisor
                 ["waitForSteamVrExit"] = waitForSteamVrServerExit.ToString(),
                 ["managedApplicationsWillClose"] = _config.FaceTrackerAutomationEnabled.ToString(),
                 ["baseStationPowerDownWillBeRequested"] = SupervisorShutdownIntents.AllowsBaseStationPowerDown(intent).ToString(),
-                ["shutdownIntent"] = SupervisorShutdownIntents.ToProtocolMode(intent)
+                ["shutdownIntent"] = SupervisorShutdownIntents.ToProtocolMode(intent),
+                ["cleanupOwnershipMode"] = ownershipMode.ToString()
             });
     }
 
@@ -8367,9 +8452,45 @@ internal sealed class AppSupervisor
             : decision.Classification is SteamVrRecoveryClassification.RecoveryTimedOut or SteamVrRecoveryClassification.RecoveryLimitReached
                 ? "SteamVR did not return within the recovery window. Running normal session cleanup."
                 : cleanupMessage);
-        await RestoreMonitorsAndStopManagedAppsAsync(waitForSteamVrServerExit: false, cancellationToken);
-        _steamVrRecovery.MarkCompleted();
-        return true;
+
+        var ownershipMode = SelectCleanupOwnership(decision);
+        var cleanupOutcome = await RunCleanupOnceAsync(
+            waitForSteamVrServerExit: false,
+            emergencyClose: false,
+            SupervisorShutdownIntent.NormalCleanup,
+            cancellationToken,
+            ownershipMode);
+
+        // Use the production-wired lifecycle outcome handler.
+        // Returns true to exit main loop (cleanup completed), false to continue (supersession adopted).
+        var shouldExit = _cleanupLifecycleHandler.Handle(cleanupOutcome);
+        if (shouldExit)
+        {
+            return true;
+        }
+
+        // Supersession adopted — log and continue.
+        if (cleanupOutcome.Kind == CleanupOutcomeKind.SupersededByRuntime
+            && cleanupOutcome.SupersedingRuntime is { } supersedingRuntime)
+        {
+            Console.WriteLine($"Replacement SteamVR runtime detected during cleanup (PID {supersedingRuntime.Pid}). Adopting and continuing session.");
+            _lifecycleExitReason = "supersession-adopted";
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// H-1: Select cleanup ownership from the decision classification.
+    /// SupervisorExit decisions (explicit Supervisor exit) are always CommittedGlobal.
+    /// Runtime-loss recovery decisions (timeout, limit exhaustion, normal exit) use RuntimeAbsence.
+    /// This ensures SupervisorExit never enters supersedable RuntimeAbsence cleanup.
+    /// </summary>
+    internal static CleanupOwnershipMode SelectCleanupOwnership(SteamVrRecoveryDecision decision)
+    {
+        return decision.Classification == SteamVrRecoveryClassification.SupervisorExit
+            ? CleanupOwnershipMode.CommittedGlobal
+            : CleanupOwnershipMode.RuntimeAbsence;
     }
 
     private void WriteSteamVrLifecycleDecision(SteamVrRecoveryDecision decision, string caller)
@@ -9728,8 +9849,10 @@ internal sealed class AppSupervisor
 
         if (forceFirst)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             foreach (var process in processes)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 using (process)
                 {
                     TryKill(process);
@@ -9752,8 +9875,10 @@ internal sealed class AppSupervisor
             throw new TimeoutException($"{displayName} did not close cleanly.");
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         foreach (var process in processes)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             using (process)
             {
                 TryCloseMainWindow(process);
@@ -9768,8 +9893,10 @@ internal sealed class AppSupervisor
 
         processes = GetProcesses(processNames);
         var forcedTerminationAttempted = processes.Count > 0;
+        cancellationToken.ThrowIfCancellationRequested();
         foreach (var process in processes)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             using (process)
             {
                 TryKill(process);
