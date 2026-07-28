@@ -225,7 +225,7 @@ public sealed class LifecycleJournalCaptureTests
     }
 
     [Fact]
-    public void ManifestIsPhysicallyWrittenAfterSnapshotMetadataIsComplete()
+    public async Task ManifestIsPhysicallyWrittenAfterSnapshotMetadataIsComplete()
     {
         using var temp = new TempDirectory();
         var captureFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -258,7 +258,7 @@ public sealed class LifecycleJournalCaptureTests
                 ExternalOutputRoot: outputRoot,
                 RepositoryRoot: repoRoot));
 
-            captureFinished.Task.Wait(TimeSpan.FromSeconds(10));
+            await captureFinished.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
             Assert.Empty(result.Errors);
             Assert.True(File.Exists(result.Bundle.ManifestPath));
