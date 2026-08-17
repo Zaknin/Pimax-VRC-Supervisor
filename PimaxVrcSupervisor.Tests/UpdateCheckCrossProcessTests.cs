@@ -273,6 +273,7 @@ public sealed class UpdateCheckCrossProcessTests
             RepositoryRoot(),
             "PimaxVrcSupervisor",
             "bin",
+            "test-trust",
             Configuration(),
             "net9.0-windows10.0.19041.0",
             "PimaxVrcSupervisor.dll");
