@@ -546,7 +546,7 @@ internal sealed class ConfigEditorForm : Form
         AddLabeledRow(layout, "Automatic checks", _updatePolicyComboBox, "Disabled does not check automatically. Notify checks Stable releases after 24 hours. Manual checks remain available for both policies.");
         AddSectionHeader(layout, "Verified status");
         AddLabeledRow(layout, "Current version", _updateCurrentVersionLabel, "The installed application version.");
-        AddLabeledRow(layout, "Channel", _updateChannelLabel, "Phase 33A supports only the Stable channel.");
+        AddLabeledRow(layout, "Channel", _updateChannelLabel, "Only the Stable update channel is supported.");
         AddLabeledRow(layout, "Latest verified version", _updateLatestVersionLabel, "Shows the newest version accepted for this device.");
         AddLabeledRow(layout, "Last successful check", _updateLastSuccessLabel, "The most recent completed verified metadata check.");
         AddLabeledRow(layout, "Last check attempt", _updateLastAttemptLabel, "The most recent network check attempt.");

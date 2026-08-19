@@ -28,7 +28,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="Fixtures\Phase33A\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures\UpdateAcceptance\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

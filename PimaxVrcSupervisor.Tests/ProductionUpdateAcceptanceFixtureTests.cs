@@ -5,22 +5,22 @@ using System.Text.Json.Nodes;
 using PimaxVrcSupervisor.Updates;
 using Xunit;
 
-public sealed class Phase33AProductionAcceptanceFixtureTests
+public sealed class ProductionUpdateAcceptanceFixtureTests
 {
     private static readonly DateTimeOffset Now = new(2026, 7, 21, 12, 0, 0, TimeSpan.Zero);
 
-    public static TheoryData<Phase33AAcceptanceState> NetworkFixtureStates => new()
+    public static TheoryData<UpdateAcceptanceState> NetworkFixtureStates => new()
     {
-        Phase33AAcceptanceState.CurrentVersionLatest,
-        Phase33AAcceptanceState.VerifiedStableAvailable,
-        Phase33AAcceptanceState.AlteredManifestBytes,
-        Phase33AAcceptanceState.InvalidSignature,
-        Phase33AAcceptanceState.UnknownKeyId,
-        Phase33AAcceptanceState.WrongRepository,
-        Phase33AAcceptanceState.DraftOrPrerelease,
-        Phase33AAcceptanceState.TimeoutOrUnavailable,
-        Phase33AAcceptanceState.Http304Cached,
-        Phase33AAcceptanceState.UnsupportedManifestSchema
+        UpdateAcceptanceState.CurrentVersionLatest,
+        UpdateAcceptanceState.VerifiedStableAvailable,
+        UpdateAcceptanceState.AlteredManifestBytes,
+        UpdateAcceptanceState.InvalidSignature,
+        UpdateAcceptanceState.UnknownKeyId,
+        UpdateAcceptanceState.WrongRepository,
+        UpdateAcceptanceState.DraftOrPrerelease,
+        UpdateAcceptanceState.TimeoutOrUnavailable,
+        UpdateAcceptanceState.Http304Cached,
+        UpdateAcceptanceState.UnsupportedManifestSchema
     };
 
     [Fact]
@@ -88,14 +88,14 @@ public sealed class Phase33AProductionAcceptanceFixtureTests
 
     [Theory]
     [MemberData(nameof(NetworkFixtureStates))]
-    public async Task BoundedAcceptanceNetworkStateProducesExpectedResult(Phase33AAcceptanceState state)
+    public async Task BoundedAcceptanceNetworkStateProducesExpectedResult(UpdateAcceptanceState state)
     {
         var fixture = LoadProductionFixture();
         var productionScenario = new DiscoveryScenario(fixture);
         var (client, transport, expectedStatus, expectedCode) = CreateNetworkState(state, productionScenario);
         using (client)
         {
-            var result = await client.CheckAsync(state == Phase33AAcceptanceState.Http304Cached ? "\"fixture-etag\"" : null, CancellationToken.None);
+            var result = await client.CheckAsync(state == UpdateAcceptanceState.Http304Cached ? "\"fixture-etag\"" : null, CancellationToken.None);
 
             Assert.Equal(expectedStatus, result.Status);
             Assert.Equal(expectedCode, result.ErrorCode);
@@ -188,7 +188,7 @@ public sealed class Phase33AProductionAcceptanceFixtureTests
     [Fact]
     public async Task DismissedCandidateIsSuppressedAndNewerCandidateResurfaces()
     {
-        Assert.Equal(12, Enum.GetValues<Phase33AAcceptanceState>().Length);
+        Assert.Equal(12, Enum.GetValues<UpdateAcceptanceState>().Length);
         using var directory = new TempDirectory();
         var store = new UpdateStateStore(UpdatePackageVariant.NoDotnet9, directory.Path);
         var initial = store.Load().State with
@@ -223,24 +223,24 @@ public sealed class Phase33AProductionAcceptanceFixtureTests
     }
 
     private static (GitHubUpdateDiscoveryClient Client, FakeUpdateHttpTransport? Transport, UpdateDiscoveryStatus Status, string? ErrorCode)
-        CreateNetworkState(Phase33AAcceptanceState state, DiscoveryScenario productionScenario)
+        CreateNetworkState(UpdateAcceptanceState state, DiscoveryScenario productionScenario)
     {
         var trustStore = productionScenario.Signed.TrustStore;
         switch (state)
         {
-            case Phase33AAcceptanceState.CurrentVersionLatest:
+            case UpdateAcceptanceState.CurrentVersionLatest:
                 {
                     var transport = new FakeUpdateHttpTransport(_ => FakeUpdateHttpTransport.Response(
                         HttpStatusCode.OK,
                         productionScenario.CreateReleaseMetadata(version: AppVersion.Current)));
                     return (CreateClient(transport, trustStore), transport, UpdateDiscoveryStatus.Current, null);
                 }
-            case Phase33AAcceptanceState.VerifiedStableAvailable:
+            case UpdateAcceptanceState.VerifiedStableAvailable:
                 {
                     var transport = productionScenario.CreateSuccessfulTransport();
                     return (CreateClient(transport, trustStore), transport, UpdateDiscoveryStatus.UpdateAvailable, null);
                 }
-            case Phase33AAcceptanceState.AlteredManifestBytes:
+            case UpdateAcceptanceState.AlteredManifestBytes:
                 {
                     var altered = productionScenario.Signed.ManifestBytes.Concat([(byte)' ']).ToArray();
                     var transport = new FakeUpdateHttpTransport(
@@ -249,7 +249,7 @@ public sealed class Phase33AProductionAcceptanceFixtureTests
                         _ => FakeUpdateHttpTransport.Response(HttpStatusCode.OK, productionScenario.Signed.SignatureEnvelopeBytes));
                     return (CreateClient(transport, trustStore), transport, UpdateDiscoveryStatus.Failed, "manifest_hash");
                 }
-            case Phase33AAcceptanceState.InvalidSignature:
+            case UpdateAcceptanceState.InvalidSignature:
                 {
                     var signature = MutateEnvelope(productionScenario.Signed.SignatureEnvelopeBytes, envelope =>
                     {
@@ -263,7 +263,7 @@ public sealed class Phase33AProductionAcceptanceFixtureTests
                         _ => FakeUpdateHttpTransport.Response(HttpStatusCode.OK, signature));
                     return (CreateClient(transport, trustStore), transport, UpdateDiscoveryStatus.Failed, "signature_invalid");
                 }
-            case Phase33AAcceptanceState.UnknownKeyId:
+            case UpdateAcceptanceState.UnknownKeyId:
                 {
                     var signature = MutateEnvelope(productionScenario.Signed.SignatureEnvelopeBytes, envelope =>
                         envelope["signatures"]![0]!["keyId"] = "unknown-production-key");
@@ -273,7 +273,7 @@ public sealed class Phase33AProductionAcceptanceFixtureTests
                         _ => FakeUpdateHttpTransport.Response(HttpStatusCode.OK, signature));
                     return (CreateClient(transport, trustStore), transport, UpdateDiscoveryStatus.Failed, "unknown_key");
                 }
-            case Phase33AAcceptanceState.WrongRepository:
+            case UpdateAcceptanceState.WrongRepository:
                 {
                     var manifest = UpdateContractTestData.CreateManifest();
                     manifest["repository"] = "Other/Repository";
@@ -281,14 +281,14 @@ public sealed class Phase33AProductionAcceptanceFixtureTests
                     var transport = scenario.CreateSuccessfulTransport();
                     return (CreateClient(transport, scenario.Signed.TrustStore), transport, UpdateDiscoveryStatus.Failed, "repository");
                 }
-            case Phase33AAcceptanceState.DraftOrPrerelease:
+            case UpdateAcceptanceState.DraftOrPrerelease:
                 {
                     var transport = new FakeUpdateHttpTransport(_ => FakeUpdateHttpTransport.Response(
                         HttpStatusCode.OK,
                         productionScenario.CreateReleaseMetadata(draft: true)));
                     return (CreateClient(transport, trustStore), transport, UpdateDiscoveryStatus.Ignored, null);
                 }
-            case Phase33AAcceptanceState.TimeoutOrUnavailable:
+            case UpdateAcceptanceState.TimeoutOrUnavailable:
                 {
                     var transport = new FakeUpdateHttpTransport(async (_, cancellationToken) =>
                     {
@@ -297,12 +297,12 @@ public sealed class Phase33AProductionAcceptanceFixtureTests
                     });
                     return (CreateClient(transport, trustStore, TimeSpan.FromMilliseconds(20)), transport, UpdateDiscoveryStatus.Failed, "request_timeout");
                 }
-            case Phase33AAcceptanceState.Http304Cached:
+            case UpdateAcceptanceState.Http304Cached:
                 {
                     var transport = new FakeUpdateHttpTransport(_ => FakeUpdateHttpTransport.Response(HttpStatusCode.NotModified, [], etag: "\"fixture-etag\""));
                     return (CreateClient(transport, trustStore), transport, UpdateDiscoveryStatus.NotModified, null);
                 }
-            case Phase33AAcceptanceState.UnsupportedManifestSchema:
+            case UpdateAcceptanceState.UnsupportedManifestSchema:
                 {
                     var manifest = UpdateContractTestData.CreateManifest();
                     manifest["schemaVersion"] = 2;
@@ -324,7 +324,7 @@ public sealed class Phase33AProductionAcceptanceFixtureTests
 
     private static SignedUpdateTestData LoadProductionFixture()
     {
-        var root = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Phase33A");
+        var root = Path.Combine(AppContext.BaseDirectory, "Fixtures", "UpdateAcceptance");
         return new SignedUpdateTestData(
             File.ReadAllBytes(Path.Combine(root, "PimaxVrcSupervisor-v1.4.0-update-manifest-v1.json")),
             File.ReadAllBytes(Path.Combine(root, "PimaxVrcSupervisor-v1.4.0-update-manifest-v1.signatures.json")),
@@ -359,7 +359,7 @@ public sealed class Phase33AProductionAcceptanceFixtureTests
     }
 }
 
-public enum Phase33AAcceptanceState
+public enum UpdateAcceptanceState
 {
     CurrentVersionLatest,
     VerifiedStableAvailable,

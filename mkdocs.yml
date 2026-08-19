@@ -76,22 +76,12 @@ nav:
       - Pimax Connect Lifecycle Observation: development/pimax-connect-lifecycle-observation.md
       - Pimax External-Hub Physical Port Mapping: development/pimax-external-hub-physical-port-mapping.md
       - Base Station Startup Diagnostics: development/base-station-startup-diagnostics.md
+      - Lifecycle Observability: operator/lifecycle-observability.md
       - XSOverlay Brokered Restart: development/xs-overlay-brokered-restart.md
       - SteamVR Restart Recovery: development/steamvr-restart-recovery.md
-      - Phase32B2 Manual Acceptance: development/phase32b2-manual-acceptance.md
-      - Phase32B2A Manual Acceptance: development/phase32b2a-manual-acceptance.md
-      - Phase32B2B Manual Acceptance: development/phase32b2b-manual-acceptance.md
-      - Phase32B2C Manual Acceptance: development/phase32b2c-manual-acceptance.md
-      - Phase32B2D Manual Acceptance: development/phase32b2d-manual-acceptance.md
-      - Phase32B2E Manual Acceptance: development/phase32b2e-manual-acceptance.md
-      - Phase32C Manual Acceptance: development/phase32c-manual-acceptance.md
-      - Phase32D Manual Acceptance: development/phase32d-manual-acceptance.md
-      - Phase32E1 Manual Acceptance: development/phase32e1-manual-acceptance.md
-      - Phase32F Tracked-Device Power Policy Discovery: development/phase32f-steamvr-tracked-device-power-policy-discovery.md
-      - Phase33A Secure GitHub Update Discovery: development/phase33a-secure-github-update-discovery.md
-      - Phase33B Secure Update Transaction: development/phase33b-secure-update-transaction.md
+      - Secure GitHub Update Discovery: development/secure-github-update-discovery.md
+      - Secure Update Transaction: development/secure-update-transaction.md
       - Immutable Release Operations: reference/immutable-release-operations.md
       - Production Update Trust-Key Ceremony: reference/production-update-key-ceremony.md
-      - Phase33A Update Notification Acceptance: reference/phase33a-update-notification-acceptance.md
       - Shortcuts: reference/shortcuts.md
       - Release Packaging: reference/release-packaging.md

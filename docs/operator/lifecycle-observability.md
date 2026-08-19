@@ -1,4 +1,4 @@
-# Phase 34A — Lifecycle ownership and cleanup observability
+# Lifecycle ownership and cleanup observability
 
 Phase 34A adds a passive, crash-surviving lifecycle journal. It does **not** change cleanup admission, Watcher launch decisions, owner-lock policy, SteamVR restart handling, managed-app shutdown policy, base-station timing, delayed wake timing, or update behavior.
 

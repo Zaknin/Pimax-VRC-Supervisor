@@ -215,7 +215,7 @@ public sealed class CombinedInterfaceModeTests
     }
 
     [Fact]
-    public void Phase32E1RecoveryRemainsInterfaceAgnostic()
+    public void PimaxReconnectRecoveryRemainsInterfaceAgnostic()
     {
         var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "PimaxVrcSupervisor", "Program.cs"));
         var start = source.IndexOf("private void ObserveUsbDeviceInventory", StringComparison.Ordinal);
